@@ -13,6 +13,11 @@ synthetic test fixtures, and documentation only. Do not commit proprietary game 
 - Add focused helpers for audio first, then sprite/TILE workflows after the container
   tool is boringly reliable.
 
+## Current Milestone
+
+`0.2.0` captures the first in-game audio discovery pass. See
+`docs/handoff-0.2.0.md` for the resume summary, confirmed findings, and next steps.
+
 ## Current Commands
 
 ```powershell

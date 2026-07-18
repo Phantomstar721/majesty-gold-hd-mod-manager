@@ -63,10 +63,15 @@ order and entry order, but readers should slice by absolute offset and size.
 ## Known Section Types
 
 - `WAVE`: WAV audio files.
+- `DSDP`: sound phase definitions in runtime sound description archives.
+- `DSND`: sound descriptions in runtime sound description archives.
+- `DSDG`: sound groups in runtime sound description archives.
 - `IMAG`: image/animation descriptors.
 - `TILE`: sprite frame pixel data or terrain tile data, depending on archive.
 - `SPLT`: palette data.
 - `CUT `: small fixed-size resource in `maindata.cam`; not investigated yet.
+
+See `docs/audio-modding-findings.md` for the in-game audio lookup findings.
 
 ## First Milestone
 

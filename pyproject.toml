@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "majesty-cam-tool"
-version = "0.1.0"
+version = "0.2.0"
 description = "Unpack, inspect, and repack Majesty Gold HD CAM archives."
 readme = "README.md"
 requires-python = ">=3.9"

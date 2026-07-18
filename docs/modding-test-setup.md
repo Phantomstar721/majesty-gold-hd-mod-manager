@@ -46,6 +46,11 @@ We should confirm those exact folders before writing a deploy script.
 The first practical target should be audio CAMs like `WrathOfKrolm_soundfx.cam` and
 `WrathOfKrolm_voices.cam`, because their entries are standard WAV payloads.
 
+Audio test result so far: quest-local `soundfx.cam` WAVE overrides work, and quest-local
+`sounddesc.cam` overrides of existing base `DSND` sound descriptions work. Loose sound XML
+alone did not register a new sound for GPL `$PlaySound`. See
+`docs/audio-modding-findings.md`.
+
 ## Later Test Loop
 
 Once audio is reliable:
