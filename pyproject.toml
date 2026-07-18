@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "majesty-cam-tool"
+version = "0.1.0"
+description = "Unpack, inspect, and repack Majesty Gold HD CAM archives."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+  { name = "Majesty CAM Tool contributors" }
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = []
+
+[project.scripts]
+majesty-cam = "majesty_cam.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/majesty_cam"]

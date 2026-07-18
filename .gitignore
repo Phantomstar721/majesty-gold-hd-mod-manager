@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Local game assets and cloned reference repos. Do not commit proprietary data.
+local/*
+!local/README.md
+reference-repos/*
+!reference-repos/README.md
+*.cam
+*.CAM
+*.wav
+*.WAV
