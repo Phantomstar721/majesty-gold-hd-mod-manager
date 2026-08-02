@@ -27,7 +27,20 @@ python -m majesty_cam.cli unpack path\to\archive.cam local\unpacked
 python -m majesty_cam.cli pack local\unpacked local\repacked.cam
 ```
 
+`unpack` requires a new or empty destination so files left by an older archive
+cannot be mistaken for current output. To intentionally retain existing files,
+pass `--allow-nonempty`; the tool warns that unrelated files will remain. It
+never cleans a destination automatically.
+
 ## Local Setup
+
+Tests run directly from a fresh checkout without installing the package:
+
+```powershell
+python -m unittest discover -s tests
+```
+
+For an isolated editable install and the `majesty-cam` command:
 
 ```powershell
 cd C:\Users\bterr\source\repos\majesty-cam-tool

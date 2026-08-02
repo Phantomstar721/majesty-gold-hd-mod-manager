@@ -21,6 +21,11 @@ def main(argv: list[str] | None = None) -> int:
     unpack_parser = subcommands.add_parser("unpack", help="Unpack a CAM archive to a folder")
     unpack_parser.add_argument("cam", type=Path)
     unpack_parser.add_argument("output_dir", type=Path)
+    unpack_parser.add_argument(
+        "--allow-nonempty",
+        action="store_true",
+        help="Keep unrelated files already present in the output directory",
+    )
 
     pack_parser = subcommands.add_parser("pack", help="Pack an unpacked CAM folder")
     pack_parser.add_argument("input_dir", type=Path)
@@ -34,7 +39,20 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "verify":
             return _verify(args.cam)
         if args.command == "unpack":
-            unpack_archive(args.cam, args.output_dir)
+            output_was_nonempty = (
+                args.output_dir.is_dir() and any(args.output_dir.iterdir())
+            )
+            if args.allow_nonempty and output_was_nonempty:
+                print(
+                    "warning: unpacking into a nonempty directory; unrelated "
+                    "existing files will remain",
+                    file=sys.stderr,
+                )
+            unpack_archive(
+                args.cam,
+                args.output_dir,
+                allow_nonempty=args.allow_nonempty,
+            )
             print(f"Unpacked {args.cam} -> {args.output_dir}")
             return 0
         if args.command == "pack":

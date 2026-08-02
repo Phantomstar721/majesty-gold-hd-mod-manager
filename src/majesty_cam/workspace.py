@@ -11,9 +11,23 @@ MANIFEST_NAME = ".majesty-cam.json"
 MANIFEST_VERSION = 1
 
 
-def unpack_archive(cam_path: str | Path, output_dir: str | Path) -> None:
-    archive = read_cam(cam_path)
+def unpack_archive(
+    cam_path: str | Path,
+    output_dir: str | Path,
+    *,
+    allow_nonempty: bool = False,
+) -> None:
     root = Path(output_dir)
+    if root.exists():
+        if not root.is_dir():
+            raise CamFormatError(f"Unpack destination is not a directory: {root}")
+        if any(root.iterdir()) and not allow_nonempty:
+            raise CamFormatError(
+                f"Unpack destination is not empty: {root}. "
+                "Use --allow-nonempty only if keeping unrelated existing files is intentional."
+            )
+
+    archive = read_cam(cam_path)
     root.mkdir(parents=True, exist_ok=True)
 
     manifest: dict[str, object] = {
