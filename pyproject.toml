@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "majesty-cam-tool"
+name = "majesty-gold-hd-cam-merger"
 version = "0.2.0"
 description = "Merge Majesty Gold HD CAM mods, on a container layer that unpacks, inspects, and repacks CAM archives."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
-  { name = "Majesty CAM Tool contributors" }
+  { name = "Majesty Gold HD CAM Merger contributors" }
 ]
 dependencies = []
 

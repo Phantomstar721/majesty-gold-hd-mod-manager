@@ -1,4 +1,4 @@
-# Majesty CAM Tool 0.2.0 Handoff
+# Majesty Gold HD CAM Merger 0.2.0 Handoff
 
 This is the working handoff after the first serious audio-modding probe run.
 
@@ -15,7 +15,7 @@ Known local paths:
 
 ```text
 Repo:
-C:\Users\bterr\source\repos\majesty-cam-tool
+C:\Users\bterr\source\repos\majesty-gold-hd-cam-merger
 
 SDK:
 C:\Program Files (x86)\Steam\steamapps\common\Majesty HD\SDK

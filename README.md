@@ -1,4 +1,4 @@
-# Majesty CAM Mod Merge
+# Majesty Gold HD CAM Merger
 
 Tooling to make two or more Majesty Gold HD CAM mods work together, built on a
 container layer that already unpacks and repacks CAM archives byte-for-byte.
@@ -6,12 +6,11 @@ container layer that already unpacks and repacks CAM archives byte-for-byte.
 The live Majesty install should stay a reference and test target. This repo keeps code,
 synthetic test fixtures, and documentation only. Do not commit proprietary game assets.
 
-## Status: parked
+## Status: merger foundation
 
-The container layer works. The merge layer is designed but not started, and is
-deliberately on hold: there is currently one other CAM mod in existence besides
-Custom Guild: Phantoms Haunt, and it is not substantial enough to validate a
-merger against. Resuming makes sense when there is real material to merge.
+The container layer works. The merge layer is designed but not started. Custom
+Guild: Alchemist is planned as the second substantial CAM mod and the first
+real-world merge fixture alongside Custom Guild: Phantoms Haunt.
 
 The design notes below are the useful output of that decision and exist so the
 reasoning does not have to be rederived.
@@ -112,7 +111,7 @@ python -m unittest discover -s tests
 For an isolated editable install and the `majesty-cam` command:
 
 ```powershell
-cd C:\Users\bterr\source\repos\majesty-cam-tool
+cd C:\Users\bterr\source\repos\majesty-gold-hd-cam-merger
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -e .[dev]
 .\.venv\Scripts\python -m unittest discover -s tests
