@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "majesty-cam-tool"
 version = "0.2.0"
-description = "Unpack, inspect, and repack Majesty Gold HD CAM archives."
+description = "Merge Majesty Gold HD CAM mods, on a container layer that unpacks, inspects, and repacks CAM archives."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
