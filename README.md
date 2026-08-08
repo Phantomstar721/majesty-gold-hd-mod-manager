@@ -40,20 +40,26 @@ recovers the intent mechanically.
 | `BDEP` | Engine takes one complete table, does not merge tables | Yes, combine deltas against stock |
 | `UNTN`, `ACTN`, `QITM`, `AITX`, `HPTX` | Whole tables, load order wins | Yes, same delta approach |
 | `TILE` / `SPLT` | Global numeric slots, mods pick overlapping ones | Hard, needs renumbering and reference rewriting |
-| `SMNU/AP07` and other recruit dialogs | Exe-keyed, finite stock IDs | No |
-| Replaced stock GPL functions | Two mods rewrite the same behavior | No |
+| `SMNU/AP07` and other recruit dialogs | Exe-keyed stock controller dispatch | Yes, with allocated IDs plus the runtime controller registry |
+| Replaced stock GPL functions | Two mods rewrite the same behavior | Sometimes: vanilla-aware three-way merge plus manual resolution |
 
-### The two that cannot be automated
+### The two that require higher-level support
 
-A recruit-dialog clash is resource contention, not a data conflict. Majesty
-keys recruit-panel behavior in `MajestyHD.exe` by stock AP dialog ID, and mod
-data cannot register a new handler, so two custom guilds wanting a panel is a
-genuine shortage. The tool can detect it and list which stock panels are still
-free, but choosing one is a design decision about which stock guild gets its
-panel overwritten.
+A recruit-dialog clash is resource contention, not just a data conflict.
+Runtime testing in the Expanded Building Slots project proved that a custom
+dialog ID can retain its own CAM resources while using a stock controller and
+without displacing the stock building. The production design therefore assigns
+stable internal IDs during the merge and emits a registry mapping each ID to
+the controller archetype declared by the mod author.
 
-Overlapping GPL replacements are ordinary code merge conflicts. Detect, report,
-do not attempt.
+Overlapping GPL replacements are code merge conflicts. The reviewed Workshop
+Majesty Script Merger demonstrates a useful vanilla-aware three-way approach:
+merge non-overlapping edits automatically, validate and compile the result, and
+present genuine overlap regions for an explicit user decision.
+
+See [the local Majesty Script Merger review](docs/majesty-script-merger-review.md)
+for the reusable concepts, limitations, and relationship to the planned
+manager.
 
 ### The hazard in renumbering
 
