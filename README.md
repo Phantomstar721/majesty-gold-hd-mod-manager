@@ -6,14 +6,17 @@ container layer that already unpacks and repacks CAM archives byte-for-byte.
 The live Majesty install should stay a reference and test target. This repo keeps code,
 synthetic test fixtures, and documentation only. Do not commit proprietary game assets.
 
-## Status: merger foundation
+## Status: working Haunt + Alchemist proof of concept
 
-The container layer works. The merge layer is designed but not started. Custom
-Guild: Alchemist is planned as the second substantial CAM mod and the first
-real-world merge fixture alongside Custom Guild: Phantoms Haunt.
+The container layer and the first real merge pipeline now work. The tool safely
+ingests completed packages and v1 definitions, performs stock-relative N-way
+table/XML/GPL merges, compiles one BCD, and relocates positional art only through
+typed reference maps. It generates Haunt-only, Alchemist-only, and combined
+profiles without editing either source mod.
 
-The design notes below are the useful output of that decision and exist so the
-reasoning does not have to be rederived.
+See [the POC contract and test guide](docs/poc-mod-contract.md) for package
+requirements, the external Expanded Building Slots/runtime boundary, current
+scope limits, and the live test matrix.
 
 ## Why merging, and not a slot convention
 
@@ -99,12 +102,24 @@ python -m majesty_cam.cli list path\to\archive.cam
 python -m majesty_cam.cli verify path\to\archive.cam
 python -m majesty_cam.cli unpack path\to\archive.cam local\unpacked
 python -m majesty_cam.cli pack local\unpacked local\repacked.cam
+python -m majesty_cam.cli poc-build --game-path "C:\Program Files (x86)\Steam\steamapps\common\Majesty HD" --input-root local\poc\inputs --output-root local\poc\outputs
 ```
 
 `unpack` requires a new or empty destination so files left by an older archive
 cannot be mistaken for current output. To intentionally retain existing files,
 pass `--allow-nonempty`; the tool warns that unrelated files will remain. It
 never cleans a destination automatically.
+
+For the checked-in Haunt/Alchemist fixture layout, the equivalent convenience
+command is:
+
+```powershell
+.\scripts\Build-Haunt-Alchemist-Poc.ps1
+```
+
+Generated packages and proprietary inputs remain under ignored `local/` paths.
+The public `compose_package(...)` API accepts an ordered sequence of any number
+of packages; unresolved conflicts and unsupported binary shapes fail closed.
 
 ## Local Setup
 

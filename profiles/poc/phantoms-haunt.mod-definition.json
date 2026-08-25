@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "mod_id": "{8c48289e-7c70-4426-8913-133f3544a182}",
+  "internal_name": "CustomGuildPhantomsHaunt",
+  "display_name": "Custom Guild: Phantoms Haunt",
+  "custom_buildings": [
+    {
+      "local_name": "Phantoms_Haunt",
+      "dialog_id": "CGPH",
+      "controller_base": "AP07",
+      "panel_resource_template": "AP10"
+    }
+  ]
+}

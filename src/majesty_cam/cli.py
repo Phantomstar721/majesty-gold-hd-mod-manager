@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 
 from .cam import CamFormatError, read_cam
+from .compose import ComposeError
+from .poc import build_poc_profiles
 from .workspace import pack_workspace, unpack_archive
 
 
@@ -30,6 +32,15 @@ def main(argv: list[str] | None = None) -> int:
     pack_parser = subcommands.add_parser("pack", help="Pack an unpacked CAM folder")
     pack_parser.add_argument("input_dir", type=Path)
     pack_parser.add_argument("output_cam", type=Path)
+
+    poc_parser = subcommands.add_parser(
+        "poc-build",
+        help="Build Haunt-only, Alchemist-only, and combined proof profiles",
+    )
+    poc_parser.add_argument("--game-path", required=True, type=Path)
+    poc_parser.add_argument("--input-root", required=True, type=Path)
+    poc_parser.add_argument("--output-root", required=True, type=Path)
+    poc_parser.add_argument("--definition-root", type=Path)
 
     args = parser.parse_args(argv)
 
@@ -59,7 +70,20 @@ def main(argv: list[str] | None = None) -> int:
             pack_workspace(args.input_dir, args.output_cam)
             print(f"Packed {args.input_dir} -> {args.output_cam}")
             return 0
-    except (CamFormatError, OSError) as exc:
+        if args.command == "poc-build":
+            result = build_poc_profiles(
+                args.game_path,
+                args.input_root,
+                args.output_root,
+                definition_root=args.definition_root,
+            )
+            for profile in result.profiles:
+                print(
+                    f"Built {profile.profile_slug}: {profile.output_root} "
+                    f"({profile.mod_id})"
+                )
+            return 0
+    except (CamFormatError, ComposeError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "mod_id": "{42ba4603-2b13-446d-a2a4-6cf3a55ddac3}",
+  "internal_name": "CustomGuildAlchemist",
+  "display_name": "Custom Guild: Alchemist Lab",
+  "custom_buildings": [
+    {
+      "local_name": "AlchemistsLaboratory",
+      "dialog_id": "CGAL",
+      "controller_base": "AP10",
+      "panel_resource_template": "AP10"
+    }
+  ]
+}
