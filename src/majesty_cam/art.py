@@ -31,6 +31,7 @@ MAX_IMAG_SETS = 256
 MAX_DIRECTIONS = 32
 MAX_FRAMES = 256
 LOW16_SENTINEL = 0xFFFF
+BUILDING_TERMINAL_TILE_SET_ID = 208
 
 
 class ArtFormatError(CamFormatError):
@@ -548,6 +549,39 @@ def parse_imag_tile_references(
                         layout=layout,
                     )
                 )
+
+        # Stock building IMAG set 208 carries one additional TILE reference in
+        # the final u32 of the set, after its direction records.  It is present
+        # in every ordinary stock building family (including the three Fervus
+        # levels cloned by Phantoms Haunt) and is not part of a frame table.
+        # Treat the field explicitly so relocation preserves the complete stock
+        # building-image lifecycle without scanning arbitrary integer values.
+        terminal_offset = set_end - 4
+        if (
+            set_id == BUILDING_TERMINAL_TILE_SET_ID
+            and terminal_offset >= direction_table_end
+            and all(reference.offset != terminal_offset for reference in references)
+        ):
+            encoded_value = _u32(data, terminal_offset)
+            tile_index = encoded_value & 0xFFFF
+            if tile_index != LOW16_SENTINEL:
+                if tile_index >= tile_count:
+                    raise UnsupportedImagShapeError(
+                        f"IMAG {_display_name(raw_name)!r} set {set_id} terminal "
+                        f"field references missing TILE {tile_index} of {tile_count}"
+                    )
+                references.append(
+                    ImagTileReference(
+                        entry_name=raw_name,
+                        set_id=set_id,
+                        direction=-1,
+                        frame=-1,
+                        offset=terminal_offset,
+                        encoded_value=encoded_value,
+                        layout="building-terminal",
+                    )
+                )
+                layouts.add("building-terminal")
 
     return ParsedImag(
         entry_name=raw_name,

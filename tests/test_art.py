@@ -200,6 +200,48 @@ class ImagParserTests(unittest.TestCase):
             self.assertEqual(reparsed.references[1].tile_index, 8)
             self.assertEqual(result.report.supported_layouts, ("compact",))
 
+    def test_stock_building_set_terminal_tile_is_typed_and_rewritten(self):
+        data = _imag(
+            [
+                _SetSpec(
+                    208,
+                    "extended",
+                    (7,),
+                    terminal_tile=12,
+                    terminal_flag_bits=0x34000000,
+                )
+            ]
+        )
+
+        parsed = parse_imag_tile_references(
+            data,
+            tile_count=64,
+            entry_name=b"ABQ1Temple, Fervus1",
+        )
+
+        self.assertEqual(
+            [reference.tile_index for reference in parsed.references],
+            [7, 12],
+        )
+        terminal = parsed.references[1]
+        self.assertEqual(terminal.layout, "building-terminal")
+        self.assertEqual((terminal.direction, terminal.frame), (-1, -1))
+        self.assertEqual(terminal.offset, len(data) - 4)
+        self.assertEqual(terminal.flag_bits, 0x34000000)
+
+        rewritten = rewrite_imag_tile_indices(
+            data,
+            {12: 40},
+            tile_count=64,
+            entry_name=b"PHG1Phantom Guild",
+        )
+        reparsed = parse_imag_tile_references(rewritten, tile_count=64)
+        self.assertEqual(
+            [reference.tile_index for reference in reparsed.references],
+            [7, 40],
+        )
+        self.assertEqual(reparsed.references[1].flag_bits, 0x34000000)
+
     def test_rewriter_changes_only_typed_frame_fields_not_equal_header_words(self):
         data = bytearray(_imag([_SetSpec(64, "compact", (7, 8))]))
         struct.pack_into("<I", data, 0, 7)  # Looks like a TILE index, but is an IMAG header field.
@@ -424,12 +466,16 @@ class _SetSpec:
         *,
         layers: int = 1,
         flag_bits: int = 0,
+        terminal_tile=None,
+        terminal_flag_bits: int = 0,
     ) -> None:
         self.set_id = set_id
         self.layout = layout
         self.tile_indices = tile_indices
         self.layers = layers
         self.flag_bits = flag_bits
+        self.terminal_tile = terminal_tile
+        self.terminal_flag_bits = terminal_flag_bits
 
 
 def _imag(specs: list[_SetSpec]) -> bytes:
@@ -483,6 +529,10 @@ def _set_chunk(spec: _SetSpec) -> bytes:
     struct.pack_into("<I", chunk, 0, 1)
     struct.pack_into("<i", chunk, 64, 68)
     chunk.extend(direction)
+    if spec.terminal_tile is not None:
+        chunk += struct.pack(
+            "<I", spec.terminal_flag_bits | spec.terminal_tile
+        )
     return bytes(chunk)
 
 

@@ -513,6 +513,110 @@ def merge_sources(
     return merge_semantic_items(vanilla_items, flattened_mods, resolutions)
 
 
+_INVENTORY_EXPRESSION_RE = re.compile(r"^#[A-Za-z_][A-Za-z0-9_]*$")
+_STOCK_DEATH_DROP_LAST_EXCLUSION_RE = re.compile(
+    r"(?P<indent>^[ \t]*)WhatItem[ \t]*!=[ \t]*"
+    r"#MarketItem_Market3_Item[ \t]*\)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def add_inventory_death_drop_exclusions(
+    result: SemanticMergeResult,
+    expressions: Iterable[str],
+    *,
+    source_name: str = "<inventory-death-drop-composition>",
+) -> SemanticMergeResult:
+    """Extend Majesty's stock hero-death non-drop condition.
+
+    Numeric inventory keys (``INVx``) are reported droppable by the engine even
+    when a private unit description carries ``CanDropItem=0``. Stock handles its
+    own exceptions directly in ``Hero_Drop_Quest_Items`` before ``SpawnUnit``.
+    This composes additional private IDs through that same lifecycle and fails
+    closed if the selected function no longer has the stock condition shape.
+    """
+
+    requested: list[str] = []
+    seen: set[str] = set()
+    for expression in expressions:
+        if not _INVENTORY_EXPRESSION_RE.fullmatch(expression):
+            raise ValueError(
+                f"invalid inventory death-drop exclusion expression: {expression!r}"
+            )
+        key = expression.casefold()
+        if key in seen:
+            raise ValueError(
+                f"duplicate inventory death-drop exclusion: {expression!r}"
+            )
+        seen.add(key)
+        requested.append(expression)
+    if not requested:
+        return result
+
+    result.require_clean()
+    defined_expressions = {
+        item.normalized_name
+        for item in result.items
+        if item.kind == DefinitionKind.EXPRESSION
+    }
+    undefined = [
+        expression
+        for expression in requested
+        if expression.casefold() not in defined_expressions
+    ]
+    if undefined:
+        labels = ", ".join(undefined)
+        raise ValueError(
+            "inventory death-drop exclusions must name defined numeric "
+            f"GPL expressions; missing: {labels}"
+        )
+
+    target_key = semantic_key(DefinitionKind.FUNCTION, "Hero_Drop_Quest_Items")
+    target = next((item for item in result.items if item.key == target_key), None)
+    if target is None:
+        raise ValueError(
+            "inventory death-drop exclusions require Hero_Drop_Quest_Items"
+        )
+    already_present = {
+        expression.casefold()
+        for expression in requested
+        if re.search(rf"\bWhatItem\s*!=\s*{re.escape(expression)}\b", target.text, re.I)
+    }
+    additions = [
+        expression
+        for expression in requested
+        if expression.casefold() not in already_present
+    ]
+    if not additions:
+        return result
+
+    matches = list(_STOCK_DEATH_DROP_LAST_EXCLUSION_RE.finditer(target.text))
+    if len(matches) != 1:
+        raise ValueError(
+            "Hero_Drop_Quest_Items does not contain exactly one recognized "
+            "stock inventory exclusion condition"
+        )
+    match = matches[0]
+    indent = match.group("indent")
+    replacement = (
+        f"{indent}WhatItem != #MarketItem_Market3_Item &&\n"
+        + "\n".join(
+            f"{indent}WhatItem != {expression}{')' if index == len(additions) - 1 else ' &&'}"
+            for index, expression in enumerate(additions)
+        )
+    )
+    resolved = replace(
+        target,
+        text=target.text[: match.start()] + replacement + target.text[match.end() :],
+        source_name=source_name,
+        span=None,
+    )
+    return SemanticMergeResult(
+        tuple(resolved if item.key == target_key else item for item in result.items),
+        result.conflicts,
+    )
+
+
 def _finish_parse(
     source_name: str,
     text: str,
@@ -695,6 +799,7 @@ __all__ = [
     "UnterminatedDefinitionError",
     "merge_semantic_items",
     "merge_sources",
+    "add_inventory_death_drop_exclusions",
     "parse_dat",
     "parse_gpl",
     "semantic_key",

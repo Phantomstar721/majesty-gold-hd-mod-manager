@@ -14,6 +14,7 @@ from majesty_cam.gpl import (
     SemanticMergeConflictError,
     merge_semantic_items,
     merge_sources,
+    add_inventory_death_drop_exclusions,
     parse_dat,
     parse_gpl,
     semantic_key,
@@ -128,6 +129,70 @@ class GplParsingTests(unittest.TestCase):
 
 
 class SemanticMergeTests(unittest.TestCase):
+    def test_composes_private_numeric_item_into_stock_death_drop_exclusions(self):
+        source = parse_gpl(
+            textwrap.dedent(
+                """\
+                Expression #PrivateNumericItem 113
+
+                Function Hero_Drop_Quest_Items (agent ThisAgent)
+                Declare
+                    integer WhatItem;
+                Begin
+                    If (WhatItem != #QItem_Magic_Sword &&
+                        WhatItem != #MarketItem_Ring_Protection &&
+                        WhatItem != #MarketItem_Market3_Item)
+                        begin
+                            If ($CanDropInventoryItem(WhatItem) == True)
+                                $SpawnUnit(ThisAgent, "Special_Item");
+                        end
+                End
+                """
+            ),
+            "stock-death.gpl",
+        )
+        merged = merge_sources([], {"haunt": [source]})
+
+        result = add_inventory_death_drop_exclusions(
+            merged, ("#PrivateNumericItem",)
+        )
+
+        emitted = result.emit_project_source_set().gpl_text
+        self.assertIn(
+            "WhatItem != #MarketItem_Market3_Item &&\n"
+            "        WhatItem != #PrivateNumericItem)",
+            emitted,
+        )
+        self.assertLess(
+            emitted.index("#PrivateNumericItem", emitted.index("Function")),
+            emitted.index("$CanDropInventoryItem"),
+        )
+
+    def test_death_drop_composition_rejects_undefined_numeric_expression(self):
+        source = parse_gpl(
+            _function("Hero_Drop_Quest_Items", "return 1;"),
+            "stock-death.gpl",
+        )
+        merged = merge_sources([], {"custom": [source]})
+
+        with self.assertRaisesRegex(ValueError, "missing: #MissingPrivateItem"):
+            add_inventory_death_drop_exclusions(
+                merged, ("#MissingPrivateItem",)
+            )
+
+    def test_death_drop_composition_fails_closed_on_non_stock_shape(self):
+        source = parse_gpl(
+            "Expression #PrivateNumericItem 113\n\n"
+            + _function("Hero_Drop_Quest_Items", "return 1;"),
+            "custom-death.gpl",
+        )
+        merged = merge_sources([], {"custom": [source]})
+
+        with self.assertRaisesRegex(ValueError, "recognized stock"):
+            add_inventory_death_drop_exclusions(
+                merged, ("#PrivateNumericItem",)
+            )
+
     def test_n_way_merge_unions_additions_and_accepts_identical_changes(self):
         vanilla = parse_gpl(
             _function("Stock_Only", 'return "stock";')

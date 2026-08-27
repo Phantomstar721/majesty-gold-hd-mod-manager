@@ -6,7 +6,7 @@ import sys
 
 from .cam import CamFormatError, read_cam
 from .compose import ComposeError
-from .poc import build_poc_profiles
+from .poc import build_haunt_profile, build_poc_profiles
 from .workspace import pack_workspace, unpack_archive
 
 
@@ -41,6 +41,15 @@ def main(argv: list[str] | None = None) -> int:
     poc_parser.add_argument("--input-root", required=True, type=Path)
     poc_parser.add_argument("--output-root", required=True, type=Path)
     poc_parser.add_argument("--definition-root", type=Path)
+
+    haunt_parser = subcommands.add_parser(
+        "haunt-poc-build",
+        help="Build the Haunt-only Freestyle proof without Alchemist inputs",
+    )
+    haunt_parser.add_argument("--game-path", required=True, type=Path)
+    haunt_parser.add_argument("--input-root", required=True, type=Path)
+    haunt_parser.add_argument("--output-root", required=True, type=Path)
+    haunt_parser.add_argument("--definition-root", type=Path)
 
     args = parser.parse_args(argv)
 
@@ -82,6 +91,18 @@ def main(argv: list[str] | None = None) -> int:
                     f"Built {profile.profile_slug}: {profile.output_root} "
                     f"({profile.mod_id})"
                 )
+            return 0
+        if args.command == "haunt-poc-build":
+            profile = build_haunt_profile(
+                args.game_path,
+                args.input_root,
+                args.output_root,
+                definition_root=args.definition_root,
+            )
+            print(
+                f"Built {profile.profile_slug}: {profile.output_root} "
+                f"({profile.mod_id})"
+            )
             return 0
     except (CamFormatError, ComposeError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)

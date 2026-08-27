@@ -14,6 +14,38 @@ class PocBuildResult:
     profiles: tuple[ComposePackageResult, ...]
 
 
+def build_haunt_profile(
+    game_path: Path,
+    input_root: Path,
+    output_root: Path,
+    *,
+    definition_root: Path | None = None,
+) -> ComposePackageResult:
+    """Build the independent Haunt proof without requiring Alchemist inputs."""
+
+    if definition_root is None:
+        definition_root = Path(__file__).resolve().parents[2] / "profiles" / "poc"
+    haunt_definition = load_mod_definition(
+        definition_root / "phantoms-haunt.mod-definition.json"
+    )
+    haunt = SelectedMod(
+        "haunt",
+        load_package(input_root / "haunt-ap07", definition=haunt_definition),
+    )
+    return compose_package(
+        game_path,
+        output_root,
+        (haunt,),
+        profile_slug="haunt-freestyle",
+        display_name="TEST - CAM Manager - Freestyle Phantoms Haunt",
+        internal_name="CAMManagerFreestyleHauntTest",
+        runtime_capabilities=(
+            "expanded-building-slots.cg-prefix",
+            "freestyle-cam-rebind.v1",
+        ),
+    )
+
+
 def build_poc_profiles(
     game_path: Path,
     input_root: Path,
@@ -50,7 +82,10 @@ def build_poc_profiles(
         ),
     )
 
-    common_runtime = ("expanded-building-slots.cg-prefix",)
+    common_runtime = (
+        "expanded-building-slots.cg-prefix",
+        "freestyle-cam-rebind.v1",
+    )
     alchemist_runtime = (
         *common_runtime,
         "alchemist.cgbrewing-secondary-controller",
@@ -83,8 +118,8 @@ def build_poc_profiles(
             output_root / "combined",
             (alchemist_resolution, haunt),
             profile_slug="haunt-alchemist",
-            display_name="CAM POC: Haunt + Alchemist",
-            internal_name="CAMManagerPocHauntAlchemist",
+            display_name="TEST - CAM Manager - Freestyle Haunt + Alchemist",
+            internal_name="CAMManagerFreestyleHauntAlchemistTest",
             resolution_owners={
                 (DefinitionKind.FUNCTION, "Random_Hero_Type"): "alchemist",
                 (DefinitionKind.FUNCTION, "spell_extra_value"): "alchemist",
@@ -95,4 +130,8 @@ def build_poc_profiles(
     return PocBuildResult(profiles=profiles)
 
 
-__all__: Sequence[str] = ("PocBuildResult", "build_poc_profiles")
+__all__: Sequence[str] = (
+    "PocBuildResult",
+    "build_haunt_profile",
+    "build_poc_profiles",
+)

@@ -42,6 +42,7 @@ from .gpl import (
     ParsedSemanticSource,
     SemanticConflict,
     SemanticItem,
+    add_inventory_death_drop_exclusions,
     merge_sources,
     parse_dat,
     parse_gpl,
@@ -127,6 +128,7 @@ class GplComposeResult:
     source_set: GplProjectSourceSet
     conflicts: tuple[SemanticConflict, ...]
     resolution_owners: tuple[tuple[DefinitionKind, str, str], ...]
+    inventory_death_drop_exclusions: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -799,6 +801,7 @@ def merge_gpl_resources(
     inventories: Sequence[PackageInventory],
     *,
     resolution_owners: Mapping[tuple[DefinitionKind | str, str], str] | None = None,
+    inventory_death_drop_exclusions: Sequence[str] = (),
 ) -> GplComposeResult:
     parsed_by_owner: dict[str, list[ParsedSemanticSource]] = {}
     for inventory in inventories:
@@ -850,10 +853,16 @@ def merge_gpl_resources(
         raise ComposeError(f"GPL resolutions do not name real conflicts: {labels}")
     final = merge_sources([], parsed_by_owner, resolutions or None)
     final.require_clean()
+    final = add_inventory_death_drop_exclusions(
+        final,
+        inventory_death_drop_exclusions,
+        source_name="<CAM Manager stock death-drop composition>",
+    )
     return GplComposeResult(
         source_set=final.emit_project_source_set(),
         conflicts=initial.conflicts,
         resolution_owners=tuple(used),
+        inventory_death_drop_exclusions=tuple(inventory_death_drop_exclusions),
     )
 
 
@@ -909,6 +918,7 @@ def compose_package(
     display_name: str | None = None,
     internal_name: str | None = None,
     resolution_owners: Mapping[tuple[DefinitionKind | str, str], str] | None = None,
+    inventory_death_drop_exclusions: Sequence[str] = (),
     runtime_capabilities: Sequence[str] = (),
 ) -> ComposePackageResult:
     """Generate one atomic, self-contained local profile from any N packages.
@@ -950,7 +960,9 @@ def compose_package(
         game_path, inventories
     )
     gpl = merge_gpl_resources(
-        inventories, resolution_owners=resolution_owners
+        inventories,
+        resolution_owners=resolution_owners,
+        inventory_death_drop_exclusions=inventory_death_drop_exclusions,
     )
 
     output_mod_id = _generated_mod_id(selected_mods, profile_slug)
@@ -1376,6 +1388,9 @@ def _build_report(
                     {"kind": kind.value, "name": name, "owner": owner}
                     for kind, name, owner in gpl.resolution_owners
                 ],
+                "inventory_death_drop_exclusions": list(
+                    gpl.inventory_death_drop_exclusions
+                ),
                 "compiled_bcd_size": compiled.size,
             },
             "art": {

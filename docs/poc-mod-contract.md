@@ -49,6 +49,18 @@ independently usable content package. It must ship:
    building records declare `local_name`, `dialog_id`, `controller_base`, and
    `panel_resource_template`.
 
+Numeric private inventory IDs need one additional lifecycle declaration in a
+future metadata version: whether each item may be spawned into the world when
+its owner dies. Majesty reports every numeric `INVx` key as droppable, so a
+unit Description attribute such as `CanDropItem=0` does not control this path.
+The POC currently accepts an explicit composition-profile list and extends the
+stock `Hero_Drop_Quest_Items` exclusion condition. It fails closed if that
+function is not stock-shaped or if a requested exclusion is not a defined GPL
+expression. SDK named inventory items do not use this numeric `INVx` path and
+must not be added to the condition. The current Alchemist reagent is a named
+item (`"AlchemistReagent"`), so the combined profile declares no numeric
+death-drop exclusion; the original source packages remain unchanged.
+
 The current completed Workshop packages do not yet include that sidecar. This
 POC therefore supplies read-only caller-owned definitions under `profiles/poc`.
 Future manager-ready uploads should include the same metadata in their own
@@ -65,7 +77,10 @@ Alchemist feature set, the player must use its DLL launcher, which starts
 Majesty suspended, injects the runtime, and resumes the game. Launching the
 Alchemist package directly from ordinary Steam bypasses the CGBR and related
 hooks. The current runtime supports the public 1.5.2.24 and beta2 1.5.2.28
-executables and refuses unknown fingerprints.
+executables and refuses unknown fingerprints. Generated CAM profiles also
+declare `freestyle-cam-rebind.v1`; this capability repairs the stale IMAG
+generation lifecycle through the injected runtime and is undergoing the
+Haunt-first Freestyle validation matrix.
 
 The generic reusable capability is intentionally narrow: stock-shaped custom
 guild recruit, upgrade, hero-list, and destroy behavior. The following are
@@ -96,6 +111,12 @@ Workshop:
 
 `selected Workshop packages -> external generator -> one validated local mod`
 
+The Haunt-only Freestyle proof deliberately does not require Alchemist inputs:
+
+```powershell
+.\scripts\Build-Haunt-Freestyle-Poc.ps1
+```
+
 ## Merge rules implemented in the POC
 
 The composer accepts an ordered sequence of any number of packages and applies
@@ -109,16 +130,21 @@ stock-relative N-way rules:
 - GPL functions/expressions and DAT blocks are indexed case-insensitively;
 - identical co-owned changes are accepted;
 - divergent semantic changes require an explicit resolution;
+- explicitly declared non-droppable numeric inventory IDs are added to the
+  stock hero-death exclusion condition before its `CanDropInventoryItem` and
+  `SpawnUnit` path;
 - TILE and SPLT collisions use deterministic allocation and only typed IMAG or
-  TILE-palette reference rewriting;
+  TILE-palette reference rewriting. Typed building IMAG coverage includes the
+  stock set-208 terminal TILE field after the direction records;
 - unknown manifest directives, CAM sections, IMAG layouts, direct references,
   and unsupported dataset shapes fail instead of being dropped or guessed.
 
-For the combined proof, Alchemist is intentionally the first art owner. Its
-three unreferenced/direct main TILE changes stay fixed. The complete typed Haunt
-run `17180-17929` is relocated to `17795-18544`; its interface TILE `2624` is
-relocated to `2980`. Both mods' SPLT change at `560` is byte-identical and
-Alchemist's `854` is unique, so palettes need no relocation.
+For the combined proof, Alchemist is intentionally the first art owner, so its
+requested main TILE positions stay fixed. With the current committed inputs,
+the complete typed Haunt run `17173-17929` is relocated to `17815-18571`; its
+interface TILE `2624` is relocated to `2982`. Both mods' SPLT change at `560`
+is byte-identical and Alchemist's `854` is unique, so palettes need no
+relocation.
 
 The two real GPL conflicts are `Random_Hero_Type` and `spell_extra_value`.
 Their explicit resolutions come from the existing Alchemist compatibility
@@ -156,7 +182,8 @@ For a live test, copy exactly one generated profile directory into
 `Documents\My Games\MajestyHD\Mods`, disable the original Haunt and Alchemist
 items, enable only the generated profile, and launch through Expanded Building
 Slots. Test one normal Original quest and one Northern Expansion quest for each
-profile. Freestyle is not supported for these CAM-dependent mods.
+profile. Freestyle testing requires the runtime capability declared in the
+generated report and must use the injected launcher.
 
 Minimum live checks:
 
@@ -164,13 +191,15 @@ Minimum live checks:
 | --- | --- |
 | Haunt-only | Palace gate, construct/recruit/upgrade, reopen and save/reload, Phantom art/audio/spells, Paladin lifecycle, stock AP07/Elf panel still correct. |
 | Alchemist-only | All three levels, recruit with NM18 names, CGAL/CGBR reopen, Oil/Phial/Vigor behavior, AP78 rows, Embassy/Outpost behavior, stock AP10/Fervus still correct. |
-| Combined | Both build entries, repeatedly alternate CGPH/CGAL/CGBR, recruit both heroes, verify both art/audio sets and both BDEP rules, exercise the resolved Embassy/Outpost/Paladin flow, save/reload. |
+| Combined | Both build entries, repeatedly alternate CGPH/CGAL/CGBR, recruit both heroes, verify both art/audio sets and both BDEP rules, exercise the resolved Embassy/Outpost/Paladin flow, kill an Alchemist carrying one or more Monster Reagents and verify the game remains responsive, save/reload. |
 
 ## Current scope limits
 
 - Dataset bases other than `Any`, multiple behavioral variants, and quest-mod
   binding are not yet composed.
-- Freestyle custom-CAM loading remains unsupported.
+- Freestyle custom-CAM loading is experimental under
+  `freestyle-cam-rebind.v1`; only completed profile/build combinations from the
+  live matrix may be described as supported.
 - v1 metadata cannot declare arbitrary runtime hooks.
 - A novel positional reference shape must first be traced to a stock mechanism
   and added as a typed parser; blind byte scanning is prohibited.
