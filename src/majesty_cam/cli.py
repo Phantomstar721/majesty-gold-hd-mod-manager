@@ -51,6 +51,11 @@ def main(argv: list[str] | None = None) -> int:
     haunt_parser.add_argument("--output-root", required=True, type=Path)
     haunt_parser.add_argument("--definition-root", type=Path)
 
+    subcommands.add_parser(
+        "manager",
+        help="Open the Majesty Mod Manager desktop application",
+    )
+
     args = parser.parse_args(argv)
 
     try:
@@ -104,6 +109,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"({profile.mod_id})"
             )
             return 0
+        if args.command == "manager":
+            from .manager.app import main as manager_main
+
+            return manager_main([])
     except (CamFormatError, ComposeError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

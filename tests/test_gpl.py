@@ -17,11 +17,84 @@ from majesty_cam.gpl import (
     add_inventory_death_drop_exclusions,
     parse_dat,
     parse_gpl,
+    require_complete_semantic_coverage,
+    rewrite_integer_expression,
     semantic_key,
 )
 
 
 class GplParsingTests(unittest.TestCase):
+    def test_complete_coverage_accepts_only_comments_and_whitespace_in_gaps(self):
+        source = parse_gpl(
+            "// prefix\n"
+            + _function("First", "return 1;")
+            + "/* between */\n"
+            + _function("Second", "return 2;")
+            + "// trailing\n",
+            "comments.gpl",
+        )
+
+        require_complete_semantic_coverage(source)
+
+    def test_complete_coverage_rejects_code_in_every_unparsed_gap(self):
+        valid = _function("First", "return 1;")
+        second = _function("Second", "return 2;")
+        cases = {
+            "prefix": "Include \"other.gpl\"\n" + valid,
+            "between": valid + "UnknownDirective 7\n" + second,
+            "trailing": valid + "RunThread Hidden();\n",
+        }
+        for label, text in cases.items():
+            with self.subTest(label=label):
+                source = parse_gpl(text, f"{label}.gpl")
+                with self.assertRaisesRegex(
+                    ValueError, "unparsed semantic-source text"
+                ):
+                    require_complete_semantic_coverage(source)
+
+    def test_complete_coverage_rejects_unterminated_block_comment(self):
+        source = parse_gpl(
+            _function("First", "return 1;") + "/* never closed",
+            "unterminated-comment.gpl",
+        )
+
+        with self.assertRaisesRegex(ValueError, "unparsed semantic-source text"):
+            require_complete_semantic_coverage(source)
+
+    def test_rewrites_only_an_exact_declared_integer_expression(self):
+        item = parse_gpl(
+            "expression #Intent_Applying_Oil 309 // private AITX row\n",
+            "oil.gpl",
+        ).items[0]
+
+        rewritten = rewrite_integer_expression(
+            item,
+            expected_value=309,
+            replacement_value=0x61234567,
+        )
+
+        self.assertEqual(
+            rewritten.text,
+            "expression #Intent_Applying_Oil 1629701479 // private AITX row\n",
+        )
+        with self.assertRaisesRegex(ValueError, "expected 310"):
+            rewrite_integer_expression(
+                item,
+                expected_value=310,
+                replacement_value=0x61234567,
+            )
+
+    def test_integer_expression_rewrite_rejects_compound_numeric_source(self):
+        item = parse_gpl(
+            "expression #Intent_Applying_Oil 300 + 9\n", "compound.gpl"
+        ).items[0]
+        with self.assertRaisesRegex(ValueError, "not an exact decimal integer"):
+            rewrite_integer_expression(
+                item,
+                expected_value=309,
+                replacement_value=0x61234567,
+            )
+
     def test_parses_functions_expressions_spans_and_nested_begin_end(self):
         source = textwrap.dedent(
             """\

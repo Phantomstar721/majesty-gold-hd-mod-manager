@@ -1,0 +1,22 @@
+MAJESTY MOD MANAGER
+
+Keep this entire folder together. "Majesty Mod Manager.exe" requires the
+nearby "_internal" folder and will not work if the EXE is moved by itself.
+
+1. Close Majesty Gold HD.
+2. Double-click "Majesty Mod Manager.exe" and approve the administrator prompt.
+3. Confirm the app detects Default Public 1.5.2.24 or beta2 1.5.2.28.
+4. Install the two required helpers on the Quality of Life tab when prompted.
+5. Review the automatically selected mods.
+6. If Merge mods are selected, choose "Prepare Selected Mods".
+7. Choose "Launch Majesty".
+
+Always launch through the manager while using prepared Merge content. Your
+subscribed source mods and downloaded quests are left untouched.
+
+Windows may show a SmartScreen warning because this community-built app is not
+code-signed. Use "More info > Run anyway" only when this folder came from the
+official Workshop item or GitHub release.
+
+Source, documentation, and licenses:
+https://github.com/Phantomstar721/majesty-gold-hd-cam-merger

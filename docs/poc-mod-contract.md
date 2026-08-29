@@ -45,9 +45,10 @@ independently usable content package. It must ship:
    `CGxx` building DialogID. A custom guild supplies matching `SMNU` and `STRT`
    resources and retains the exact stock controller lifecycle declared by its
    controller profile.
-6. A v1 `mod-definition.json` whose `mod_id` matches the MMXML UUID and whose
+6. A v2 `mod-definition.json` whose `mod_id` matches the MMXML UUID, whose
    building records declare `local_name`, `dialog_id`, `controller_base`, and
-   `panel_resource_template`.
+   `panel_resource_template`, and whose `runtime_capabilities` array declares
+   any extra launcher behavior the package needs.
 
 Numeric private inventory IDs need one additional lifecycle declaration in a
 future metadata version: whether each item may be spawned into the world when
@@ -91,9 +92,10 @@ for an arbitrary mod:
 - private AP78 weapon-oil rows;
 - the private NM18/HN69-HN72 name generator.
 
-A future metadata version needs a versioned runtime-capability registry before
-other mods may request new secondary controls, effect presenters, or name
-generators. Until then, unknown runtime behavior fails closed.
+Version 2 package definitions use the manager's versioned runtime-capability
+registry. A package may request a supported secondary control, presenter, or
+name generator without being keyed by UUID in manager code. Unknown runtime
+behavior fails closed.
 
 ### Generation-time tooling
 
@@ -125,7 +127,10 @@ stock-relative N-way rules:
 - named CAM registries are unioned by their native four-byte key;
 - BDEP is merged by case-sensitive building ID;
 - UNTN, ACTN, and HPTX are merged by embedded ID;
-- QITM and AITX are merged by positional index;
+- QITM is merged by positional index;
+- every stock-relative AITX change is automatically tied to its direct stock
+  resolver call sites, moved into the manager DLL registry, and removed from
+  the quest-replaceable positional output table;
 - XML is indexed by case-sensitive `(type, ID)`;
 - GPL functions/expressions and DAT blocks are indexed case-insensitively;
 - identical co-owned changes are accepted;

@@ -7,14 +7,19 @@ __pycache__/
 venv/
 build/
 dist/
+dist-*/
 *.egg-info/
 
 # Local game assets and cloned reference repos. Do not commit proprietary data.
 local/*
 !local/README.md
+payload/
 reference-repos/*
 !reference-repos/README.md
 *.cam
 *.CAM
 *.wav
 *.WAV
+docs/internal/
+private/
+Launch - Downloaded Map Crash Diagnostic.bat

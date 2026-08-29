@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "mods": {
+    "8C48289E-7C70-4426-8913-133F3544A182": {
+      "alias": "phantoms-haunt",
+      "definition": "profiles/poc/phantoms-haunt.mod-definition.json",
+      "replacement_roots": [
+        "payload/mods/CustomGuildPhantomsHauntExpanded",
+        "workspace:majesty-gold-hd-custom-guild-phantoms-haunt/dist/CustomGuildPhantomsHauntExpanded"
+      ],
+      "merge_priority": 200,
+      "badge": "Improved CGPH edition will be used; the stock Elf Guild remains native.",
+      "runtime_capabilities": [
+        "expanded-building-slots.cg-prefix",
+        "freestyle-cam-rebind.v1"
+      ],
+      "resolution_owners": []
+    },
+    "42BA4603-2B13-446D-A2A4-6CF3A55DDAC3": {
+      "alias": "alchemist",
+      "definition": "profiles/poc/alchemist.mod-definition.json",
+      "replacement_roots": [],
+      "merge_priority": 100,
+      "badge": "Manager-ready Alchemist compatibility profile",
+      "runtime_capabilities": [
+        "expanded-building-slots.cg-prefix",
+        "freestyle-cam-rebind.v1",
+        "alchemist.cgbrewing-secondary-controller",
+        "alchemist.ap78-private-oil-rows",
+        "alchemist.nm18-name-generator"
+      ],
+      "resolution_owners": []
+    }
+  },
+  "combination_resolutions": [
+    {
+      "requires": [
+        "8C48289E-7C70-4426-8913-133F3544A182",
+        "42BA4603-2B13-446D-A2A4-6CF3A55DDAC3"
+      ],
+      "source": "profiles/manager/resolutions/haunt-alchemist.gpl",
+      "items": [
+        {
+          "kind": "function",
+          "name": "Random_Hero_Type"
+        },
+        {
+          "kind": "function",
+          "name": "spell_extra_value"
+        }
+      ]
+    }
+  ]
+}

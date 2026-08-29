@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "majesty-gold-hd-cam-merger"
-version = "0.2.0"
+version = "0.3.0"
 description = "Merge Majesty Gold HD CAM mods, on a container layer that unpacks, inspects, and repacks CAM archives."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -16,9 +16,18 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = []
+gui = [
+  "PySide6-Essentials>=6.7,<6.9"
+]
+package = [
+  "pyinstaller>=6.10,<7"
+]
 
 [project.scripts]
 majesty-cam = "majesty_cam.cli:main"
+
+[project.gui-scripts]
+majesty-mod-manager = "majesty_cam.manager.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/majesty_cam"]

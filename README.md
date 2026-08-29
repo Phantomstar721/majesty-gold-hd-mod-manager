@@ -1,154 +1,140 @@
-# Majesty Gold HD CAM Merger
+# Majesty Mod Manager
 
-Tooling to make two or more Majesty Gold HD CAM mods work together, built on a
-container layer that already unpacks and repacks CAM archives byte-for-byte.
+Majesty Mod Manager is a Windows desktop app for organizing and launching
+**Majesty Gold HD** mods. It keeps ordinary mods independent, lists downloaded
+quests, manages compatible quality-of-life improvements, and safely combines
+supported CAM-based content mods into one playable setup.
 
-The live Majesty install should stay a reference and test target. This repo keeps code,
-synthetic test fixtures, and documentation only. Do not commit proprietary game assets.
+The manager is currently in private preview. It supports both Steam game
+executables:
 
-## Status: working Haunt + Alchemist proof of concept
+- Default Public Version `1.5.2.24`
+- `beta2` Steam Multiplayer Support `1.5.2.28`
 
-The container layer and the first real merge pipeline now work. The tool safely
-ingests completed packages and v1 definitions, performs stock-relative N-way
-table/XML/GPL merges, compiles one BCD, and relocates positional art only through
-typed reference maps. It generates Haunt-only, Alchemist-only, and combined
-profiles without editing either source mod.
+## What it does
 
-See [the POC contract and test guide](docs/poc-mod-contract.md) for package
-requirements, the external Expanded Building Slots/runtime boundary, current
-scope limits, and the live test matrix.
+The app scans the normal Majesty Mods and Quests folders plus subscribed Steam
+Workshop items, then presents four player-facing tabs:
 
-## Why merging, and not a slot convention
+- **Merge** contains compatible mods that replace shared Majesty data. Choose
+  any supported combination and select **Prepare Selected Mods** to build one
+  combined package.
+- **Standard** contains ordinary mods that Majesty can load independently.
+- **Quests** lists downloaded adventures and maps. They remain available
+  through Majesty's normal quest browser.
+- **Quality of Life** installs or removes the supported utility patches. Each
+  optional improvement remains independent.
 
-An obvious alternative is to publish a slot registry and ask mod authors to
-claim `TILE`/`SPLT` ranges. It was considered and rejected. A convention only
-binds mods written afterwards by authors who find and follow it, which is not a
-lever anyone in this community actually holds. Mods that already exist, and
-mods by authors who never read this repo, still have to be reconciled.
+All compatible detected mods begin enabled. The manager remembers later
+choices and restores them on the next run. Mods that cannot yet be combined
+safely are shown in red with a plain explanation and cannot be selected.
 
-So the tool has to take arbitrary mods as they are, report the clashes it finds,
-and offer resolutions. Prevention is not available.
+When Merge mods are selected, the manager:
 
-## Design: a three-way merge
+1. compares each package with the installed stock game data;
+2. combines independent data, descriptions, artwork, audio, and game-script
+   changes;
+3. recompiles and validates one private local package;
+4. leaves every source mod and downloaded quest untouched; and
+5. launches Majesty through the bundled runtime required by combined custom
+   guilds and Freestyle mode.
 
-The stock CAM is the common ancestor, so this is `base = stock`, plus one side
-per mod, with the usual three-way semantics and the usual failure modes. Most
-"conflicts" in practice are an artifact of the format forcing a mod to ship a
-whole table when it meant to add a few rows; diffing each side against stock
-recovers the intent mechanically.
+Custom activity messages are discovered from every selected compatible
+package and assigned stable private IDs. This prevents downloaded quests from
+overwriting those messages without requiring a manager-specific copy of each
+quest.
 
-| Conflict class | Why it happens | Automatable |
-| --- | --- | --- |
-| Disjoint entries (`PH*` vs `MK*`) | Different names, no real conflict | Yes, union |
-| `BDEP` | Engine takes one complete table, does not merge tables | Yes, combine deltas against stock |
-| `UNTN`, `ACTN`, `QITM`, `AITX`, `HPTX` | Whole tables, load order wins | Yes, same delta approach |
-| `TILE` / `SPLT` | Global numeric slots, mods pick overlapping ones | Hard, needs renumbering and reference rewriting |
-| `SMNU/AP07` and other recruit dialogs | Exe-keyed stock controller dispatch | Yes, with allocated IDs plus the runtime controller registry |
-| Replaced stock GPL functions | Two mods rewrite the same behavior | Sometimes: vanilla-aware three-way merge plus manual resolution |
+The original **Custom Guild: Phantoms Haunt** is recognized automatically. If
+selected, the manager uses its included compatibility edition, which keeps the
+stock Elf Guild intact while providing the Phantom guild separately.
 
-### The two that require higher-level support
+## Install and use
 
-A recruit-dialog clash is resource contention, not just a data conflict.
-Runtime testing in the Expanded Building Slots project proved that a custom
-dialog ID can retain its own CAM resources while using a stock controller and
-without displacing the stock building. The production design therefore assigns
-stable internal IDs during the merge and emits a registry mapping each ID to
-the controller archetype declared by the mod author.
+The Steam Workshop download contains the complete windowed application.
+Keep `Majesty Mod Manager.exe` beside its `_internal` folder.
 
-Overlapping GPL replacements are code merge conflicts. The reviewed Workshop
-Majesty Script Merger demonstrates a useful vanilla-aware three-way approach:
-merge non-overlapping edits automatically, validate and compile the result, and
-present genuine overlap regions for an explicit user decision.
+1. Close Majesty Gold HD.
+2. Run `Majesty Mod Manager.exe` and approve the Windows administrator prompt.
+3. On first use, open **Quality of Life** and install the two required helpers
+   when prompted.
+4. Review the automatically selected mods. Incompatible Merge entries explain
+   what they need.
+5. If Merge mods are selected, choose **Prepare Selected Mods**.
+6. Choose **Launch Majesty**.
 
-See [the local Majesty Script Merger review](docs/majesty-script-merger-review.md)
-for the reusable concepts, limitations, and relationship to the planned
-manager.
+Always launch through the manager while using prepared Merge content. Standard
+mods can still be used without a prepared package.
 
-### The hazard in renumbering
+The application is community-built and is not code-signed, so Windows may show
+a SmartScreen warning. Use **More info > Run anyway** only when the download
+came from the official Workshop item or this repository's releases.
 
-Reassigning a `TILE` slot is only safe with a complete map of references to it,
-and references are not all in one place. In the Phantoms Haunt work, cloning
-AP10 under AP07 and searching for the old tile `466` missed frames that
-referenced `474` and `495`, because raw-texture animation-set IDs were also
-embedded inside the selected `SMNU`. Incomplete reference discovery silently
-corrupts art rather than failing loudly, which is the worst failure shape for a
-merge tool. Renumbering should be last, behind detection and the table merges.
+## Compatibility and safety
 
-## Suggested order of work
+Majesty normally lets complete CAM tables overwrite one another according to
+load order. The manager instead performs a stock-relative merge and stops when
+it cannot prove that a result is safe. It never silently chooses one conflicting
+mod over another.
 
-1. Detect. Unpack each mod, diff against stock, report additions and
-   modifications per section, and flag overlaps. No semantic understanding of
-   any record type required, and it answers the question authors actually ask.
-2. Merge the whole-table types via deltas against stock.
-3. Report the unmergeable classes with concrete resolution options.
-4. Only then attempt `TILE`/`SPLT` renumbering, gated on a reference map that
-   can be shown to be complete.
+A generic Merge mod must include the files and versioned compatibility
+definition described in the
+[merge-mod authoring contract](docs/manager-merge-contract.md). Existing legacy
+mods can be supported through audited external compatibility profiles. New
+native runtime behavior must declare a manager-supported capability; unknown
+capabilities are rejected rather than guessed.
 
-## Container layer (working today)
+The manager currently supports the package structures exercised by Custom
+Guild: Phantoms Haunt and Custom Guild: Alchemist Lab. Broader compatibility
+will grow as independently authored CAM mods become available for testing.
 
-`0.2.0` captures the first in-game audio discovery pass. See
-`docs/handoff-0.2.0.md` for the resume summary, confirmed findings, and next steps.
+The two required launch helpers are:
 
-The container goals below are met and remain the foundation for the merge work:
+- **Generic Visitor Lists**, which safely displays custom guild visitors; and
+- **Remember Active Mods**, which restores the exact selection prepared by the
+  manager when Majesty starts.
 
-- Inspect CAM archives without modifying them.
-- Unpack CAM archives into an editable directory plus an order-preserving index.
-- Repack directories back into valid CAM archives.
+They are installed through version-checked patchers and coexist with the other
+quality-of-life utilities offered in the app. Unknown Majesty executables are
+rejected before executable changes are applied.
 
-## Current Commands
+## Build from source
 
-```powershell
-python -m majesty_cam.cli list path\to\archive.cam
-python -m majesty_cam.cli verify path\to\archive.cam
-python -m majesty_cam.cli unpack path\to\archive.cam local\unpacked
-python -m majesty_cam.cli pack local\unpacked local\repacked.cam
-python -m majesty_cam.cli poc-build --game-path "C:\Program Files (x86)\Steam\steamapps\common\Majesty HD" --input-root local\poc\inputs --output-root local\poc\outputs
-```
-
-`unpack` requires a new or empty destination so files left by an older archive
-cannot be mistaken for current output. To intentionally retain existing files,
-pass `--allow-nonempty`; the tool warns that unrelated files will remain. It
-never cleans a destination automatically.
-
-For the checked-in Haunt/Alchemist fixture layout, the equivalent convenience
-command is:
+Python 3.9 or newer is required for source development:
 
 ```powershell
-.\scripts\Build-Haunt-Alchemist-Poc.ps1
+.\Setup - Majesty Mod Manager.bat
+.\Launch - Majesty Mod Manager.bat
+.\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-Generated packages and proprietary inputs remain under ignored `local/` paths.
-The public `compose_package(...)` API accepts an ordered sequence of any number
-of packages; unresolved conflicts and unsupported binary shapes fail closed.
-
-## Local Setup
-
-Tests run directly from a fresh checkout without installing the package:
+Build the redistributable windowed application with:
 
 ```powershell
-python -m unittest discover -s tests
+powershell -ExecutionPolicy Bypass -File .\scripts\Build-ModManagerExe.ps1
 ```
 
-For an isolated editable install and the `majesty-cam` command:
+The complete application is written to `dist\Majesty Mod Manager`. It is a
+one-directory build by design: the bundled runtime and support files must remain
+available for the full Majesty session.
+
+Maintainers can prepare an RGSEditor upload directory with:
 
 ```powershell
-cd C:\Users\bterr\source\repos\majesty-gold-hd-cam-merger
-python -m venv .venv
-.\.venv\Scripts\python -m pip install -e .[dev]
-.\.venv\Scripts\python -m unittest discover -s tests
+powershell -ExecutionPolicy Bypass -File .\scripts\Stage-Workshop.ps1
 ```
 
-## Local Game Data
+## License
 
-Use `local/` for anything copied from the game install while testing. It is ignored by
-git on purpose.
+The Majesty Mod Manager source and project-owned artwork are licensed under the
+MIT License. See [LICENSE](LICENSE).
 
-Useful paths on this machine:
+The packaged application also contains separately licensed components,
+including Python, PySide6/Qt, the PyInstaller bootloader, the Expanded Building
+Slots runtime, and the Majesty quality-of-life utilities. Their notices and
+source links are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), and the Workshop package
+includes the applicable license texts.
 
-- SDK: `C:\Program Files (x86)\Steam\steamapps\common\Majesty HD\SDK`
-- SDK example CAMs: `C:\Program Files (x86)\Steam\steamapps\common\Majesty HD\SDK\Example\Data`
-
-## Reference Repos
-
-Use `reference-repos/` for shallow clones of public research/tooling repos. It is also
-ignored by git so third-party code and game data are not accidentally bundled.
+Majesty Gold HD and its assets are the property of their respective owners.
+This project is an independent community tool and is not affiliated with or
+endorsed by the game's rights holders, Valve, or Steam.

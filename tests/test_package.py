@@ -126,6 +126,20 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(with_definition.definition.internal_name, "HauntCompatibility")
             self.assertIsInstance(with_definition.definition.custom_buildings, tuple)
 
+            supplied_v2 = ModDefinition(
+                schema_version=2,
+                mod_id=MOD_ID.strip("{}").upper(),
+                internal_name="PackageOwnedCapabilities",
+                display_name="Package-Owned Capabilities",
+                custom_buildings=(),
+                runtime_capabilities=("example.stock-clone.v1",),
+            )
+            with_v2_definition = load_package(package, definition=supplied_v2)
+            self.assertEqual(
+                with_v2_definition.definition.runtime_capabilities,
+                ("example.stock-clone.v1",),
+            )
+
     def test_definition_can_be_supplied_from_an_explicit_external_path(self):
         with TemporaryDirectory() as tmp:
             temp_root = Path(tmp)
@@ -240,7 +254,7 @@ class PackageTests(unittest.TestCase):
             parse_mod_definition(extra)
 
         bad_version = dict(valid)
-        bad_version["schema_version"] = 2
+        bad_version["schema_version"] = 3
         with self.assertRaisesRegex(PackageFormatError, "unsupported"):
             parse_mod_definition(bad_version)
 
@@ -258,6 +272,52 @@ class PackageTests(unittest.TestCase):
         building_extra["custom_buildings"][0]["future_field"] = True
         with self.assertRaisesRegex(PackageFormatError, "unknown future_field"):
             parse_mod_definition(building_extra)
+
+    def test_definition_v2_owns_strict_runtime_capability_declarations(self):
+        value = _definition_mapping()
+        value["schema_version"] = 2
+        value["runtime_capabilities"] = [
+            "example.stock-clone.v1",
+            "example.private-resource.v2",
+        ]
+
+        parsed = parse_mod_definition(value)
+
+        self.assertEqual(parsed.schema_version, 2)
+        self.assertEqual(
+            parsed.runtime_capabilities,
+            (
+                "example.stock-clone.v1",
+                "example.private-resource.v2",
+            ),
+        )
+
+        for capabilities, message in (
+            (["Example.MixedCase"], "lowercase dotted capability"),
+            (["not-dotted"], "lowercase dotted capability"),
+            (["example."], "lowercase dotted capability"),
+            (["example..feature"], "lowercase dotted capability"),
+            (["example.bad_feature"], "lowercase dotted capability"),
+            (["example.valid", "example.valid"], "duplicate runtime capability"),
+            ("example.not-an-array", "must be an array"),
+        ):
+            with self.subTest(capabilities=capabilities):
+                invalid = _definition_mapping()
+                invalid["schema_version"] = 2
+                invalid["runtime_capabilities"] = capabilities
+                with self.assertRaisesRegex(PackageFormatError, message):
+                    parse_mod_definition(invalid)
+
+    def test_definition_v1_stays_backward_compatible_without_capabilities(self):
+        parsed = parse_mod_definition(_definition_mapping())
+
+        self.assertEqual(parsed.schema_version, 1)
+        self.assertEqual(parsed.runtime_capabilities, ())
+
+        invalid = _definition_mapping()
+        invalid["runtime_capabilities"] = []
+        with self.assertRaisesRegex(PackageFormatError, "unknown runtime_capabilities"):
+            parse_mod_definition(invalid)
 
     def test_rejects_duplicate_json_keys_and_definition_id_mismatch(self):
         with TemporaryDirectory() as tmp:

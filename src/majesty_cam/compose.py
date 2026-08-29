@@ -13,6 +13,7 @@ from typing import Iterable, Mapping, Sequence
 import uuid
 import xml.etree.ElementTree as ET
 
+from ._subprocess import no_console_window_options
 from .art import (
     ArtArchiveAnalysis,
     ArtRelocationReport,
@@ -46,6 +47,22 @@ from .gpl import (
     merge_sources,
     parse_dat,
     parse_gpl,
+    require_complete_semantic_coverage,
+)
+from .intent_text import (
+    ActivityTextDiscoveryPackage,
+    INTENT_REGISTRY_RELATIVE_PATH,
+    IntentTextError,
+    PrivateActivityTextBinding,
+    PrivateActivityTextRecord,
+    audit_private_activity_text_resolver_aliases,
+    collect_exact_integer_expressions,
+    collect_integer_expression_environment,
+    decode_intent_registry,
+    discover_private_activity_text_bindings,
+    encode_intent_registry,
+    rewrite_private_activity_text_resolver_calls,
+    rewrite_unowned_private_activity_text_resolver_calls,
 )
 from .package import (
     CamLoad,
@@ -55,7 +72,13 @@ from .package import (
     load_package,
     parse_mod_definition,
 )
-from .strt import StrtDelta, merge_strt, parse_strt
+from .runtime_capabilities import (
+    PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY,
+    RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH,
+    decode_runtime_capability_manifest,
+    encode_runtime_capability_manifest,
+)
+from .strt import StrtDelta, StrtRecord, StrtTable, merge_strt, parse_strt, strt_delta
 from .tables import BdepDelta, merge_bdep
 
 
@@ -64,9 +87,45 @@ class ComposeError(ValueError):
 
 
 @dataclass(frozen=True)
+class StockComposeInput:
+    """One exact installed-stock file consumed by package composition."""
+
+    relative_path: Path
+    size: int
+    sha256: str
+
+
+_STOCK_COMPOSE_FIXED_INPUTS = (
+    Path("Data/textdata.cam"),
+    Path("Data/maindata.cam"),
+    Path("Data/interfacedata.cam"),
+    Path("DataMX/mx_gpltext.cam"),
+    Path("DataMX/mx_miscdata.cam"),
+    Path("SDK/Gplbcc.exe"),
+    Path("SDK/OriginalQuests/GPLMx/mx_defines.gpl"),
+)
+_STOCK_COMPOSE_XML_DIRECTORIES = (
+    Path("SDK/OriginalQuests/Data"),
+    Path("SDK/OriginalQuests/DataMX"),
+)
+
+
+@dataclass(frozen=True)
 class SelectedMod:
     alias: str
     package: ModPackage
+
+
+@dataclass(frozen=True)
+class ScopedSemanticResolution:
+    """One explicit semantic result and the mod owners it is allowed to cover."""
+
+    item: SemanticItem
+    participant_owners: frozenset[str]
+
+    def __post_init__(self) -> None:
+        if not self.participant_owners:
+            raise ValueError("semantic resolution participants cannot be empty")
 
 
 @dataclass(frozen=True)
@@ -115,6 +174,7 @@ class TextMergeResult:
     whole_tables: tuple[StrtMergeSelection, ...]
     named: tuple[NamedMergeSelection, ...]
     dialog_renames: tuple[tuple[str, bytes, bytes], ...]
+    private_activity_texts: tuple[PrivateActivityTextRecord, ...]
 
 
 @dataclass(frozen=True)
@@ -128,6 +188,7 @@ class GplComposeResult:
     source_set: GplProjectSourceSet
     conflicts: tuple[SemanticConflict, ...]
     resolution_owners: tuple[tuple[DefinitionKind, str, str], ...]
+    resolution_sources: tuple[tuple[DefinitionKind, str, str], ...]
     inventory_death_drop_exclusions: tuple[str, ...]
 
 
@@ -320,6 +381,8 @@ def merge_named_resources(
 def merge_text_resources(
     game_path: Path,
     inventories: Sequence[PackageInventory],
+    *,
+    private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
 ) -> TextMergeResult:
     """Merge Majesty's known whole STRT tables and all private panel/name tables."""
 
@@ -329,6 +392,7 @@ def merge_text_resources(
 
     whole: dict[bytes, StrtMergeSelection] = {}
     whole_resource_ids: set[int] = set()
+    detached_activity_texts: tuple[PrivateActivityTextRecord, ...] = ()
     for key, (stock_relative, key_mode) in _WHOLE_STRT.items():
         variants = [
             resource
@@ -337,10 +401,29 @@ def merge_text_resources(
         ]
         if not variants:
             continue
+        variant_owners = [resource.owner for resource in variants]
+        duplicate_owners = sorted(
+            owner for owner in set(variant_owners) if variant_owners.count(owner) > 1
+        )
+        if duplicate_owners:
+            raise ComposeError(
+                f"complete {_display_key(key)} STRT table appears more than once "
+                f"for selected owner(s): {', '.join(duplicate_owners)}"
+            )
         stock_entry = _require_cam_entry(game_path / stock_relative, b"STRT", key)
+        stock_table = parse_strt(stock_entry.data)
+        parsed_variants = tuple(
+            (resource.owner, parse_strt(resource.entry.data)) for resource in variants
+        )
+        if key == b"AITX" and private_activity_texts is not None:
+            parsed_variants, detached_activity_texts = _detach_private_activity_texts(
+                stock_table,
+                parsed_variants,
+                private_activity_texts,
+            )
         merged, deltas = merge_strt(
-            parse_strt(stock_entry.data),
-            ((resource.owner, parse_strt(resource.entry.data)) for resource in variants),
+            stock_table,
+            parsed_variants,
             key_mode=key_mode,
         )
         whole[key] = StrtMergeSelection(
@@ -349,6 +432,11 @@ def merge_text_resources(
             deltas=deltas,
         )
         whole_resource_ids.update(id(resource) for resource in variants)
+
+    if private_activity_texts and b"AITX" not in whole:
+        raise ComposeError(
+            "private activity-text bindings exist but no selected mod provides AITX"
+        )
 
     private_strt_resources = tuple(
         resource
@@ -390,7 +478,205 @@ def merge_text_resources(
         whole_tables=tuple(whole[key] for key in whole_order if key in whole),
         named=(*smnu_selections, *private_strt_selections),
         dialog_renames=dialog_renames,
+        private_activity_texts=detached_activity_texts,
     )
+
+
+def discover_private_activity_texts(
+    game_path: Path,
+    inventories: Sequence[PackageInventory],
+) -> tuple[PrivateActivityTextBinding, ...]:
+    """Derive quest-safe private AITX bindings from every selected package.
+
+    This is deliberately package-independent: it compares each supplied AITX
+    table to the stock table and proves each changed row against that package's
+    complete GPL source.  No Mod UUID, row, symbol, or string is recognized by
+    name.  A package that cannot prove the stock resolver lifecycle is rejected.
+    """
+
+    stock_entry = _require_cam_entry(
+        game_path / _WHOLE_STRT[b"AITX"][0], b"STRT", b"AITX"
+    )
+    stock = parse_strt(stock_entry.data)
+    packages: list[ActivityTextDiscoveryPackage] = []
+    for inventory in inventories:
+        owner = inventory.selected.alias
+        variants = [
+            resource
+            for resource in inventory.resources
+            if resource.section == b"STRT" and resource.key == b"AITX"
+        ]
+        if len(variants) > 1:
+            raise ComposeError(
+                f"{owner}: complete AITX STRT table appears more than once"
+            )
+        if not variants:
+            continue
+        table = parse_strt(variants[0].entry.data)
+        _require_complete_aitx_provider(owner, stock, table)
+        delta = strt_delta(stock, table, owner=owner, key_mode="index")
+        if not delta.changes:
+            continue
+        for source_index, record in delta.changes:
+            if record.string_id != source_index:
+                raise ComposeError(
+                    f"{owner}: AITX[{source_index}] embeds ID {record.string_id}, "
+                    "expected its positional index"
+                )
+        packages.append(
+            ActivityTextDiscoveryPackage(
+                owner=owner,
+                source_mod_id=inventory.selected.package.mod_id,
+                changes=tuple(
+                    (source_index, record.text)
+                    for source_index, record in delta.changes
+                ),
+                stock_rows=tuple(
+                    (
+                        source_index,
+                        stock.records[source_index].text
+                        if source_index < len(stock.records)
+                        else b"",
+                    )
+                    for source_index, _record in delta.changes
+                ),
+                gpl_sources=tuple(_parse_inventory_gpl_sources(inventory)),
+            )
+        )
+    if not packages:
+        return ()
+    try:
+        stock_expressions = _load_stock_activity_text_expressions(game_path)
+        return discover_private_activity_text_bindings(
+            packages,
+            stock_integer_expressions=stock_expressions,
+        )
+    except IntentTextError as exc:
+        raise ComposeError(str(exc)) from exc
+
+
+def discover_selected_private_activity_texts(
+    game_path: Path,
+    selected_mods: Sequence[SelectedMod],
+) -> tuple[PrivateActivityTextBinding, ...]:
+    """Convenience wrapper used by manager plan/catalog preflight."""
+
+    inventories = tuple(inventory_package(selected) for selected in selected_mods)
+    return discover_private_activity_texts(game_path, inventories)
+
+
+def _load_stock_activity_text_expressions(game_path: Path) -> dict[str, int]:
+    source = _load_stock_activity_text_expression_source(game_path)
+    try:
+        return collect_exact_integer_expressions((source,), owner="stock-datamx")
+    except IntentTextError as exc:
+        raise ComposeError(str(exc)) from exc
+
+
+def _load_stock_activity_text_expression_source(
+    game_path: Path,
+) -> ParsedSemanticSource:
+    path = game_path / "SDK" / "OriginalQuests" / "GPLMx" / "mx_defines.gpl"
+    if not path.is_file():
+        raise ComposeError(
+            "stock DataMX GPL definitions are required for activity-text "
+            f"discovery: {path}"
+        )
+    return parse_gpl(_read_source_text(path), str(path))
+
+
+def _detach_private_activity_texts(
+    stock: StrtTable,
+    variants: Sequence[tuple[str, StrtTable]],
+    bindings: Sequence[PrivateActivityTextBinding],
+) -> tuple[
+    tuple[tuple[str, StrtTable], ...],
+    tuple[PrivateActivityTextRecord, ...],
+]:
+    """Detach every discovered AITX delta into the manager runtime registry.
+
+    AITX is a quest-replaceable positional singleton.  Keeping even one
+    Merge-mod delta in that table would let a later quest silently substitute
+    unrelated text. Therefore every selected AITX change must have a proven
+    stock-resolver call-site binding and be restored to its stock placeholder
+    or removed from the emitted table. Incomplete discovery stops the build.
+    """
+
+    by_owner: dict[str, list[PrivateActivityTextBinding]] = {}
+    known_owners = {owner for owner, _table in variants}
+    runtime_ids: set[int] = set()
+    for binding in bindings:
+        if binding.owner not in known_owners:
+            raise ComposeError(
+                f"{binding.owner}: private activity-text binding has no AITX provider"
+            )
+        if binding.runtime_id in runtime_ids:
+            raise ComposeError(
+                f"duplicate private activity-text runtime ID 0x{binding.runtime_id:08X}"
+            )
+        runtime_ids.add(binding.runtime_id)
+        by_owner.setdefault(binding.owner, []).append(binding)
+
+    sanitized: list[tuple[str, StrtTable]] = []
+    detached: list[PrivateActivityTextRecord] = []
+    for owner, table in variants:
+        _require_complete_aitx_provider(owner, stock, table)
+        delta = strt_delta(stock, table, owner=owner, key_mode="index")
+        changed = {index for index, _record in delta.changes}
+        declared = {binding.source_index for binding in by_owner.get(owner, ())}
+        undeclared = sorted(changed - declared)
+        stale = sorted(declared - changed)
+        if undeclared:
+            raise ComposeError(
+                f"{owner}: AITX changes at indices {undeclared} were not discovered "
+                "as safe private activity text; quest-safe composition cannot be proven"
+            )
+        if stale:
+            raise ComposeError(
+                f"{owner}: private activity-text discovery names unchanged/missing "
+                f"AITX indices {stale}"
+            )
+
+        records = list(table.records)
+        for binding in by_owner.get(owner, ()):
+            record = records[binding.source_index]
+            expected = binding.expected_text.encode("cp1252")
+            if record.string_id != binding.source_index:
+                raise ComposeError(
+                    f"{owner}: AITX[{binding.source_index}] embeds ID "
+                    f"{record.string_id}, expected its positional index"
+                )
+            if record.text != expected:
+                raise ComposeError(
+                    f"{owner}: AITX[{binding.source_index}] does not match the "
+                    f"discovered text for AITX[{binding.source_index}]"
+                )
+            detached.append(PrivateActivityTextRecord(binding=binding, text=record.text))
+            records[binding.source_index] = (
+                stock.records[binding.source_index]
+                if binding.source_index < len(stock.records)
+                else StrtRecord(string_id=binding.source_index, text=b"")
+            )
+
+        while len(records) > len(stock.records) and not records[-1].text:
+            records.pop()
+        sanitized.append((owner, StrtTable(version=table.version, records=tuple(records))))
+
+    if bindings and len(detached) != len(bindings):  # defensive closed-world check
+        raise ComposeError("not every discovered private activity-text row was detached")
+    detached.sort(key=lambda record: record.binding.runtime_id)
+    return tuple(sanitized), tuple(detached)
+
+
+def _require_complete_aitx_provider(
+    owner: str, stock: StrtTable, table: StrtTable
+) -> None:
+    if len(table.records) < len(stock.records):
+        raise ComposeError(
+            f"{owner}: AITX provider is truncated ({len(table.records)} rows; "
+            f"installed stock has {len(stock.records)}); complete effective "
+            "positional tables are required"
+        )
 
 
 def merge_bdep_resource(
@@ -801,40 +1087,112 @@ def merge_gpl_resources(
     inventories: Sequence[PackageInventory],
     *,
     resolution_owners: Mapping[tuple[DefinitionKind | str, str], str] | None = None,
+    semantic_resolutions: Mapping[
+        tuple[DefinitionKind | str, str],
+        SemanticItem | ScopedSemanticResolution,
+    ] | None = None,
     inventory_death_drop_exclusions: Sequence[str] = (),
+    private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
+    stock_integer_expression_sources: Sequence[ParsedSemanticSource] = (),
 ) -> GplComposeResult:
     parsed_by_owner: dict[str, list[ParsedSemanticSource]] = {}
     for inventory in inventories:
         owner = inventory.selected.alias
-        parsed = parsed_by_owner.setdefault(owner, [])
-        for load in inventory.gpl_loads:
-            for source_path in load.sources:
-                path = source_path.absolute_path
-                text = _read_source_text(path)
-                suffix = path.suffix.casefold()
-                if suffix == ".gpl":
-                    source = parse_gpl(text, str(path))
-                elif suffix == ".dat":
-                    source = parse_dat(text, str(path))
-                else:
-                    raise ComposeError(
-                        f"{owner}: unsupported GPL source extension: {path}"
-                    )
-                if not source.items and _meaningful_nonsemantic_text(source.text):
-                    raise ComposeError(
-                        f"{owner}: GPL source has non-semantic content the composer "
-                        f"cannot preserve: {path}"
-                    )
-                parsed.append(source)
+        parsed_by_owner.setdefault(owner, []).extend(
+            _parse_inventory_gpl_sources(inventory)
+        )
+
+    integer_expression_environment = collect_integer_expression_environment(
+        (
+            *stock_integer_expression_sources,
+            *(
+                source
+                for owner_sources in parsed_by_owner.values()
+                for source in owner_sources
+            ),
+        )
+    )
+
+    try:
+        parsed_by_owner = rewrite_private_activity_text_resolver_calls(
+            parsed_by_owner,
+            private_activity_texts or (),
+            integer_expression_environment=integer_expression_environment,
+        )
+    except IntentTextError as exc:
+        raise ComposeError(str(exc)) from exc
 
     initial = merge_sources([], parsed_by_owner)
     requested = {
         (DefinitionKind(kind), name.casefold()): owner
         for (kind, name), owner in (resolution_owners or {}).items()
     }
+    explicit: dict[tuple[DefinitionKind, str], SemanticItem] = {}
+    explicit_scopes: dict[tuple[DefinitionKind, str], frozenset[str]] = {}
+    for (kind, name), resolution in (semantic_resolutions or {}).items():
+        key = (DefinitionKind(kind), name.casefold())
+        if isinstance(resolution, ScopedSemanticResolution):
+            explicit[key] = resolution.item
+            explicit_scopes[key] = resolution.participant_owners
+        else:
+            explicit[key] = resolution
+    for key, item in explicit.items():
+        if item.key != key:
+            raise ComposeError(
+                f"GPL semantic resolution key {key!r} does not match item {item.key!r}"
+            )
+    if explicit and private_activity_texts:
+        try:
+            rewritten_explicit = rewrite_unowned_private_activity_text_resolver_calls(
+                tuple(explicit.values()),
+                private_activity_texts,
+                integer_expression_environment=integer_expression_environment,
+            )
+        except IntentTextError as exc:
+            raise ComposeError(str(exc)) from exc
+        explicit = {
+            key: item for key, item in zip(explicit.keys(), rewritten_explicit)
+        }
+    overlap = set(requested) & set(explicit)
+    if overlap:
+        labels = ", ".join(f"{kind.value}:{name}" for kind, name in sorted(overlap))
+        raise ComposeError(
+            f"GPL conflicts cannot have both owner and explicit resolutions: {labels}"
+        )
     resolutions: dict[tuple[DefinitionKind, str], SemanticItem] = {}
     used: list[tuple[DefinitionKind, str, str]] = []
+    used_sources: list[tuple[DefinitionKind, str, str]] = []
     for conflict in initial.conflicts:
+        explicit_item = explicit.get(conflict.key)
+        if explicit_item is not None:
+            allowed_owners = explicit_scopes.get(conflict.key)
+            novel_extra_owners: set[str] = set()
+            if allowed_owners is not None:
+                allowed_texts = {
+                    variant.item.text
+                    for variant in conflict.variants
+                    if variant.side_name in allowed_owners
+                }
+                allowed_texts.add(explicit_item.text)
+                novel_extra_owners = {
+                    variant.side_name
+                    for variant in conflict.variants
+                    if variant.side_name not in allowed_owners
+                    and variant.item.text not in allowed_texts
+                }
+            if novel_extra_owners:
+                extras = sorted(novel_extra_owners)
+                raise ComposeError(
+                    "GPL semantic resolution for "
+                    f"{conflict.key[0].value}:{conflict.name} is scoped to "
+                    f"{sorted(allowed_owners or ())}, but additional mod owners "
+                    f"provide novel changes: {extras}"
+                )
+            resolutions[conflict.key] = explicit_item
+            used_sources.append(
+                (conflict.key[0], conflict.name, explicit_item.source_name)
+            )
+            continue
         owner = requested.get(conflict.key)
         if owner is None:
             continue
@@ -851,6 +1209,14 @@ def merge_gpl_resources(
     if unused:
         labels = ", ".join(f"{kind.value}:{name}" for kind, name in sorted(unused))
         raise ComposeError(f"GPL resolutions do not name real conflicts: {labels}")
+    unused_explicit = set(explicit) - set(resolutions)
+    if unused_explicit:
+        labels = ", ".join(
+            f"{kind.value}:{name}" for kind, name in sorted(unused_explicit)
+        )
+        raise ComposeError(
+            f"GPL semantic resolutions do not name real conflicts: {labels}"
+        )
     final = merge_sources([], parsed_by_owner, resolutions or None)
     final.require_clean()
     final = add_inventory_death_drop_exclusions(
@@ -858,12 +1224,49 @@ def merge_gpl_resources(
         inventory_death_drop_exclusions,
         source_name="<CAM Manager stock death-drop composition>",
     )
+    if private_activity_texts:
+        try:
+            audit_private_activity_text_resolver_aliases(
+                final.items, private_activity_texts
+            )
+        except IntentTextError as exc:
+            raise ComposeError(str(exc)) from exc
     return GplComposeResult(
         source_set=final.emit_project_source_set(),
         conflicts=initial.conflicts,
         resolution_owners=tuple(used),
+        resolution_sources=tuple(used_sources),
         inventory_death_drop_exclusions=tuple(inventory_death_drop_exclusions),
     )
+
+
+def _parse_inventory_gpl_sources(
+    inventory: PackageInventory,
+) -> list[ParsedSemanticSource]:
+    owner = inventory.selected.alias
+    parsed: list[ParsedSemanticSource] = []
+    for load in inventory.gpl_loads:
+        for source_path in load.sources:
+            path = source_path.absolute_path
+            text = _read_source_text(path)
+            suffix = path.suffix.casefold()
+            if suffix == ".gpl":
+                source = parse_gpl(text, str(path))
+            elif suffix == ".dat":
+                source = parse_dat(text, str(path))
+            else:
+                raise ComposeError(
+                    f"{owner}: unsupported GPL source extension: {path}"
+                )
+            try:
+                require_complete_semantic_coverage(source)
+            except ValueError as exc:
+                raise ComposeError(
+                    f"{owner}: GPL source has unparsed content the composer "
+                    f"cannot preserve: {path}: {exc}"
+                ) from exc
+            parsed.append(source)
+    return parsed
 
 
 def compile_gpl(
@@ -893,6 +1296,7 @@ def compile_gpl(
         text=True,
         encoding="cp1252",
         errors="replace",
+        **no_console_window_options(),
     )
     if process.returncode != 0:
         raise ComposeError(
@@ -909,6 +1313,109 @@ def compile_gpl(
     )
 
 
+def snapshot_stock_compose_inputs(game_path: Path) -> tuple[StockComposeInput, ...]:
+    """Hash the complete, deterministic installed-stock composition input set.
+
+    The fixed CAM/compiler/defines inputs are required.  Both stock Description
+    directories are required and every direct ``*.xml`` child is included, so
+    adding or deleting a stock Description document changes the snapshot.  A
+    symlink anywhere below the resolved game root is rejected rather than
+    silently following a mutable external target.
+    """
+
+    root = game_path.resolve(strict=True)
+    if not root.is_dir():
+        raise ComposeError(f"game path is not a directory: {root}")
+
+    relative_paths = _enumerate_stock_compose_relative_paths(root)
+
+    snapshots: list[StockComposeInput] = []
+    seen: set[str] = set()
+    for relative in relative_paths:
+        normalized = relative.as_posix().casefold()
+        if normalized in seen:
+            raise ComposeError(
+                "installed stock composition inputs contain a duplicate "
+                f"case-insensitive path: {relative.as_posix()}"
+            )
+        seen.add(normalized)
+        path = root / relative
+        _require_stock_input_path(root, path, expect_directory=False)
+        before = path.stat()
+        digest = _sha256(path)
+        _require_stock_input_path(root, path, expect_directory=False)
+        after = path.stat()
+        before_identity = (
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+            getattr(before, "st_ino", 0),
+        )
+        after_identity = (
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+            getattr(after, "st_ino", 0),
+        )
+        if before_identity != after_identity:
+            raise ComposeError(
+                f"installed stock composition input changed while hashing: {path}"
+            )
+        snapshots.append(
+            StockComposeInput(
+                relative_path=relative,
+                size=after.st_size,
+                sha256=digest,
+            )
+        )
+    if relative_paths != _enumerate_stock_compose_relative_paths(root):
+        raise ComposeError(
+            "installed stock Description inputs changed while creating the "
+            "composition snapshot"
+        )
+    return tuple(snapshots)
+
+
+def _enumerate_stock_compose_relative_paths(root: Path) -> tuple[Path, ...]:
+    relative_paths = list(_STOCK_COMPOSE_FIXED_INPUTS)
+    for relative_directory in _STOCK_COMPOSE_XML_DIRECTORIES:
+        directory = root / relative_directory
+        _require_stock_input_path(root, directory, expect_directory=True)
+        xml_paths: list[Path] = []
+        for child in directory.iterdir():
+            if child.suffix.casefold() != ".xml":
+                continue
+            _require_stock_input_path(root, child, expect_directory=False)
+            xml_paths.append(child.relative_to(root))
+        relative_paths.extend(
+            sorted(xml_paths, key=lambda value: value.as_posix().casefold())
+        )
+    return tuple(relative_paths)
+
+
+def _require_stock_input_path(
+    root: Path, path: Path, *, expect_directory: bool
+) -> None:
+    try:
+        relative = path.relative_to(root)
+    except ValueError as exc:
+        raise ComposeError(f"stock composition input escapes the game root: {path}") from exc
+    current = root
+    for part in relative.parts:
+        current /= part
+        if current.is_symlink():
+            raise ComposeError(
+                f"installed stock composition input cannot be a symlink: {current}"
+            )
+    expected = "directory" if expect_directory else "file"
+    if (expect_directory and not path.is_dir()) or (
+        not expect_directory and not path.is_file()
+    ):
+        raise ComposeError(
+            f"required installed stock composition {expected} was not found: {path}"
+        )
+
+
 def compose_package(
     game_path: Path,
     output_root: Path,
@@ -918,8 +1425,13 @@ def compose_package(
     display_name: str | None = None,
     internal_name: str | None = None,
     resolution_owners: Mapping[tuple[DefinitionKind | str, str], str] | None = None,
+    semantic_resolutions: Mapping[
+        tuple[DefinitionKind | str, str],
+        SemanticItem | ScopedSemanticResolution,
+    ] | None = None,
     inventory_death_drop_exclusions: Sequence[str] = (),
     runtime_capabilities: Sequence[str] = (),
+    private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
 ) -> ComposePackageResult:
     """Generate one atomic, self-contained local profile from any N packages.
 
@@ -944,14 +1456,28 @@ def compose_package(
     for selected in selected_mods:
         if selected.package.definition is None:
             raise ComposeError(f"{selected.alias}: a v1 mod definition is required")
-
     output_root = output_root.resolve(strict=False)
     if output_root.exists():
         raise ComposeError(f"output destination already exists: {output_root}")
     output_root.parent.mkdir(parents=True, exist_ok=True)
 
     inventories = tuple(inventory_package(selected) for selected in selected_mods)
-    text_result = merge_text_resources(game_path, inventories)
+    if private_activity_texts is None:
+        private_activity_texts = discover_private_activity_texts(
+            game_path, inventories
+        )
+    (
+        canonical_runtime_capabilities,
+        capability_manifest_payload,
+    ) = _derive_runtime_capabilities(
+        runtime_capabilities,
+        has_private_activity_text=bool(private_activity_texts),
+    )
+    text_result = merge_text_resources(
+        game_path,
+        inventories,
+        private_activity_texts=private_activity_texts,
+    )
     bdep_result = merge_bdep_resource(game_path, inventories)
     main_art, interface_art = merge_art_resources(game_path, inventories)
     audio_archive, sound_archive, sound_selections = merge_sound_resources(inventories)
@@ -962,7 +1488,14 @@ def compose_package(
     gpl = merge_gpl_resources(
         inventories,
         resolution_owners=resolution_owners,
+        semantic_resolutions=semantic_resolutions,
         inventory_death_drop_exclusions=inventory_death_drop_exclusions,
+        private_activity_texts=private_activity_texts,
+        stock_integer_expression_sources=(
+            (_load_stock_activity_text_expression_source(game_path),)
+            if private_activity_texts
+            else ()
+        ),
     )
 
     output_mod_id = _generated_mod_id(selected_mods, profile_slug)
@@ -975,6 +1508,7 @@ def compose_package(
         actual_internal_name,
         actual_display_name,
         selected_mods,
+        canonical_runtime_capabilities,
     )
 
     staging = Path(
@@ -1021,6 +1555,15 @@ def compose_package(
         (staging / "mod-definition.json").write_text(
             json.dumps(definition_payload, indent=2) + "\n", encoding="utf-8"
         )
+        registry_path = staging / Path(INTENT_REGISTRY_RELATIVE_PATH)
+        registry_path.write_bytes(
+            encode_intent_registry(text_result.private_activity_texts)
+        )
+        capability_manifest_path = staging / Path(
+            RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH
+        )
+        capability_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        capability_manifest_path.write_bytes(capability_manifest_payload)
 
         validation = validate_composed_package(staging)
         report_payload = _build_report(
@@ -1037,7 +1580,7 @@ def compose_package(
             description_stock_deltas=description_stock_deltas,
             gpl=gpl,
             compiled=compiled,
-            runtime_capabilities=runtime_capabilities,
+            runtime_capabilities=canonical_runtime_capabilities,
             staging=staging,
             validation=validation,
         )
@@ -1060,6 +1603,32 @@ def compose_package(
         report=output_root / report_name,
         validation=validation,
     )
+
+
+def _derive_runtime_capabilities(
+    runtime_capabilities: Sequence[str],
+    *,
+    has_private_activity_text: bool,
+) -> tuple[tuple[str, ...], bytes]:
+    """Validate caller capabilities and derive the private-text requirement.
+
+    The MMTX runtime feature is evidence-owned by composition, never by a
+    package identity or caller assertion. This keeps direct API and POC builds
+    coherent in both directions as well as manager-driven builds.
+    """
+
+    try:
+        provided = decode_runtime_capability_manifest(
+            encode_runtime_capability_manifest(runtime_capabilities)
+        )
+        effective = set(provided)
+        effective.discard(PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY)
+        if has_private_activity_text:
+            effective.add(PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY)
+        payload = encode_runtime_capability_manifest(tuple(sorted(effective)))
+        return decode_runtime_capability_manifest(payload), payload
+    except ValueError as exc:
+        raise ComposeError(f"invalid runtime capability requirements: {exc}") from exc
 
 
 def validate_composed_package(root: Path) -> Mapping[str, object]:
@@ -1136,6 +1705,50 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
             parsed_sources += len(parse_dat(text, source.relative_path).items)
         else:
             raise ComposeError(f"generated GPL source has unsupported type: {source.relative_path}")
+    registry_path = root / Path(INTENT_REGISTRY_RELATIVE_PATH)
+    if not registry_path.is_file():
+        raise ComposeError(
+            f"generated package has no private activity-text registry: {registry_path}"
+        )
+    try:
+        private_activity_texts = decode_intent_registry(registry_path.read_bytes())
+    except ValueError as exc:
+        raise ComposeError(
+            f"generated private activity-text registry is invalid: {exc}"
+        ) from exc
+    capability_manifest_path = root / Path(
+        RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH
+    )
+    if not capability_manifest_path.is_file():
+        raise ComposeError(
+            "generated package has no runtime capability manifest: "
+            f"{capability_manifest_path}"
+        )
+    try:
+        runtime_capabilities = decode_runtime_capability_manifest(
+            capability_manifest_path.read_bytes()
+        )
+    except ValueError as exc:
+        raise ComposeError(
+            f"generated runtime capability manifest is invalid: {exc}"
+        ) from exc
+    if package.definition is None or package.definition.schema_version != 2:
+        raise ComposeError(
+            "generated package must carry a schema-version 2 merge definition"
+        )
+    if package.definition.runtime_capabilities != runtime_capabilities:
+        raise ComposeError(
+            "generated package definition and runtime capability manifest disagree"
+        )
+    has_private_activity_text = bool(private_activity_texts)
+    has_private_activity_capability = (
+        PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY in runtime_capabilities
+    )
+    if has_private_activity_text != has_private_activity_capability:
+        raise ComposeError(
+            "generated private activity-text registry and runtime capability "
+            "manifest disagree"
+        )
     return {
         "status": "passed",
         "manifest": package.manifest_path.name,
@@ -1144,6 +1757,8 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
         "description_count": len(document.records),
         "gpl_source_item_count": parsed_sources,
         "bcd_size": gpl_load.target.absolute_path.stat().st_size,
+        "private_activity_text_count": len(private_activity_texts),
+        "runtime_capability_count": len(runtime_capabilities),
         "resolved_external_palette_references": palette_reference_count,
     }
 
@@ -1173,6 +1788,7 @@ def _generated_definition(
     internal_name: str,
     display_name: str,
     selected_mods: Sequence[SelectedMod],
+    runtime_capabilities: Sequence[str],
 ) -> dict:
     buildings = []
     for selected in selected_mods:
@@ -1188,11 +1804,12 @@ def _generated_definition(
                 }
             )
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "mod_id": mod_id,
         "internal_name": internal_name,
         "display_name": display_name,
         "custom_buildings": buildings,
+        "runtime_capabilities": list(runtime_capabilities),
     }
     # Reuse the public exact-schema validator before serializing the sidecar.
     parse_mod_definition(payload)
@@ -1258,22 +1875,7 @@ def _build_report(
     staging: Path,
     validation: Mapping[str, object],
 ) -> dict:
-    stock_files = [
-        Path("Data/textdata.cam"),
-        Path("Data/maindata.cam"),
-        Path("Data/interfacedata.cam"),
-        Path("DataMX/mx_gpltext.cam"),
-        Path("DataMX/mx_miscdata.cam"),
-        Path("SDK/Gplbcc.exe"),
-    ]
-    stock_files.extend(
-        path.relative_to(game_path)
-        for directory in (
-            game_path / "SDK" / "OriginalQuests" / "Data",
-            game_path / "SDK" / "OriginalQuests" / "DataMX",
-        )
-        for path in sorted(directory.glob("*.xml"), key=lambda item: item.name.casefold())
-    )
+    stock_inputs = snapshot_stock_compose_inputs(game_path)
     selected_payload = []
     for selected in selected_mods:
         files = [
@@ -1294,6 +1896,11 @@ def _build_report(
                 "files": files,
             }
         )
+    stock_aitx = parse_strt(
+        _require_cam_entry(
+            game_path / Path("DataMX/mx_gpltext.cam"), b"STRT", b"AITX"
+        ).data
+    )
     return {
         "schema_version": 1,
         "profile_slug": profile_slug,
@@ -1303,11 +1910,11 @@ def _build_report(
         "stock_ancestor": {
             "files": [
                 {
-                    "path": relative.as_posix(),
-                    "size": (game_path / relative).stat().st_size,
-                    "sha256": _sha256(game_path / relative),
+                    "path": stock_input.relative_path.as_posix(),
+                    "size": stock_input.size,
+                    "sha256": stock_input.sha256,
                 }
-                for relative in stock_files
+                for stock_input in stock_inputs
             ],
             "stock_art_payloads_redistributed": True,
             "stock_palette_prefix_materialized_locally": True,
@@ -1316,8 +1923,42 @@ def _build_report(
         "runtime": {
             "outside_workshop_required": bool(runtime_capabilities),
             "capabilities": list(runtime_capabilities),
+            "capability_manifest": {
+                "path": RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH,
+                "sha256": _sha256(
+                    staging / Path(RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH)
+                ),
+                "record_count": len(runtime_capabilities),
+            },
         },
         "merge": {
+            "private_activity_text": {
+                "registry_path": INTENT_REGISTRY_RELATIVE_PATH,
+                "registry_sha256": _sha256(
+                    staging / Path(INTENT_REGISTRY_RELATIVE_PATH)
+                ),
+                "records": [
+                    {
+                        "owner": record.binding.owner,
+                        "source_mod_id": record.binding.source_mod_id,
+                        "source_index": record.binding.source_index,
+                        "source_expressions": list(record.binding.expressions),
+                        "package_defined_source_expressions": list(
+                            record.binding.package_expressions
+                        ),
+                        "generated_expression": record.binding.generated_expression,
+                        "runtime_id": record.binding.runtime_id,
+                        "text": record.text.decode("cp1252"),
+                        "rewrite_scope": "owner_resolver_argument_two_only",
+                        "row_origin": (
+                            "existing_stock_placeholder"
+                            if record.binding.source_index < len(stock_aitx.records)
+                            else "appended"
+                        ),
+                    }
+                    for record in text_result.private_activity_texts
+                ],
+            },
             "dialog_renames": [
                 {
                     "owner": owner,
@@ -1387,6 +2028,14 @@ def _build_report(
                 "resolutions": [
                     {"kind": kind.value, "name": name, "owner": owner}
                     for kind, name, owner in gpl.resolution_owners
+                ],
+                "explicit_resolutions": [
+                    {
+                        "kind": kind.value,
+                        "name": name,
+                        "source": source,
+                    }
+                    for kind, name, source in gpl.resolution_sources
                 ],
                 "inventory_death_drop_exclusions": list(
                     gpl.inventory_death_drop_exclusions
@@ -1677,16 +2326,6 @@ def _read_source_text(path: Path) -> str:
     raise ComposeError(f"GPL source is not UTF-8 or Windows-1252: {path}")
 
 
-def _meaningful_nonsemantic_text(text: str) -> bool:
-    # Real Majesty source files contain only comments/whitespace outside the
-    # parsed definitions. This is deliberately conservative: novel directives
-    # must not disappear silently from a generated GPL project.
-    import re
-
-    without_comments = re.sub(r"/\*.*?\*/|//[^\r\n]*", "", text, flags=re.S)
-    return bool(without_comments.strip())
-
-
 def _is_building_name(actual: str, declared: str) -> bool:
     if actual == declared:
         return True
@@ -1710,11 +2349,15 @@ __all__ = [
     "NamedMergeSelection",
     "PackageInventory",
     "SelectedMod",
+    "ScopedSemanticResolution",
+    "StockComposeInput",
     "StrtMergeSelection",
     "TextMergeResult",
     "compile_gpl",
     "compose_package",
     "analyze_description_stock_deltas",
+    "discover_private_activity_texts",
+    "discover_selected_private_activity_texts",
     "inventory_package",
     "merge_bdep_resource",
     "merge_art_resources",
@@ -1723,5 +2366,6 @@ __all__ = [
     "merge_named_resources",
     "merge_sound_resources",
     "merge_text_resources",
+    "snapshot_stock_compose_inputs",
     "validate_composed_package",
 ]

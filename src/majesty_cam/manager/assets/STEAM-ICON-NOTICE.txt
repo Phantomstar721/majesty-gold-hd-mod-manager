@@ -1,0 +1,14 @@
+Steam icon logo.svg
+
+Source: https://commons.wikimedia.org/wiki/File:Steam_icon_logo.svg
+Canonical file: https://upload.wikimedia.org/wikipedia/commons/8/83/Steam_icon_logo.svg
+Author: Steam
+Date: 2007
+
+Wikimedia Commons classifies this image as public-domain simple geometry in
+the United States. Provenance is provided here even though that classification
+does not require attribution.
+
+Steam and the Steam logo are trademarks of Valve Corporation. This icon is
+used descriptively to link to Steam Workshop pages and does not imply Valve's
+endorsement of Majesty Mod Manager.

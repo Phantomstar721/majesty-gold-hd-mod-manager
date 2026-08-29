@@ -6,9 +6,17 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Mapping, Optional, Sequence, Tuple, Union
 import xml.etree.ElementTree as ET
 
+from .runtime_capabilities import is_runtime_capability_name
+
 
 DEFINITION_FILE_NAME = "mod-definition.json"
-DEFINITION_SCHEMA_VERSION = 1
+# Version 1 remains readable for legacy manager adapters and older third-party
+# packages.  Version 2 is the current authoring contract: it lets a
+# package declare runtime features without requiring a UUID-keyed manager
+# update.  Keep the supported set explicit so an unknown future schema fails
+# closed instead of being partially interpreted as version 2.
+DEFINITION_SCHEMA_VERSION = 2
+SUPPORTED_DEFINITION_SCHEMA_VERSIONS = frozenset((1, 2))
 
 
 class PackageFormatError(ValueError):
@@ -125,6 +133,7 @@ class ModDefinition:
     internal_name: str
     display_name: str
     custom_buildings: Tuple[CustomBuildingDefinition, ...]
+    runtime_capabilities: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -218,22 +227,36 @@ def load_mod_definition(path: Union[str, Path]) -> ModDefinition:
 
 
 def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
-    """Parse the exact version-1 ``mod-definition.json`` object shape."""
+    """Parse one supported, exact ``mod-definition.json`` object shape.
 
-    expected = {
+    Version 1 is the original building-only contract.  Version 2 adds only
+    package-owned runtime capability declarations. Private positional text is
+    handled separately: the manager discovers and proves those bindings from
+    the package's stock-relative AITX and GPL data.
+    """
+
+    common_fields = {
         "schema_version",
         "mod_id",
         "internal_name",
         "display_name",
         "custom_buildings",
     }
-    _require_exact_fields(value, expected, "mod definition")
 
-    schema_version = value["schema_version"]
-    if type(schema_version) is not int or schema_version != DEFINITION_SCHEMA_VERSION:
+    schema_version = value.get("schema_version")
+    if (
+        type(schema_version) is not int
+        or schema_version not in SUPPORTED_DEFINITION_SCHEMA_VERSIONS
+    ):
         raise PackageFormatError(
             "unsupported mod definition schema_version: " f"{schema_version!r}"
         )
+    expected = (
+        common_fields
+        if schema_version == 1
+        else common_fields | {"runtime_capabilities"}
+    )
+    _require_exact_fields(value, expected, "mod definition")
 
     mod_id = _required_string(value["mod_id"], "mod definition mod_id")
     internal_name = _required_string(
@@ -288,12 +311,34 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         seen_dialog_ids.add(dialog_key)
         buildings.append(building)
 
+    raw_capabilities = value.get("runtime_capabilities", ())
+    if not isinstance(raw_capabilities, (list, tuple)):
+        raise PackageFormatError(
+            "mod definition runtime_capabilities must be an array"
+        )
+    capabilities = []
+    seen_capabilities = set()
+    for index, raw_capability in enumerate(raw_capabilities):
+        context = f"runtime_capabilities[{index}]"
+        capability = _required_string(raw_capability, context)
+        if not is_runtime_capability_name(capability):
+            raise PackageFormatError(
+                f"{context} must be a lowercase dotted capability name"
+            )
+        if capability in seen_capabilities:
+            raise PackageFormatError(
+                f"duplicate runtime capability: {capability!r}"
+            )
+        seen_capabilities.add(capability)
+        capabilities.append(capability)
+
     return ModDefinition(
         schema_version=schema_version,
         mod_id=mod_id,
         internal_name=internal_name,
         display_name=display_name,
         custom_buildings=tuple(buildings),
+        runtime_capabilities=tuple(capabilities),
     )
 
 
@@ -535,23 +580,24 @@ def _select_definition(
 
 
 def _validate_definition_object(definition: ModDefinition) -> ModDefinition:
-    return parse_mod_definition(
-        {
-            "schema_version": definition.schema_version,
-            "mod_id": definition.mod_id,
-            "internal_name": definition.internal_name,
-            "display_name": definition.display_name,
-            "custom_buildings": [
-                {
-                    "local_name": building.local_name,
-                    "dialog_id": building.dialog_id,
-                    "controller_base": building.controller_base,
-                    "panel_resource_template": building.panel_resource_template,
-                }
-                for building in definition.custom_buildings
-            ],
-        }
-    )
+    value = {
+        "schema_version": definition.schema_version,
+        "mod_id": definition.mod_id,
+        "internal_name": definition.internal_name,
+        "display_name": definition.display_name,
+        "custom_buildings": [
+            {
+                "local_name": building.local_name,
+                "dialog_id": building.dialog_id,
+                "controller_base": building.controller_base,
+                "panel_resource_template": building.panel_resource_template,
+            }
+            for building in definition.custom_buildings
+        ],
+    }
+    if definition.schema_version == 2:
+        value["runtime_capabilities"] = list(definition.runtime_capabilities)
+    return parse_mod_definition(value)
 
 
 def _localized_children(parent: ET.Element, name: str) -> Tuple[LocalizedText, ...]:
@@ -638,6 +684,7 @@ __all__ = [
     "DatasetLoad",
     "DEFINITION_FILE_NAME",
     "DEFINITION_SCHEMA_VERSION",
+    "SUPPORTED_DEFINITION_SCHEMA_VERSIONS",
     "DescriptionsLoad",
     "GplLoad",
     "GplPath",

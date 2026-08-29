@@ -1,0 +1,953 @@
+"""Tolerant, read-only discovery of installed Majesty content.
+
+This module deliberately does not reuse :mod:`majesty_cam.package` for the
+initial catalog pass.  Package loading is strict because it protects the
+composer; discovery instead has to preserve malformed items as structured
+diagnostics so one bad Workshop download cannot prevent the manager opening.
+The strict loader remains the authority when a selected merge package is
+actually inventoried or composed.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from enum import Enum
+from pathlib import Path
+import re
+from typing import Callable, Mapping, Optional, Sequence, Tuple, Union
+import uuid
+import xml.etree.ElementTree as ET
+
+from majesty_cam.package import (
+    DEFINITION_FILE_NAME,
+    PackageFormatError,
+    load_mod_definition,
+)
+
+from .capabilities import (
+    DERIVED_RUNTIME_CAPABILITIES,
+    SUPPORTED_RUNTIME_CAPABILITIES,
+)
+
+
+MAJESTY_SCRIPT_MERGER_ID = "FF86AE2B-43A8-4EB0-88FD-1EF1D7D6D2CD"
+TOOL_DELIVERY_ISSUE_CODE = "non_gameplay_tool_delivery"
+_KNOWN_TOOL_DELIVERY_IDS = frozenset((MAJESTY_SCRIPT_MERGER_ID,))
+_TOOL_DELIVERY_PHRASES = (
+    "modding tool only",
+    "changes nothing in game",
+    "changes nothing in the game",
+)
+
+
+class CatalogKind(str, Enum):
+    """The manager section which owns an installed item."""
+
+    STANDARD = "standard"
+    QUEST = "quest"
+    MERGE = "merge"
+
+
+class CatalogSource(str, Enum):
+    """The Majesty installation location where an item was found."""
+
+    LOCAL_MODS = "local_mods"
+    LOCAL_QUESTS = "local_quests"
+    WORKSHOP = "workshop"
+
+
+class IssueSeverity(str, Enum):
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class CatalogIssue:
+    """A stable, UI-friendly discovery diagnostic."""
+
+    code: str
+    message: str
+    severity: IssueSeverity
+    path: Optional[Path] = None
+    content_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class CatalogEntry:
+    """One discovered manifest and its manager classification."""
+
+    content_id: Optional[str]
+    raw_content_id: Optional[str]
+    display_name: str
+    kind: CatalogKind
+    source: CatalogSource
+    package_root: Path
+    manifest_path: Path
+    has_cam: bool
+    merge_ready: bool
+    compatibility_applied: bool = False
+    generated: bool = False
+    issues: Tuple[CatalogIssue, ...] = ()
+
+    @property
+    def selectable(self) -> bool:
+        """Whether the item may participate in an active-mod selection.
+
+        Quests are cataloged for visibility but are loaded by Majesty's quest
+        lifecycle, not its active Mod GUID list.  Generated profiles are
+        manager outputs, never inputs to another composition.
+        """
+
+        if self.kind is CatalogKind.QUEST or self.generated or self.tool_delivery:
+            return False
+        if self.content_id is None:
+            return False
+        if self.kind is CatalogKind.MERGE and not self.merge_ready:
+            return False
+        return not any(issue.severity is IssueSeverity.ERROR for issue in self.issues)
+
+    @property
+    def active_mod_selectable(self) -> bool:
+        """Explicit alias for consumers which also display quest entries."""
+
+        return self.selectable
+
+    @property
+    def tool_delivery(self) -> bool:
+        """Whether the manifest explicitly describes a non-gameplay tool payload."""
+
+        return any(issue.code == TOOL_DELIVERY_ISSUE_CODE for issue in self.issues)
+
+    @property
+    def workshop_item_id(self) -> Optional[str]:
+        """Return this entry's Steam PublishedFileId when it has one.
+
+        Workshop package roots are named with Steam's decimal PublishedFileId.
+        The source check is important: a numeric local Mods folder is not proof
+        that an item came from Steam Workshop.
+        """
+
+        if self.source is not CatalogSource.WORKSHOP:
+            return None
+        return _published_file_id_from_path(self.package_root)
+
+
+@dataclass(frozen=True)
+class Catalog:
+    """A deterministic snapshot of all discovered content."""
+
+    entries: Tuple[CatalogEntry, ...]
+    issues: Tuple[CatalogIssue, ...] = ()
+
+    @property
+    def visible_entries(self) -> Tuple[CatalogEntry, ...]:
+        """Player-facing entries, excluding manager-owned generated outputs.
+
+        ``entries`` intentionally retains those outputs so controller startup
+        can expand a remembered generated profile back to its source Mod IDs.
+        They are implementation state, not installed content the user should
+        select or see beside source packages.
+        """
+
+        return tuple(entry for entry in self.entries if not entry.generated)
+
+    @property
+    def standard(self) -> Tuple[CatalogEntry, ...]:
+        return tuple(
+            entry
+            for entry in self.visible_entries
+            if entry.kind is CatalogKind.STANDARD
+        )
+
+    @property
+    def quests(self) -> Tuple[CatalogEntry, ...]:
+        return tuple(
+            entry for entry in self.visible_entries if entry.kind is CatalogKind.QUEST
+        )
+
+    @property
+    def merge(self) -> Tuple[CatalogEntry, ...]:
+        return tuple(
+            entry for entry in self.visible_entries if entry.kind is CatalogKind.MERGE
+        )
+
+
+CompatibilityCallback = Callable[[str, Path], bool]
+CompatibilityResolver = Union[Mapping[str, object], CompatibilityCallback]
+MergePreflightCallback = Callable[
+    [str, str, Path], Sequence[CatalogIssue]
+]
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    package_root: Path
+    manifest_path: Path
+    source: CatalogSource
+    ambiguous: bool
+
+
+def normalize_content_id(value: str) -> str:
+    """Return Majesty content UUID text in uppercase, without braces."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("content id must be a non-empty UUID string")
+    cleaned = value.strip()
+    if cleaned.startswith("{") and cleaned.endswith("}"):
+        cleaned = cleaned[1:-1].strip()
+    try:
+        parsed = uuid.UUID(cleaned)
+    except (AttributeError, ValueError) as exc:
+        raise ValueError(f"invalid Majesty content UUID: {value!r}") from exc
+    return str(parsed).upper()
+
+
+def scan_catalog(
+    *,
+    local_mods_root: Optional[Union[str, Path]] = None,
+    local_quests_root: Optional[Union[str, Path]] = None,
+    workshop_roots: Sequence[Union[str, Path]] = (),
+    compatibility: Optional[CompatibilityResolver] = None,
+    merge_preflight: Optional[MergePreflightCallback] = None,
+) -> Catalog:
+    """Scan immediate installed-content roots without mutating them.
+
+    ``local_mods_root`` and ``local_quests_root`` are the respective MajestyHD
+    folders; each immediate child directory is inspected.  Each path in
+    ``workshop_roots`` may be either one Workshop item root or the Steam app's
+    Workshop content directory: when it has no top-level game manifest, its
+    immediate child directories are inspected as item roots.
+
+    A compatibility mapping is keyed by Mod UUID (any UUID spelling accepted);
+    mapping values are opaque because the catalog only needs to know that the
+    manager owns a compatibility definition.  A callback receives the
+    normalized UUID and package root and returns the same readiness decision.
+
+    ``merge_preflight`` runs only after a Merge row passes the tolerant
+    manifest/definition checks. It receives normalized UUID, display name, and
+    package root. Returned errors make that row red and nonselectable before
+    the controller restores or defaults any selections.
+    """
+
+    candidates = []
+    root_issues = []
+    if local_mods_root is not None:
+        found, issues = _local_candidates(local_mods_root, CatalogSource.LOCAL_MODS)
+        candidates.extend(found)
+        root_issues.extend(issues)
+    if local_quests_root is not None:
+        found, issues = _local_candidates(local_quests_root, CatalogSource.LOCAL_QUESTS)
+        candidates.extend(found)
+        root_issues.extend(issues)
+    for workshop_root in workshop_roots:
+        found, issues = _workshop_candidates(workshop_root)
+        candidates.extend(found)
+        root_issues.extend(issues)
+
+    # A root can be supplied through more than one discovery route.  Keep the
+    # source with stock-like local precedence, then use lexical paths so results
+    # never depend on filesystem enumeration order.
+    candidates.sort(key=_candidate_sort_key)
+    unique_candidates = []
+    seen_manifests = set()
+    for candidate in candidates:
+        key = str(candidate.manifest_path).casefold()
+        if key in seen_manifests:
+            continue
+        seen_manifests.add(key)
+        unique_candidates.append(candidate)
+
+    entries = [
+        _parse_candidate(candidate, compatibility, merge_preflight)
+        for candidate in unique_candidates
+    ]
+    entries, duplicate_issues = _deduplicate_entries(entries)
+    entries.sort(key=_entry_sort_key)
+    all_issues = list(root_issues)
+    all_issues.extend(duplicate_issues)
+    for entry in entries:
+        all_issues.extend(entry.issues)
+    all_issues = _unique_issues(all_issues)
+    all_issues.sort(key=_issue_sort_key)
+    return Catalog(entries=tuple(entries), issues=tuple(all_issues))
+
+
+def _local_candidates(
+    raw_root: Union[str, Path], source: CatalogSource
+) -> Tuple[list[_Candidate], list[CatalogIssue]]:
+    root, issue = _scan_root(raw_root, source)
+    if root is None:
+        return [], ([issue] if issue is not None else [])
+    candidates = []
+    for child in _sorted_child_directories(root):
+        candidates.extend(_manifest_candidates(child, source))
+    return candidates, []
+
+
+def _workshop_candidates(
+    raw_root: Union[str, Path],
+) -> Tuple[list[_Candidate], list[CatalogIssue]]:
+    root, issue = _scan_root(raw_root, CatalogSource.WORKSHOP)
+    if root is None:
+        return [], ([issue] if issue is not None else [])
+    direct = _manifest_candidates(root, CatalogSource.WORKSHOP)
+    if direct:
+        return direct, []
+    candidates = []
+    for child in _sorted_child_directories(root):
+        # Steam Workshop item directories are decimal PublishedFileIds.  Do
+        # not ingest local backup/scratch folders which happen to sit beside
+        # them (for example ``3769947406.backup-...``).
+        if not child.name.isdecimal():
+            continue
+        candidates.extend(_manifest_candidates(child, CatalogSource.WORKSHOP))
+    return candidates, []
+
+
+def _scan_root(
+    raw_root: Union[str, Path], source: CatalogSource
+) -> Tuple[Optional[Path], Optional[CatalogIssue]]:
+    try:
+        root = Path(raw_root).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None, CatalogIssue(
+            code="scan_root_missing",
+            message=f"{source.value} scan root does not exist: {raw_root}",
+            severity=IssueSeverity.WARNING,
+            path=Path(raw_root),
+        )
+    if not root.is_dir():
+        return None, CatalogIssue(
+            code="scan_root_not_directory",
+            message=f"{source.value} scan root is not a directory: {root}",
+            severity=IssueSeverity.WARNING,
+            path=root,
+        )
+    return root, None
+
+
+def _sorted_child_directories(root: Path) -> list[Path]:
+    try:
+        children = [path.resolve() for path in root.iterdir() if path.is_dir()]
+    except OSError:
+        return []
+    return sorted(children, key=lambda path: (path.name.casefold(), str(path).casefold()))
+
+
+def _manifest_candidates(root: Path, source: CatalogSource) -> list[_Candidate]:
+    try:
+        manifests = [
+            path.resolve()
+            for path in root.iterdir()
+            if path.is_file() and path.suffix.casefold() in {".mmxml", ".mqxml"}
+        ]
+    except OSError:
+        return []
+    manifests.sort(key=lambda path: (path.name.casefold(), str(path).casefold()))
+    mod_count = sum(path.suffix.casefold() == ".mmxml" for path in manifests)
+    return [
+        _Candidate(
+            package_root=root,
+            manifest_path=path,
+            source=source,
+            # A Workshop quest pack normally owns several independent mqxml
+            # manifests which share Data/GPL.  That is stock packaging, not an
+            # ambiguity.  Merge Mod packages stay one-manifest-per-root.
+            ambiguous=(mod_count > 1 if path.suffix.casefold() == ".mmxml" else False),
+        )
+        for path in manifests
+    ]
+
+
+def _parse_candidate(
+    candidate: _Candidate,
+    compatibility: Optional[CompatibilityResolver],
+    merge_preflight: Optional[MergePreflightCallback],
+) -> CatalogEntry:
+    manifest = candidate.manifest_path
+    expected_tag = "Mod" if manifest.suffix.casefold() == ".mmxml" else "Quest"
+    inferred_kind = CatalogKind.STANDARD if expected_tag == "Mod" else CatalogKind.QUEST
+    issues = []
+    if candidate.ambiguous:
+        issues.append(
+            CatalogIssue(
+                code="ambiguous_manifests",
+                message=(
+                    f"package contains multiple top-level {manifest.suffix} manifests; "
+                    "it cannot be selected safely"
+                ),
+                severity=IssueSeverity.ERROR,
+                path=manifest,
+            )
+        )
+
+    try:
+        xml_bytes = manifest.read_bytes()
+    except OSError as exc:
+        issues.append(
+            CatalogIssue(
+                code="manifest_read_error",
+                message=f"cannot read manifest: {exc}",
+                severity=IssueSeverity.ERROR,
+                path=manifest,
+            )
+        )
+        return _invalid_entry(candidate, inferred_kind, issues)
+
+    upper = xml_bytes.upper()
+    if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
+        issues.append(
+            CatalogIssue(
+                code="unsafe_xml_declaration",
+                message="manifest DTD/entity declarations are not allowed",
+                severity=IssueSeverity.ERROR,
+                path=manifest,
+            )
+        )
+        return _invalid_entry(candidate, inferred_kind, issues)
+    try:
+        xml_root = ET.fromstring(xml_bytes)
+    except ET.ParseError as exc:
+        issues.append(
+            CatalogIssue(
+                code="invalid_manifest_xml",
+                message=f"invalid XML: {exc}",
+                severity=IssueSeverity.ERROR,
+                path=manifest,
+            )
+        )
+        return _invalid_entry(candidate, inferred_kind, issues)
+
+    content_nodes = [
+        node for node in xml_root.iter() if _local_name(node.tag) == expected_tag
+    ]
+    if len(content_nodes) != 1:
+        issues.append(
+            CatalogIssue(
+                code="invalid_manifest_shape",
+                message=(
+                    f"{manifest.suffix} manifest must contain exactly one "
+                    f"{expected_tag} element; found {len(content_nodes)}"
+                ),
+                severity=IssueSeverity.ERROR,
+                path=manifest,
+            )
+        )
+        return _invalid_entry(candidate, inferred_kind, issues)
+
+    content = content_nodes[0]
+    raw_content_id = _clean_text(content.get("id"))
+    content_id = None
+    if raw_content_id is None:
+        issues.append(
+            CatalogIssue(
+                code="missing_content_id",
+                message=f"manifest {expected_tag} has no content UUID",
+                severity=IssueSeverity.ERROR,
+                path=manifest,
+            )
+        )
+    else:
+        try:
+            content_id = normalize_content_id(raw_content_id)
+        except ValueError:
+            issues.append(
+                CatalogIssue(
+                    code="invalid_content_id",
+                    message=f"manifest has an invalid content UUID: {raw_content_id!r}",
+                    severity=IssueSeverity.ERROR,
+                    path=manifest,
+                )
+            )
+
+    display_name = _display_name(content) or manifest.stem
+    if _display_name(content) is None and expected_tag == "Mod":
+        issues.append(
+            CatalogIssue(
+                code="missing_display_name",
+                message="Mod manifest has no non-empty DisplayName",
+                severity=IssueSeverity.ERROR,
+                path=manifest,
+                content_id=content_id,
+            )
+        )
+
+    has_cam = expected_tag == "Mod" and any(
+        _local_name(node.tag) == "CAM" for node in content.iter()
+    )
+    kind = (
+        CatalogKind.QUEST
+        if expected_tag == "Quest"
+        else (CatalogKind.MERGE if has_cam else CatalogKind.STANDARD)
+    )
+    generated = _is_generated_package(candidate.package_root)
+    tool_delivery = _is_tool_delivery(content_id, content)
+    merge_ready = False
+    compatibility_applied = False
+    if generated:
+        issues.append(
+            CatalogIssue(
+                code="generated_output",
+                message="manager-generated content is an output, not a selectable source",
+                severity=IssueSeverity.INFO,
+                path=candidate.package_root,
+                content_id=content_id,
+            )
+        )
+    elif tool_delivery:
+        issues.append(
+            CatalogIssue(
+                code=TOOL_DELIVERY_ISSUE_CODE,
+                message=(
+                    "This Workshop-style package only delivers a modding tool and "
+                    "changes nothing in-game; it should not be enabled as a Mod."
+                ),
+                severity=IssueSeverity.INFO,
+                path=manifest,
+                content_id=content_id,
+            )
+        )
+    elif kind is CatalogKind.MERGE and content_id is not None:
+        merge_ready, compatibility_applied, definition_issues = _merge_readiness(
+            candidate.package_root, content_id, compatibility
+        )
+        issues.extend(definition_issues)
+        if merge_ready and merge_preflight is not None:
+            try:
+                deep_issues = tuple(
+                    merge_preflight(content_id, display_name, candidate.package_root)
+                )
+            except Exception as exc:  # Application callback boundary.
+                deep_issues = (
+                    CatalogIssue(
+                        code="merge_preflight_error",
+                        message=f"deep compatibility check failed: {exc}",
+                        severity=IssueSeverity.ERROR,
+                        path=candidate.package_root,
+                        content_id=content_id,
+                    ),
+                )
+            issues.extend(deep_issues)
+            if any(
+                issue.severity is IssueSeverity.ERROR for issue in deep_issues
+            ):
+                merge_ready = False
+
+    return CatalogEntry(
+        content_id=content_id,
+        raw_content_id=raw_content_id,
+        display_name=display_name,
+        kind=kind,
+        source=candidate.source,
+        package_root=candidate.package_root,
+        manifest_path=manifest,
+        has_cam=has_cam,
+        merge_ready=merge_ready,
+        compatibility_applied=compatibility_applied,
+        generated=generated,
+        issues=tuple(_attach_content_id(issues, content_id)),
+    )
+
+
+def _invalid_entry(
+    candidate: _Candidate, kind: CatalogKind, issues: Sequence[CatalogIssue]
+) -> CatalogEntry:
+    generated = _is_generated_package(candidate.package_root)
+    combined_issues = list(issues)
+    if generated:
+        combined_issues.append(
+            CatalogIssue(
+                code="generated_output",
+                message="manager-generated content is an output, not a selectable source",
+                severity=IssueSeverity.INFO,
+                path=candidate.package_root,
+            )
+        )
+    return CatalogEntry(
+        content_id=None,
+        raw_content_id=None,
+        display_name=candidate.manifest_path.stem,
+        kind=kind,
+        source=candidate.source,
+        package_root=candidate.package_root,
+        manifest_path=candidate.manifest_path,
+        has_cam=False,
+        merge_ready=False,
+        generated=generated,
+        issues=tuple(combined_issues),
+    )
+
+
+def _display_name(content: ET.Element) -> Optional[str]:
+    display_names = [
+        child
+        for child in list(content)
+        if _local_name(child.tag) == "DisplayName" and _element_text(child)
+    ]
+    for child in display_names:
+        language = (_clean_text(child.get("lang")) or "").replace("-", "_").casefold()
+        if language == "en_us":
+            return _element_text(child)
+    if display_names:
+        return _element_text(display_names[0])
+    if _local_name(content.tag) == "Quest":
+        for child in list(content):
+            if _local_name(child.tag) == "Name" and _element_text(child):
+                return _element_text(child)
+    return None
+
+
+def _is_tool_delivery(content_id: Optional[str], content: ET.Element) -> bool:
+    """Recognize explicit non-gameplay delivery metadata without guessing.
+
+    Some Workshop subscriptions intentionally ship an executable tool inside a
+    valid Mod package and tell players not to enable it.  UUID recognition
+    keeps known tools stable if their copy changes; narrowly worded metadata
+    phrases cover equivalent packages.  The absence of gameplay load
+    directives alone is deliberately *not* evidence that a Mod is a tool.
+    """
+
+    if content_id in _KNOWN_TOOL_DELIVERY_IDS:
+        return True
+    searchable = _normalize_metadata_text(" ".join(_manifest_metadata(content)))
+    return any(phrase in searchable for phrase in _TOOL_DELIVERY_PHRASES)
+
+
+def _manifest_metadata(content: ET.Element) -> Tuple[str, ...]:
+    values = []
+    for node in content.iter():
+        if _local_name(node.tag) not in {"DisplayName", "Short", "Long"}:
+            continue
+        text = _element_text(node)
+        if text:
+            values.append(text)
+    return tuple(values)
+
+
+def _normalize_metadata_text(value: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", value.casefold()).split())
+
+
+def _merge_readiness(
+    package_root: Path,
+    content_id: str,
+    compatibility: Optional[CompatibilityResolver],
+) -> Tuple[bool, bool, list[CatalogIssue]]:
+    issues = []
+    compatibility_ready = False
+    if compatibility is not None:
+        try:
+            compatibility_ready = _compatibility_matches(
+                compatibility, content_id, package_root
+            )
+        except Exception as exc:  # Catalog callbacks are an application boundary.
+            issues.append(
+                CatalogIssue(
+                    code="compatibility_lookup_error",
+                    message=f"compatibility lookup failed: {exc}",
+                    severity=IssueSeverity.ERROR,
+                    path=package_root,
+                    content_id=content_id,
+                )
+            )
+
+    definition_path = package_root / DEFINITION_FILE_NAME
+    if not definition_path.is_file():
+        if compatibility_ready:
+            return True, True, issues
+        issues.append(
+            CatalogIssue(
+                code="missing_merge_definition",
+                message=f"CAM mod is missing required {DEFINITION_FILE_NAME}",
+                severity=IssueSeverity.ERROR,
+                path=package_root,
+                content_id=content_id,
+            )
+        )
+        return False, False, issues
+
+    try:
+        definition = load_mod_definition(definition_path)
+        definition_id = normalize_content_id(definition.mod_id)
+        if definition_id != content_id:
+            raise PackageFormatError(
+                f"definition Mod id {definition_id} does not match manifest id {content_id}"
+            )
+    except (PackageFormatError, ValueError) as exc:
+        if compatibility_ready:
+            issues.append(
+                CatalogIssue(
+                    code="packaged_merge_definition_ignored",
+                    message=f"manager compatibility replaces invalid packaged definition: {exc}",
+                    severity=IssueSeverity.WARNING,
+                    path=definition_path,
+                    content_id=content_id,
+                )
+            )
+            return True, True, issues
+        issues.append(
+            CatalogIssue(
+                code="invalid_merge_definition",
+                message=f"invalid {DEFINITION_FILE_NAME}: {exc}",
+                severity=IssueSeverity.ERROR,
+                path=definition_path,
+                content_id=content_id,
+            )
+        )
+        return False, False, issues
+    if definition.schema_version == 1:
+        if compatibility_ready:
+            return True, True, issues
+        issues.append(
+            CatalogIssue(
+                code="legacy_merge_definition_requires_adapter",
+                message=(
+                    "schema-version 1 mod-definition.json cannot declare the "
+                    "runtime features required for safe combining; this mod needs "
+                    "a trusted manager compatibility adapter or a version-2 definition"
+                ),
+                severity=IssueSeverity.ERROR,
+                path=definition_path,
+                content_id=content_id,
+            )
+        )
+        return False, False, issues
+    reserved_capabilities = sorted(
+        set(definition.runtime_capabilities) & DERIVED_RUNTIME_CAPABILITIES
+    )
+    if reserved_capabilities:
+        if compatibility_ready:
+            issues.append(
+                CatalogIssue(
+                    code="packaged_merge_definition_ignored",
+                    message=(
+                        "manager compatibility replaces a packaged definition "
+                        "that declares manager-derived runtime features: "
+                        + ", ".join(reserved_capabilities)
+                    ),
+                    severity=IssueSeverity.WARNING,
+                    path=definition_path,
+                    content_id=content_id,
+                )
+            )
+            return True, True, issues
+        issues.append(
+            CatalogIssue(
+                code="reserved_runtime_capability",
+                message=(
+                    "mod-definition.json declares runtime features that only "
+                    "the manager may derive from inspected content: "
+                    + ", ".join(reserved_capabilities)
+                ),
+                severity=IssueSeverity.ERROR,
+                path=definition_path,
+                content_id=content_id,
+            )
+        )
+        return False, False, issues
+    unknown_capabilities = sorted(
+        set(definition.runtime_capabilities) - SUPPORTED_RUNTIME_CAPABILITIES
+    )
+    if unknown_capabilities:
+        issues.append(
+            CatalogIssue(
+                code="unsupported_runtime_capability",
+                message=(
+                    "mod-definition.json requests runtime features this manager "
+                    "does not support: " + ", ".join(unknown_capabilities)
+                ),
+                severity=IssueSeverity.ERROR,
+                path=definition_path,
+                content_id=content_id,
+            )
+        )
+        return False, False, issues
+    return True, False, issues
+
+
+def _compatibility_matches(
+    compatibility: CompatibilityResolver, content_id: str, package_root: Path
+) -> bool:
+    if callable(compatibility):
+        return bool(compatibility(content_id, package_root))
+    for raw_id in compatibility.keys():
+        try:
+            if normalize_content_id(raw_id) == content_id:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _deduplicate_entries(
+    entries: Sequence[CatalogEntry],
+) -> Tuple[list[CatalogEntry], list[CatalogIssue]]:
+    by_id = {}
+    without_ids = []
+    for entry in entries:
+        if entry.content_id is None:
+            without_ids.append(entry)
+        else:
+            by_id.setdefault(entry.content_id, []).append(entry)
+
+    kept = list(without_ids)
+    duplicate_issues = []
+    for content_id in sorted(by_id):
+        group = sorted(by_id[content_id], key=_duplicate_precedence)
+        winner = group[0]
+        if len(group) > 1:
+            paths = ", ".join(str(entry.manifest_path) for entry in group)
+            issue = CatalogIssue(
+                code="duplicate_content_id",
+                message=f"content UUID is installed more than once: {paths}",
+                severity=IssueSeverity.ERROR,
+                path=winner.manifest_path,
+                content_id=content_id,
+            )
+            winner = replace(winner, issues=winner.issues + (issue,))
+            duplicate_issues.append(issue)
+        kept.append(winner)
+    return kept, duplicate_issues
+
+
+def _is_generated_package(package_root: Path) -> bool:
+    try:
+        generated_names = {
+            "cam-merge-report.json",
+            ".majesty-mod-manager-owned.json",
+        }
+        return any(
+            path.is_file() and path.name.casefold() in generated_names
+            for path in package_root.iterdir()
+        )
+    except OSError:
+        return False
+
+
+def _attach_content_id(
+    issues: Sequence[CatalogIssue], content_id: Optional[str]
+) -> list[CatalogIssue]:
+    return [
+        issue
+        if issue.content_id is not None or content_id is None
+        else replace(issue, content_id=content_id)
+        for issue in issues
+    ]
+
+
+def _unique_issues(issues: Sequence[CatalogIssue]) -> list[CatalogIssue]:
+    result = []
+    seen = set()
+    for issue in issues:
+        key = (
+            issue.code,
+            issue.message,
+            issue.severity.value,
+            str(issue.path).casefold() if issue.path is not None else "",
+            issue.content_id or "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(issue)
+    return result
+
+
+def _candidate_sort_key(candidate: _Candidate) -> tuple:
+    return (
+        _source_rank(candidate.source),
+        str(candidate.package_root).casefold(),
+        candidate.manifest_path.name.casefold(),
+    )
+
+
+def _duplicate_precedence(entry: CatalogEntry) -> tuple:
+    return (
+        _source_rank(entry.source),
+        1 if entry.generated else 0,
+        str(entry.manifest_path).casefold(),
+    )
+
+
+def _entry_sort_key(entry: CatalogEntry) -> tuple:
+    kind_rank = {
+        CatalogKind.STANDARD: 0,
+        CatalogKind.QUEST: 1,
+        CatalogKind.MERGE: 2,
+    }[entry.kind]
+    return (
+        kind_rank,
+        # Tool-delivery subscriptions are useful context, but are not gameplay
+        # mods and cannot be selected.  Keep them after every ordinary Standard
+        # entry without disturbing alphabetical ordering in the other tabs.
+        1 if entry.kind is CatalogKind.STANDARD and entry.tool_delivery else 0,
+        entry.display_name.casefold(),
+        entry.content_id or "",
+        str(entry.manifest_path).casefold(),
+    )
+
+
+def _published_file_id_from_path(package_root: Path) -> Optional[str]:
+    """Read a canonical nonzero uint64 PublishedFileId from a package path."""
+
+    candidate = package_root.name
+    if re.fullmatch(r"[1-9][0-9]{0,19}", candidate) is None:
+        return None
+    if int(candidate) > (2**64 - 1):
+        return None
+    return candidate
+
+
+def _issue_sort_key(issue: CatalogIssue) -> tuple:
+    severity_rank = {
+        IssueSeverity.ERROR: 0,
+        IssueSeverity.WARNING: 1,
+        IssueSeverity.INFO: 2,
+    }[issue.severity]
+    return (
+        severity_rank,
+        issue.code,
+        issue.content_id or "",
+        str(issue.path).casefold() if issue.path is not None else "",
+        issue.message,
+    )
+
+
+def _source_rank(source: CatalogSource) -> int:
+    return {
+        CatalogSource.LOCAL_MODS: 0,
+        CatalogSource.LOCAL_QUESTS: 1,
+        CatalogSource.WORKSHOP: 2,
+    }[source]
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _element_text(element: ET.Element) -> str:
+    return "".join(element.itertext()).strip()
+
+
+def _clean_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+__all__ = [
+    "Catalog",
+    "CatalogEntry",
+    "CatalogIssue",
+    "CatalogKind",
+    "CatalogSource",
+    "CompatibilityResolver",
+    "IssueSeverity",
+    "MAJESTY_SCRIPT_MERGER_ID",
+    "MergePreflightCallback",
+    "TOOL_DELIVERY_ISSUE_CODE",
+    "normalize_content_id",
+    "scan_catalog",
+]

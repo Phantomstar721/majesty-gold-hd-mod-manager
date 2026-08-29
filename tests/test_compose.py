@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 
@@ -16,16 +17,25 @@ from majesty_cam.cam import CamEntry, CamSection, pad_name
 from majesty_cam.compose import (
     CamResource,
     ComposeError,
+    ScopedSemanticResolution,
     SelectedMod,
     _blank_positional_section,
     _build_manifest,
+    _derive_runtime_capabilities,
     _first_free_after_reserved,
+    _generated_definition,
     _generated_mod_id,
     _materialize_effective_stock_prefix,
     _select_later_conflict_runs,
     merge_named_resources,
+    merge_gpl_resources,
 )
-from majesty_cam.gpl import GplProjectSourceSet
+from majesty_cam.gpl import GplProjectSourceSet, parse_gpl
+from majesty_cam.package import CustomBuildingDefinition, ModDefinition
+from majesty_cam.runtime_capabilities import (
+    PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY,
+    decode_runtime_capability_manifest,
+)
 
 
 def resource(owner, key, payload, order=0):
@@ -123,7 +133,150 @@ class PositionalComposeTests(unittest.TestCase):
         )
 
 
+class ScopedGplResolutionTests(unittest.TestCase):
+    def test_pair_resolution_allows_unrelated_third_mod_but_rejects_contributor(self):
+        def parsed(owner, function_name, value):
+            return parse_gpl(
+                f"function {function_name}() is integer\n"
+                f"begin\nreturn {value};\nend\n",
+                f"{owner}.gpl",
+            )
+
+        inventories = tuple(
+            SimpleNamespace(selected=SimpleNamespace(alias=owner))
+            for owner in ("first", "second", "third")
+        )
+        sources = {
+            "first": parsed("first", "Shared_Result", 1),
+            "second": parsed("second", "Shared_Result", 2),
+            "third": parsed("third", "Unrelated_Result", 9),
+        }
+        resolution_item = parsed("resolution", "Shared_Result", 3).items[0]
+        scoped = ScopedSemanticResolution(
+            item=resolution_item,
+            participant_owners=frozenset(("first", "second")),
+        )
+        key = resolution_item.key
+
+        with patch(
+            "majesty_cam.compose._parse_inventory_gpl_sources",
+            side_effect=lambda inventory: [sources[inventory.selected.alias]],
+        ):
+            result = merge_gpl_resources(
+                inventories,
+                semantic_resolutions={key: scoped},
+            )
+
+        self.assertIn("return 3", result.source_set.gpl_text)
+        self.assertIn("Unrelated_Result", result.source_set.gpl_text)
+
+        sources["third"] = parsed("third", "Shared_Result", 4)
+        with patch(
+            "majesty_cam.compose._parse_inventory_gpl_sources",
+            side_effect=lambda inventory: [sources[inventory.selected.alias]],
+        ), self.assertRaisesRegex(
+            ComposeError,
+            "additional mod owners.*third",
+        ):
+            merge_gpl_resources(
+                inventories,
+                semantic_resolutions={key: scoped},
+            )
+
+        sources["third"] = parsed("third", "Shared_Result", 1)
+        with patch(
+            "majesty_cam.compose._parse_inventory_gpl_sources",
+            side_effect=lambda inventory: [sources[inventory.selected.alias]],
+        ):
+            duplicate_variant = merge_gpl_resources(
+                inventories,
+                semantic_resolutions={key: scoped},
+            )
+
+        self.assertIn("return 3", duplicate_variant.source_set.gpl_text)
+
+        sources["third"] = parsed("third", "Shared_Result", 3)
+        with patch(
+            "majesty_cam.compose._parse_inventory_gpl_sources",
+            side_effect=lambda inventory: [sources[inventory.selected.alias]],
+        ):
+            resolved_variant = merge_gpl_resources(
+                inventories,
+                semantic_resolutions={key: scoped},
+            )
+
+        self.assertIn("return 3", resolved_variant.source_set.gpl_text)
+
+
 class ProfileIdentityTests(unittest.TestCase):
+    def test_private_text_runtime_capability_is_derived_not_caller_asserted(self):
+        other = "freestyle-cam-rebind.v1"
+        without_records, without_payload = _derive_runtime_capabilities(
+            (other, PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY),
+            has_private_activity_text=False,
+        )
+        with_records, with_payload = _derive_runtime_capabilities(
+            (other,),
+            has_private_activity_text=True,
+        )
+
+        self.assertEqual(without_records, (other,))
+        self.assertEqual(
+            decode_runtime_capability_manifest(without_payload),
+            without_records,
+        )
+        self.assertEqual(
+            with_records,
+            (other, PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY),
+        )
+        self.assertEqual(
+            decode_runtime_capability_manifest(with_payload),
+            with_records,
+        )
+
+    def test_generated_definition_round_trips_exact_runtime_capabilities(self):
+        source_definition = ModDefinition(
+            schema_version=2,
+            mod_id="{00000000-0000-0000-0000-000000000001}",
+            internal_name="Fixture",
+            display_name="Fixture",
+            custom_buildings=(
+                CustomBuildingDefinition(
+                    local_name="FixtureGuild",
+                    dialog_id="CGFX",
+                    controller_base="CGGuild",
+                    panel_resource_template="CGFX",
+                ),
+            ),
+            runtime_capabilities=(),
+        )
+        selected = (
+            SelectedMod(
+                "fixture",
+                SimpleNamespace(definition=source_definition),
+            ),
+        )
+        for capabilities in (
+            (),
+            (
+                "expanded-building-slots.cg-prefix",
+                "freestyle-cam-rebind.v1",
+            ),
+        ):
+            with self.subTest(capabilities=capabilities):
+                payload = _generated_definition(
+                    source_definition.mod_id,
+                    "GeneratedFixture",
+                    "Generated Fixture",
+                    selected,
+                    capabilities,
+                )
+
+                self.assertEqual(payload["schema_version"], 2)
+                self.assertEqual(
+                    tuple(payload["runtime_capabilities"]), capabilities
+                )
+
     def test_generated_ids_are_distinct_stable_and_ordered(self):
         first = SelectedMod("first", SimpleNamespace(mod_id="{00000000-0000-0000-0000-000000000001}"))
         second = SelectedMod("second", SimpleNamespace(mod_id="{00000000-0000-0000-0000-000000000002}"))

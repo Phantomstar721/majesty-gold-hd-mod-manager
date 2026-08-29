@@ -133,6 +133,25 @@ class ParsedSemanticSource:
         return "".join(item.leading_text + item.text for item in self.items) + self.trailing_text
 
 
+def require_complete_semantic_coverage(source: ParsedSemanticSource) -> None:
+    """Reject source text the semantic merger would not preserve.
+
+    Comments and whitespace between definitions are intentionally disposable.
+    Any other prefix, inter-definition, or trailing text is executable or an
+    unknown directive and must fail closed instead of silently disappearing.
+    """
+
+    fragments = [
+        *(item.leading_text for item in source.items),
+        source.trailing_text,
+    ]
+    for index, fragment in enumerate(fragments):
+        if _has_meaningful_unparsed_text(fragment):
+            raise SemanticParseError(
+                f"{source.source_name}: unparsed semantic-source text in gap {index}"
+            )
+
+
 @dataclass(frozen=True)
 class MergeVariant:
     side_name: str
@@ -251,6 +270,13 @@ _FUNCTION_START_RE = re.compile(
 _EXPRESSION_RE = re.compile(
     r"^[ \t]*expression[ \t]+(#[A-Za-z_][A-Za-z0-9_]*)\b[^\r\n]*(?:\r\n|\r|\n|$)",
     re.IGNORECASE | re.MULTILINE,
+)
+_INTEGER_EXPRESSION_RE = re.compile(
+    r"\A(?P<prefix>[ \t]*expression[ \t]+"
+    r"(?P<name>#[A-Za-z_][A-Za-z0-9_]*)[ \t]+)"
+    r"(?P<value>[0-9]+)"
+    r"(?P<suffix>[ \t]*(?://[^\r\n]*)?(?:\r\n|\r|\n)?)\Z",
+    re.IGNORECASE,
 )
 _BEGIN_END_RE = re.compile(r"\b(begin|end)\b", re.IGNORECASE)
 _DAT_HEADER_RE = re.compile(
@@ -617,6 +643,45 @@ def add_inventory_death_drop_exclusions(
     )
 
 
+def rewrite_integer_expression(
+    item: SemanticItem,
+    *,
+    expected_value: int,
+    replacement_value: int,
+    source_name: str = "<integer-expression-rewrite>",
+) -> SemanticItem:
+    """Rewrite one declared GPL integer literal and no other numeric content.
+
+    Private positional resources may be detached from their old table index only
+    when compatibility metadata names the exact expression that carries it.  A
+    compound expression, stale value, renamed symbol, or non-decimal literal is
+    rejected instead of searching/replacing arbitrary numbers in GPL source.
+    """
+
+    if item.kind is not DefinitionKind.EXPRESSION:
+        raise ValueError(f"{item.name} is not a GPL expression")
+    if type(expected_value) is not int or expected_value < 0:
+        raise ValueError("expected GPL expression value must be a non-negative integer")
+    if type(replacement_value) is not int or replacement_value < 0:
+        raise ValueError("replacement GPL expression value must be a non-negative integer")
+    match = _INTEGER_EXPRESSION_RE.fullmatch(item.text)
+    if match is None or match.group("name").casefold() != item.normalized_name:
+        raise ValueError(
+            f"{item.source_name}: {item.name} is not an exact decimal integer expression"
+        )
+    actual_value = int(match.group("value"), 10)
+    if actual_value != expected_value:
+        raise ValueError(
+            f"{item.source_name}: {item.name} is {actual_value}, expected {expected_value}"
+        )
+    rewritten = (
+        match.group("prefix")
+        + str(replacement_value)
+        + match.group("suffix")
+    )
+    return replace(item, text=rewritten, source_name=source_name, span=None)
+
+
 def _finish_parse(
     source_name: str,
     text: str,
@@ -722,6 +787,40 @@ def _mask_non_code(text: str) -> str:
     return "".join(chars)
 
 
+def _has_meaningful_unparsed_text(text: str) -> bool:
+    """Return true unless ``text`` consists solely of whitespace/comments."""
+
+    index = 0
+    state = "code"
+    while index < len(text):
+        current = text[index]
+        following = text[index + 1] if index + 1 < len(text) else ""
+        if state == "code":
+            if current.isspace():
+                index += 1
+                continue
+            if current == "/" and following == "/":
+                state = "line_comment"
+                index += 2
+                continue
+            if current == "/" and following == "*":
+                state = "block_comment"
+                index += 2
+                continue
+            return True
+        if state == "line_comment":
+            if current in "\r\n":
+                state = "code"
+            index += 1
+            continue
+        if current == "*" and following == "/":
+            state = "code"
+            index += 2
+            continue
+        index += 1
+    return state == "block_comment"
+
+
 def _render_items(items: Iterable[SemanticItem]) -> str:
     output = ""
     for item in items:
@@ -800,7 +899,9 @@ __all__ = [
     "merge_semantic_items",
     "merge_sources",
     "add_inventory_death_drop_exclusions",
+    "rewrite_integer_expression",
     "parse_dat",
     "parse_gpl",
+    "require_complete_semantic_coverage",
     "semantic_key",
 ]

@@ -1,0 +1,161 @@
+// Explicit stock-lifecycle compatibility resolution for the current
+// Phantoms Haunt + Alchemist pair.  Kept outside either source package so the
+// manager can consume their independent releases without modifying them.
+Function Random_Hero_Type(agent ThisAgent) is string
+
+Declare
+	integer Random;
+
+Begin
+	If (ThisAgent's "Title" == "Embassy" || ThisAgent's "Subtype" == "Outpost")
+		If ($Alchemist_Compat_Phantom_Max_Haunt_Level(ThisAgent) > 0)
+			begin
+				Random = $RandomNumber(17) + 1;
+
+				If (Random == 1)
+					return "Adept";
+				Else if (Random == 2)
+					return "Barbarian";
+				Else if (Random == 3)
+					return "Cultist";
+				Else if (Random == 4)
+					return "Healer";
+				Else if (Random == 5)
+					return "Monk";
+				Else if (Random == 6)
+					return "Priestess";
+				Else if (Random == 7)
+					return "Ranger";
+				Else if (Random == 8)
+					return "Rogue";
+				Else if (Random == 9)
+					return "Solarus";
+				Else if (Random == 10)
+					return "Warrior";
+				Else if (Random == 11)
+					return "Wizard";
+				Else if (Random == 12)
+					return "Warrior_of_Discord";
+				Else if (Random == 13)
+					return "Dwarf";
+				Else if (Random == 14)
+					return "Elf";
+				Else if (Random == 15)
+					return "Gnome";
+				Else if (Random == 16)
+					return "Phantom";
+				Else
+					return "Alchemist";
+			end
+
+	Random = $RandomNumber(18) + 1;
+
+	If (Random == 1)
+		return "Adept";
+	Else if (Random == 2)
+		return "Barbarian";
+	Else if (Random == 3)
+		return "Cultist";
+	Else if (Random == 4)
+		return "Healer";
+	Else if (Random == 5)
+		return "Monk";
+	Else if (Random == 6)
+		return "Priestess";
+	Else if (Random == 7)
+		return "Ranger";
+	Else if (Random == 8)
+		return "Rogue";
+	Else if (Random == 9)
+		return "Solarus";
+	Else if (Random == 10)
+		return "Warrior";
+	Else if (Random == 11)
+		return "Wizard";
+	Else if (Random == 12)
+		return "Paladin";
+	Else if (Random == 13)
+		return "Warrior_of_Discord";
+	Else if (Random == 14)
+		return "Dwarf";
+	Else if (Random == 15)
+		return "Elf";
+	Else if (Random == 16)
+		return "Gnome";
+	Else if (Random == 17)
+		return "Phantom";
+	Else
+		return "Alchemist";
+End
+
+function spell_extra_value(agent thisagent) is integer
+
+declare
+	integer value;
+
+begin
+	if ($isspellavailable(thisagent,"energy_blast",1))
+		value += 10;
+
+	if ($isspellavailable(thisagent,"fire_blast",1))
+		value += 30;
+
+	if ($isspellavailable(thisagent,"fire_ball",1))
+		value += 30;
+
+	if ($isspellavailable(thisagent,"teleport",1))
+		value += 5;
+
+	if ($isspellavailable(thisagent,"resist_magic",1))
+		value += 5;
+
+	if ($isspellavailable(thisagent,"meteor_storm",1))
+		value += 30;
+
+	if ($isspellavailable(thisagent,"drain_life",1))
+		value += 30;
+
+	if ($isspellavailable(thisagent,"sun_scorch",1))
+		value += 30;
+
+	if (thisagent's "Title" == "Phantom")
+		begin
+			if ($isspellavailable(thisagent,"ice_lance",1))
+				value += 10;
+
+			if ($isspellavailable(thisagent,"frost_armor",1))
+				value += 10;
+
+			if (
+				$Alchemist_Compat_Phantom_Max_Haunt_Level(thisagent) >= 2 &&
+				$isspellavailable(thisagent,"icy_touch",1)
+			)
+				value += 25;
+
+			if ($isspellavailable(thisagent,"call_to_grave",1))
+				value += 10;
+
+			if ($isspellavailable(thisagent,"eternal_soul",1))
+				value += 25;
+
+			if (
+				$Alchemist_Compat_Phantom_Max_Haunt_Level(thisagent) >= 3 &&
+				$isspellavailable(thisagent,"endless_winter",1)
+			)
+				value += 30;
+		end
+
+	if (thisagent's "Title" == "Alchemist")
+		begin
+			if ($isspellavailable(thisagent,"flash_flask",1))
+				value += #Alchemist_Flash_Flask_Confidence;
+
+			if ($isspellavailable(thisagent,"stun_serum",1))
+				value += #Alchemist_Stun_Serum_Confidence;
+
+			if ($isspellavailable(thisagent,"miasma_mist",1))
+				value += #Alchemist_Miasma_Mist_Confidence;
+		end
+
+	return value;
+end
