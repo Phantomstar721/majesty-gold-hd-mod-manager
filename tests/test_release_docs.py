@@ -49,10 +49,21 @@ class ReleaseDocumentationTests(unittest.TestCase):
                 r"dist\workshop-upload\workshop-preview.jpg"
             )
         )
-        self.assertIn("private-preview", workshop.findtext("Description", ""))
         self.assertNotIn(
             r"C:\Users", project.read_text(encoding="utf-8"),
             "the tracked Workshop template must remain portable",
+        )
+
+    def test_workshop_text_is_the_project_description(self):
+        project = REPO_ROOT / "workshop/MajestyModManager.mswproj"
+        root = ET.fromstring(project.read_text(encoding="utf-8"))
+        workshop = root.find("SteamWorkshop")
+        self.assertIsNotNone(workshop)
+        assert workshop is not None
+        canonical = (REPO_ROOT / "WORKSHOP.md").read_text(encoding="utf-8")
+        self.assertEqual(
+            workshop.findtext("Description", "").strip(),
+            canonical.strip(),
         )
 
     def test_release_licenses_and_workshop_sources_are_present(self):

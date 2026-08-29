@@ -1,18 +1,23 @@
 <Majesty>
 	<SteamWorkshop id="0" visibility="Private">
 		<Title lang="en_US">Majesty Mod Manager</Title>
-		<Description lang="en_US">Choose your Majesty Gold HD mods in one place, safely combine supported custom guild mods, manage compatible quality-of-life improvements, and launch through the runtime those mods need.
+		<Description lang="en_US">Majesty Mod Manager makes it easy to organize and launch all of the Majesty Gold
+HD mods and quests you have installed or subscribed to.
 
-The app finds local and subscribed content, sorts it into Merge, Standard, Quests, and Quality of Life, enables compatible mods by default, and remembers later choices. Standard mods stay independent and downloaded quests remain untouched.
+More complicated mods, such as custom guilds, need extra support. Install this
+manager and launch Majesty through it to use those mods individually or
+together. It automatically finds and organizes your mods and quests, remembers
+your choices, and prepares anything that needs extra support.
 
-Selected manager-compatible CAM mods are combined into one validated local package. Unknown conflicts are shown in red and cannot be selected instead of silently allowing one mod to overwrite another.
+To use it:
 
-Supports Default Public 1.5.2.24 and beta2 1.5.2.28. Current private-preview Merge support covers Custom Guild: Phantoms Haunt and Custom Guild: Alchemist Lab. The included Haunt compatibility edition keeps the stock Elf Guild intact.
+1. Subscribe to this item and the Majesty mods or quests you want to use.
+2. Open this item's Workshop folder and run Majesty Mod Manager.exe.
+3. Follow the first-time setup prompt.
+4. Choose your mods, prepare them if requested, and select Launch Majesty.
 
-Subscribe, open this item's Workshop folder, keep the entire download together, and run Majesty Mod Manager.exe. Install the two required helpers when prompted, prepare selected Merge mods, then use Launch Majesty.
-
-This unsigned community app may trigger Windows SmartScreen. Source, documentation, and licenses:
-https://github.com/Phantomstar721/majesty-gold-hd-cam-merger</Description>
+Keep the entire downloaded folder together. The manager supports both the
+default and beta2 versions of Majesty Gold HD.</Description>
 		<ContentPath>dist\workshop-upload\content</ContentPath>
 		<PreviewImagePath>dist\workshop-upload\workshop-preview.jpg</PreviewImagePath>
 		<IDTag>Original Rules</IDTag>
