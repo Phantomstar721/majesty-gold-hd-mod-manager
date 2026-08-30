@@ -180,6 +180,62 @@ class ManagerAppLayoutTests(unittest.TestCase):
 
         window.close()
 
+    def test_header_explains_rescan_and_offers_game_location_controls(self) -> None:
+        from PySide6.QtWidgets import QLabel, QPushButton
+
+        class _Paths:
+            game_path = Path("Z:/missing-majesty")
+            game_executable = game_path / "MajestyHD.exe"
+            profile_path = Path(tempfile.gettempdir()) / "manager-ui-profile.json"
+
+        class _Controller:
+            paths = _Paths()
+
+        with patch.object(manager_app.QTimer, "singleShot"):
+            window = manager_app.ManagerWindow(_Controller())  # type: ignore[arg-type]
+
+        buttons = {button.text(): button for button in window.findChildren(QPushButton)}
+        self.assertIn("Rescan Content", buttons)
+        self.assertIn("Choose…", buttons)
+        self.assertIn("Folder", buttons)
+        self.assertIn("mods and quests", buttons["Rescan Content"].toolTip())
+        self.assertIn("MajestyHD.exe", buttons["Choose…"].toolTip())
+        install_path = window.findChild(QLabel, "installPath")
+        self.assertIsNotNone(install_path)
+        self.assertGreaterEqual(install_path.minimumWidth(), 240)
+        self.assertGreater(install_path.maximumWidth(), 1000)
+        self.assertEqual(buttons["Choose…"].height(), buttons["Folder"].height())
+        self.assertEqual(
+            buttons["Folder"].height(), buttons["Rescan Content"].height()
+        )
+        self.assertEqual(buttons["Choose…"].width(), buttons["Folder"].width())
+        self.assertEqual(
+            buttons["Folder"].width(), buttons["Rescan Content"].width()
+        )
+        self.assertEqual(buttons["Choose…"].property("role"), "headerAction")
+        self.assertEqual(buttons["Folder"].property("role"), "headerAction")
+        self.assertEqual(
+            buttons["Rescan Content"].property("role"), "headerAction"
+        )
+        header_labels = {
+            label.text(): label
+            for label in window.findChildren(QLabel)
+            if label.text()
+            in {"MAJESTY GOLD HD", "GAME VERSION", "GAME INSTALL"}
+        }
+        self.assertEqual(len(header_labels), 3)
+        self.assertEqual(
+            {label.height() for label in header_labels.values()}, {14}
+        )
+        self.assertEqual(
+            {
+                bool(label.alignment() & manager_app.Qt.AlignmentFlag.AlignTop)
+                for label in header_labels.values()
+            },
+            {True},
+        )
+        window.close()
+
     def test_footer_does_not_repeat_required_qol_status(self) -> None:
         from PySide6.QtWidgets import QLabel
 

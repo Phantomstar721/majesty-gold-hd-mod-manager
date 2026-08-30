@@ -30,12 +30,14 @@ try:  # Keep non-GUI merger imports usable without the optional Qt runtime.
         QThreadPool,
         QTimer,
         Qt,
+        QUrl,
         Signal,
         Slot,
     )
     from PySide6.QtGui import (
         QColor,
         QCloseEvent,
+        QDesktopServices,
         QFont,
         QIcon,
         QKeySequence,
@@ -46,6 +48,7 @@ try:  # Keep non-GUI merger imports usable without the optional Qt runtime.
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
+        QFileDialog,
         QFrame,
         QHBoxLayout,
         QLabel,
@@ -819,8 +822,13 @@ if _PYSIDE_IMPORT_ERROR is None:
 
             titles = QVBoxLayout()
             titles.setSpacing(1)
+            header_label_alignment = (
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+            )
             eyebrow = QLabel("MAJESTY GOLD HD")
             eyebrow.setObjectName("eyebrow")
+            eyebrow.setAlignment(header_label_alignment)
+            eyebrow.setFixedHeight(14)
             titles.addWidget(eyebrow)
             title = QLabel(APP_NAME)
             title.setObjectName("appTitle")
@@ -829,44 +837,85 @@ if _PYSIDE_IMPORT_ERROR is None:
             tagline.setObjectName("tagline")
             titles.addWidget(tagline)
             header_layout.addLayout(titles)
-            header_layout.addStretch(1)
+            header_layout.setAlignment(
+                titles, Qt.AlignmentFlag.AlignTop
+            )
+
+            game_controls = QVBoxLayout()
+            game_controls.setSpacing(8)
+            game_details = QHBoxLayout()
+            game_details.setSpacing(20)
 
             game_version = QVBoxLayout()
             game_version.setSpacing(3)
             version_label = QLabel("GAME VERSION")
             version_label.setObjectName("microLabel")
+            version_label.setAlignment(header_label_alignment)
+            version_label.setFixedHeight(14)
             game_version.addWidget(version_label)
             self.game_build = QLabel("Checking…")
             self.game_build.setObjectName("gameBuild")
             self.game_build.setProperty("state", "pending")
             game_version.addWidget(self.game_build)
-            header_layout.addLayout(game_version)
+            game_details.addLayout(game_version)
 
             install = QVBoxLayout()
             install.setSpacing(3)
             install_label = QLabel("GAME INSTALL")
             install_label.setObjectName("microLabel")
+            install_label.setAlignment(header_label_alignment)
+            install_label.setFixedHeight(14)
             install.addWidget(install_label)
             self.install_path = _ElidingLabel(str(self.controller.paths.game_path))
             self.install_path.setObjectName("installPath")
             self.install_path.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse
             )
-            self.install_path.setMinimumWidth(140)
-            self.install_path.setMaximumWidth(260)
+            self.install_path.setMinimumWidth(240)
             self.install_path.setSizePolicy(
                 QSizePolicy.Policy.Expanding,
                 QSizePolicy.Policy.Preferred,
             )
             install.addWidget(self.install_path)
-            header_layout.addLayout(install)
+            game_details.addLayout(install, 1)
+            game_controls.addLayout(game_details)
 
-            self.rescan_button = QPushButton("Rescan")
-            self.rescan_button.setProperty("role", "outline")
+            install_actions = QHBoxLayout()
+            install_actions.setSpacing(8)
+            install_actions.addStretch(1)
+            self.choose_game_button = QPushButton("Choose…")
+            self.choose_game_button.setProperty("role", "headerAction")
+            self.choose_game_button.setToolTip(
+                "Choose which MajestyHD.exe the manager should use"
+            )
+            self.choose_game_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.choose_game_button.setFixedSize(132, 34)
+            self.choose_game_button.clicked.connect(self._choose_game_executable)
+            install_actions.addWidget(self.choose_game_button)
+            self.open_game_folder_button = QPushButton("Folder")
+            self.open_game_folder_button.setProperty("role", "headerAction")
+            self.open_game_folder_button.setToolTip(
+                "Open the folder containing the selected MajestyHD.exe"
+            )
+            self.open_game_folder_button.setCursor(
+                Qt.CursorShape.PointingHandCursor
+            )
+            self.open_game_folder_button.setFixedSize(132, 34)
+            self.open_game_folder_button.clicked.connect(self._open_game_folder)
+            install_actions.addWidget(self.open_game_folder_button)
+
+            self.rescan_button = QPushButton("Rescan Content")
+            self.rescan_button.setProperty("role", "headerAction")
             self.rescan_button.setCursor(Qt.CursorShape.PointingHandCursor)
             self.rescan_button.setToolTip("Rescan installed mods and quests (F5)")
+            self.rescan_button.setFixedSize(132, 34)
             self.rescan_button.clicked.connect(self.scan)
-            header_layout.addWidget(self.rescan_button)
+            install_actions.addWidget(self.rescan_button)
+            game_controls.addLayout(install_actions)
+            header_layout.addLayout(game_controls, 1)
+            header_layout.setAlignment(
+                game_controls, Qt.AlignmentFlag.AlignTop
+            )
             page.addWidget(header)
 
             navigation = QFrame()
@@ -985,6 +1034,47 @@ if _PYSIDE_IMPORT_ERROR is None:
 
         def _startup_scan(self) -> None:
             self._start_scan(force_refresh=False)
+
+        @Slot()
+        def _choose_game_executable(self) -> None:
+            if self._busy or not hasattr(
+                self.controller, "select_game_executable"
+            ):
+                return
+            current = str(self.controller.paths.game_executable)
+            selected, _filter = QFileDialog.getOpenFileName(
+                self,
+                "Choose MajestyHD.exe",
+                current,
+                "Majesty Gold HD (MajestyHD.exe);;Windows applications (*.exe)",
+            )
+            if not selected:
+                return
+            try:
+                self.controller.select_game_executable(Path(selected))
+            except (OSError, ValueError) as exc:
+                self._show_interaction_error(
+                    "Could not use that Majesty executable",
+                    exc,
+                )
+                return
+            self.install_path.setFullText(str(self.controller.paths.game_path))
+            self._start_scan(force_refresh=True)
+
+        @Slot()
+        def _open_game_folder(self) -> None:
+            folder = self.controller.paths.game_executable.parent
+            if not folder.is_dir():
+                self._show_interaction_error(
+                    "Could not open the game folder",
+                    FileNotFoundError(f"Majesty folder was not found: {folder}"),
+                )
+                return
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+                self._show_interaction_error(
+                    "Could not open the game folder",
+                    OSError(f"Windows could not open: {folder}"),
+                )
 
         def _start_scan(self, *, force_refresh: bool) -> None:
             if self._busy:
@@ -1371,6 +1461,8 @@ if _PYSIDE_IMPORT_ERROR is None:
                 self.build_state.setText(message)
             self.progress.setVisible(busy)
             self.rescan_button.setEnabled(not busy)
+            self.choose_game_button.setEnabled(not busy)
+            self.open_game_folder_button.setEnabled(not busy)
             self.build_button.setEnabled(False if busy else self.build_button.isEnabled())
             self.launch_button.setEnabled(False if busy else self.launch_button.isEnabled())
             self._set_interactions_enabled(not busy)

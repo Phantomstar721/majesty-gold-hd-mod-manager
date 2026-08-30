@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from typing import Mapping
@@ -19,7 +19,13 @@ from .build import (
 from .catalog import Catalog, CatalogKind, scan_catalog
 from .compatibility import CompatibilityRegistry, load_compatibility_registry
 from .launch import LaunchResult, ManagerLaunchError, launch_majesty
-from .paths import ManagerPaths, detect_manager_paths
+from .paths import (
+    GAME_EXECUTABLE_NAME,
+    GAME_SELECTION_FILENAME,
+    ManagerPaths,
+    detect_manager_paths,
+    save_game_executable_selection,
+)
 from .preflight import catalog_merge_preflight
 from .profile import (
     ManagerProfile,
@@ -37,6 +43,7 @@ from .qol_service import (
     QolCatalogSnapshot,
     QolService,
     QolUtilityStatus,
+    detect_majesty_branch,
 )
 from .startup_cache import (
     StartupCache,
@@ -93,6 +100,40 @@ class ManagerController:
         )
         self._qol_checked = False
         self.notices: list[str] = []
+
+    def select_game_executable(self, executable: Path) -> MajestyBranch:
+        """Validate and remember the Majesty executable used by this manager.
+
+        All game-relative build, QOL, and launch services are rebound together;
+        callers should follow this with a forced scan so catalog preflight and
+        the displayed branch describe the newly selected installation.
+        """
+
+        selected = executable.resolve(strict=True)
+        if selected.name.casefold() != GAME_EXECUTABLE_NAME.casefold():
+            raise ValueError(
+                f"Choose the game's {GAME_EXECUTABLE_NAME} file."
+            )
+        branch = detect_majesty_branch(selected)
+        if branch is None:
+            raise ValueError(
+                "That executable is not the supported Standard or beta2 "
+                "Majesty Gold HD build."
+            )
+        save_game_executable_selection(
+            self.paths.profile_path.parent / GAME_SELECTION_FILENAME,
+            selected,
+        )
+        self.paths = replace(self.paths, game_path=selected.parent)
+        self.qol_service = QolService(
+            repo_root=self.paths.repo_root,
+            game_executable=self.paths.game_executable,
+        )
+        self.qol_catalog = None
+        self.qol_status = ()
+        self._qol_checked = False
+        self._replan()
+        return branch
 
     def scan(
         self,

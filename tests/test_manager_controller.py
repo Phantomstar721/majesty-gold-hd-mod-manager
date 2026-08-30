@@ -463,6 +463,49 @@ class ManagerControllerTests(unittest.TestCase):
             self.assertTrue(cached.utilities[0].installed)
             self.assertFalse(cached.utilities[1].installed)
 
+    def test_select_game_executable_rebinds_and_remembers_supported_build(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = _manager_paths(root)
+            selected = root / "alternate" / "MajestyHD.exe"
+            selected.parent.mkdir(parents=True)
+            _write_synthetic_exe(selected, PUBLIC_BRANCH)
+            controller = ManagerController(
+                paths=paths, registry=CompatibilityRegistry(specs={})
+            )
+            controller._qol_checked = True
+
+            branch = controller.select_game_executable(selected)
+
+            self.assertEqual(branch, PUBLIC_BRANCH)
+            self.assertEqual(controller.paths.game_executable, selected.resolve())
+            self.assertEqual(
+                controller.qol_service.game_executable, selected.resolve()
+            )
+            self.assertFalse(controller._qol_checked)
+            remembered = (
+                paths.profile_path.parent / "game-executable.txt"
+            ).read_text(encoding="utf-8").strip()
+            self.assertEqual(remembered, str(selected.resolve()))
+
+    def test_select_game_executable_rejects_unknown_or_renamed_build(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = _manager_paths(root)
+            controller = ManagerController(
+                paths=paths, registry=CompatibilityRegistry(specs={})
+            )
+            unknown = root / "alternate" / "MajestyHD.exe"
+            unknown.parent.mkdir(parents=True)
+            unknown.write_bytes(b"not Majesty")
+            with self.assertRaisesRegex(ValueError, "Standard or beta2"):
+                controller.select_game_executable(unknown)
+
+            renamed = root / "alternate" / "MajestyBackup.exe"
+            _write_synthetic_exe(renamed, PUBLIC_BRANCH)
+            with self.assertRaisesRegex(ValueError, "MajestyHD.exe"):
+                controller.select_game_executable(renamed)
+
 
 def _manager_paths(root: Path, *, runtime_ready: bool = False) -> ManagerPaths:
     repo = root / "repo"

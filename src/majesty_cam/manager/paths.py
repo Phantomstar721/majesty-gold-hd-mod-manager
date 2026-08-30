@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 from typing import Iterable
 
 from .profile import canonical_remembered_path, default_profile_path
@@ -12,6 +13,8 @@ from .profile import canonical_remembered_path, default_profile_path
 
 STEAM_APP_ID = "73230"
 GAME_DIRECTORY_NAME = "Majesty HD"
+GAME_EXECUTABLE_NAME = "MajestyHD.exe"
+GAME_SELECTION_FILENAME = "game-executable.txt"
 
 
 @dataclass(frozen=True)
@@ -30,7 +33,7 @@ class ManagerPaths:
 
     @property
     def game_executable(self) -> Path:
-        return self.game_path / "MajestyHD.exe"
+        return self.game_path / GAME_EXECUTABLE_NAME
 
     @property
     def runtime_launcher(self) -> Path:
@@ -66,11 +69,18 @@ def detect_manager_paths(
 
     steam_roots = _steam_library_roots()
     if game_path is None:
+        saved_executable = read_game_executable_selection(
+            game_executable_selection_path(local_appdata)
+        )
         game_candidates = [
+            *((saved_executable.parent,) if saved_executable is not None else ()),
             Path(r"C:\Program Files (x86)\Steam\steamapps\common\Majesty HD"),
             *(root / "steamapps" / "common" / GAME_DIRECTORY_NAME for root in steam_roots),
         ]
-        game_path = _first_with_file(game_candidates, "MajestyHD.exe") or game_candidates[0]
+        game_path = (
+            _first_with_file(game_candidates, GAME_EXECUTABLE_NAME)
+            or game_candidates[0]
+        )
     game_path = game_path.resolve(strict=False)
 
     if documents_root is None:
@@ -216,6 +226,56 @@ def _first_with_file(candidates: Iterable[Path], filename: str) -> Path | None:
     return None
 
 
+def game_executable_selection_path(local_appdata: Path | None = None) -> Path:
+    """Return the manager-owned location for the player's chosen executable."""
+
+    return default_profile_path(local_appdata).parent / GAME_SELECTION_FILENAME
+
+
+def read_game_executable_selection(path: Path) -> Path | None:
+    """Read one remembered Majesty executable without trusting stale entries."""
+
+    if not path.is_file():
+        return None
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return None
+    if not value:
+        return None
+    executable = Path(value).resolve(strict=False)
+    if (
+        executable.name.casefold() != GAME_EXECUTABLE_NAME.casefold()
+        or not executable.is_file()
+    ):
+        return None
+    return executable
+
+
+def save_game_executable_selection(path: Path, executable: Path) -> Path:
+    """Atomically remember a validated Majesty executable selection."""
+
+    selected = executable.resolve(strict=True)
+    if selected.name.casefold() != GAME_EXECUTABLE_NAME.casefold():
+        raise ValueError(f"Choose {GAME_EXECUTABLE_NAME}, not {selected.name}.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(str(selected))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return selected
+
+
 def _unique_paths(paths: Iterable[Path]) -> list[Path]:
     result: list[Path] = []
     seen: set[str] = set()
@@ -230,7 +290,11 @@ def _unique_paths(paths: Iterable[Path]) -> list[Path]:
 
 __all__ = [
     "ManagerPaths",
+    "GAME_EXECUTABLE_NAME",
     "application_root",
     "detect_manager_paths",
+    "game_executable_selection_path",
     "is_frozen_application",
+    "read_game_executable_selection",
+    "save_game_executable_selection",
 ]

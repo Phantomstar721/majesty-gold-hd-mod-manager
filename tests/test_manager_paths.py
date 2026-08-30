@@ -21,6 +21,47 @@ MOD_ID = "42BA4603-2B13-446D-A2A4-6CF3A55DDAC3"
 
 
 class FrozenManagerPathTests(unittest.TestCase):
+    def test_player_selected_executable_is_remembered_and_preferred(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            resources = root / "repo"
+            resources.mkdir()
+            game = root / "alternate-library" / "Majesty HD"
+            executable = game / "MajestyHD.exe"
+            _touch(executable)
+            local_appdata = root / "localappdata"
+            selection = manager_paths.game_executable_selection_path(
+                local_appdata
+            )
+
+            saved = manager_paths.save_game_executable_selection(
+                selection, executable
+            )
+            self.assertEqual(
+                manager_paths.read_game_executable_selection(selection), saved
+            )
+            with patch.object(
+                manager_paths, "_steam_library_roots", return_value=()
+            ):
+                detected = manager_paths.detect_manager_paths(
+                    repo_root=resources,
+                    documents_root=root / "documents",
+                    local_appdata=local_appdata,
+                )
+
+            self.assertEqual(detected.game_executable, executable.resolve())
+
+    def test_stale_or_renamed_executable_selection_is_ignored(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            selection = root / "game-executable.txt"
+            renamed = root / "Other.exe"
+            _touch(renamed)
+            selection.write_text(str(renamed), encoding="utf-8")
+            self.assertIsNone(
+                manager_paths.read_game_executable_selection(selection)
+            )
+
     def test_application_root_uses_pyinstaller_meipass_without_leaking_sys_state(self):
         had_frozen = hasattr(sys, "frozen")
         old_frozen = getattr(sys, "frozen", None)
