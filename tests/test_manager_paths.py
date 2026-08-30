@@ -196,7 +196,7 @@ class FrozenManagerPathTests(unittest.TestCase):
     def test_source_checkout_retains_explicit_sibling_repository_fallbacks(self):
         with TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            repo = workspace / "majesty-gold-hd-cam-merger"
+            repo = workspace / "majesty-gold-hd-mod-manager"
             repo.mkdir()
             runtime = (
                 workspace

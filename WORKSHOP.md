@@ -16,5 +16,5 @@ To use it:
 Keep the entire downloaded folder together. The manager supports both the
 default and beta2 versions of Majesty Gold HD.
 
-More details: https://github.com/Phantomstar721/majesty-gold-hd-cam-merger
+More details: https://github.com/Phantomstar721/majesty-gold-hd-mod-manager
 Join the Majesty community: https://discord.gg/MEjtKZb9GQ

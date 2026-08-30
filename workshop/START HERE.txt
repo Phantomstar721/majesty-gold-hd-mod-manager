@@ -19,4 +19,4 @@ code-signed. Use "More info > Run anyway" only when this folder came from the
 official Workshop item or GitHub release.
 
 Source, documentation, and licenses:
-https://github.com/Phantomstar721/majesty-gold-hd-cam-merger
+https://github.com/Phantomstar721/majesty-gold-hd-mod-manager

@@ -65,6 +65,8 @@ class ReleaseDocumentationTests(unittest.TestCase):
             workshop.findtext("Description", "").strip(),
             canonical.strip(),
         )
+        self.assertIn("majesty-gold-hd-mod-manager", canonical)
+        self.assertNotIn("majesty-gold-hd-cam-merger", canonical)
 
     def test_release_licenses_and_workshop_sources_are_present(self):
         required = (
