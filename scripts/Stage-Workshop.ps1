@@ -1,5 +1,6 @@
 param(
-    [string]$ApplicationRoot = ""
+    [string]$ApplicationRoot = "",
+    [string]$WorkshopId = "3793024054"
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,9 +15,9 @@ $stage = Join-Path $distRoot (".workshop-upload-stage-" + [guid]::NewGuid().ToSt
 $backup = Join-Path $distRoot (".workshop-upload-backup-" + [guid]::NewGuid().ToString("N"))
 $ownershipMarker = ".majesty-mod-manager-workshop-stage"
 $projectName = "MajestyModManager.mswproj"
-$projectSource = Join-Path $repoRoot ("workshop\" + $projectName)
-$previewSource = Join-Path $repoRoot "workshop\workshop-preview.jpg"
-$instructionsSource = Join-Path $repoRoot "workshop\START HERE.txt"
+$descriptionSource = Join-Path $repoRoot "WORKSHOP.md"
+$previewSource = Join-Path $repoRoot "artwork\workshop-preview.jpg"
+$instructionsSource = Join-Path $repoRoot "release\START HERE.txt"
 $licenseRoot = Join-Path $repoRoot "licenses"
 
 $required = @(
@@ -25,7 +26,7 @@ $required = @(
     (Join-Path $applicationRoot "_internal\payload\runtime\MajestyBuildingRuntime.dll"),
     (Join-Path $applicationRoot "_internal\payload\runtime\LICENSE-manager-runtime.txt"),
     (Join-Path $applicationRoot "_internal\profiles\manager\compatibility.json"),
-    $projectSource,
+    $descriptionSource,
     $previewSource,
     $instructionsSource,
     (Join-Path $repoRoot "LICENSE"),
@@ -76,27 +77,44 @@ try {
     Copy-Item -LiteralPath (Join-Path $repoRoot "src\majesty_cam\manager\assets\STEAM-ICON-NOTICE.txt") -Destination (Join-Path $stagedLicenses "STEAM-ICON-NOTICE.txt") -Force
     Copy-Item -LiteralPath $previewSource -Destination (Join-Path $stage "workshop-preview.jpg") -Force
 
-    $projectText = Get-Content -LiteralPath $projectSource -Raw
-    $finalContentPath = [Security.SecurityElement]::Escape((Join-Path $target "content"))
-    $finalPreviewPath = [Security.SecurityElement]::Escape((Join-Path $target "workshop-preview.jpg"))
-    $projectText = [regex]::Replace(
-        $projectText,
-        '<ContentPath>.*?</ContentPath>',
-        ('<ContentPath>' + $finalContentPath + '</ContentPath>')
-    )
-    $projectText = [regex]::Replace(
-        $projectText,
-        '<PreviewImagePath>.*?</PreviewImagePath>',
-        ('<PreviewImagePath>' + $finalPreviewPath + '</PreviewImagePath>')
-    )
+    $projectId = $WorkshopId
+    $visibility = "Private"
     $existingProject = Join-Path $target $projectName
     if (Test-Path -LiteralPath $existingProject -PathType Leaf) {
         $existingText = Get-Content -LiteralPath $existingProject -Raw
         $existingId = [regex]::Match($existingText, '<SteamWorkshop id="([1-9][0-9]*)"')
         if ($existingId.Success) {
-            $projectText = $projectText -replace '<SteamWorkshop id="[0-9]+"', ('<SteamWorkshop id="' + $existingId.Groups[1].Value + '"')
+            $projectId = $existingId.Groups[1].Value
+        }
+        $existingVisibility = [regex]::Match(
+            $existingText,
+            '<SteamWorkshop[^>]+visibility="(Private|Public|FriendsOnly)"'
+        )
+        if ($existingVisibility.Success) {
+            $visibility = $existingVisibility.Groups[1].Value
         }
     }
+    if ($projectId -notmatch '^(0|[1-9][0-9]*)$') {
+        throw "Workshop ID must be zero or a positive integer: $projectId"
+    }
+
+    $finalContentPath = [Security.SecurityElement]::Escape((Join-Path $target "content"))
+    $finalPreviewPath = [Security.SecurityElement]::Escape((Join-Path $target "workshop-preview.jpg"))
+    $description = [Security.SecurityElement]::Escape(
+        (Get-Content -LiteralPath $descriptionSource -Raw).Trim()
+    )
+    $projectText = @"
+<Majesty>
+	<SteamWorkshop id="$projectId" visibility="$visibility">
+		<Title lang="en_US">Majesty Mod Manager</Title>
+		<Description lang="en_US">$description</Description>
+		<ContentPath>$finalContentPath</ContentPath>
+		<PreviewImagePath>$finalPreviewPath</PreviewImagePath>
+		<IDTag>Original Rules</IDTag>
+		<IDTag>Northern Expansion Rules</IDTag>
+	</SteamWorkshop>
+</Majesty>
+"@
     $utf8NoBom = New-Object Text.UTF8Encoding($false)
     [IO.File]::WriteAllText((Join-Path $stage $projectName), $projectText, $utf8NoBom)
     [IO.File]::WriteAllText((Join-Path $stage $ownershipMarker), "schema=1`r`n", [Text.Encoding]::ASCII)

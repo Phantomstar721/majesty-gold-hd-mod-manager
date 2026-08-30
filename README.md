@@ -1,6 +1,6 @@
 # Majesty Mod Manager
 
-![Majesty Mod Manager](workshop/workshop-preview.jpg)
+![Majesty Mod Manager](artwork/workshop-preview.jpg)
 
 Majesty Gold HD Mod Manager is a Windows app for finding, organizing, and
 launching the **Majesty Gold HD** mods and quests you have installed or

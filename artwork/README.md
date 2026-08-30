@@ -33,8 +33,8 @@ Rebuild the derived files with:
 
 ## Steam Workshop preview
 
-`workshop/workshop-preview-source.png` is the full-resolution project-owned
-source for the Steam cover. `workshop/workshop-preview.jpg` is its mechanically
+`artwork/workshop-preview-source.png` is the full-resolution project-owned
+source for the Steam cover. `artwork/workshop-preview.jpg` is its mechanically
 converted upload copy, kept below Steam's preview-image size limit. The source
 image was generated for this project with OpenAI's built-in image generation
 tool.

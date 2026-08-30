@@ -2,7 +2,6 @@ from pathlib import Path
 import re
 import sys
 import unittest
-import xml.etree.ElementTree as ET
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -30,51 +29,32 @@ class ReleaseDocumentationTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden.casefold(), text.casefold())
 
-    def test_workshop_project_is_private_and_points_at_staged_content(self):
-        project = REPO_ROOT / "workshop/MajestyModManager.mswproj"
-        root = ET.fromstring(project.read_text(encoding="utf-8"))
-        workshop = root.find("SteamWorkshop")
-        self.assertIsNotNone(workshop)
-        assert workshop is not None
-        self.assertRegex(workshop.attrib["id"], r"^(0|[1-9][0-9]*)$")
-        self.assertEqual(workshop.attrib["visibility"], "Private")
-        self.assertEqual(workshop.findtext("Title"), "Majesty Mod Manager")
-        self.assertTrue(
-            workshop.findtext("ContentPath", "").endswith(
-                r"dist\workshop-upload\content"
-            )
+    def test_workshop_project_has_one_generated_location(self):
+        self.assertFalse((REPO_ROOT / "workshop").exists())
+        script = (REPO_ROOT / "scripts/Stage-Workshop.ps1").read_text(
+            encoding="utf-8-sig"
         )
-        self.assertTrue(
-            workshop.findtext("PreviewImagePath", "").endswith(
-                r"dist\workshop-upload\workshop-preview.jpg"
-            )
-        )
-        self.assertNotIn(
-            r"C:\Users", project.read_text(encoding="utf-8"),
-            "the tracked Workshop template must remain portable",
-        )
+        self.assertIn('Join-Path $distRoot "workshop-upload"', script)
+        self.assertIn('$projectName = "MajestyModManager.mswproj"', script)
+        self.assertNotIn("$projectSource", script)
 
-    def test_workshop_text_is_the_project_description(self):
-        project = REPO_ROOT / "workshop/MajestyModManager.mswproj"
-        root = ET.fromstring(project.read_text(encoding="utf-8"))
-        workshop = root.find("SteamWorkshop")
-        self.assertIsNotNone(workshop)
-        assert workshop is not None
+    def test_workshop_text_is_the_generated_project_description(self):
         canonical = (REPO_ROOT / "WORKSHOP.md").read_text(encoding="utf-8")
-        self.assertEqual(
-            workshop.findtext("Description", "").strip(),
-            canonical.strip(),
-        )
         self.assertIn("majesty-gold-hd-mod-manager", canonical)
         self.assertNotIn("majesty-gold-hd-cam-merger", canonical)
+        script = (REPO_ROOT / "scripts/Stage-Workshop.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        self.assertIn('$descriptionSource = Join-Path $repoRoot "WORKSHOP.md"', script)
+        self.assertIn("<Description lang=", script)
 
     def test_release_licenses_and_workshop_sources_are_present(self):
         required = (
             "LICENSE",
             "THIRD-PARTY-NOTICES.md",
             "WORKSHOP.md",
-            "workshop/START HERE.txt",
-            "workshop/workshop-preview.jpg",
+            "release/START HERE.txt",
+            "artwork/workshop-preview.jpg",
             "licenses/PYTHON-3.9.txt",
             "licenses/LGPL-3.0.txt",
             "licenses/GPL-3.0.txt",
@@ -89,7 +69,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
         self.assertEqual(missing, [])
 
     def test_workshop_copy_does_not_claim_the_exe_is_standalone(self):
-        instructions = (REPO_ROOT / "workshop/START HERE.txt").read_text(
+        instructions = (REPO_ROOT / "release/START HERE.txt").read_text(
             encoding="utf-8"
         )
         self.assertIn('requires the\nnearby "_internal" folder', instructions)
@@ -125,15 +105,16 @@ class ReleaseDocumentationTests(unittest.TestCase):
         self.assertNotIn("majesty-gold-hd-expanded-building-slots", notices)
         self.assertIn("majesty-gold-hd-mod-manager/tree/main/runtime", notices)
 
-    def test_workshop_stager_resolves_portable_template_paths(self):
+    def test_workshop_stager_generates_the_canonical_project_paths(self):
         script = (REPO_ROOT / "scripts/Stage-Workshop.ps1").read_text(
             encoding="utf-8-sig"
         )
         self.assertIn("$finalContentPath", script)
         self.assertIn("$finalPreviewPath", script)
-        self.assertIn("<ContentPath>.*?</ContentPath>", script)
-        self.assertIn("<PreviewImagePath>.*?</PreviewImagePath>", script)
+        self.assertIn("<ContentPath>$finalContentPath</ContentPath>", script)
+        self.assertIn("<PreviewImagePath>$finalPreviewPath</PreviewImagePath>", script)
         self.assertIn('[string]$ApplicationRoot = ""', script)
+        self.assertIn('[string]$WorkshopId = "3793024054"', script)
 
 
 if __name__ == "__main__":
