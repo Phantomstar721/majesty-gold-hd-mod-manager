@@ -1,110 +1,74 @@
 # Majesty Mod Manager
 
-Majesty Mod Manager is a Windows desktop app for organizing and launching
-**Majesty Gold HD** mods. It keeps ordinary mods independent, lists downloaded
-quests, manages compatible quality-of-life improvements, and safely combines
-supported CAM-based content mods into one playable setup.
+![Majesty Mod Manager](workshop/workshop-preview.jpg)
 
-The manager is currently in private preview. It supports both Steam game
-executables:
+Majesty Gold HD Mod Manager is a Windows app for finding, organizing, and
+launching the **Majesty Gold HD** mods and quests you have installed or
+subscribed to through Steam Workshop.
+
+It also provides the extra support required by more complicated mods, such as
+custom guilds, so compatible mods can be used individually or together without
+overwriting one another.
+
+## Features
+
+- Finds local and Steam Workshop mods and downloaded quests automatically.
+- Organizes content into **Merge**, **Standard**, **Quests**, and
+  **Quality of Life** tabs.
+- Enables detected mods by default and remembers your later choices.
+- Clearly marks content that cannot be combined safely.
+- Prepares one playable package when selected mods need to be combined.
+- Leaves subscribed mods and downloaded quests unchanged.
+- Installs and manages the supported Majesty quality-of-life patches.
+- Supports both maintained Steam versions of Majesty Gold HD.
+- Launches the game with the additional support required by prepared mods and
+  Freestyle games.
+
+## Install and use
+
+The Steam Workshop download contains the complete application. Keep
+`Majesty Mod Manager.exe` beside its `_internal` folder.
+
+1. Subscribe to the Mod Manager and the Majesty mods or quests you want to use.
+2. Open the Mod Manager's Workshop folder and run
+   `Majesty Mod Manager.exe`.
+3. Follow the first-time prompt to install the two required game helpers.
+4. Review the detected content and choose what you want enabled.
+5. Select **Prepare Selected Mods** if the Merge tab contains selected mods.
+6. Select **Launch Majesty**.
+
+Continue launching through the manager whenever prepared Merge content is
+enabled. Ordinary Standard mods and downloaded quests remain usable through
+Majesty normally.
+
+## Content tabs
+
+| Tab | Purpose |
+| --- | --- |
+| **Merge** | Compatible content that needs the manager to work safely alongside other complex mods. |
+| **Standard** | Ordinary Majesty mods that the game can load independently. |
+| **Quests** | Downloaded adventures and maps available through Majesty's quest browser. |
+| **Quality of Life** | Optional game improvements that can be installed or removed individually. |
+
+Items that do not change the game, such as modding tools, are identified but
+are not selectable. If a Merge mod is missing required compatibility
+information, the manager displays it in red with an explanation instead of
+building an unsafe package.
+
+## Compatibility and safety
+
+The manager supports both maintained Steam versions:
 
 - Default Public Version `1.5.2.24`
 - `beta2` Steam Multiplayer Support `1.5.2.28`
 
-## What it does
+The detected version and installation folder are shown at the top of the app.
+Use **Choose…** if you want the manager to use a different supported
+`MajestyHD.exe`.
 
-The app scans the normal Majesty Mods and Quests folders plus subscribed Steam
-Workshop items, then presents four player-facing tabs:
+## Building from source
 
-- **Merge** contains compatible mods that replace shared Majesty data. Choose
-  any supported combination and select **Prepare Selected Mods** to build one
-  combined package.
-- **Standard** contains ordinary mods that Majesty can load independently.
-- **Quests** lists downloaded adventures and maps. They remain available
-  through Majesty's normal quest browser.
-- **Quality of Life** installs or removes the supported utility patches. Each
-  optional improvement remains independent.
-
-All compatible detected mods begin enabled. The manager remembers later
-choices and restores them on the next run. Mods that cannot yet be combined
-safely are shown in red with a plain explanation and cannot be selected.
-
-After a complete scan, unchanged mod and game-helper checks are cached for
-faster repeat launches. Adding, removing, or updating relevant content
-invalidates the affected cache automatically; **Rescan** or F5 always performs
-a complete fresh check.
-
-When Merge mods are selected, the manager:
-
-1. compares each package with the installed stock game data;
-2. combines independent data, descriptions, artwork, audio, and game-script
-   changes;
-3. recompiles and validates one private local package;
-4. leaves every source mod and downloaded quest untouched; and
-5. launches Majesty through the bundled runtime required by combined custom
-   guilds and Freestyle mode.
-
-Custom activity messages are discovered from every selected compatible
-package and assigned stable private IDs. This prevents downloaded quests from
-overwriting those messages without requiring a manager-specific copy of each
-quest.
-
-The original **Custom Guild: Phantoms Haunt** is recognized automatically. If
-selected, the manager uses its included compatibility edition, which keeps the
-stock Elf Guild intact while providing the Phantom guild separately.
-
-## Install and use
-
-The Steam Workshop download contains the complete windowed application.
-Keep `Majesty Mod Manager.exe` beside its `_internal` folder.
-
-1. Close Majesty Gold HD.
-2. Run `Majesty Mod Manager.exe` and approve the Windows administrator prompt.
-3. On first use, open **Quality of Life** and install the two required helpers
-   when prompted.
-4. Review the automatically selected mods. Incompatible Merge entries explain
-   what they need.
-5. If Merge mods are selected, choose **Prepare Selected Mods**.
-6. Choose **Launch Majesty**.
-
-Always launch through the manager while using prepared Merge content. Standard
-mods can still be used without a prepared package.
-
-The application is community-built and is not code-signed, so Windows may show
-a SmartScreen warning. Use **More info > Run anyway** only when the download
-came from the official Workshop item or this repository's releases.
-
-## Compatibility and safety
-
-Majesty normally lets complete CAM tables overwrite one another according to
-load order. The manager instead performs a stock-relative merge and stops when
-it cannot prove that a result is safe. It never silently chooses one conflicting
-mod over another.
-
-A generic Merge mod must include the files and versioned compatibility
-definition described in the
-[merge-mod authoring contract](docs/manager-merge-contract.md). Existing legacy
-mods can be supported through audited external compatibility profiles. New
-native runtime behavior must declare a manager-supported capability; unknown
-capabilities are rejected rather than guessed.
-
-The manager currently supports the package structures exercised by Custom
-Guild: Phantoms Haunt and Custom Guild: Alchemist Lab. Broader compatibility
-will grow as independently authored CAM mods become available for testing.
-
-The two required launch helpers are:
-
-- **Generic Visitor Lists**, which safely displays custom guild visitors; and
-- **Remember Active Mods**, which restores the exact selection prepared by the
-  manager when Majesty starts.
-
-They are installed through version-checked patchers and coexist with the other
-quality-of-life utilities offered in the app. Unknown Majesty executables are
-rejected before executable changes are applied.
-
-## Build from source
-
-Python 3.9 or newer is required for source development:
+Python 3.9 or newer is required:
 
 ```powershell
 .\Setup - Majesty Mod Manager.bat
@@ -112,31 +76,28 @@ Python 3.9 or newer is required for source development:
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-Build the redistributable windowed application with:
+Build the standalone Windows application with:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Build-ModManagerExe.ps1
 ```
 
-The complete application is written to `dist\Majesty Mod Manager`. It is a
-one-directory build by design: the bundled runtime and support files must remain
-available for the full Majesty session.
+The finished application is written to `dist\Majesty Mod Manager`.
 
-Maintainers can prepare an RGSEditor upload directory with:
+Mod authors interested in making compatible content can read the
+[Merge mod authoring guide](docs/manager-merge-contract.md).
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\Stage-Workshop.ps1
-```
+## Community
+
+Join the Majesty community on [Discord](https://discord.gg/MEjtKZb9GQ).
 
 ## License
 
-The Majesty Mod Manager source and project-owned artwork are licensed under the
-MIT License. See [LICENSE](LICENSE).
+The Majesty Gold HD Mod Manager source and project-owned artwork are licensed
+under the [MIT License](LICENSE).
 
-The packaged application also contains separately licensed components,
-including Python, PySide6/Qt, the PyInstaller bootloader, the Expanded Building
-Slots runtime, and the Majesty quality-of-life utilities. Their notices and
-source links are listed in
+The packaged application contains separately licensed components. Their
+licenses, notices, and source links are listed in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), and the Workshop package
 includes the applicable license texts.
 
