@@ -209,7 +209,10 @@ class ManagerPreflightTests(unittest.TestCase):
             internal_name="CapabilityFixture",
             display_name="Capability Fixture",
             custom_buildings=(),
-            runtime_capabilities=("alchemist.nm18-name-generator",),
+            runtime_capabilities=(
+                "alchemist.nm18-name-generator",
+                "phantom.nm19-name-generator",
+            ),
         )
         package = SimpleNamespace(
             definition=definition, mod_id=MOD_ID, manifest_path=Path("fixture.mmxml")
@@ -231,6 +234,7 @@ class ManagerPreflightTests(unittest.TestCase):
                 "expanded-building-slots.cg-prefix",
                 "freestyle-cam-rebind.v1",
                 "alchemist.nm18-name-generator",
+                "phantom.nm19-name-generator",
             ),
         )
         self.assertFalse(result.issues)

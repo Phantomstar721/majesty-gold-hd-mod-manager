@@ -111,6 +111,13 @@ unadapted v1 Merge mod red and nonselectable. Version 1 remains usable only
 when a trusted manager compatibility profile supplies the missing definition,
 capabilities, or complete audited replacement package.
 
+The expanded Phantoms Haunt declares `phantom.nm19-name-generator`. That
+capability requests the runtime's stock-lifecycle `NM19` registry extension;
+the package supplies private `HN73`-`HN76` tables and selects `NM19` on the
+Phantom description. Stock `NM11` and the Original/Expansion Priestess
+`HN41`-`HN44` resources remain manager-base content and are not contributed by
+the Haunt package.
+
 ## Stock-relative content requirements
 
 Majesty treats several resources as complete effective tables rather than

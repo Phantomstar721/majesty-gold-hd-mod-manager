@@ -27,7 +27,7 @@ class RuntimeCapabilityManifestTests(unittest.TestCase):
             tuple(sorted(capabilities)),
         )
 
-    def test_empty_generic_and_alchemist_profiles_are_distinct(self):
+    def test_empty_generic_and_private_name_profiles_are_distinct(self):
         generic = (
             "expanded-building-slots.cg-prefix",
             "freestyle-cam-rebind.v1",
@@ -39,6 +39,7 @@ class RuntimeCapabilityManifestTests(unittest.TestCase):
             "alchemist.cgbrewing-secondary-controller",
             "alchemist.nm18-name-generator",
         )
+        phantom = (*generic, "phantom.nm19-name-generator")
         self.assertEqual(decode_runtime_capability_manifest(
             encode_runtime_capability_manifest(())
         ), ())
@@ -53,6 +54,12 @@ class RuntimeCapabilityManifestTests(unittest.TestCase):
                 encode_runtime_capability_manifest(alchemist)
             ),
             tuple(sorted(alchemist)),
+        )
+        self.assertEqual(
+            decode_runtime_capability_manifest(
+                encode_runtime_capability_manifest(phantom)
+            ),
+            tuple(sorted(phantom)),
         )
 
     def test_decoder_rejects_truncation_duplicates_order_and_trailing_bytes(self):

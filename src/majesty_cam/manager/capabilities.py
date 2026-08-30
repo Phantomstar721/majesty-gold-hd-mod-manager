@@ -26,6 +26,7 @@ SUPPORTED_RUNTIME_CAPABILITIES = frozenset(
         "alchemist.ap78-private-oil-rows",
         "alchemist.nm18-name-generator",
         "generic-visitor-lists.v1",
+        "phantom.nm19-name-generator",
         *DERIVED_RUNTIME_CAPABILITIES,
     )
 )
