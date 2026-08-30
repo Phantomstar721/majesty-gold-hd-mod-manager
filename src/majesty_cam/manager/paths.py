@@ -102,10 +102,7 @@ def detect_manager_paths(
     runtime_candidates = [repo_root / "payload" / "runtime"]
     if not frozen:
         runtime_candidates.append(
-            workspace_root
-            / "majesty-gold-hd-expanded-building-slots"
-            / "artifacts"
-            / "runtime-intent-text"
+            repo_root / "local" / "manager-runtime-release"
         )
     runtime_root = (
         _first_with_file(runtime_candidates, "MajestyBuildingRuntimeLauncher.exe")

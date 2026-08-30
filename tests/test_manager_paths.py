@@ -234,16 +234,12 @@ class FrozenManagerPathTests(unittest.TestCase):
                 / "payload/qol/remember-active-mods/Install-ModPersistence.ps1",
             )
 
-    def test_source_checkout_retains_explicit_sibling_repository_fallbacks(self):
+    def test_source_checkout_uses_manager_owned_runtime_fallback(self):
         with TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             repo = workspace / "majesty-gold-hd-mod-manager"
             repo.mkdir()
-            runtime = (
-                workspace
-                / "majesty-gold-hd-expanded-building-slots"
-                / "artifacts/runtime-intent-text"
-            )
+            runtime = repo / "local/manager-runtime-release"
             visitor = (
                 workspace
                 / "majesty-gold-hd-generic-visitor-lists"

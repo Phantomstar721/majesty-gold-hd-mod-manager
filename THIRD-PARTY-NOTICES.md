@@ -37,13 +37,20 @@ included as `licenses/PYINSTALLER.txt`.
 
 Source: https://github.com/pyinstaller/pyinstaller/tree/v6.22.2
 
-## Expanded Building Slots runtime
+## Majesty Mod Manager native runtime
 
-The distribution includes the Majesty Gold HD Expanded Building Slots launcher
-and DLL, licensed under MIT by Phantomstar721. Its license is retained inside
-the bundled runtime payload and copied into the Workshop package.
+The native launcher and DLL are maintained as part of Majesty Mod Manager and
+licensed under the repository's MIT license. Their complete source is included
+in the public repository under `runtime`, with build scripts and tests retained
+alongside the manager source.
 
-Source: https://github.com/Phantomstar721/majesty-gold-hd-expanded-building-slots
+Source: https://github.com/Phantomstar721/majesty-gold-hd-mod-manager/tree/main/runtime
+
+The Freestyle CAM support incorporates work derived from
+`Iximi-Ixus/freestyle-cam-sidecar`, licensed under MIT. Its retained notice is
+included as `licenses/FREESTYLE-CAM-SIDECAR.txt`.
+
+Source: https://github.com/Iximi-Ixus/freestyle-cam-sidecar
 
 ## Majesty Gold HD quality-of-life utilities
 

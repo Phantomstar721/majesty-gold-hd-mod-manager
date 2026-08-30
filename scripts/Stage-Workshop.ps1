@@ -23,6 +23,7 @@ $required = @(
     (Join-Path $applicationRoot "Majesty Mod Manager.exe"),
     (Join-Path $applicationRoot "_internal\payload\runtime\MajestyBuildingRuntimeLauncher.exe"),
     (Join-Path $applicationRoot "_internal\payload\runtime\MajestyBuildingRuntime.dll"),
+    (Join-Path $applicationRoot "_internal\payload\runtime\LICENSE-manager-runtime.txt"),
     (Join-Path $applicationRoot "_internal\profiles\manager\compatibility.json"),
     $projectSource,
     $previewSource,
@@ -33,6 +34,7 @@ $required = @(
     (Join-Path $licenseRoot "LGPL-3.0.txt"),
     (Join-Path $licenseRoot "GPL-3.0.txt"),
     (Join-Path $licenseRoot "PYINSTALLER.txt"),
+    (Join-Path $licenseRoot "FREESTYLE-CAM-SIDECAR.txt"),
     (Join-Path $repoRoot "src\majesty_cam\manager\assets\STEAM-ICON-NOTICE.txt")
 )
 foreach ($path in $required) {

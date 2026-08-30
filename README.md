@@ -68,7 +68,8 @@ Use **Choose…** if you want the manager to use a different supported
 
 ## Building from source
 
-Python 3.9 or newer is required:
+Python 3.9 or newer is required. Building the native runtime also requires the
+x86 Visual C++ build tools and a Windows 10 SDK:
 
 ```powershell
 .\Setup - Majesty Mod Manager.bat

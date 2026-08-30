@@ -18,10 +18,9 @@ $python = Join-Path $workspaceRoot ".tools\python.cmd"
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw "Workspace Python wrapper was not found: $python"
 }
-$runtimeRepo = Join-Path $workspaceRoot "majesty-gold-hd-expanded-building-slots"
-$runtimeBuild = Join-Path $runtimeRepo "scripts\Build-Runtime.ps1"
+$runtimeBuild = Join-Path $repoRoot "scripts\Build-Runtime.ps1"
 if (-not $RuntimeOutputRoot) {
-    $RuntimeOutputRoot = Join-Path $runtimeRepo "artifacts\runtime-freestyle-validation"
+    $RuntimeOutputRoot = Join-Path $repoRoot "local\runtime-freestyle-validation"
 }
 if (-not (Test-Path -LiteralPath $runtimeBuild -PathType Leaf)) {
     throw "CAM Manager runtime build script was not found: $runtimeBuild"

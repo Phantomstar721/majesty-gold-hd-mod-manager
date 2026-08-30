@@ -16,15 +16,17 @@ if ($target -ne $expected) {
 
 $stage = Join-Path $repoRoot (".payload-stage-" + [guid]::NewGuid().ToString("N"))
 $backup = Join-Path $repoRoot (".payload-backup-" + [guid]::NewGuid().ToString("N"))
-$runtimeSource = Join-Path $workspaceRoot "majesty-gold-hd-expanded-building-slots\artifacts\runtime-intent-text"
+$runtimeBuild = Join-Path $repoRoot "scripts\Build-Runtime.ps1"
+$runtimeSource = Join-Path $repoRoot "local\manager-runtime-release"
 $visitorRepo = Join-Path $workspaceRoot "majesty-gold-hd-generic-visitor-lists"
 $rememberRepo = Join-Path $workspaceRoot "majesty-gold-hd-remember-active-mods"
 $qolRepo = Join-Path $workspaceRoot "majesty-gold-hd-qol-utilities"
 $hauntSource = Join-Path $workspaceRoot "majesty-gold-hd-custom-guild-phantoms-haunt\dist\CustomGuildPhantomsHauntExpanded"
 
 $required = @(
-    (Join-Path $runtimeSource "MajestyBuildingRuntimeLauncher.exe"),
-    (Join-Path $runtimeSource "MajestyBuildingRuntime.dll"),
+    $runtimeBuild,
+    (Join-Path $repoRoot "LICENSE"),
+    (Join-Path $repoRoot "runtime\MajestyBuildingRuntimeLauncher.cpp"),
     (Join-Path $visitorRepo "scripts\Install-GenericVisitorLists.ps1"),
     (Join-Path $visitorRepo "scripts\MajestyBuildProfiles.ps1"),
     (Join-Path $rememberRepo "scripts\Install-ModPersistence.ps1"),
@@ -41,15 +43,28 @@ foreach ($path in $required) {
     }
 }
 
+& $runtimeBuild -OutputRoot $runtimeSource
+if ($LASTEXITCODE -ne 0) {
+    throw "Majesty Mod Manager native runtime build failed with exit code $LASTEXITCODE."
+}
+foreach ($runtimeFile in @(
+    (Join-Path $runtimeSource "MajestyBuildingRuntimeLauncher.exe"),
+    (Join-Path $runtimeSource "MajestyBuildingRuntime.dll")
+)) {
+    if (-not (Test-Path -LiteralPath $runtimeFile -PathType Leaf)) {
+        throw "Required manager runtime output was not found: $runtimeFile"
+    }
+}
+
 try {
     New-Item -ItemType Directory -Path $stage | Out-Null
-    Set-Content -LiteralPath (Join-Path $stage ".majesty-mod-manager-payload") -Value "schema=2" -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $stage ".majesty-mod-manager-payload") -Value "schema=3" -Encoding ASCII
 
     $runtimeTarget = Join-Path $stage "runtime"
     New-Item -ItemType Directory -Path $runtimeTarget | Out-Null
     Copy-Item -LiteralPath (Join-Path $runtimeSource "MajestyBuildingRuntimeLauncher.exe") -Destination $runtimeTarget
     Copy-Item -LiteralPath (Join-Path $runtimeSource "MajestyBuildingRuntime.dll") -Destination $runtimeTarget
-    Copy-Item -LiteralPath (Join-Path $workspaceRoot "majesty-gold-hd-expanded-building-slots\LICENSE") -Destination (Join-Path $runtimeTarget "LICENSE-expanded-building-runtime.txt")
+    Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $runtimeTarget "LICENSE-manager-runtime.txt")
 
     $visitorTarget = Join-Path $stage "qol\generic-visitor-lists"
     New-Item -ItemType Directory -Path $visitorTarget | Out-Null

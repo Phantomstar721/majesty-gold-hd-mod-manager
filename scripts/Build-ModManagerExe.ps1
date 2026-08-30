@@ -13,7 +13,7 @@ $managerIcon = Join-Path $assetRoot "manager-icon.ico"
 $requiredPayloadFiles = @(
     "payload\runtime\MajestyBuildingRuntimeLauncher.exe",
     "payload\runtime\MajestyBuildingRuntime.dll",
-    "payload\runtime\LICENSE-expanded-building-runtime.txt",
+    "payload\runtime\LICENSE-manager-runtime.txt",
     "payload\qol\generic-visitor-lists\Install-GenericVisitorLists.ps1",
     "payload\qol\generic-visitor-lists\MajestyBuildProfiles.ps1",
     "payload\qol\generic-visitor-lists\LICENSE.txt",
@@ -42,6 +42,7 @@ $releaseFiles = @(
     (Join-Path $repoRoot "licenses\LGPL-3.0.txt"),
     (Join-Path $repoRoot "licenses\GPL-3.0.txt"),
     (Join-Path $repoRoot "licenses\PYINSTALLER.txt"),
+    (Join-Path $repoRoot "licenses\FREESTYLE-CAM-SIDECAR.txt"),
     (Join-Path $assetRoot "STEAM-ICON-NOTICE.txt")
 )
 foreach ($releaseFile in $releaseFiles) {
@@ -49,20 +50,17 @@ foreach ($releaseFile in $releaseFiles) {
         throw "Required release notice was not found: $releaseFile"
     }
 }
-$payloadCurrent = (Test-Path -LiteralPath $payloadMarker -PathType Leaf) -and `
-    ((Get-Content -LiteralPath $payloadMarker -Raw).Trim() -eq "schema=2")
-if ($payloadCurrent) {
-    foreach ($relative in $requiredPayloadFiles) {
-        if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $relative) -PathType Leaf)) {
-            $payloadCurrent = $false
-            break
-        }
-    }
+& (Join-Path $PSScriptRoot "Stage-ModManagerPayload.ps1")
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not stage a complete schema-3 manager payload."
 }
-if (-not $payloadCurrent) {
-    & (Join-Path $PSScriptRoot "Stage-ModManagerPayload.ps1")
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not stage a complete schema-2 manager payload."
+if (-not (Test-Path -LiteralPath $payloadMarker -PathType Leaf) -or
+    ((Get-Content -LiteralPath $payloadMarker -Raw).Trim() -ne "schema=3")) {
+    throw "Manager payload staging did not produce the required schema-3 marker."
+}
+foreach ($relative in $requiredPayloadFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $relative) -PathType Leaf)) {
+        throw "Manager payload staging omitted required file: $relative"
     }
 }
 
@@ -108,6 +106,7 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\PYTHON-3.9.txt") -Destinat
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\LGPL-3.0.txt") -Destination $applicationLicenses -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\GPL-3.0.txt") -Destination $applicationLicenses -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\PYINSTALLER.txt") -Destination $applicationLicenses -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\FREESTYLE-CAM-SIDECAR.txt") -Destination $applicationLicenses -Force
 Copy-Item -LiteralPath (Join-Path $assetRoot "STEAM-ICON-NOTICE.txt") -Destination $applicationLicenses -Force
 if (-not $KeepBuildFiles) {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

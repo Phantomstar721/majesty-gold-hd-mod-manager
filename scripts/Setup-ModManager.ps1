@@ -10,7 +10,7 @@ $payloadMarker = Join-Path $repoRoot "payload\.majesty-mod-manager-payload"
 $requiredPayloadFiles = @(
     "payload\runtime\MajestyBuildingRuntimeLauncher.exe",
     "payload\runtime\MajestyBuildingRuntime.dll",
-    "payload\runtime\LICENSE-expanded-building-runtime.txt",
+    "payload\runtime\LICENSE-manager-runtime.txt",
     "payload\qol\generic-visitor-lists\Install-GenericVisitorLists.ps1",
     "payload\qol\generic-visitor-lists\MajestyBuildProfiles.ps1",
     "payload\qol\generic-visitor-lists\LICENSE.txt",
@@ -28,7 +28,7 @@ if (-not (Test-Path -LiteralPath $workspacePython -PathType Leaf)) {
     throw "Workspace Python was not found: $workspacePython"
 }
 $payloadCurrent = (Test-Path -LiteralPath $payloadMarker -PathType Leaf) -and `
-    ((Get-Content -LiteralPath $payloadMarker -Raw).Trim() -eq "schema=2")
+    ((Get-Content -LiteralPath $payloadMarker -Raw).Trim() -eq "schema=3")
 if ($payloadCurrent) {
     foreach ($relative in $requiredPayloadFiles) {
         if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $relative) -PathType Leaf)) {

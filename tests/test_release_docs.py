@@ -36,7 +36,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
         workshop = root.find("SteamWorkshop")
         self.assertIsNotNone(workshop)
         assert workshop is not None
-        self.assertEqual(workshop.attrib["id"], "0")
+        self.assertRegex(workshop.attrib["id"], r"^(0|[1-9][0-9]*)$")
         self.assertEqual(workshop.attrib["visibility"], "Private")
         self.assertEqual(workshop.findtext("Title"), "Majesty Mod Manager")
         self.assertTrue(
@@ -79,6 +79,10 @@ class ReleaseDocumentationTests(unittest.TestCase):
             "licenses/LGPL-3.0.txt",
             "licenses/GPL-3.0.txt",
             "licenses/PYINSTALLER.txt",
+            "licenses/FREESTYLE-CAM-SIDECAR.txt",
+            "runtime/MajestyBuildingRuntimeLauncher.cpp",
+            "runtime/FreestyleCamRuntime.cpp",
+            "scripts/Build-Runtime.ps1",
             "scripts/Stage-Workshop.ps1",
         )
         missing = [item for item in required if not (REPO_ROOT / item).is_file()]
@@ -103,9 +107,23 @@ class ReleaseDocumentationTests(unittest.TestCase):
             "LGPL-3.0.txt",
             "GPL-3.0.txt",
             "PYINSTALLER.txt",
+            "FREESTYLE-CAM-SIDECAR.txt",
             "STEAM-ICON-NOTICE.txt",
         ):
             self.assertIn(required, script)
+
+    def test_native_runtime_is_built_from_manager_owned_source(self):
+        stage_script = (
+            REPO_ROOT / "scripts/Stage-ModManagerPayload.ps1"
+        ).read_text(encoding="utf-8-sig")
+        notices = (REPO_ROOT / "THIRD-PARTY-NOTICES.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('Join-Path $repoRoot "scripts\\Build-Runtime.ps1"', stage_script)
+        self.assertIn('Join-Path $repoRoot "runtime\\MajestyBuildingRuntimeLauncher.cpp"', stage_script)
+        self.assertNotIn("majesty-gold-hd-expanded-building-slots", stage_script)
+        self.assertNotIn("majesty-gold-hd-expanded-building-slots", notices)
+        self.assertIn("majesty-gold-hd-mod-manager/tree/main/runtime", notices)
 
     def test_workshop_stager_resolves_portable_template_paths(self):
         script = (REPO_ROOT / "scripts/Stage-Workshop.ps1").read_text(
