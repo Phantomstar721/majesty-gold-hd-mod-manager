@@ -44,6 +44,10 @@ class ManagerPaths:
     def empty_runtime_capability_manifest(self) -> Path:
         return self.profile_path.parent / "empty-runtime-capabilities.mmcp"
 
+    @property
+    def startup_cache_path(self) -> Path:
+        return self.profile_path.parent / "startup-cache.json"
+
 
 def detect_manager_paths(
     *,

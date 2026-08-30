@@ -155,6 +155,31 @@ class ManagerAppLayoutTests(unittest.TestCase):
         self.assertEqual(window.tabs.currentIndex(), 0)
         window.close()
 
+    def test_startup_uses_cache_while_rescan_forces_refresh(self) -> None:
+        class _Paths:
+            game_path = Path("Z:/missing-majesty")
+            profile_path = Path(tempfile.gettempdir()) / "manager-ui-profile.json"
+
+        class _Controller:
+            paths = _Paths()
+
+            def scan(self, *, force_refresh=False):
+                return force_refresh
+
+        with patch.object(manager_app.QTimer, "singleShot"):
+            window = manager_app.ManagerWindow(_Controller())  # type: ignore[arg-type]
+
+        with patch.object(window, "_run_task") as run:
+            window._startup_scan()
+            startup_action = run.call_args.args[1]
+            self.assertFalse(startup_action(lambda message: None))
+
+            window.scan()
+            rescan_action = run.call_args.args[1]
+            self.assertTrue(rescan_action(lambda message: None))
+
+        window.close()
+
     def test_footer_does_not_repeat_required_qol_status(self) -> None:
         from PySide6.QtWidgets import QLabel
 

@@ -1,9 +1,14 @@
-param()
+param(
+    [string]$ApplicationRoot = ""
+)
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $distRoot = Join-Path $repoRoot "dist"
-$applicationRoot = Join-Path $distRoot "Majesty Mod Manager"
+if (-not $ApplicationRoot) {
+    $ApplicationRoot = Join-Path $distRoot "Majesty Mod Manager"
+}
+$applicationRoot = [IO.Path]::GetFullPath($ApplicationRoot)
 $target = Join-Path $distRoot "workshop-upload"
 $stage = Join-Path $distRoot (".workshop-upload-stage-" + [guid]::NewGuid().ToString("N"))
 $backup = Join-Path $distRoot (".workshop-upload-backup-" + [guid]::NewGuid().ToString("N"))

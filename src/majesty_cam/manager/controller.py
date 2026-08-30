@@ -38,6 +38,11 @@ from .qol_service import (
     QolService,
     QolUtilityStatus,
 )
+from .startup_cache import (
+    StartupCache,
+    merge_preflight_signature,
+    qol_input_signature,
+)
 
 
 @dataclass(frozen=True)
@@ -89,23 +94,49 @@ class ManagerController:
         self._qol_checked = False
         self.notices: list[str] = []
 
-    def scan(self, *, inspect_qol: bool = True) -> ControllerSnapshot:
+    def scan(
+        self,
+        *,
+        inspect_qol: bool = True,
+        force_refresh: bool = False,
+    ) -> ControllerSnapshot:
         self.notices = []
+        cache = StartupCache.load(self.paths.startup_cache_path)
+        preflight_ids: set[str] = set()
+
+        def inspect_merge(
+            content_id: str, display_name: str, package_root: Path
+        ):
+            preflight_ids.add(content_id)
+            signature = merge_preflight_signature(
+                content_id=content_id,
+                display_name=display_name,
+                source_root=package_root,
+                registry=self.registry,
+                game_path=self.paths.game_path,
+            )
+            if not force_refresh:
+                cached = cache.get_preflight(content_id, signature)
+                if cached is not None:
+                    return cached
+            issues = catalog_merge_preflight(
+                content_id,
+                display_name,
+                package_root,
+                registry=self.registry,
+                game_path=self.paths.game_path,
+            )
+            cache.set_preflight(content_id, signature, issues)
+            return issues
+
         self.catalog = scan_catalog(
             local_mods_root=self.paths.local_mods_root,
             local_quests_root=self.paths.local_quests_root,
             workshop_roots=self.paths.workshop_roots,
             compatibility=self.registry.specs,
-            merge_preflight=lambda content_id, display_name, package_root: (
-                catalog_merge_preflight(
-                    content_id,
-                    display_name,
-                    package_root,
-                    registry=self.registry,
-                    game_path=self.paths.game_path,
-                )
-            ),
+            merge_preflight=inspect_merge,
         )
+        cache.retain_preflight(preflight_ids)
         try:
             saved = load_profile(self.paths.profile_path)
         except ProfileFormatError as exc:
@@ -134,7 +165,16 @@ class ManagerController:
         self._qol_checked = inspect_qol
         if inspect_qol:
             try:
-                self._set_qol_catalog(self.qol_service.inspect())
+                qol_signature = qol_input_signature(self.qol_service)
+                qol_catalog = (
+                    None
+                    if force_refresh
+                    else cache.get_qol(qol_signature, self.qol_service)
+                )
+                if qol_catalog is None:
+                    qol_catalog = self.qol_service.inspect()
+                    cache.set_qol(qol_signature, qol_catalog)
+                self._set_qol_catalog(qol_catalog)
             except Exception as exc:
                 self.qol_catalog = None
                 self.qol_status = ()
@@ -142,6 +182,7 @@ class ManagerController:
         else:
             self.qol_catalog = None
             self.qol_status = ()
+        cache.save()
         return self.snapshot()
 
     def change_qol(self, key: str, install: bool) -> ControllerSnapshot:
@@ -159,7 +200,11 @@ class ManagerController:
         else:
             self.qol_service.remove(key)
         self._qol_checked = True
-        self._set_qol_catalog(self.qol_service.inspect())
+        catalog = self.qol_service.inspect()
+        self._set_qol_catalog(catalog)
+        cache = StartupCache.load(self.paths.startup_cache_path)
+        cache.set_qol(qol_input_signature(self.qol_service), catalog)
+        cache.save()
         return self.snapshot()
 
     def set_selected(self, content_id: str, enabled: bool) -> ControllerSnapshot:

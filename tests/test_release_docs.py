@@ -113,6 +113,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
         self.assertIn("$finalPreviewPath", script)
         self.assertIn("<ContentPath>.*?</ContentPath>", script)
         self.assertIn("<PreviewImagePath>.*?</PreviewImagePath>", script)
+        self.assertIn('[string]$ApplicationRoot = ""', script)
 
 
 if __name__ == "__main__":

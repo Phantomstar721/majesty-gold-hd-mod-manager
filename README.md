@@ -29,6 +29,11 @@ All compatible detected mods begin enabled. The manager remembers later
 choices and restores them on the next run. Mods that cannot yet be combined
 safely are shown in red with a plain explanation and cannot be selected.
 
+After a complete scan, unchanged mod and game-helper checks are cached for
+faster repeat launches. Adding, removing, or updating relevant content
+invalidates the affected cache automatically; **Rescan** or F5 always performs
+a complete fresh check.
+
 When Merge mods are selected, the manager:
 
 1. compares each package with the installed stock game data;

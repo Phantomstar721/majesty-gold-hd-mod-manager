@@ -790,7 +790,7 @@ if _PYSIDE_IMPORT_ERROR is None:
 
             QShortcut(QKeySequence.StandardKey.Find, self, activated=self.search.setFocus)
             QShortcut(QKeySequence("F5"), self, activated=self.scan)
-            QTimer.singleShot(0, self.scan)
+            QTimer.singleShot(0, self._startup_scan)
 
         def _build_ui(self) -> None:
             root = QWidget()
@@ -981,13 +981,19 @@ if _PYSIDE_IMPORT_ERROR is None:
 
         @Slot()
         def scan(self) -> None:
+            self._start_scan(force_refresh=True)
+
+        def _startup_scan(self) -> None:
+            self._start_scan(force_refresh=False)
+
+        def _start_scan(self, *, force_refresh: bool) -> None:
             if self._busy:
                 return
             self.prepared_cache.clear()
             self.blocked_cache.clear()
             self._run_task(
                 "Looking for installed content",
-                lambda progress: self.controller.scan(),
+                lambda progress: self.controller.scan(force_refresh=force_refresh),
                 self._scan_finished,
             )
 
