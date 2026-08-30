@@ -350,14 +350,36 @@ class QolService:
             detect_majesty_branch(self.game_executable),
         )
 
-    def apply(self, key: str) -> QolUtilityStatus:
-        return self._change(key, install=True)
+    def apply(
+        self,
+        key: str,
+        *,
+        current: QolUtilityStatus | None = None,
+    ) -> QolUtilityStatus:
+        return self._change(key, install=True, current=current)
 
-    def remove(self, key: str) -> QolUtilityStatus:
-        return self._change(key, install=False)
+    def remove(
+        self,
+        key: str,
+        *,
+        current: QolUtilityStatus | None = None,
+    ) -> QolUtilityStatus:
+        return self._change(key, install=False, current=current)
 
-    def _change(self, key: str, *, install: bool) -> QolUtilityStatus:
-        current = self.inspect_patch(key)
+    def _change(
+        self,
+        key: str,
+        *,
+        install: bool,
+        current: QolUtilityStatus | None = None,
+    ) -> QolUtilityStatus:
+        spec = self._spec(key)
+        if current is None:
+            current = self.inspect_patch(key)
+        elif current.key != key or current.patch.spec.key != spec.key:
+            raise QolServiceError(
+                f"Cached QOL status does not describe {spec.name}."
+            )
         if not install and current.required_for_manager:
             raise QolServiceError(
                 f"{current.name} is required by Majesty Mod Manager and cannot be removed."
@@ -369,30 +391,41 @@ class QolService:
             raise QolServiceError(
                 f"{current.patch.spec.name} is not safely applicable: {current.detail}"
             )
-        script = (
-            current.patch.install_script if install else current.patch.remove_script
-        )
+        # Resolve the canonical pair again before mutation so a cached status
+        # can skip its expensive dry-run without pinning the action to stale or
+        # removed script paths.  The script remains the authority for branch,
+        # byte-layout, ownership, and conflict checks.
+        patch = resolve_qol_patch(self.repo_root, spec)
+        script = patch.install_script if install else patch.remove_script
         if script is None or not script.is_file():
             verb = "installer" if install else "restorer"
             raise QolServiceError(
-                f"{current.patch.spec.name} canonical {verb} is unavailable."
+                f"{spec.name} canonical {verb} is unavailable."
             )
 
-        completed = self._runner(self._command(current.patch.spec, script))
+        completed = self._runner(self._command(spec, script))
         output = _combined_output(completed)
         if completed.returncode != 0:
             action = "apply" if install else "remove"
             raise QolServiceError(
-                f"Could not {action} {current.patch.spec.name}: "
+                f"Could not {action} {spec.name}: "
                 f"{output or f'exit code {completed.returncode}'}"
             )
-        verified = self.inspect_patch(key)
-        if verified.installed is not desired:
-            action = "installed" if install else "removed"
-            raise QolServiceError(
-                f"{current.patch.spec.name} script completed but the utility was not {action}."
-            )
-        return verified
+        # Canonical scripts fail closed: they validate their complete target
+        # set, verify locks, perform the mutation, and return nonzero on any
+        # failure.  A second dry-run merely repeats their expensive parsing.
+        return QolUtilityStatus(
+            patch=patch,
+            state=(
+                QolUtilityState.INSTALLED
+                if desired
+                else QolUtilityState.AVAILABLE
+            ),
+            supported=True,
+            applicable=True,
+            installed=desired,
+            detail="Installed." if desired else "Available.",
+        )
 
     def _inspect_resolved(
         self,

@@ -186,7 +186,13 @@ class ManagerController:
         return self.snapshot()
 
     def change_qol(self, key: str, install: bool) -> ControllerSnapshot:
-        """Apply or remove one canonical QOL utility and refresh its status."""
+        """Apply or remove one utility and refresh only the affected status.
+
+        The canonical fail-closed script validates the complete mutation.
+        Re-running independent PowerShell dry-runs afterward made a single
+        button press needlessly slow and did not provide stronger ownership
+        guarantees.
+        """
 
         spec = next((item for item in self.qol_service.specs if item.key == key), None)
         if spec is None:
@@ -195,12 +201,31 @@ class ManagerController:
             raise ValueError(
                 f"{spec.name} is required when launching through Majesty Mod Manager."
             )
+        previous_catalog = self.qol_catalog
+        previous_status = None
+        if previous_catalog is not None:
+            try:
+                previous_status = previous_catalog.get(key)
+            except KeyError:
+                previous_status = None
         if install:
-            self.qol_service.apply(key)
+            changed = self.qol_service.apply(key, current=previous_status)
         else:
-            self.qol_service.remove(key)
+            changed = self.qol_service.remove(key, current=previous_status)
         self._qol_checked = True
-        catalog = self.qol_service.inspect()
+        if previous_catalog is None or previous_status is None:
+            # This path is retained for non-UI callers which request a change
+            # before the manager has ever inspected the QOL catalog.
+            catalog = self.qol_service.inspect()
+        else:
+            catalog = QolCatalogSnapshot(
+                game_executable=previous_catalog.game_executable,
+                branch=previous_catalog.branch,
+                utilities=tuple(
+                    changed if status.key == key else status
+                    for status in previous_catalog.utilities
+                ),
+            )
         self._set_qol_catalog(catalog)
         cache = StartupCache.load(self.paths.startup_cache_path)
         cache.set_qol(qol_input_signature(self.qol_service), catalog)

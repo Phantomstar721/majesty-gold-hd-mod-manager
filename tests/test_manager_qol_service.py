@@ -190,6 +190,35 @@ class QolServiceTests(unittest.TestCase):
                 all(str(payload) in command[5] for command in runner.commands)
             )
 
+    def test_cached_status_skips_duplicate_pre_action_dry_run(self):
+        spec = _test_spec()
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            merger = root / "merger"
+            executable = root / "game" / "MajestyHD.exe"
+            executable.parent.mkdir()
+            _write_synthetic_exe(executable, PUBLIC_BRANCH)
+            payload = merger / "payload" / "qol" / spec.payload_slug
+            payload.mkdir(parents=True)
+            (payload / spec.install_script_name).write_text("", encoding="utf-8")
+            (payload / spec.remove_script_name).write_text("", encoding="utf-8")
+            runner = _StatefulRunner(spec)
+            service = QolService(
+                repo_root=merger,
+                game_executable=executable,
+                specs=(spec,),
+                runner=runner,
+            )
+
+            cached = service.inspect_patch(spec.key)
+            runner.commands.clear()
+            installed = service.apply(spec.key, current=cached)
+
+            self.assertTrue(installed.installed)
+            self.assertEqual(installed.state, QolUtilityState.INSTALLED)
+            self.assertEqual(len(runner.commands), 1)
+            self.assertNotIn("-DryRun", runner.commands[0])
+
     def test_executable_patch_is_not_run_for_an_unsupported_branch(self):
         spec = _test_spec()
         with TemporaryDirectory() as tmp:

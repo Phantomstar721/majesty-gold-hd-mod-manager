@@ -23,6 +23,13 @@ from majesty_cam.manager.launch import LaunchResult, ManagerLaunchError
 from majesty_cam.manager.paths import ManagerPaths
 from majesty_cam.manager.preflight import PreparedMergeMod
 from majesty_cam.manager.qol import QolPatchStatus
+from majesty_cam.manager.qol_service import (
+    PUBLIC_BRANCH,
+    QolCatalogSnapshot,
+    QolPatchSpec,
+    QolService,
+)
+from majesty_cam.manager.startup_cache import StartupCache, qol_input_signature
 from majesty_cam.intent_text import INTENT_REGISTRY_RELATIVE_PATH
 from majesty_cam.runtime_capabilities import (
     RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH,
@@ -401,6 +408,61 @@ class ManagerControllerTests(unittest.TestCase):
             self.assertFalse(snapshot.can_build)
             self.assertFalse(snapshot.can_launch)
 
+    def test_change_qol_reuses_cached_status_and_does_not_rescan_other_helpers(self):
+        specs = (
+            _qol_spec("first", "First Helper"),
+            _qol_spec("second", "Second Helper"),
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = _manager_paths(root)
+            _write_synthetic_exe(paths.game_executable, PUBLIC_BRANCH)
+            for spec in specs:
+                scripts = (
+                    paths.repo_root
+                    / "payload"
+                    / "qol"
+                    / spec.payload_slug
+                )
+                scripts.mkdir(parents=True)
+                (scripts / spec.install_script_name).write_text("", encoding="utf-8")
+                (scripts / spec.remove_script_name).write_text("", encoding="utf-8")
+            runner = _MultiQolRunner(specs)
+            service = QolService(
+                repo_root=paths.repo_root,
+                game_executable=paths.game_executable,
+                prefs_path=root / "prefs",
+                specs=specs,
+                runner=runner,
+            )
+            controller = ManagerController(
+                paths=paths, registry=CompatibilityRegistry(specs={})
+            )
+            controller.qol_service = service
+            initial = service.inspect()
+            controller._set_qol_catalog(initial)
+            runner.commands.clear()
+
+            with patch.object(
+                service,
+                "inspect",
+                side_effect=AssertionError("full QOL rescan was requested"),
+            ):
+                snapshot = controller.change_qol("first", True)
+
+            self.assertEqual(len(runner.commands), 1)
+            self.assertNotIn("-DryRun", runner.commands[0])
+            self.assertEqual(Path(runner.commands[0][5]).name, "Install-first.ps1")
+            self.assertTrue(snapshot.qol_utilities[0].installed)
+            self.assertFalse(snapshot.qol_utilities[1].installed)
+            cached = StartupCache.load(paths.startup_cache_path).get_qol(
+                qol_input_signature(service),
+                service,
+            )
+            self.assertIsNotNone(cached)
+            self.assertTrue(cached.utilities[0].installed)
+            self.assertFalse(cached.utilities[1].installed)
+
 
 def _manager_paths(root: Path, *, runtime_ready: bool = False) -> ManagerPaths:
     repo = root / "repo"
@@ -427,6 +489,83 @@ def _manager_paths(root: Path, *, runtime_ready: bool = False) -> ManagerPaths:
         profile_path=root / "localappdata" / "MajestyModManager" / "profile.json",
         merged_output_root=mods / "Majesty Mod Manager - Merged",
     )
+
+
+def _qol_spec(key: str, name: str) -> QolPatchSpec:
+    return QolPatchSpec(
+        key=key,
+        name=name,
+        description="test",
+        repository=f"standalone-{key}",
+        bundle_directory=name,
+        payload_slug=key,
+        install_script_name=f"Install-{key}.ps1",
+        remove_script_name=f"Restore-{key}.ps1",
+        installed_phrase=f"{key} already installed",
+    )
+
+
+class _MultiQolRunner:
+    def __init__(self, specs):
+        self.specs_by_script = {}
+        self.installed = {}
+        self.commands = []
+        for spec in specs:
+            self.specs_by_script[spec.install_script_name] = (spec, True)
+            self.specs_by_script[spec.remove_script_name] = (spec, False)
+            self.installed[spec.key] = False
+
+    def __call__(self, command):
+        command = list(command)
+        self.commands.append(command)
+        spec, installing = self.specs_by_script[Path(command[5]).name]
+        if "-DryRun" in command:
+            output = (
+                spec.installed_phrase
+                if self.installed[spec.key]
+                else "WouldPatch"
+            )
+        else:
+            self.installed[spec.key] = installing
+            output = "installed" if installing else "restored"
+        return SimpleNamespace(returncode=0, stdout=output, stderr="")
+
+
+def _write_synthetic_exe(path: Path, branch) -> None:
+    import struct
+
+    pe_offset = 0x80
+    optional_offset = pe_offset + 24
+    section_table = optional_offset + 0xE0
+    size = max(
+        section.raw_offset + section.raw_size for section in branch.stock_sections
+    )
+    data = bytearray(size)
+    data[:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3C, pe_offset)
+    data[pe_offset : pe_offset + 4] = b"PE\0\0"
+    struct.pack_into("<HH", data, pe_offset + 4, 0x014C, 4)
+    struct.pack_into("<I", data, pe_offset + 8, branch.coff_timestamp)
+    struct.pack_into("<H", data, pe_offset + 20, 0xE0)
+    struct.pack_into("<H", data, optional_offset, 0x010B)
+    struct.pack_into("<I", data, optional_offset + 28, 0x00400000)
+    struct.pack_into("<II", data, optional_offset + 32, 0x1000, 0x0200)
+    struct.pack_into("<I", data, optional_offset + 60, 0x0400)
+    for index, section in enumerate(branch.stock_sections):
+        offset = section_table + (index * 40)
+        name = section.name.encode("ascii")
+        data[offset : offset + len(name)] = name
+        struct.pack_into(
+            "<IIII",
+            data,
+            offset + 8,
+            section.virtual_size,
+            section.rva,
+            section.raw_size,
+            section.raw_offset,
+        )
+        struct.pack_into("<I", data, offset + 36, section.characteristics)
+    path.write_bytes(data)
 
 
 def _set_required_qol_state(
