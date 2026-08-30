@@ -23,3 +23,11 @@ reference-repos/*
 docs/internal/
 private/
 Launch - Downloaded Map Crash Diagnostic.bat
+
+# Maintainer handoffs and one-off game diagnostics are local working material.
+docs/handoff-*.md
+docs/modding-test-setup.md
+docs/poc-mod-contract.md
+FREESTYLE-VALIDATION.md
+Launch - CAM Manager Freestyle Validation.bat
+Launch - CAM Manager Siege Crash Diagnostic.bat

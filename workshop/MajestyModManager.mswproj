@@ -17,7 +17,10 @@ To use it:
 4. Choose your mods, prepare them if requested, and select Launch Majesty.
 
 Keep the entire downloaded folder together. The manager supports both the
-default and beta2 versions of Majesty Gold HD.</Description>
+default and beta2 versions of Majesty Gold HD.
+
+More details: https://github.com/Phantomstar721/majesty-gold-hd-cam-merger
+Join the Majesty community: https://discord.gg/MEjtKZb9GQ</Description>
 		<ContentPath>dist\workshop-upload\content</ContentPath>
 		<PreviewImagePath>dist\workshop-upload\workshop-preview.jpg</PreviewImagePath>
 		<IDTag>Original Rules</IDTag>
