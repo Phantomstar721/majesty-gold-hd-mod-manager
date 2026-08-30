@@ -15,6 +15,14 @@ $stage = Join-Path $distRoot (".workshop-upload-stage-" + [guid]::NewGuid().ToSt
 $backup = Join-Path $distRoot (".workshop-upload-backup-" + [guid]::NewGuid().ToString("N"))
 $ownershipMarker = ".majesty-mod-manager-workshop-stage"
 $projectName = "MajestyModManager.mswproj"
+$managedRootNames = @(
+    $ownershipMarker,
+    "content",
+    $projectName,
+    "SHA256.txt",
+    "workshop-preview.jpg"
+)
+$userFileBackupRoot = Join-Path $repoRoot "local\workshop-user-files-backup"
 $descriptionSource = Join-Path $repoRoot "WORKSHOP.md"
 $previewSource = Join-Path $repoRoot "artwork\workshop-preview.jpg"
 $instructionsSource = Join-Path $repoRoot "release\START HERE.txt"
@@ -62,6 +70,24 @@ if (Test-Path -LiteralPath $target) {
 }
 
 try {
+    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+    if (Test-Path -LiteralPath $target) {
+        $userItems = @(
+            Get-ChildItem -LiteralPath $target -Force |
+                Where-Object { $_.Name -notin $managedRootNames }
+        )
+        if ($userItems.Count -gt 0) {
+            New-Item -ItemType Directory -Path $userFileBackupRoot -Force | Out-Null
+            foreach ($item in $userItems) {
+                if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw "Refusing to preserve a linked user-added Workshop item: $($item.FullName)"
+                }
+                Copy-Item -LiteralPath $item.FullName -Destination $stage -Recurse -Force
+                Copy-Item -LiteralPath $item.FullName -Destination $userFileBackupRoot -Recurse -Force
+            }
+        }
+    }
+
     $contentPath = Join-Path $stage "content"
     $stagedLicenses = Join-Path $contentPath "licenses"
     New-Item -ItemType Directory -Path $contentPath -Force | Out-Null

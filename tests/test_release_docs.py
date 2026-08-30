@@ -116,6 +116,23 @@ class ReleaseDocumentationTests(unittest.TestCase):
         self.assertIn('[string]$ApplicationRoot = ""', script)
         self.assertIn('[string]$WorkshopId = "3793024054"', script)
 
+    def test_workshop_stager_preserves_user_added_files(self):
+        script = (REPO_ROOT / "scripts/Stage-Workshop.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        self.assertIn("$managedRootNames", script)
+        self.assertIn("$userFileBackupRoot", script)
+        self.assertIn("workshop-user-files-backup", script)
+        self.assertIn("$_.Name -notin $managedRootNames", script)
+        self.assertIn(
+            "Copy-Item -LiteralPath $item.FullName -Destination $stage",
+            script,
+        )
+        self.assertIn(
+            "Copy-Item -LiteralPath $item.FullName -Destination $userFileBackupRoot",
+            script,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
