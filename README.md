@@ -55,6 +55,117 @@ are not selectable. If a Merge mod is missing required compatibility
 information, the manager displays it in red with an explanation instead of
 building an unsafe package.
 
+## For mod creators: making a mod compatible
+
+A compatible Merge mod does not need to be hardcoded into the Mod Manager. If
+the distributed package follows this format and passes validation, the manager
+can detect and combine it automatically. The current public format covers
+custom-building packages that contain CAM and GPL content.
+
+### Package layout
+
+Place exactly one `.mmxml` manifest and one `mod-definition.json` in the top
+level of the distributed mod folder:
+
+```text
+YourMod/
+|-- YourMod.mmxml
+|-- mod-definition.json
+|-- Data/
+|   |-- your_mod_data.cam
+|   |-- your_mod_interface.cam
+|   |-- your_mod.bcd
+|   `-- your_descriptions.xml
+|-- GPL/
+|   |-- your_mod.gpl
+|   `-- your_data.dat
+`-- Assets/
+    `-- any additional files
+```
+
+The subfolder names are flexible. Every path used by the `.mmxml` must be
+relative to the package, remain inside it, and point to a file included in the
+distributed package.
+
+The `.mmxml` must:
+
+- Have a stable, unique Mod UUID and a player-facing display name.
+- Contain one `Dataset base="Any"`.
+- Use only `CAM`, `Descriptions`, and `GPL` load directives.
+- Include at least one CAM load and one GPL load.
+- List the compiled GPL target and every `.gpl` or `.dat` source needed to
+  rebuild it.
+- Include every description, artwork, sound, and data file required by the
+  mod.
+
+### Mod definition
+
+The top-level `mod-definition.json` must use schema version 2:
+
+```json
+{
+  "schema_version": 2,
+  "mod_id": "{the-same-uuid-used-by-your-mmxml}",
+  "internal_name": "YourNamespacedModName",
+  "display_name": "Your Player-Facing Mod Name",
+  "custom_buildings": [
+    {
+      "local_name": "YourNamespacedBuildingID",
+      "dialog_id": "CGXX",
+      "controller_base": "AP10",
+      "panel_resource_template": "AP10"
+    }
+  ],
+  "runtime_capabilities": []
+}
+```
+
+`schema_version` identifies the Mod Manager compatibility-file format, not the
+version of the mod. Keep it at `2` unless a future Mod Manager specification
+introduces another supported format.
+
+Replace `CGXX` with a unique four-character ID beginning with `CG` and ending
+with two uppercase letters or digits. `controller_base` and
+`panel_resource_template` identify the stock Majesty building behavior and
+panel layout that the custom building follows.
+
+Leave `runtime_capabilities` empty unless the mod uses one of the optional,
+reusable features documented by the Mod Manager. Normal custom guilds and
+stock-based building panels do not require a package-specific capability. The
+manager automatically supplies shared building-slot, Freestyle, visitor-list,
+and compatible custom-text support. Unsupported capability names are rejected
+rather than guessed.
+
+### Content requirements
+
+- Namespace all custom Description IDs, CAM resource keys, GPL functions and
+  expressions, DAT blocks, dialog IDs, artwork, and sound filenames.
+- Ship complete effective tables when changing resources Majesty treats as
+  positional or whole-table data.
+- Preserve unchanged stock entries, ordering, flags, padding, and references.
+- Include a complete BDEP table and exactly one main and one interface
+  TILE/IMAG provider.
+- Use named inventory items for new carried items rather than adding private
+  numeric QITM rows.
+- Do not depend on files from an authoring repository or another Workshop
+  folder.
+
+The manager currently supports CAM sections `SMNU`, `STRT`, `DATA`, `IMAG`,
+`TILE`, `SPLT`, `DSND`, and `WAVE`, with `BDEP` supported inside `DATA`.
+Packages using other resource structures require additional typed support
+before they can be merged safely.
+
+### Testing compatibility
+
+Install the finished package exactly as players will receive it and select
+**Rescan Content** in the Mod Manager. A package that passes validation appears
+in the Merge tab as selectable. If required information is missing or an
+unsupported structure is detected, the mod appears in red with the reason it
+cannot be combined.
+
+For the complete technical rules, see the
+[Merge mod authoring guide](docs/manager-merge-contract.md).
+
 ## Compatibility and safety
 
 The manager supports both maintained Steam versions:
