@@ -244,6 +244,7 @@ class ArtArchiveAnalysis:
     imag_entries: tuple[CamEntry, ...]
     imag_references: tuple[ImagTileReference, ...]
     retained_tile_dependencies: tuple[int, ...]
+    retained_palette_dependencies: tuple[int, ...]
     tile_palette_references: tuple[TilePaletteReference, ...]
     unreferenced_tile_changes: tuple[int, ...]
     unreferenced_palette_changes: tuple[int, ...]
@@ -417,6 +418,86 @@ def allocate_collision_free_ranges(
     )
 
 
+def _parse_end_anchored_direction_references(
+    data: bytes,
+    *,
+    anchor: int,
+    direction_end: int,
+    entry_name: bytes,
+    set_id: int,
+    direction: int,
+    tile_count: int,
+    mark_single_terminal: bool = False,
+) -> tuple[tuple[ImagTileReference, ...], str]:
+    """Read Majesty's direction-end frame/lane table exactly once."""
+
+    if anchor + 8 > direction_end:
+        raise UnsupportedImagShapeError(
+            _direction_error(entry_name, set_id, direction, "is truncated")
+        )
+    count_word = _u32(data, anchor + 4)
+    frame_count = count_word >> 16
+    stream_count = count_word & 0xFFFF
+    total = frame_count * stream_count
+    frame_start = direction_end - total * 8
+    if (
+        frame_count <= 0
+        or stream_count <= 0
+        or total > MAX_FRAMES
+        or frame_start < anchor + 8
+        or (frame_start - anchor) % 4
+    ):
+        raise UnsupportedImagShapeError(
+            _direction_error(
+                entry_name,
+                set_id,
+                direction,
+                f"has an invalid {frame_count} frame x {stream_count} lane table",
+            )
+        )
+
+    layout = (
+        "building-terminal"
+        if mark_single_terminal and total == 1
+        else "stock-end-anchored"
+    )
+    references: list[ImagTileReference] = []
+    for stream in range(stream_count):
+        for frame in range(frame_count):
+            offset = (
+                frame_start
+                + stream * frame_count * 8
+                + frame * 8
+                + 4
+            )
+            encoded = _u32(data, offset)
+            tile_index = encoded & 0xFFFF
+            if tile_index == LOW16_SENTINEL:
+                continue
+            if tile_index >= tile_count:
+                raise UnsupportedImagShapeError(
+                    f"IMAG {_display_name(entry_name)!r} set {set_id} direction "
+                    f"{direction} frame {frame} references missing TILE "
+                    f"{tile_index} of {tile_count}"
+                )
+            references.append(
+                ImagTileReference(
+                    entry_name=entry_name,
+                    set_id=set_id,
+                    direction=direction,
+                    frame=(
+                        -1
+                        if layout == "building-terminal"
+                        else stream * frame_count + frame
+                    ),
+                    offset=offset,
+                    encoded_value=encoded,
+                    layout=layout,
+                )
+            )
+    return tuple(references), layout
+
+
 def parse_imag_tile_references(
     data: bytes,
     *,
@@ -523,7 +604,34 @@ def parse_imag_tile_references(
                 set_id=set_id,
                 direction=direction,
             )
-            layouts.add(layout)
+            frame_stream_end = first_tile_offset + (frame_count - 1) * 8 + 4
+            if (
+                set_id == BUILDING_TERMINAL_TILE_SET_ID
+                and frame_stream_end != direction_end
+            ):
+                # Set 208 has two stock layouts. Ordinary world/item art can
+                # use the historical stream through the direction boundary
+                # (for example AVk4's three resurrection-item frames).
+                # Building and scenery records reuse the early header for
+                # footprint/control data, then place the actual frame/lane
+                # table at the end of the direction. Read that complete stock
+                # table instead of even inspecting integer-looking coordinates.
+                end_references, end_layout = (
+                    _parse_end_anchored_direction_references(
+                        data,
+                        anchor=anchor,
+                        direction_end=direction_end,
+                        entry_name=raw_name,
+                        set_id=set_id,
+                        direction=direction,
+                        tile_count=tile_count,
+                        mark_single_terminal=True,
+                    )
+                )
+                references.extend(end_references)
+                layouts.add(end_layout)
+                continue
+
             for frame in range(frame_count):
                 tile_offset = first_tile_offset + frame * 8
                 encoded_value = _u32(data, tile_offset)
@@ -547,33 +655,7 @@ def parse_imag_tile_references(
                         layout=layout,
                     )
                 )
-
-        terminal_offset = set_end - 4
-        if (
-            set_id == BUILDING_TERMINAL_TILE_SET_ID
-            and terminal_offset >= direction_table_end
-            and all(reference.offset != terminal_offset for reference in references)
-        ):
-            encoded_value = _u32(data, terminal_offset)
-            tile_index = encoded_value & 0xFFFF
-            if tile_index != LOW16_SENTINEL:
-                if tile_index >= tile_count:
-                    raise UnsupportedImagShapeError(
-                        f"IMAG {_display_name(raw_name)!r} set {set_id} terminal "
-                        f"field references missing TILE {tile_index} of {tile_count}"
-                    )
-                references.append(
-                    ImagTileReference(
-                        entry_name=raw_name,
-                        set_id=set_id,
-                        direction=-1,
-                        frame=-1,
-                        offset=terminal_offset,
-                        encoded_value=encoded_value,
-                        layout="building-terminal",
-                    )
-                )
-                layouts.add("building-terminal")
+            layouts.add(layout)
 
     return ParsedImag(
         entry_name=raw_name,
@@ -630,6 +712,7 @@ def parse_stock_imag_tile_references(
         )
 
     references: list[ImagTileReference] = []
+    layouts: set[str] = set()
     for set_index, (set_id, set_start) in enumerate(set_entries):
         set_end = (
             set_entries[set_index + 1][1]
@@ -668,58 +751,44 @@ def parse_stock_imag_tile_references(
                 if direction + 1 < len(anchors)
                 else set_end
             )
-            if anchor + 8 > direction_end:
-                raise UnsupportedImagShapeError(
-                    _direction_error(raw_name, set_id, direction, "is truncated")
-                )
-            count_word = _u32(data, anchor + 4)
-            frame_count = count_word >> 16
-            stream_count = count_word & 0xFFFF
-            total = frame_count * stream_count
-            frame_start = direction_end - total * 8
-            if (
-                frame_count <= 0
-                or stream_count <= 0
-                or total > MAX_FRAMES
-                or frame_start < anchor + 8
-                or (frame_start - anchor) % 4
-            ):
-                raise UnsupportedImagShapeError(
-                    _direction_error(
-                        raw_name,
-                        set_id,
-                        direction,
-                        f"has an invalid {frame_count} frame x {stream_count} lane table",
-                    )
-                )
-            for stream in range(stream_count):
-                for frame in range(frame_count):
-                    offset = frame_start + stream * frame_count * 8 + frame * 8 + 4
-                    encoded = _u32(data, offset)
-                    tile_index = encoded & 0xFFFF
-                    if tile_index == LOW16_SENTINEL:
-                        continue
-                    if tile_index >= tile_count:
-                        raise UnsupportedImagShapeError(
-                            f"IMAG {_display_name(raw_name)!r} set {set_id} direction "
-                            f"{direction} frame {frame} references missing TILE "
-                            f"{tile_index} of {tile_count}"
-                        )
-                    references.append(
-                        ImagTileReference(
+            mark_single_terminal = False
+            if set_id == BUILDING_TERMINAL_TILE_SET_ID:
+                try:
+                    _layout, historical_count, historical_first = (
+                        _parse_direction_layout(
+                            data,
+                            anchor=anchor,
+                            direction_end=direction_end,
                             entry_name=raw_name,
                             set_id=set_id,
                             direction=direction,
-                            frame=stream * frame_count + frame,
-                            offset=offset,
-                            encoded_value=encoded,
-                            layout="stock-end-anchored",
                         )
                     )
+                    historical_end = (
+                        historical_first + (historical_count - 1) * 8 + 4
+                    )
+                except UnsupportedImagShapeError:
+                    historical_end = -1
+                if historical_end != direction_end:
+                    mark_single_terminal = True
+            end_references, direction_layout = (
+                _parse_end_anchored_direction_references(
+                    data,
+                    anchor=anchor,
+                    direction_end=direction_end,
+                    entry_name=raw_name,
+                    set_id=set_id,
+                    direction=direction,
+                    tile_count=tile_count,
+                    mark_single_terminal=mark_single_terminal,
+                )
+            )
+            references.extend(end_references)
+            layouts.add(direction_layout)
     return ParsedImag(
         entry_name=raw_name,
         references=tuple(references),
-        layouts=("stock-end-anchored",),
+        layouts=tuple(sorted(layouts)),
         set_count=set_count,
     )
 
@@ -830,6 +899,39 @@ def rewrite_best_imag_entries(
         )
         for entry in entries
     ]
+    return _rewrite_parsed_imag_entries(
+        entries,
+        mapping,
+        parsed,
+        require_all_referenced=require_all_referenced,
+    )
+
+
+def rewrite_parsed_imag_entries(
+    entries: Sequence[CamEntry],
+    mapping: Mapping[int, int],
+    parsed: Sequence[ParsedImag],
+    *,
+    require_all_referenced: bool = True,
+) -> ImagRewriteResult:
+    """Rewrite only the references proven by the supplied typed parse.
+
+    A composite IMAG such as CUR1 may contain stock animation sets alongside a
+    package-owned private set.  Analysis deliberately excludes those inherited
+    sets from ownership.  Reusing that exact analysis parse here prevents a
+    private TILE relocation from rewriting an unrelated stock set merely
+    because both sets happen to reference the same positional TILE index.
+    """
+
+    if len(entries) != len(parsed):
+        raise ArtFormatError(
+            "IMAG rewrite requires one proven parse for every source entry"
+        )
+    for entry, image in zip(entries, parsed):
+        if image.entry_name.rstrip(b"\x00") != entry.name.rstrip(b"\x00"):
+            raise ArtFormatError(
+                "IMAG rewrite parse does not match its source entry"
+            )
     return _rewrite_parsed_imag_entries(
         entries,
         mapping,
@@ -1058,6 +1160,64 @@ def rewrite_tile_palette_indices(
     )
 
 
+def _resolve_stock_lineage_entry(
+    source_entry: CamEntry | None,
+    *,
+    index: int,
+    extension: bytes,
+    lineage: Sequence[CamSection | None],
+    preferred_lineages: Iterable[int] | None = None,
+) -> tuple[CamEntry, int]:
+    """Resolve one empty positional dependency to its proven stock lineage.
+
+    ``lineage[0]`` is the effective stock table and later elements are the
+    ordered fall-through ancestors used to construct it.  Majesty preserves a
+    positional entry's diagnostic name even when its payload is empty.  That
+    name is the only package-local proof that distinguishes a reused Original
+    slot from an unrelated DataMX slot.  A palette dependency inherited by a
+    resolved TILE may additionally constrain the valid lineage explicitly.
+    """
+
+    preferred = (
+        frozenset(preferred_lineages)
+        if preferred_lineages is not None
+        else None
+    )
+    candidates: list[tuple[int, CamEntry]] = []
+    for lineage_index, section in enumerate(lineage):
+        if preferred is not None and lineage_index not in preferred:
+            continue
+        if section is None or index >= len(section.entries):
+            continue
+        candidate = section.entries[index]
+        if not candidate.data:
+            continue
+        if source_entry is not None and candidate.name != source_entry.name:
+            continue
+        candidates.append((lineage_index, candidate))
+
+    label = extension.decode("ascii", errors="replace")
+    if not candidates:
+        lineage_hint = (
+            " required by its TILE lineage"
+            if preferred is not None
+            else " matching its preserved entry name"
+        )
+        raise ArtFormatError(
+            f"{label} {index} is an empty referenced dependency with no stock "
+            f"ancestor{lineage_hint}"
+        )
+
+    payloads = {candidate.data for _lineage_index, candidate in candidates}
+    if len(payloads) != 1:
+        rendered = ", ".join(str(item[0]) for item in candidates)
+        raise ArtFormatError(
+            f"{label} {index} has ambiguous stock ancestry across lineages "
+            f"{rendered}"
+        )
+    return candidates[0][1], candidates[0][0]
+
+
 def analyze_art_archive(
     stock: CamArchive,
     mod: CamArchive,
@@ -1159,10 +1319,15 @@ def analyze_art_archive(
     )
     referenced_tiles = {reference.tile_index for reference in imag_references}
 
+    tile_lineage = (
+        stock_tile,
+        *(
+            _optional_section(archive, TILE)
+            for archive in fallthrough_ancestors
+        ),
+    )
     ancestor_tiles = tuple(
-        section
-        for archive in fallthrough_ancestors
-        if (section := _optional_section(archive, TILE)) is not None
+        section for section in tile_lineage[1:] if section is not None
     )
     inherited_tile_changes = tuple(
         change.index
@@ -1184,35 +1349,68 @@ def analyze_art_archive(
             stock_identical_count=tile_delta.stock_identical_count + len(inherited),
         )
 
-    # A namespaced IMAG owns the nonempty TILE payloads it references even
-    # when those payloads happen to match the Original Majesty ancestor.  The
-    # completed source package materializes them deliberately: a later stock
-    # dataset (notably DataMX/mx_interfacedata.cam) can reuse the same
-    # positional slot for unrelated art.  Treating such records as disposable
-    # stock copies makes that later layer leak through the generated package.
-    # Promote only typed, nonempty IMAG dependencies; unrelated copied stock
-    # records remain ordinary fall-through and do not bloat the output.
+    # An emitted IMAG owns every TILE payload it references, including an empty
+    # package slot that inherits a payload from the stock archive it was built
+    # against.  Gold HD reuses positional slots between Original and DataMX, so
+    # blindly taking the composite effective stock entry can pair an Original
+    # IMAG with unrelated expansion art.  Preserve the source entry name as the
+    # provenance proof and resolve that exact stock lineage.  Ambiguous lineage
+    # fails closed instead of guessing.  Unreferenced stock copies and empty
+    # slots remain disposable.
     changes = {change.index: change for change in tile_delta.changes}
     retained_tile_dependencies: list[int] = []
+    tile_dependency_lineage: dict[int, int] = {}
+    promoted_stock_identical = 0
+    promoted_fallthrough = 0
     for index in sorted(referenced_tiles):
         if index in changes:
-            continue
-        entry = mod_tile.entries[index]
-        if not entry.data:
+            change = changes[index]
+            stock_entry = change.stock_entry
+            if stock_entry is not None and change.entry.data != stock_entry.data:
+                matching_ancestors = [
+                    lineage_index
+                    for lineage_index, section in enumerate(tile_lineage[1:], 1)
+                    if section is not None
+                    and index < len(section.entries)
+                    and section.entries[index].name == change.entry.name
+                    and section.entries[index].data == change.entry.data
+                ]
+                if matching_ancestors:
+                    retained_tile_dependencies.append(index)
+                    tile_dependency_lineage[index] = matching_ancestors[0]
             continue
         stock_entry = (
             stock_tile.entries[index]
             if index < len(stock_tile.entries)
             else None
         )
-        if stock_entry is None or entry.data != stock_entry.data:
+        entry = mod_tile.entries[index]
+        if entry.data:
+            if stock_entry is None or entry.data != stock_entry.data:
+                raise ArtFormatError(
+                    f"TILE {index} has a nonempty referenced payload missing from its "
+                    "stock-relative delta"
+                )
+            effective_entry = entry
+            promoted_stock_identical += 1
+        else:
+            if stock_entry is None or not stock_entry.data:
+                continue
+            effective_entry, lineage_index = _resolve_stock_lineage_entry(
+                entry,
+                index=index,
+                extension=TILE,
+                lineage=tile_lineage,
+            )
+            tile_dependency_lineage[index] = lineage_index
+            promoted_fallthrough += 1
+        if stock_entry is None:
             raise ArtFormatError(
-                f"TILE {index} has a nonempty referenced payload missing from its "
-                "stock-relative delta"
+                f"TILE {index} is referenced but has no effective stock payload"
             )
         changes[index] = PositionalChange(
             index=index,
-            entry=entry,
+            entry=effective_entry,
             stock_entry=stock_entry,
         )
         retained_tile_dependencies.append(index)
@@ -1221,11 +1419,13 @@ def analyze_art_archive(
             tile_delta,
             changes=tuple(changes[index] for index in sorted(changes)),
             stock_identical_count=(
-                tile_delta.stock_identical_count - len(retained_tile_dependencies)
+                tile_delta.stock_identical_count - promoted_stock_identical
             ),
+            fallthrough_count=tile_delta.fallthrough_count - promoted_fallthrough,
         )
 
     palette_references: list[TilePaletteReference] = []
+    palette_dependency_lineages: dict[int, set[int]] = {}
     for change in tile_delta.changes:
         reference = parse_tile_palette_reference(
             change.entry.data,
@@ -1233,16 +1433,33 @@ def analyze_art_archive(
         )
         if reference is not None:
             palette_references.append(reference)
+            lineage_index = tile_dependency_lineage.get(change.index)
+            if lineage_index is not None:
+                palette_dependency_lineages.setdefault(
+                    reference.palette_index, set()
+                ).add(lineage_index)
     referenced_palettes = {
         reference.palette_index for reference in palette_references
     }
+    palette_extension = (
+        palette_delta.extension
+        if palette_delta is not None
+        else (stock_palette.extension if stock_palette is not None else None)
+    )
+    palette_lineage = (
+        (
+            stock_palette,
+            *(
+                _optional_section(archive, palette_extension)
+                for archive in fallthrough_ancestors
+            ),
+        )
+        if palette_extension is not None
+        else ()
+    )
     if palette_delta is not None:
         ancestor_palettes = tuple(
-            section
-            for archive in fallthrough_ancestors
-            if (
-                section := _optional_section(archive, palette_delta.extension)
-            ) is not None
+            section for section in palette_lineage[1:] if section is not None
         )
         inherited_palette_changes = {
             change.index
@@ -1267,6 +1484,93 @@ def analyze_art_archive(
                     + len(inherited_palette_changes)
                 ),
             )
+    retained_palette_dependencies: list[int] = []
+    if stock_palette is not None and referenced_palettes:
+        if palette_delta is None:
+            palette_delta = PositionalSectionDelta(
+                extension=stock_palette.extension,
+                stock_count=len(stock_palette.entries),
+                mod_count=0,
+                changes=(),
+                fallthrough_count=0,
+                stock_identical_count=0,
+            )
+        palette_changes = {
+            change.index: change for change in palette_delta.changes
+        }
+        promoted_palette_identical = 0
+        promoted_palette_fallthrough = 0
+        for index in sorted(referenced_palettes):
+            if index in palette_changes:
+                change = palette_changes[index]
+                stock_entry = change.stock_entry
+                if stock_entry is not None and change.entry.data != stock_entry.data:
+                    matching_ancestors = [
+                        lineage_index
+                        for lineage_index, section in enumerate(
+                            palette_lineage[1:], 1
+                        )
+                        if section is not None
+                        and index < len(section.entries)
+                        and section.entries[index].name == change.entry.name
+                        and section.entries[index].data == change.entry.data
+                    ]
+                    required_lineages = palette_dependency_lineages.get(index)
+                    if required_lineages is not None:
+                        matching_ancestors = [
+                            lineage_index
+                            for lineage_index in matching_ancestors
+                            if lineage_index in required_lineages
+                        ]
+                    if matching_ancestors:
+                        retained_palette_dependencies.append(index)
+                continue
+            if index >= len(stock_palette.entries):
+                continue
+            stock_entry = stock_palette.entries[index]
+            if not stock_entry.data:
+                continue
+            entry = (
+                mod_palette.entries[index]
+                if mod_palette is not None and index < len(mod_palette.entries)
+                else None
+            )
+            if entry is not None and entry.data:
+                if entry.data != stock_entry.data:
+                    raise ArtFormatError(
+                        f"{stock_palette.extension.decode('ascii')} {index} has a "
+                        "nonempty referenced payload missing from its stock-relative delta"
+                    )
+                effective_entry = entry
+                promoted_palette_identical += 1
+            else:
+                effective_entry, _lineage_index = _resolve_stock_lineage_entry(
+                    entry,
+                    index=index,
+                    extension=stock_palette.extension,
+                    lineage=palette_lineage,
+                    preferred_lineages=palette_dependency_lineages.get(index),
+                )
+                if entry is not None:
+                    promoted_palette_fallthrough += 1
+            palette_changes[index] = PositionalChange(
+                index=index,
+                entry=effective_entry,
+                stock_entry=stock_entry,
+            )
+            retained_palette_dependencies.append(index)
+        palette_delta = replace(
+            palette_delta,
+            changes=tuple(
+                palette_changes[index] for index in sorted(palette_changes)
+            ),
+            stock_identical_count=(
+                palette_delta.stock_identical_count - promoted_palette_identical
+            ),
+            fallthrough_count=(
+                palette_delta.fallthrough_count - promoted_palette_fallthrough
+            ),
+        )
 
     return ArtArchiveAnalysis(
         mod_id=mod_id,
@@ -1275,6 +1579,7 @@ def analyze_art_archive(
         imag_entries=imag_section.entries,
         imag_references=imag_references,
         retained_tile_dependencies=tuple(retained_tile_dependencies),
+        retained_palette_dependencies=tuple(retained_palette_dependencies),
         tile_palette_references=tuple(palette_references),
         unreferenced_tile_changes=tuple(
             index for index in tile_delta.changed_indices if index not in referenced_tiles
@@ -1564,6 +1869,7 @@ __all__ = [
     "plan_art_relocation",
     "rewrite_imag_entries",
     "rewrite_best_imag_entries",
+    "rewrite_parsed_imag_entries",
     "rewrite_stock_imag_entries",
     "rewrite_imag_tile_indices",
     "rewrite_tile_palette_indices",

@@ -20,6 +20,7 @@ from .art import (
     ArtFormatError,
     ArtRelocationReport,
     ImagRelocationReport,
+    ParsedImag,
     PaletteRelocationReport,
     PositionalAllocationReport,
     PositionalCollision,
@@ -31,7 +32,7 @@ from .art import (
     parse_best_imag_tile_references,
     parse_imag_tile_references,
     parse_stock_imag_tile_references,
-    rewrite_best_imag_entries,
+    rewrite_parsed_imag_entries,
     rewrite_stock_imag_entries,
     rewrite_tile_palette_indices,
     validate_external_palette_closure,
@@ -126,7 +127,13 @@ from .stock_controller_registry import (
     resolve_stock_controller_registry,
 )
 from .strt import StrtDelta, StrtRecord, StrtTable, merge_strt, parse_strt, strt_delta
-from .tables import BdepDelta, merge_bdep
+from .tables import (
+    BdepDelta,
+    TableAncestryError,
+    TableFormatError,
+    TableMergeConflict,
+    merge_bdep_stock_relative,
+)
 
 
 class ComposeError(ValueError):
@@ -145,6 +152,7 @@ class StockComposeInput:
 
 _STOCK_COMPOSE_FIXED_INPUTS = (
     Path("Data/textdata.cam"),
+    Path("Data/miscdata.cam"),
     Path("Data/maindata.cam"),
     Path("Data/interfacedata.cam"),
     Path("DataMX/mx_gpltext.cam"),
@@ -162,6 +170,21 @@ _STOCK_COMPOSE_OPTIONAL_INPUTS = (
 _STOCK_COMPOSE_XML_DIRECTORIES = (
     Path("SDK/OriginalQuests/Data"),
     Path("SDK/OriginalQuests/DataMX"),
+)
+
+# These are the exact primary TILE fields of the stock cursor lifecycles exposed
+# by the generic controller-feature schema.  Authors may replace only these
+# visible glyph frames; the complete stock set body and every auxiliary frame
+# must remain from one coherent stock dataset.
+_HOSTILE_MONSTER_FLAG_CURSOR_TEMPLATE = (
+    1005,
+    frozenset((0x78, 0xA8, 0xE0)),
+    "Attack",
+)
+_SOVEREIGN_TARGET_CURSOR_TEMPLATE = (
+    1014,
+    frozenset((0x7C, 0xAC, 0xE4, 0x10C)),
+    "Lightning",
 )
 
 
@@ -798,7 +821,10 @@ def merge_bdep_resource(
             f"{resource.owner}:{_display_key(resource.key)}" for resource in unsupported
         )
         raise ComposeError(f"unsupported DATA resources: {labels}")
-    stock = _require_cam_entry(
+    original_stock = _require_cam_entry(
+        game_path / "Data" / "miscdata.cam", b"DATA", b"BDEP"
+    )
+    effective_stock = _require_cam_entry(
         game_path / "DataMX" / "mx_miscdata.cam", b"DATA", b"BDEP"
     )
     if not resources:
@@ -809,14 +835,21 @@ def merge_bdep_resource(
             raise ComposeError("selected packages provide no DATA/BDEP resource")
         return BdepComposeResult(
             archive=CamArchive(
-                sections=(CamSection(extension=b"DATA", entries=(stock,)),)
+                sections=(CamSection(extension=b"DATA", entries=(effective_stock,)),)
             ),
             deltas=(),
         )
-    result = merge_bdep(
-        stock.data,
-        ((resource.owner, resource.entry.data) for resource in resources),
-    )
+    try:
+        result = merge_bdep_stock_relative(
+            effective_stock.data,
+            (
+                ("Original Majesty", original_stock.data),
+                ("Northern Expansion", effective_stock.data),
+            ),
+            ((resource.owner, resource.entry.data) for resource in resources),
+        )
+    except (TableAncestryError, TableFormatError, TableMergeConflict) as exc:
+        raise ComposeError(str(exc)) from exc
     entry = CamEntry(name=resources[0].entry.name, data=result.payload)
     archive = CamArchive(
         sections=(CamSection(extension=b"DATA", entries=(entry,)),)
@@ -903,7 +936,7 @@ def merge_art_resources(
         if not providers:
             results.append(_stock_art_domain(domain, stock))
             continue
-        analyses = tuple(
+        raw_analyses = tuple(
             analyze_art_archive(
                 stock,
                 archive,
@@ -912,10 +945,29 @@ def merge_art_resources(
             )
             for inventory, _path, archive in providers
         )
+        prepared_providers: list[tuple[PackageInventory, Path, CamArchive]] = []
+        analyses: list[ArtArchiveAnalysis] = []
+        for provider, raw_analysis in zip(providers, raw_analyses):
+            inventory, path, archive = provider
+            prepared_archive = _strip_unowned_secondary_imag_layers(
+                archive,
+                raw_analysis,
+            )
+            prepared_providers.append((inventory, path, prepared_archive))
+            analyses.append(
+                raw_analysis
+                if prepared_archive is archive
+                else analyze_art_archive(
+                    stock,
+                    prepared_archive,
+                    mod_id=inventory.selected.alias,
+                    fallthrough_ancestors=fallthrough_ancestors,
+                )
+            )
         result = _compose_art_domain(
             domain,
             stock,
-            providers,
+            tuple(prepared_providers),
             analyses,
             fallthrough_ancestors=fallthrough_ancestors,
         )
@@ -1023,7 +1075,22 @@ def _compose_art_domain(
         analysis.mod_id: analysis.tile_delta for analysis in analyses
     }
     tile_collisions = find_positional_collisions(tile_deltas)
-    tile_moves = _select_later_conflict_runs(tile_deltas, tile_collisions, order)
+    protected_tile_indices = {
+        analysis.mod_id: {
+            change.index
+            for change in analysis.tile_delta.changes
+            if change.index in analysis.retained_tile_dependencies
+            and change.stock_entry is not None
+            and change.entry.data != change.stock_entry.data
+        }
+        for analysis in analyses
+    }
+    tile_moves = _select_later_conflict_runs(
+        tile_deltas,
+        tile_collisions,
+        order,
+        protected_indices=protected_tile_indices,
+    )
     tile_start = _first_free_after_reserved(tile_deltas, tile_moves)
     tile_allocation = allocate_collision_free_ranges(
         tile_deltas,
@@ -1047,8 +1114,22 @@ def _compose_art_domain(
             if delta is not None
         }
         palette_collisions = find_positional_collisions(concrete_palette_deltas)
+        protected_palette_indices = {
+            analysis.mod_id: {
+                change.index
+                for change in analysis.palette_delta.changes
+                if change.index in analysis.retained_palette_dependencies
+                and change.stock_entry is not None
+                and change.entry.data != change.stock_entry.data
+            }
+            for analysis in analyses
+            if analysis.palette_delta is not None
+        }
         palette_moves = _select_later_conflict_runs(
-            concrete_palette_deltas, palette_collisions, order
+            concrete_palette_deltas,
+            palette_collisions,
+            order,
+            protected_indices=protected_palette_indices,
         )
         palette_start = _first_free_after_reserved(
             concrete_palette_deltas, palette_moves
@@ -1063,7 +1144,10 @@ def _compose_art_domain(
     palette_reports: list[tuple[str, PaletteRelocationReport]] = []
     for inventory, _path, archive in providers:
         owner = inventory.selected.alias
-        entries = _require_section(archive, b"TILE").entries
+        effective_entries = _effective_analysis_tile_entries(
+            archive,
+            analysis_by_owner[owner],
+        )
         mapping = (
             palette_allocation.mapping_for(owner)
             if (
@@ -1074,13 +1158,13 @@ def _compose_art_domain(
         )
         if mapping:
             rewritten = rewrite_tile_palette_indices(
-                entries,
+                effective_entries,
                 mapping,
                 tile_indices=analysis_by_owner[owner].tile_delta.changed_indices,
             )
-            entries = rewritten.entries
+            effective_entries = rewritten.entries
             palette_reports.append((owner, rewritten.report))
-        rewritten_tiles[owner] = entries
+        rewritten_tiles[owner] = effective_entries
 
     imag_resources: list[CamResource] = []
     imag_reports: list[tuple[str, ImagRelocationReport]] = []
@@ -1117,15 +1201,42 @@ def _compose_art_domain(
             old: new for old, new in mapping.items() if old in inherited_references
         }
         preferred_tile_indices = analysis_by_owner[owner].tile_delta.changed_indices
-        custom_references = {
-            reference.tile_index
-            for entry in custom_entries
-            for reference in parse_best_imag_tile_references(
+        custom_parsed: list[ParsedImag] = []
+        proven_references = analysis_by_owner[owner].imag_references
+        for entry in custom_entries:
+            parsed = parse_best_imag_tile_references(
                 entry.data,
                 tile_count=len(_require_section(archive, b"TILE").entries),
                 entry_name=entry.name,
                 preferred_tile_indices=preferred_tile_indices,
-            ).references
+            )
+            if entry.name.rstrip(b"\x00")[:4] == b"CUR1":
+                # CUR1 is a composite container.  A package normally carries
+                # all of Majesty's stock cursor sets plus one private set.  Art
+                # analysis has already proven which references belong to that
+                # package by filtering out every byte-identical stock set.
+                # Relocate only that proven subset; otherwise a private
+                # dependency that shares an index with an inherited cursor can
+                # mutate the inherited set and create a false CUR1 conflict.
+                allowed_offsets = {
+                    reference.offset
+                    for reference in proven_references
+                    if reference.entry_name.rstrip(b"\x00")
+                    == entry.name.rstrip(b"\x00")
+                }
+                parsed = replace(
+                    parsed,
+                    references=tuple(
+                        reference
+                        for reference in parsed.references
+                        if reference.offset in allowed_offsets
+                    ),
+                )
+            custom_parsed.append(parsed)
+        custom_references = {
+            reference.tile_index
+            for parsed in custom_parsed
+            for reference in parsed.references
         }
         custom_mapping = {
             old: new for old, new in mapping.items() if old in custom_references
@@ -1141,11 +1252,10 @@ def _compose_art_domain(
             inherited_mapping,
             tile_count=tile_allocation.final_count,
         )
-        custom_rewritten = rewrite_best_imag_entries(
+        custom_rewritten = rewrite_parsed_imag_entries(
             custom_entries,
             custom_mapping,
-            tile_count=tile_allocation.final_count,
-            preferred_tile_indices=preferred_tile_indices,
+            custom_parsed,
         )
         combined_entries = tuple(
             next(
@@ -1254,13 +1364,12 @@ def _compose_art_domain(
             if analysis.palette_delta is None:
                 continue
             mapping = palette_allocation.mapping_for(owner)
-            mod_palettes = _require_section(_archive, palette_extension).entries
             for change in analysis.palette_delta.changes:
                 destination = mapping.get(change.index, change.index)
                 _place_positional(
                     output_palettes,
                     destination,
-                    mod_palettes[change.index],
+                    change.entry,
                     owner,
                     palette_extension,
                 )
@@ -1288,6 +1397,22 @@ def _compose_art_domain(
             palette_reports=tuple(palette_reports),
         ),
     )
+
+
+def _effective_analysis_tile_entries(
+    archive: CamArchive,
+    analysis: ArtArchiveAnalysis,
+) -> tuple[CamEntry, ...]:
+    """Materialize the effective payload for every analyzed TILE change."""
+
+    entries = list(_require_section(archive, b"TILE").entries)
+    # Art analysis promotes every typed stock/fall-through dependency into
+    # the owner's effective TILE delta. Relocation must carry that promoted
+    # payload, not the package's original empty placeholder; otherwise a
+    # rewritten IMAG points at an allocated but blank slot.
+    for change in analysis.tile_delta.changes:
+        entries[change.index] = change.entry
+    return tuple(entries)
 
 
 def _materialize_imag_tile_dependencies(
@@ -1373,6 +1498,119 @@ def _split_imag_sets(entry: CamEntry) -> tuple[bytes, tuple[tuple[int, bytes], .
     return data[:20], sets
 
 
+def _join_imag_sets(
+    entry: CamEntry,
+    header: bytes,
+    sets: Sequence[tuple[int, bytes]],
+) -> CamEntry:
+    """Rebuild one validated IMAG set directory without changing set payloads."""
+
+    table_end = 24 + len(sets) * 8
+    cursor = table_end
+    directory = bytearray()
+    payloads = bytearray()
+    for set_id, payload in sets:
+        directory.extend(struct.pack("<II", set_id, cursor))
+        payloads.extend(payload)
+        cursor += len(payload)
+    return CamEntry(
+        name=entry.name,
+        data=b"".join(
+            (header, struct.pack("<I", len(sets)), directory, payloads)
+        ),
+    )
+
+
+def _strip_unowned_secondary_imag_layers(
+    archive: CamArchive,
+    analysis: ArtArchiveAnalysis,
+) -> CamArchive:
+    """Drop stock fall-through layers beneath an explicitly private base layer.
+
+    Majesty encodes additional visual layers by placing a one-based layer number
+    in the high byte of an IMAG set ID.  A stock-derived private sprite can
+    replace the base set while accidentally retaining a template building's
+    secondary layer through empty positional TILE slots.  That produces valid
+    but unrelated stock art at runtime (for example Marketplace awnings over a
+    private building).
+
+    Empty slots are implicit fall-through, not an ownership declaration.  When
+    a base layer references package-owned TILE data, suppress a corresponding
+    secondary layer only when every one of its TILE references is empty in the
+    package.  A package that intentionally keeps or replaces the layer can do so
+    simply by carrying its TILE payloads, so this rule remains content-agnostic.
+    """
+
+    tile_section = _require_section(archive, b"TILE")
+    imag_section = _require_section(archive, b"IMAG")
+    references_by_entry_and_set: dict[tuple[bytes, int], set[int]] = {}
+    for reference in analysis.imag_references:
+        references_by_entry_and_set.setdefault(
+            (reference.entry_name.rstrip(b"\x00"), reference.set_id), set()
+        ).add(reference.tile_index)
+
+    changed = False
+    output_entries: list[CamEntry] = []
+    for entry in imag_section.entries:
+        header, sets = _split_imag_sets(entry)
+        set_ids = {set_id for set_id, _payload in sets}
+        entry_key = entry.name.rstrip(b"\x00")
+        private_base_sets = {
+            set_id
+            for set_id in set_ids
+            if set_id < 0x01000000
+            and any(
+                index < len(tile_section.entries)
+                and bool(tile_section.entries[index].data)
+                and index not in analysis.retained_tile_dependencies
+                for index in references_by_entry_and_set.get(
+                    (entry_key, set_id), ()
+                )
+            )
+        }
+        stripped: set[int] = set()
+        for set_id in set_ids:
+            if set_id < 0x01000000:
+                continue
+            base_set_id = set_id & 0x00FFFFFF
+            if base_set_id not in private_base_sets:
+                continue
+            referenced = references_by_entry_and_set.get((entry_key, set_id), set())
+            if not referenced:
+                continue
+            if all(
+                index < len(tile_section.entries)
+                and not tile_section.entries[index].data
+                for index in referenced
+            ):
+                stripped.add(set_id)
+        if stripped:
+            kept_sets = tuple(
+                item for item in sets if item[0] not in stripped
+            )
+            output_entries.append(_join_imag_sets(entry, header, kept_sets))
+            changed = True
+        else:
+            output_entries.append(entry)
+
+    if not changed:
+        return archive
+    return CamArchive(
+        sections=tuple(
+            CamSection(
+                extension=section.extension,
+                entries=(
+                    tuple(output_entries)
+                    if section.extension == b"IMAG"
+                    else section.entries
+                ),
+                padding=section.padding,
+            )
+            for section in archive.sections
+        )
+    )
+
+
 def _merge_tactical_cursor_entry(
     stock: CamEntry,
     ancestors: Sequence[CamEntry],
@@ -1423,6 +1661,234 @@ def _merge_tactical_cursor_entry(
         name=stock.name,
         data=b"".join((header, struct.pack("<I", len(output)), directory, payloads)),
     )
+
+
+def _imag_set_start(entry: CamEntry, set_id: int) -> int:
+    """Return one validated IMAG set's absolute payload offset."""
+
+    _header, sets = _split_imag_sets(entry)
+    if sum(candidate == set_id for candidate, _payload in sets) != 1:
+        raise ComposeError(
+            f"{_display_key(entry.name[:4])}: expected exactly one IMAG set {set_id}"
+        )
+    count = struct.unpack_from("<I", entry.data, 20)[0]
+    return next(
+        struct.unpack_from("<I", entry.data, 28 + index * 8)[0]
+        for index in range(count)
+        if struct.unpack_from("<I", entry.data, 24 + index * 8)[0] == set_id
+    )
+
+
+def _prove_private_cursor_set_clone(
+    private_cursor: CamEntry,
+    private_tiles: CamSection,
+    private_set_id: int,
+    stock_cursor: CamEntry,
+    stock_tiles: CamSection,
+    stock_set_id: int,
+    primary_offsets: frozenset[int],
+) -> tuple[bool, str]:
+    """Prove a private CUR1 set is an exact stock clone with one glyph swap."""
+
+    try:
+        private_start = _imag_set_start(private_cursor, private_set_id)
+        stock_start = _imag_set_start(stock_cursor, stock_set_id)
+        private_payload = dict(_split_imag_sets(private_cursor)[1])[private_set_id]
+        stock_payload = dict(_split_imag_sets(stock_cursor)[1])[stock_set_id]
+        private_parsed = parse_stock_imag_tile_references(
+            private_cursor.data,
+            tile_count=len(private_tiles.entries),
+            entry_name=private_cursor.name,
+        )
+        stock_parsed = parse_stock_imag_tile_references(
+            stock_cursor.data,
+            tile_count=len(stock_tiles.entries),
+            entry_name=stock_cursor.name,
+        )
+    except (ArtFormatError, ComposeError, ValueError) as exc:
+        return False, str(exc)
+
+    private_refs = {
+        reference.offset - private_start: reference
+        for reference in private_parsed.references
+        if reference.set_id == private_set_id
+    }
+    stock_refs = {
+        reference.offset - stock_start: reference
+        for reference in stock_parsed.references
+        if reference.set_id == stock_set_id
+    }
+    if set(private_refs) != set(stock_refs):
+        return False, "typed TILE-reference topology differs"
+    if not primary_offsets.issubset(stock_refs):
+        return False, "stock primary cursor fields are missing"
+    if len(private_payload) != len(stock_payload):
+        return False, "cursor set payload length differs"
+
+    for offset in sorted(stock_refs):
+        private = private_refs[offset]
+        stock = stock_refs[offset]
+        if (
+            private.flag_bits != stock.flag_bits
+            or private.direction != stock.direction
+            or private.frame != stock.frame
+            or private.layout != stock.layout
+        ):
+            return False, f"typed cursor field 0x{offset:X} differs"
+
+    private_primary = {private_refs[offset].tile_index for offset in primary_offsets}
+    stock_primary = {stock_refs[offset].tile_index for offset in primary_offsets}
+    if len(stock_primary) != 1:
+        return False, "stock primary cursor frames do not share one TILE"
+    if len(private_primary) != 1:
+        return False, "private primary cursor frames do not share one TILE"
+    private_primary_index = next(iter(private_primary))
+    if private_primary_index == next(iter(stock_primary)):
+        return False, "private cursor did not replace the stock primary TILE"
+    if (
+        private_primary_index >= len(private_tiles.entries)
+        or not private_tiles.entries[private_primary_index].data
+    ):
+        return False, f"private primary TILE {private_primary_index} is empty"
+
+    # Compare every byte after erasing only the low 16-bit primary indices.
+    # This preserves and proves flags, direction timing, hotspot geometry,
+    # cleanup frames, and every other field in the stock lifecycle.
+    normalized_private = bytearray(private_payload)
+    normalized_stock = bytearray(stock_payload)
+    for offset in primary_offsets:
+        struct.pack_into("<H", normalized_private, offset, 0)
+        struct.pack_into("<H", normalized_stock, offset, 0)
+    if normalized_private != normalized_stock:
+        return False, "cursor set differs outside its primary TILE indices"
+
+    for offset, stock_ref in sorted(stock_refs.items()):
+        if offset in primary_offsets:
+            continue
+        private_ref = private_refs[offset]
+        if private_ref.tile_index != stock_ref.tile_index:
+            return False, f"auxiliary cursor field 0x{offset:X} changed TILE"
+        index = private_ref.tile_index
+        if (
+            index >= len(private_tiles.entries)
+            or not private_tiles.entries[index].data
+        ):
+            return False, f"auxiliary TILE {index} is not carried by the package"
+        if (
+            index >= len(stock_tiles.entries)
+            or private_tiles.entries[index].data != stock_tiles.entries[index].data
+        ):
+            return False, f"auxiliary TILE {index} is from a different stock dataset"
+    return True, ""
+
+
+def _validate_private_controller_cursor_sets(
+    game_path: Path,
+    inventories: Sequence[PackageInventory],
+    registry: ResolvedControllerRegistry,
+    panel_owners: Mapping[str, str],
+) -> None:
+    """Fail closed when a declared private cursor mixes stock art lineages."""
+
+    requirements: list[tuple[str, int, int, frozenset[int], str]] = []
+    for feature in registry.hostile_monster_flags:
+        template_set, primary_offsets, label = _HOSTILE_MONSTER_FLAG_CURSOR_TEMPLATE
+        requirements.append(
+            (
+                panel_owners[feature.panel_key],
+                1000 + feature.cursor_ordinal,
+                template_set,
+                primary_offsets,
+                label,
+            )
+        )
+    for feature in registry.sovereign_target_actions:
+        template_set, primary_offsets, label = _SOVEREIGN_TARGET_CURSOR_TEMPLATE
+        requirements.append(
+            (
+                panel_owners[feature.panel_key],
+                1000 + feature.cursor_ordinal,
+                template_set,
+                primary_offsets,
+                label,
+            )
+        )
+    if not requirements:
+        return
+
+    original = read_cam(game_path / "Data" / "interfacedata.cam")
+    effective = _effective_stock_art_ancestor(game_path, "interface")
+    stock_lineages = (
+        ("Original", original),
+        ("Northern Expansion", effective),
+    )
+    inventories_by_owner = {
+        inventory.selected.alias: inventory for inventory in inventories
+    }
+
+    for owner, private_set_id, stock_set_id, primary_offsets, label in dict.fromkeys(
+        requirements
+    ):
+        inventory = inventories_by_owner[owner]
+        providers: list[tuple[CamEntry, CamSection, Path]] = []
+        for path in inventory.cams:
+            archive = read_cam(path)
+            tile_sections = [
+                section for section in archive.sections if section.extension == b"TILE"
+            ]
+            for section in archive.sections:
+                if section.extension != b"IMAG":
+                    continue
+                for entry in section.entries:
+                    if entry.name.rstrip(b"\x00")[:4] != b"CUR1":
+                        continue
+                    _header, sets = _split_imag_sets(entry)
+                    if any(set_id == private_set_id for set_id, _payload in sets):
+                        if len(tile_sections) != 1:
+                            raise ComposeError(
+                                f"{owner}: private CUR1 set {private_set_id} must share "
+                                "one archive with exactly one TILE section"
+                            )
+                        providers.append((entry, tile_sections[0], path))
+        if len(providers) != 1:
+            raise ComposeError(
+                f"{owner}: expected exactly one package source for private CUR1 set "
+                f"{private_set_id}; found {len(providers)}"
+            )
+        private_cursor, private_tiles, source = providers[0]
+
+        failures = []
+        for lineage_name, archive in stock_lineages:
+            stock_tiles = _require_section(archive, b"TILE")
+            stock_cursor = next(
+                (
+                    entry
+                    for entry in _require_section(archive, b"IMAG").entries
+                    if entry.name.rstrip(b"\x00")[:4] == b"CUR1"
+                ),
+                None,
+            )
+            if stock_cursor is None:
+                failures.append(f"{lineage_name}: stock CUR1 is missing")
+                continue
+            accepted, reason = _prove_private_cursor_set_clone(
+                private_cursor,
+                private_tiles,
+                private_set_id,
+                stock_cursor,
+                stock_tiles,
+                stock_set_id,
+                primary_offsets,
+            )
+            if accepted:
+                break
+            failures.append(f"{lineage_name}: {reason}")
+        else:
+            raise ComposeError(
+                f"{owner}: private CUR1 set {private_set_id} does not preserve "
+                f"Majesty's complete stock {label} cursor lifecycle and auxiliary "
+                f"frames ({'; '.join(failures)}): {source}"
+            )
 
 
 def merge_description_resources(
@@ -1701,6 +2167,13 @@ def validate_controller_stock_evidence(
             "controller stock evidence requires exact manager-owned panel "
             "ownership metadata"
         )
+
+    _validate_private_controller_cursor_sets(
+        game_path,
+        inventories,
+        registry,
+        panel_owners,
+    )
 
     for panel in registry.panels:
         panel_owner = panel_owners[panel.panel_key]
@@ -4225,6 +4698,14 @@ def _art_report_payload(result: ArtDomainComposeResult) -> dict:
             }
             for analysis in result.analyses
         ],
+        "retained_palette_dependencies": [
+            {
+                "owner": analysis.mod_id,
+                "count": len(analysis.retained_palette_dependencies),
+                "slots": list(analysis.retained_palette_dependencies),
+            }
+            for analysis in result.analyses
+        ],
         "tile_collision_count": len(result.tile_collisions),
         "tile_collisions": [
             {
@@ -4489,15 +4970,28 @@ def _select_later_conflict_runs(
     deltas: Mapping[str, PositionalSectionDelta],
     collisions: Sequence[PositionalCollision],
     owner_order: Mapping[str, int],
+    *,
+    protected_indices: Mapping[str, Iterable[int]] | None = None,
 ) -> dict[str, set[int]]:
     selected = {owner: set() for owner in deltas}
     changed = {
         owner: set(delta.changed_indices) for owner, delta in deltas.items()
     }
+    protected_by_owner = {
+        owner: frozenset(indices)
+        for owner, indices in (protected_indices or {}).items()
+    }
+    for owner, indices in changed.items():
+        for index in sorted(indices.intersection(protected_by_owner.get(owner, ()))):
+            selected[owner].update(_contiguous_component(indices, index))
     for collision in collisions:
         if collision.identical_payload:
             continue
-        owners = sorted(collision.mods, key=lambda owner: owner_order[owner])
+        owners = [
+            owner
+            for owner in sorted(collision.mods, key=lambda owner: owner_order[owner])
+            if collision.index not in selected[owner]
+        ]
         for owner in owners[1:]:
             selected[owner].update(
                 _contiguous_component(changed[owner], collision.index)

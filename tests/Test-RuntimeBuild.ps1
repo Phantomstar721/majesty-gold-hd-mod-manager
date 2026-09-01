@@ -173,6 +173,16 @@ try {
         "!buildingFamilies.insert(item->buildingFamilyId).second",
         "stockTargetModes.find(*mode)", "stockExecutorModes.find(*mode)"
     ) "Stock-controller registry contract"
+    Assert-ContainsAny @($runtimeSource) @(
+        "FindRewardStateByPrivateMode",
+        "state.modeObject == modeObject",
+        "g_buildProfile->getFlagModeManagerRva",
+        "g_buildProfile->getSelectedFlagModeRva",
+        "FindRewardStateByPrivateMode(selected)",
+        "FindRegisteredRewardMode(state.record->privateMode)",
+        "registered != state.modeObject",
+        "registeredCursor != state.record->cursorOrdinal"
+    ) "Private Fl00 live-context and registry identity contract"
     Assert-ContainsAny @($capabilitySource, $capabilityHeader) @(
         "kManifestVersion = 1", "kMaximumCapabilityCount = 64",
         "kMaximumCapabilityBytes = 128", "kMaximumManifestBytes = 64u * 1024u",

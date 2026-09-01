@@ -16,8 +16,11 @@ from .build import (
     BuildPlan,
     ManagerBuildError,
     ManagerBuildResult,
+    STANDARD_SELECTION_ISSUE_CODES,
     build_merged_package,
     create_build_plan,
+    standard_selection_issues,
+    standard_conflict_pair_key,
     _order_standard_ids,
     read_managed_build,
     _require_current_plan_sources,
@@ -91,6 +94,7 @@ class ManagerController:
         self.selections: dict[str, bool] = {}
         self.order: tuple[str, ...] = ()
         self.profile = ManagerProfile()
+        self.standard_conflict_winners: dict[str, str] = {}
         self.selection_source = "defaults"
         self.plan = create_build_plan(
             self.catalog,
@@ -105,6 +109,8 @@ class ManagerController:
             game_executable=self.paths.game_executable,
         )
         self._qol_checked = False
+        self._managed_build_cache: ManagerBuildResult | None = None
+        self._managed_build_cache_loaded = False
         self.notices: list[str] = []
 
     def select_game_executable(self, executable: Path) -> MajestyBranch:
@@ -139,6 +145,7 @@ class ManagerController:
         self.qol_status = ()
         self._qol_checked = False
         self._replan()
+        self._managed_build_cache_loaded = False
         return branch
 
     def scan(
@@ -209,6 +216,9 @@ class ManagerController:
         self.selection_source = source
         self._enforce_catalog_exclusivity()
         self.profile = saved or ManagerProfile()
+        self.standard_conflict_winners = dict(
+            self.profile.standard_conflict_winners
+        )
         self._replan()
         self._qol_checked = inspect_qol
         if inspect_qol:
@@ -231,6 +241,7 @@ class ManagerController:
             self.qol_catalog = None
             self.qol_status = ()
         cache.save()
+        self._refresh_managed_build_cache()
         return self.snapshot()
 
     def change_qol(self, key: str, install: bool) -> ControllerSnapshot:
@@ -333,6 +344,23 @@ class ManagerController:
         self._save_selection_state()
         return self.snapshot()
 
+    def set_standard_conflict_winner(
+        self,
+        left_id: str,
+        right_id: str,
+        winner_id: str,
+    ) -> ControllerSnapshot:
+        """Remember which whole Standard Mod should load last for one pair."""
+
+        pair = standard_conflict_pair_key(left_id, right_id)
+        winner = normalize_guid(winner_id)
+        if winner not in pair.split("|"):
+            raise ValueError("The conflict winner must be one of the two Mods.")
+        self.standard_conflict_winners[pair] = winner
+        self._refresh_standard_plan()
+        self._save_selection_state()
+        return self.snapshot()
+
     def build(self, *, progress=None) -> tuple[ManagerBuildResult, ControllerSnapshot]:
         snapshot = self.snapshot()
         if not snapshot.can_build:
@@ -343,6 +371,8 @@ class ManagerController:
                 details or "Select at least one supported Merge mod before preparing mods."
             )
         result = build_merged_package(self.plan, self.paths, progress=progress)
+        self._managed_build_cache = result
+        self._managed_build_cache_loaded = True
         self.profile = self._profile_with_current_selections().with_successful_build(
             fingerprint=result.fingerprint,
             mod_id=result.mod_id,
@@ -364,6 +394,7 @@ class ManagerController:
 
             # For Merge launches the lock is already held, so this snapshot and
             # every subsequent input check observe one stable generated profile.
+            self._refresh_managed_build_cache()
             snapshot = self.snapshot()
             if not snapshot.can_launch:
                 if not self._required_qol_ready():
@@ -430,7 +461,9 @@ class ManagerController:
                 profile_lock.close()
 
     def snapshot(self) -> ControllerSnapshot:
-        managed = read_managed_build(self.paths.merged_output_root)
+        if not self._managed_build_cache_loaded:
+            self._refresh_managed_build_cache()
+        managed = self._managed_build_cache
         build_required = bool(
             self.plan.has_merge
             and (
@@ -469,6 +502,21 @@ class ManagerController:
             ),
             notices=tuple(self.notices),
         )
+
+    def _refresh_managed_build_cache(self) -> ManagerBuildResult | None:
+        """Revalidate generated output only at lifecycle safety boundaries.
+
+        Reading a managed build inventories and hashes the complete generated
+        package.  Doing that on every ordinary checkbox click made selection
+        latency proportional to package size.  Scans, successful builds, and
+        launches remain authoritative refresh boundaries.
+        """
+
+        self._managed_build_cache = read_managed_build(
+            self.paths.merged_output_root
+        )
+        self._managed_build_cache_loaded = True
+        return self._managed_build_cache
 
     def _set_qol_catalog(self, catalog: QolCatalogSnapshot) -> None:
         self.qol_catalog = catalog
@@ -522,6 +570,7 @@ class ManagerController:
             registry=self.registry,
             order=self.order,
             game_path=self.paths.game_path,
+            standard_conflict_winners=self.standard_conflict_winners,
         )
 
     def _refresh_standard_plan(self) -> None:
@@ -547,7 +596,19 @@ class ManagerController:
         )
         self.plan = replace(
             self.plan,
-            selected_standard_ids=_order_standard_ids(selected, order_index),
+            selected_standard_ids=_order_standard_ids(
+                selected, order_index, self.standard_conflict_winners
+            ),
+            issues=tuple(
+                issue
+                for issue in self.plan.issues
+                if issue.code not in STANDARD_SELECTION_ISSUE_CODES
+            )
+            + standard_selection_issues(
+                self.catalog,
+                self.selections,
+                self.standard_conflict_winners,
+            ),
         )
 
     def _enforce_catalog_exclusivity(self) -> None:
@@ -582,7 +643,11 @@ class ManagerController:
         order = list(self.order)
         seen = set(order)
         order.extend(key for key in self.selections if key not in seen)
-        return self.profile.with_selections(self.selections, order)
+        profile = self.profile.with_selections(self.selections, order)
+        return replace(
+            profile,
+            standard_conflict_winners=dict(self.standard_conflict_winners),
+        )
 
     def _expand_generated_profile_ids(self, remembered: tuple[str, ...]) -> tuple[str, ...]:
         result: list[str] = []

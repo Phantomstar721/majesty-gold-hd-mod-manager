@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 import struct
 import sys
@@ -20,9 +21,12 @@ from majesty_cam.art import (
     ParsedImag,
     parse_best_imag_tile_references,
     parse_imag_tile_references,
+    parse_stock_imag_tile_references,
     parse_tile_palette_reference,
     rewrite_imag_entries,
     rewrite_imag_tile_indices,
+    rewrite_parsed_imag_entries,
+    rewrite_stock_imag_entries,
     rewrite_tile_palette_indices,
     validate_external_palette_closure,
 )
@@ -176,6 +180,46 @@ class PositionalArtTests(unittest.TestCase):
 
 
 class ImagParserTests(unittest.TestCase):
+    def test_proven_rewriter_leaves_unowned_references_unchanged(self):
+        entry = _entry(
+            "cursor",
+            _imag(
+                [
+                    _SetSpec(1000, "compact", (7,)),
+                    _SetSpec(1038, "compact", (7,)),
+                ]
+            ),
+        )
+        parsed = parse_imag_tile_references(
+            entry.data,
+            tile_count=64,
+            entry_name=entry.name,
+        )
+        private_only = replace(
+            parsed,
+            references=tuple(
+                reference
+                for reference in parsed.references
+                if reference.set_id == 1038
+            ),
+        )
+
+        rewritten = rewrite_parsed_imag_entries(
+            (entry,),
+            {7: 42},
+            (private_only,),
+        )
+        reparsed = parse_imag_tile_references(
+            rewritten.entries[0].data,
+            tile_count=64,
+            entry_name=entry.name,
+        )
+
+        self.assertEqual(
+            [(reference.set_id, reference.tile_index) for reference in reparsed.references],
+            [(1000, 7), (1038, 42)],
+        )
+
     def test_compact_extended_and_projectile_layouts_are_typed(self):
         data = _imag(
             [
@@ -259,26 +303,161 @@ class ImagParserTests(unittest.TestCase):
 
         self.assertEqual(
             [reference.tile_index for reference in parsed.references],
-            [7, 12],
+            [12],
         )
-        terminal = parsed.references[1]
+        terminal = parsed.references[0]
         self.assertEqual(terminal.layout, "building-terminal")
-        self.assertEqual((terminal.direction, terminal.frame), (-1, -1))
+        self.assertEqual((terminal.direction, terminal.frame), (0, -1))
         self.assertEqual(terminal.offset, len(data) - 4)
         self.assertEqual(terminal.flag_bits, 0x34000000)
 
         rewritten = rewrite_imag_tile_indices(
             data,
-            {12: 40},
+            {7: 42, 12: 40},
             tile_count=64,
             entry_name=b"PHG1Phantom Guild",
+            require_all_referenced=False,
         )
+        self.assertEqual(rewritten[:-4], data[:-4])
         reparsed = parse_imag_tile_references(rewritten, tile_count=64)
         self.assertEqual(
             [reference.tile_index for reference in reparsed.references],
-            [7, 40],
+            [40],
         )
-        self.assertEqual(reparsed.references[1].flag_bits, 0x34000000)
+        self.assertEqual(reparsed.references[0].flag_bits, 0x34000000)
+
+    def test_end_anchored_stock_building_reserves_and_types_terminal_tile(self):
+        data = _imag(
+            [
+                _SetSpec(
+                    208,
+                    "extended",
+                    (7,),
+                    terminal_tile=12,
+                    terminal_flag_bits=0x34000000,
+                )
+            ]
+        )
+
+        parsed = parse_stock_imag_tile_references(
+            data,
+            tile_count=64,
+            entry_name=b"ABQ1Temple, Fervus1",
+        )
+
+        self.assertEqual(
+            [reference.tile_index for reference in parsed.references],
+            [12],
+        )
+        self.assertEqual(parsed.layouts, ("building-terminal",))
+        self.assertEqual(parsed.references[0].offset, len(data) - 4)
+        self.assertEqual(parsed.references[0].flag_bits, 0x34000000)
+
+        rewritten = rewrite_stock_imag_entries(
+            (CamEntry(name=pad_name(b"ABQ1Temple, Fervus1"), data=data),),
+            {7: 42, 12: 40},
+            tile_count=64,
+            require_all_referenced=False,
+        )
+        self.assertEqual(rewritten.entries[0].data[:-4], data[:-4])
+        self.assertEqual(
+            struct.unpack_from("<I", rewritten.entries[0].data, len(data) - 4)[0],
+            0x34000000 | 40,
+        )
+
+    def test_set_208_frame_stream_reaching_boundary_keeps_every_frame(self):
+        # Original Majesty's AVk4 resurrection item uses this exact set-208
+        # shape: three real frames, with the third ending at the direction
+        # boundary.  PXF1 Phoenix Phial is a private clone of that stock
+        # lifecycle and must not be mistaken for a building footprint.
+        data = _imag(
+            [
+                _SetSpec(
+                    208,
+                    "extended",
+                    (7, 8, 9),
+                    flag_bits=0x12000000,
+                )
+            ]
+        )
+
+        historical = parse_imag_tile_references(
+            data,
+            tile_count=64,
+            entry_name=b"PXF1Phoenix Phial",
+        )
+        stock = parse_stock_imag_tile_references(
+            data,
+            tile_count=64,
+            entry_name=b"AVk4Res Item",
+        )
+
+        self.assertEqual(
+            [reference.tile_index for reference in historical.references],
+            [7, 8, 9],
+        )
+        self.assertEqual(
+            [reference.tile_index for reference in stock.references],
+            [7, 8, 9],
+        )
+        self.assertEqual(historical.layouts, ("extended",))
+        self.assertEqual(stock.layouts, ("stock-end-anchored",))
+
+        rewritten = rewrite_imag_tile_indices(
+            data,
+            {7: 40, 8: 41, 9: 42},
+            tile_count=64,
+            entry_name=b"PXF1Phoenix Phial",
+        )
+        reparsed = parse_imag_tile_references(
+            rewritten,
+            tile_count=64,
+            entry_name=b"PXF1Phoenix Phial",
+        )
+        self.assertEqual(
+            [reference.tile_index for reference in reparsed.references],
+            [40, 41, 42],
+        )
+        self.assertTrue(
+            all(reference.flag_bits == 0x12000000 for reference in reparsed.references)
+        )
+
+    def test_set_208_uses_complete_end_anchored_multiframe_table(self):
+        # Some stock set-208 scenery records have footprint/control words after
+        # the historical-looking stream, followed by a complete multi-frame
+        # table at the direction boundary.  The misleading early words can
+        # even exceed the TILE table (as in BBe1/BBi1), so fallback selection
+        # must happen before decoding them.  The fallback is not merely one
+        # terminal building frame.
+        payload = bytearray(
+            _imag([_SetSpec(208, "extended", (65000, 65001, 65002))])
+        )
+        end_anchored = bytearray(24)
+        for frame, tile_index in enumerate((20, 21, 22)):
+            struct.pack_into("<I", end_anchored, frame * 8 + 4, tile_index)
+        payload.extend(end_anchored)
+
+        historical = parse_imag_tile_references(
+            bytes(payload),
+            tile_count=64,
+            entry_name=b"private scenery",
+        )
+        stock = parse_stock_imag_tile_references(
+            bytes(payload),
+            tile_count=64,
+            entry_name=b"stock scenery",
+        )
+
+        self.assertEqual(
+            [reference.tile_index for reference in historical.references],
+            [20, 21, 22],
+        )
+        self.assertEqual(
+            [reference.tile_index for reference in stock.references],
+            [20, 21, 22],
+        )
+        self.assertEqual(historical.layouts, ("stock-end-anchored",))
+        self.assertEqual(stock.layouts, ("stock-end-anchored",))
 
     def test_rewriter_changes_only_typed_frame_fields_not_equal_header_words(self):
         data = bytearray(_imag([_SetSpec(64, "compact", (7, 8))]))
@@ -419,7 +598,7 @@ class ArtArchiveAnalysisTests(unittest.TestCase):
     def test_inherited_stock_imag_claims_its_positional_tile_dependencies(self):
         inherited = _entry(
             "ABn1stock building",
-            _imag([_SetSpec(208, "compact", (1,))]),
+            _imag([_SetSpec(208, "compact", (1,), terminal_tile=1)]),
         )
         tiles = [_entry("unused", _tile(0)), _entry("building", _tile(0, marker=1))]
         stock = CamArchive(
@@ -440,7 +619,10 @@ class ArtArchiveAnalysisTests(unittest.TestCase):
         self.assertEqual(analysis.retained_tile_dependencies, (1,))
         self.assertEqual(analysis.tile_delta.changed_indices, (1,))
         self.assertEqual(analysis.unreferenced_tile_changes, ())
-        self.assertEqual(analysis.supported_imag_layouts, ("stock-end-anchored",))
+        self.assertEqual(
+            analysis.supported_imag_layouts,
+            ("building-terminal",),
+        )
 
     def test_analysis_preserves_interface_palt_type(self):
         stock = CamArchive(
@@ -522,6 +704,77 @@ class ArtArchiveAnalysisTests(unittest.TestCase):
         self.assertEqual(analysis.retained_tile_dependencies, (0,))
         self.assertEqual(analysis.tile_delta.stock_identical_count, 0)
         self.assertEqual(analysis.unreferenced_tile_changes, ())
+
+    def test_analysis_retains_empty_fallthrough_tile_and_palette_dependencies(self):
+        original_tile = _tile(0)
+        expansion_tile = _tile(0, marker=9)
+        stock = CamArchive(
+            sections=(
+                _section("TILE", [_entry("expansion-art", expansion_tile)]),
+                _section("SPLT", [_entry("expansion-palette", b"mx-palette")]),
+            )
+        )
+        original = CamArchive(
+            sections=(
+                _section("TILE", [_entry("original-art", original_tile)]),
+                _section("SPLT", [_entry("original-palette", b"base-palette")]),
+            )
+        )
+        mod = CamArchive(
+            sections=(
+                _section(
+                    "IMAG",
+                    [_entry("private", _imag([_SetSpec(1016, "compact", (0,))]))],
+                ),
+                _section("TILE", [_entry("original-art", b"")]),
+                _section("SPLT", [_entry("original-palette", b"")]),
+            )
+        )
+
+        analysis = analyze_art_archive(
+            stock,
+            mod,
+            mod_id="fixture",
+            fallthrough_ancestors=(original,),
+        )
+
+        self.assertEqual(analysis.retained_tile_dependencies, (0,))
+        self.assertEqual(analysis.tile_delta.changed_indices, (0,))
+        self.assertEqual(analysis.tile_delta.changes[0].entry.data, original_tile)
+        self.assertEqual(analysis.palette_delta.changed_indices, (0,))
+        self.assertEqual(analysis.retained_palette_dependencies, (0,))
+        self.assertEqual(
+            analysis.palette_delta.changes[0].entry.data, b"base-palette"
+        )
+
+    def test_analysis_rejects_ambiguous_empty_dependency_ancestry(self):
+        stock = CamArchive(
+            sections=(
+                _section("TILE", [_entry("shared-name", _tile(0, marker=9))]),
+            )
+        )
+        original = CamArchive(
+            sections=(
+                _section("TILE", [_entry("shared-name", _tile(0))]),
+            )
+        )
+        mod = CamArchive(
+            sections=(
+                _section(
+                    "IMAG",
+                    [_entry("private", _imag([_SetSpec(1016, "compact", (0,))]))],
+                ),
+                _section("TILE", [_entry("shared-name", b"")]),
+            )
+        )
+
+        with self.assertRaisesRegex(ArtFormatError, "ambiguous stock ancestry"):
+            analyze_art_archive(
+                stock,
+                mod,
+                mod_id="fixture",
+                fallthrough_ancestors=(original,),
+            )
 
     def test_analysis_leaves_unreferenced_stock_copy_as_fallthrough(self):
         first = _tile(0)

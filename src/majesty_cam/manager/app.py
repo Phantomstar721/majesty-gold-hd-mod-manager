@@ -18,6 +18,7 @@ from typing import Callable, Iterable, Mapping, Optional
 from .catalog import CatalogEntry, CatalogKind, CatalogSource, IssueSeverity
 from .brand_assets import BrandAssets, ensure_brand_assets
 from .controller import ControllerSnapshot, ManagerController
+from .build import standard_content_conflicts
 from .preflight import PreparedMergeMod
 from .workshop import open_workshop_item
 
@@ -218,6 +219,7 @@ if _PYSIDE_IMPORT_ERROR is None:
     class _ModCard(QFrame):
         selection_changed = Signal(str, bool)
         steam_requested = Signal(str)
+        conflicts_requested = Signal(str)
 
         def __init__(
             self,
@@ -390,6 +392,19 @@ if _PYSIDE_IMPORT_ERROR is None:
                 details_button.setToolTip(entry.description or author_text)
                 details_button.clicked.connect(self._toggle_author_details)
                 metadata.addWidget(details_button)
+            if entry.unresolved_overlap_ids and entry.content_id:
+                conflicts_button = QPushButton("CONFLICTS")
+                conflicts_button.setObjectName("conflictsButton")
+                conflicts_button.setCursor(Qt.CursorShape.PointingHandCursor)
+                conflicts_button.setToolTip(
+                    "Show other installed Mods which change the same parts of Majesty"
+                )
+                conflicts_button.clicked.connect(
+                    lambda _checked=False, content_id=entry.content_id: (
+                        self.conflicts_requested.emit(content_id)
+                    )
+                )
+                metadata.addWidget(conflicts_button)
             source.setToolTip(str(entry.manifest_path))
             metadata.addStretch(1)
             body.addLayout(metadata)
@@ -424,6 +439,10 @@ if _PYSIDE_IMPORT_ERROR is None:
                     "Automatically loaded before "
                     + ", ".join(entry.load_before_names)
                     + " when both are selected."
+                )
+            if entry.required_names:
+                messages.append(
+                    "Requires " + ", ".join(entry.required_names) + "."
                 )
             if entry.kind is CatalogKind.QUEST and not messages:
                 messages.append(
@@ -501,6 +520,7 @@ if _PYSIDE_IMPORT_ERROR is None:
 
         selection_changed = Signal(str, bool)
         steam_requested = Signal(str)
+        conflicts_requested = Signal(str)
         expansion_changed = Signal(str, bool)
 
         def __init__(
@@ -597,6 +617,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                 )
                 card.selection_changed.connect(self.selection_changed.emit)
                 card.steam_requested.connect(self.steam_requested.emit)
+                card.conflicts_requested.connect(self.conflicts_requested.emit)
                 child_layout.addWidget(card)
                 self.cards.append(card)
             outer.addWidget(self.children)
@@ -684,6 +705,7 @@ if _PYSIDE_IMPORT_ERROR is None:
         bulk_selection = Signal(object, bool)
         selection_changed = Signal(str, bool)
         steam_requested = Signal(str)
+        conflicts_requested = Signal(str)
 
         def __init__(self, kind: CatalogKind, parent: Optional[QWidget] = None) -> None:
             super().__init__(parent)
@@ -795,6 +817,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                     )
                     group.selection_changed.connect(self.selection_changed.emit)
                     group.steam_requested.connect(self.steam_requested.emit)
+                    group.conflicts_requested.connect(self.conflicts_requested.emit)
                     group.expansion_changed.connect(self._collection_expanded)
                     self.card_layout.addWidget(group)
                     self.groups.append(group)
@@ -813,6 +836,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                 )
                 card.selection_changed.connect(self.selection_changed.emit)
                 card.steam_requested.connect(self.steam_requested.emit)
+                card.conflicts_requested.connect(self.conflicts_requested.emit)
                 self.card_layout.addWidget(card)
                 self.cards.append(card)
                 self.standalone_cards.append(card)
@@ -1298,6 +1322,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                 catalog_page.bulk_selection.connect(self._bulk_selection)
                 catalog_page.selection_changed.connect(self._selection_changed)
                 catalog_page.steam_requested.connect(self.steam_requested.emit)
+                catalog_page.conflicts_requested.connect(self._show_conflicts)
                 self.pages[kind] = catalog_page
                 self.tabs.addTab(catalog_page, label)
             self.qol_page = _QolPage()
@@ -1424,18 +1449,176 @@ if _PYSIDE_IMPORT_ERROR is None:
 
         @Slot()
         def build(self) -> None:
+            if self._busy or self.snapshot is None:
+                return
+            force_review = any(
+                issue.code == "conflicting_standard_order_choices"
+                for issue in self.snapshot.plan.issues
+            )
+            if not self._resolve_selected_conflicts(force_review=force_review):
+                return
             if (
-                self._busy
-                or self.snapshot is None
+                self.snapshot is None
                 or not self.snapshot.can_build
                 or _missing_required_qol_helpers(self.snapshot)
             ):
+                if self.snapshot is not None and not self.snapshot.plan.has_merge:
+                    self._render_snapshot(self.snapshot)
                 return
             self._run_task(
                 "Preparing your selected mods",
                 lambda progress: self.controller.build(progress=progress),
                 self._build_finished,
             )
+
+        @Slot(str)
+        def _show_conflicts(self, content_id: str) -> None:
+            if self.snapshot is None:
+                return
+            conflicts = tuple(
+                item
+                for item in standard_content_conflicts(self.snapshot.catalog)
+                if content_id in (item.left_id, item.right_id)
+            )
+            entry = next(
+                (
+                    item
+                    for item in self.snapshot.catalog.entries
+                    if item.content_id == content_id
+                ),
+                None,
+            )
+            if entry is None:
+                return
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Icon.Warning)
+            dialog.setWindowTitle(f"{APP_NAME} — Shared game changes")
+            dialog.setText(f"{entry.display_name} overlaps other installed Mods.")
+            if conflicts:
+                summaries = []
+                details = []
+                for conflict in conflicts:
+                    other_name = (
+                        conflict.right_name
+                        if conflict.left_id == content_id
+                        else conflict.left_name
+                    )
+                    summaries.append(
+                        f"• {other_name}: {len(conflict.change_keys)} shared "
+                        f"{'change' if len(conflict.change_keys) == 1 else 'changes'}"
+                    )
+                    details.append(
+                        f"{entry.display_name}  ↔  {other_name}\n"
+                        + "\n".join(
+                            f"  • {_game_change_label(key)}"
+                            for key in conflict.change_keys
+                        )
+                    )
+                dialog.setInformativeText(
+                    "\n".join(summaries)
+                    + "\n\nSelect both only if you choose which Mod should load last "
+                    "when preparing your setup."
+                )
+                dialog.setDetailedText("\n\n".join(details))
+            else:
+                dialog.setInformativeText(
+                    "The scan found shared behavior, but no readable definition "
+                    "list was available."
+                )
+            selected_conflicts = tuple(
+                item
+                for item in standard_content_conflicts(
+                    self.snapshot.catalog,
+                    self.snapshot.selections,
+                )
+                if content_id in (item.left_id, item.right_id)
+            )
+            change_button = None
+            if selected_conflicts:
+                change_button = dialog.addButton(
+                    "Change load choices",
+                    QMessageBox.ButtonRole.ActionRole,
+                )
+            dialog.addButton(QMessageBox.StandardButton.Close)
+            dialog.exec()
+            if change_button is not None and dialog.clickedButton() is change_button:
+                self._resolve_selected_conflicts(
+                    force_review=True,
+                    content_id=content_id,
+                )
+
+        def _resolve_selected_conflicts(
+            self,
+            *,
+            force_review: bool = False,
+            content_id: Optional[str] = None,
+        ) -> bool:
+            """Ask which complete Standard Mod should win each unresolved pair."""
+
+            if self.snapshot is None:
+                return False
+            conflicts = standard_content_conflicts(
+                self.snapshot.catalog,
+                self.snapshot.selections,
+            )
+            for conflict in conflicts:
+                if content_id is not None and content_id not in (
+                    conflict.left_id,
+                    conflict.right_id,
+                ):
+                    continue
+                winner = self.controller.standard_conflict_winners.get(
+                    conflict.pair_key
+                )
+                if not force_review and winner in (
+                    conflict.left_id,
+                    conflict.right_id,
+                ):
+                    continue
+                dialog = QMessageBox(self)
+                dialog.setIcon(QMessageBox.Icon.Warning)
+                dialog.setWindowTitle(f"{APP_NAME} — Choose which Mod wins")
+                dialog.setText(
+                    f"{conflict.left_name} and {conflict.right_name} change "
+                    f"{len(conflict.change_keys)} of the same game "
+                    f"{'setting' if len(conflict.change_keys) == 1 else 'settings'}."
+                )
+                dialog.setInformativeText(
+                    "Majesty loads Standard Mods as complete packages, so one of "
+                    "these Mods must load last and supply all of their shared "
+                    "changes. Choose the version you prefer."
+                )
+                dialog.setDetailedText(
+                    "\n".join(
+                        f"• {_game_change_label(key)}"
+                        for key in conflict.change_keys
+                    )
+                )
+                left_button = dialog.addButton(
+                    conflict.left_name,
+                    QMessageBox.ButtonRole.AcceptRole,
+                )
+                right_button = dialog.addButton(
+                    conflict.right_name,
+                    QMessageBox.ButtonRole.AcceptRole,
+                )
+                dialog.addButton(QMessageBox.StandardButton.Cancel)
+                dialog.exec()
+                clicked = dialog.clickedButton()
+                if clicked is left_button:
+                    winner = conflict.left_id
+                elif clicked is right_button:
+                    winner = conflict.right_id
+                else:
+                    return False
+                self.snapshot = self.controller.set_standard_conflict_winner(
+                    conflict.left_id,
+                    conflict.right_id,
+                    winner,
+                )
+            if self.snapshot is not None:
+                self._render_snapshot(self.snapshot)
+            return True
 
         @Slot()
         def launch(self) -> None:
@@ -1794,16 +1977,34 @@ if _PYSIDE_IMPORT_ERROR is None:
                     else ""
                 )
 
+            conflict_issue_codes = {
+                "unresolved_standard_overlap",
+                "conflicting_standard_order_choices",
+            }
+            conflict_issues = tuple(
+                issue
+                for issue in snapshot.plan.issues
+                if issue.code in conflict_issue_codes
+            )
+            only_conflicts = bool(conflict_issues) and len(conflict_issues) == len(
+                snapshot.plan.issues
+            )
             self.build_button.setText(
-                "Prepare Again"
+                "Review Conflicts"
+                if only_conflicts
+                else "Prepare Again"
                 if snapshot.managed_build is not None
                 else "Prepare Selected Mods"
             )
-            self.build_button.setEnabled(snapshot.can_build and required_qol_ready)
+            self.build_button.setEnabled(
+                required_qol_ready and (snapshot.can_build or only_conflicts)
+            )
             self.build_button.setToolTip(
                 (
                     "Install the required patches on the Quality of Life tab first."
                     if not required_qol_ready
+                    else "Review overlapping game changes and choose which Mod loads last."
+                    if only_conflicts
                     else "Combine the selected Merge mods into one setup Majesty can load."
                     if snapshot.plan.has_merge
                     else "Select at least one supported Merge mod to build a setup."
@@ -1940,6 +2141,23 @@ def _kind_text(entry: "CatalogEntry", *, tool_delivery: bool = False) -> str:
     }[entry.kind]
 
 
+def _game_change_label(key: str) -> str:
+    """Turn a semantic inventory key into concise player-facing text."""
+
+    parts = key.split(":")
+    raw_name = parts[-1] if parts else key
+    name = raw_name.replace("_", " ").replace("-", " ").strip()
+    label = " ".join(word.capitalize() for word in name.split()) or key
+    family = {
+        "dat_block": "Game data",
+        "gpl_function": "Game rule",
+        "gpl_thread": "Game behavior",
+        "gpl_trigger": "Game event",
+        "description": "Game description",
+    }.get(parts[0].casefold() if parts else "", "Game change")
+    return f"{family}: {label}"
+
+
 def _is_phantoms_haunt(entry: "CatalogEntry") -> bool:
     raw_id = entry.content_id or entry.raw_content_id or ""
     return str(raw_id).strip().strip("{}").casefold() == PHANTOMS_HAUNT_ID
@@ -1974,6 +2192,10 @@ def _player_issue_text(code: str, message: str) -> str:
             "This mod changes in-game status text, but the manager could not "
             "safely connect every changed message to the script that uses it."
         ),
+        "unsafe_gpl_foreach_return": (
+            "This mod contains a game-script pattern that can crash Majesty. "
+            "Its author needs to update it before it can be combined safely."
+        ),
         "unsafe_private_activity_text": (
             "One or more selected mods change in-game status text in a way the "
             "manager cannot safely combine."
@@ -1989,6 +2211,20 @@ def _player_issue_text(code: str, message: str) -> str:
             "managed safely."
         ),
         "selected_item_not_ready": "This selected mod is not ready to use.",
+        "missing_required_mod": (
+            "A selected patch is missing the original mod component it requires."
+        ),
+        "mutually_exclusive_mods": (
+            "Two selected mod choices explicitly say they cannot be used together."
+        ),
+        "unresolved_standard_overlap": (
+            "Two selected mods change the same parts of Majesty. Review their "
+            "conflicts and choose which Mod should load last."
+        ),
+        "conflicting_standard_order_choices": (
+            "The selected conflict winners cannot all be expressed as one Mod "
+            "load order. Change one of those choices."
+        ),
         "duplicate_merge_alias": (
             "Two selected mods use the same internal name and cannot be combined."
         ),

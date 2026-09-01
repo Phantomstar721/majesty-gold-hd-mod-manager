@@ -346,6 +346,24 @@ QPushButton#contentDetailsButton {
     font-size: 9px;
 }
 
+QPushButton#conflictsButton {
+    color: #ff9a91;
+    background-color: #3b1c1f;
+    border: 1px solid #9a4d49;
+    border-radius: 3px;
+    min-height: 20px;
+    max-height: 20px;
+    padding: 0 7px;
+    font-size: 9px;
+    font-weight: 700;
+}
+
+QPushButton#conflictsButton:hover {
+    color: #ffe2de;
+    background-color: #572326;
+    border-color: #e17870;
+}
+
 QPushButton#collectionDetailsButton {
     min-height: 22px;
     padding: 1px 8px;

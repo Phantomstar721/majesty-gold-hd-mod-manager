@@ -107,6 +107,7 @@ class ManagerProfile:
 
     selections: Mapping[str, bool] = field(default_factory=dict)
     order: tuple[str, ...] = ()
+    standard_conflict_winners: Mapping[str, str] = field(default_factory=dict)
     last_build_fingerprint: str | None = None
     last_build_mod_id: str | None = None
     last_build_path: str | None = None
@@ -124,6 +125,7 @@ class ManagerProfile:
         return ManagerProfile(
             selections=normalized,
             order=normalized_order,
+            standard_conflict_winners=dict(self.standard_conflict_winners),
             last_build_fingerprint=self.last_build_fingerprint,
             last_build_mod_id=self.last_build_mod_id,
             last_build_path=self.last_build_path,
@@ -139,6 +141,7 @@ class ManagerProfile:
         return ManagerProfile(
             selections=dict(self.selections),
             order=self.order,
+            standard_conflict_winners=dict(self.standard_conflict_winners),
             last_build_fingerprint=fingerprint,
             last_build_mod_id=normalize_guid(mod_id),
             last_build_path=str(path.resolve(strict=False)),
@@ -175,9 +178,25 @@ def load_profile(path: Path) -> ManagerProfile | None:
     fingerprint = _optional_string(build.get("fingerprint"))
     build_id = _optional_string(build.get("mod_id"))
     build_path = _optional_string(build.get("path"))
+    raw_winners = value.get("standard_conflict_winners", {})
+    if not isinstance(raw_winners, dict):
+        raise ProfileFormatError(f"invalid standard Mod conflict choices in {path}")
+    conflict_winners: dict[str, str] = {}
+    for raw_pair, raw_winner in raw_winners.items():
+        if not isinstance(raw_pair, str) or not isinstance(raw_winner, str):
+            raise ProfileFormatError(f"invalid standard Mod conflict choice in {path}")
+        parts = raw_pair.split("|")
+        if len(parts) != 2:
+            raise ProfileFormatError(f"invalid standard Mod conflict pair in {path}")
+        pair = "|".join(sorted(normalize_guid(item) for item in parts))
+        winner = normalize_guid(raw_winner)
+        if winner not in pair.split("|"):
+            raise ProfileFormatError(f"invalid standard Mod conflict winner in {path}")
+        conflict_winners[pair] = winner
     return ManagerProfile(
         selections=selections,
         order=_unique_guids(raw_order),
+        standard_conflict_winners=conflict_winners,
         last_build_fingerprint=fingerprint,
         last_build_mod_id=normalize_guid(build_id) if build_id else None,
         last_build_path=build_path,
@@ -189,6 +208,9 @@ def save_profile(path: Path, profile: ManagerProfile) -> None:
         "schema_version": PROFILE_SCHEMA_VERSION,
         "selections": dict(sorted(profile.selections.items())),
         "order": list(profile.order),
+        "standard_conflict_winners": dict(
+            sorted(profile.standard_conflict_winners.items())
+        ),
         "last_build": {
             "fingerprint": profile.last_build_fingerprint,
             "mod_id": profile.last_build_mod_id,

@@ -86,6 +86,15 @@ class UnterminatedDefinitionError(SemanticParseError):
         )
 
 
+@dataclass(frozen=True)
+class ForeachReturnViolation:
+    """One GPL ``return`` whose statement is owned by a ``foreach`` loop."""
+
+    source_name: str
+    return_line: int
+    foreach_line: int
+
+
 class DuplicateDefinitionError(SemanticParseError):
     """A side cannot contain two definitions for the same semantic key."""
 
@@ -279,6 +288,9 @@ _INTEGER_EXPRESSION_RE = re.compile(
     re.IGNORECASE,
 )
 _BEGIN_END_RE = re.compile(r"\b(begin|end)\b", re.IGNORECASE)
+_FOREACH_RE = re.compile(r"\bforeach\b", re.IGNORECASE)
+_DO_RE = re.compile(r"\bdo\b", re.IGNORECASE)
+_RETURN_RE = re.compile(r"\breturn\b", re.IGNORECASE)
 _DAT_HEADER_RE = re.compile(
     r"^[ \t]*\[([^\]\r\n]+)\][^\r\n]*(?:\r\n|\r|\n|$)",
     re.IGNORECASE | re.MULTILINE,
@@ -289,6 +301,41 @@ def semantic_key(
     kind: Union[DefinitionKind, str], name: str
 ) -> tuple[DefinitionKind, str]:
     return (_coerce_kind(kind), name.casefold())
+
+
+def find_foreach_return_violations(
+    text: str,
+    source_name: str = "<memory>",
+) -> tuple[ForeachReturnViolation, ...]:
+    """Find beta2-unsafe function exits from within GPL ``foreach`` bodies.
+
+    Majesty GPL permits both ``begin``/``end`` blocks and single-statement loop
+    bodies (including nested ``if`` statements).  Work from a same-length copy
+    with comments and strings masked, then find the lexical extent of every
+    loop body.  This deliberately reports the unsafe source shape rather than
+    attempting to rewrite author-owned control flow.
+    """
+
+    masked = _mask_non_code(text)
+    by_return_offset: dict[int, ForeachReturnViolation] = {}
+    for loop in _FOREACH_RE.finditer(masked):
+        do = _DO_RE.search(masked, loop.end())
+        if do is None:
+            # Malformed GPL is diagnosed by the semantic/compiler preflight.
+            continue
+        body_start = _skip_masked_space(masked, do.end())
+        body_end = _gpl_statement_end(masked, body_start)
+        if body_end <= body_start:
+            continue
+        for result in _RETURN_RE.finditer(masked, body_start, body_end):
+            # An inner foreach encountered later owns the more useful loop line
+            # when the same return is nested in multiple loops.
+            by_return_offset[result.start()] = ForeachReturnViolation(
+                source_name=source_name,
+                return_line=_line_number(text, result.start()),
+                foreach_line=_line_number(text, loop.start()),
+            )
+    return tuple(by_return_offset[offset] for offset in sorted(by_return_offset))
 
 
 def parse_gpl(text: str, source_name: str = "<memory>") -> ParsedSemanticSource:
@@ -787,6 +834,100 @@ def _mask_non_code(text: str) -> str:
     return "".join(chars)
 
 
+def _skip_masked_space(text: str, offset: int) -> int:
+    while offset < len(text) and text[offset].isspace():
+        offset += 1
+    return offset
+
+
+def _word_at(text: str, offset: int, word: str) -> Optional[re.Match[str]]:
+    return re.compile(rf"{re.escape(word)}\b", re.IGNORECASE).match(text, offset)
+
+
+def _matching_parenthesis(text: str, opening: int) -> Optional[int]:
+    if opening >= len(text) or text[opening] != "(":
+        return None
+    depth = 0
+    for offset in range(opening, len(text)):
+        char = text[offset]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return offset + 1
+    return None
+
+
+def _begin_block_end(text: str, opening: int) -> Optional[int]:
+    depth = 0
+    for token in _BEGIN_END_RE.finditer(text, opening):
+        keyword = token.group(1).casefold()
+        if keyword == "begin":
+            depth += 1
+        else:
+            depth -= 1
+            if depth == 0:
+                return token.end()
+            if depth < 0:
+                return None
+    return None
+
+
+def _simple_statement_end(text: str, start: int) -> int:
+    parentheses = 0
+    offset = start
+    while offset < len(text):
+        char = text[offset]
+        if char == "(":
+            parentheses += 1
+        elif char == ")" and parentheses:
+            parentheses -= 1
+        elif char == ";" and parentheses == 0:
+            return offset + 1
+        offset += 1
+    return len(text)
+
+
+def _gpl_statement_end(text: str, start: int) -> int:
+    """Return the lexical end of one GPL statement in already-masked text."""
+
+    start = _skip_masked_space(text, start)
+    if start >= len(text):
+        return start
+
+    begin = _word_at(text, start, "begin")
+    if begin is not None:
+        return _begin_block_end(text, start) or len(text)
+
+    conditional = _word_at(text, start, "if")
+    if conditional is not None:
+        condition_start = _skip_masked_space(text, conditional.end())
+        condition_end = _matching_parenthesis(text, condition_start)
+        if condition_end is None:
+            # GPL normally parenthesizes conditions.  Keeping the whole simple
+            # statement is conservative for a malformed source and still does
+            # not cross a terminating semicolon.
+            return _simple_statement_end(text, start)
+        then_end = _gpl_statement_end(text, condition_end)
+        cursor = _skip_masked_space(text, then_end)
+        otherwise = _word_at(text, cursor, "else")
+        if otherwise is not None:
+            return _gpl_statement_end(text, otherwise.end())
+        return then_end
+
+    for keyword in ("foreach", "while"):
+        control = _word_at(text, start, keyword)
+        if control is None:
+            continue
+        do = _DO_RE.search(text, control.end())
+        if do is None:
+            return _simple_statement_end(text, start)
+        return _gpl_statement_end(text, do.end())
+
+    return _simple_statement_end(text, start)
+
+
 def _has_meaningful_unparsed_text(text: str) -> bool:
     """Return true unless ``text`` consists solely of whitespace/comments."""
 
@@ -886,6 +1027,7 @@ __all__ = [
     "ConflictKind",
     "DefinitionKind",
     "DuplicateDefinitionError",
+    "ForeachReturnViolation",
     "GplProjectSourceSet",
     "MergeVariant",
     "ParsedSemanticSource",
@@ -899,6 +1041,7 @@ __all__ = [
     "merge_semantic_items",
     "merge_sources",
     "add_inventory_death_drop_exclusions",
+    "find_foreach_return_violations",
     "rewrite_integer_expression",
     "parse_dat",
     "parse_gpl",

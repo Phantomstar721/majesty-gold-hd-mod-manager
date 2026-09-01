@@ -442,6 +442,12 @@ is not safe to diff.
 
 ## Namespace and asset auditability
 
+GPL functions must not execute `return` from within a `foreach` body. Majesty's
+beta2 evaluator can corrupt the function result path for this source shape.
+Follow the stock pattern: initialize a result, update or select it during the
+loop, and return only after the loop completes. Preflight rejects unsafe source
+rather than rewriting author-owned control flow.
+
 Private additions must be namespaced across every runtime namespace they use:
 manifest UUID, internal and XML Description IDs, FourCC resource keys, GPL
 functions/expressions, DAT blocks, authored panel IDs, IMAG keys,

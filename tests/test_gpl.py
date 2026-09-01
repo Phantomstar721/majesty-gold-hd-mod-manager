@@ -12,6 +12,7 @@ from majesty_cam.gpl import (
     DuplicateDefinitionError,
     SemanticItem,
     SemanticMergeConflictError,
+    find_foreach_return_violations,
     merge_semantic_items,
     merge_sources,
     add_inventory_death_drop_exclusions,
@@ -24,6 +25,57 @@ from majesty_cam.gpl import (
 
 
 class GplParsingTests(unittest.TestCase):
+    def test_foreach_return_scan_handles_blocks_single_statements_and_case(self):
+        source = textwrap.dedent(
+            """\
+            Function Unsafe(agent ThisAgent) is agent
+            Begin
+                FOREACH candidate in candidates DO
+                    BeGiN
+                        if (candidate == ThisAgent)
+                            ReTuRn candidate;
+                    EnD
+
+                foreach fallback in candidates do
+                    if ($IsValidGamePiece(fallback))
+                        return fallback;
+            End
+            """
+        )
+
+        violations = find_foreach_return_violations(source, "unsafe.gpl")
+
+        self.assertEqual(
+            [
+                (item.source_name, item.return_line, item.foreach_line)
+                for item in violations
+            ],
+            [
+                ("unsafe.gpl", 6, 3),
+                ("unsafe.gpl", 11, 9),
+            ],
+        )
+
+    def test_foreach_return_scan_ignores_comments_strings_and_post_loop_return(self):
+        source = textwrap.dedent(
+            '''\
+            Function Safe(agent ThisAgent) is agent
+            Declare
+                agent selected;
+            Begin
+                // foreach candidate in candidates do return candidate;
+                selected's "return foreach do begin end" = "return";
+                foreach candidate in candidates do
+                    begin
+                        selected = candidate; /* return candidate; */
+                    end
+                return selected;
+            End
+            '''
+        )
+
+        self.assertEqual(find_foreach_return_violations(source, "safe.gpl"), ())
+
     def test_complete_coverage_accepts_only_comments_and_whitespace_in_gaps(self):
         source = parse_gpl(
             "// prefix\n"

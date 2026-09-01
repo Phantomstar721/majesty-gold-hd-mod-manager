@@ -73,7 +73,100 @@ from .profile_lock import ProfileLockError, acquire_merged_profile_lock
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
-PLAN_SCHEMA_VERSION = 5
+PLAN_SCHEMA_VERSION = 6
+STANDARD_SELECTION_ISSUE_CODES = frozenset(
+    {
+        "mutually_exclusive_mods",
+        "missing_required_mod",
+        "unresolved_standard_overlap",
+    }
+)
+
+
+@dataclass(frozen=True)
+class StandardContentConflict:
+    """Two ordinary Mods which provide different versions of shared changes."""
+
+    left_id: str
+    left_name: str
+    right_id: str
+    right_name: str
+    change_keys: tuple[str, ...]
+
+    @property
+    def pair_key(self) -> str:
+        return standard_conflict_pair_key(self.left_id, self.right_id)
+
+
+def standard_conflict_pair_key(left_id: str, right_id: str) -> str:
+    return "|".join(sorted((normalize_guid(left_id), normalize_guid(right_id))))
+
+
+def standard_content_conflicts(
+    catalog: Catalog,
+    selections: Mapping[str, bool] | None = None,
+) -> tuple[StandardContentConflict, ...]:
+    """Return exact divergent definition keys for each detected Mod pair."""
+
+    by_id = {
+        entry.content_id: entry
+        for entry in catalog.entries
+        if entry.kind is CatalogKind.STANDARD and entry.content_id is not None
+    }
+    selected_ids = (
+        {
+            normalize_guid(content_id)
+            for content_id, enabled in selections.items()
+            if enabled
+        }
+        if selections is not None
+        else set(by_id)
+    )
+    result: list[StandardContentConflict] = []
+    seen: set[tuple[str, str]] = set()
+    for left_id in sorted(selected_ids):
+        left = by_id.get(left_id)
+        if left is None:
+            continue
+        left_definitions = dict(left.content_definitions)
+        for right_id in left.unresolved_overlap_ids:
+            if right_id not in selected_ids:
+                continue
+            pair = tuple(sorted((left_id, right_id)))
+            if pair in seen:
+                continue
+            seen.add(pair)
+            right = by_id.get(right_id)
+            if right is None:
+                continue
+            right_definitions = dict(right.content_definitions)
+            changes = tuple(
+                sorted(
+                    key
+                    for key in set(left_definitions).intersection(right_definitions)
+                    if left_definitions[key] != right_definitions[key]
+                )
+            )
+            if changes:
+                result.append(
+                    StandardContentConflict(
+                        left_id=left_id,
+                        left_name=left.display_name,
+                        right_id=right_id,
+                        right_name=right.display_name,
+                        change_keys=changes,
+                    )
+                )
+    return tuple(
+        sorted(
+            result,
+            key=lambda item: (
+                item.left_name.casefold(),
+                item.right_name.casefold(),
+                item.pair_key,
+            ),
+        )
+    )
 
 
 _EMPTY_CONTROLLER_REGISTRY = resolve_stock_controller_registry((), {})
@@ -195,6 +288,7 @@ def create_build_plan(
     registry: CompatibilityRegistry,
     order: Sequence[str] = (),
     game_path: Path | None = None,
+    standard_conflict_winners: Mapping[str, str] = {},
 ) -> BuildPlan:
     normalized_selections = {
         normalize_guid(key): bool(value) for key, value in selections.items()
@@ -202,34 +296,16 @@ def create_build_plan(
     order_index = {
         normalize_guid(content_id): index for index, content_id in enumerate(order)
     }
-    issues: list[BuildIssue] = []
+    issues: list[BuildIssue] = list(
+        standard_selection_issues(
+            catalog, normalized_selections, standard_conflict_winners
+        )
+    )
     standards: list[CatalogEntry] = []
     merge_entries: list[CatalogEntry] = []
-    selected_ids = {
-        content_id for content_id, enabled in normalized_selections.items() if enabled
-    }
-    reported_conflicts: set[tuple[str, str]] = set()
     for entry in catalog.entries:
         if entry.content_id is None or not normalized_selections.get(entry.content_id, False):
             continue
-        for incompatible_id in entry.incompatible_ids:
-            if incompatible_id not in selected_ids:
-                continue
-            pair = tuple(sorted((entry.content_id, incompatible_id)))
-            if pair in reported_conflicts:
-                continue
-            reported_conflicts.add(pair)
-            issues.append(
-                BuildIssue(
-                    "mutually_exclusive_mods",
-                    (
-                        f"{entry.display_name} conflicts with another selected "
-                        "option from the same mod collection. Choose only one."
-                    ),
-                    entry.content_id,
-                    entry.manifest_path,
-                )
-            )
         if entry.kind is CatalogKind.QUEST:
             continue
         if not entry.selectable:
@@ -557,6 +633,7 @@ def create_build_plan(
     standard_order = _order_standard_ids(
         standards,
         order_index,
+        standard_conflict_winners,
     )
     return BuildPlan(
         selected_standard_ids=tuple(standard_order),
@@ -574,9 +651,145 @@ def create_build_plan(
     )
 
 
+def standard_selection_issues(
+    catalog: Catalog,
+    selections: Mapping[str, bool],
+    conflict_winners: Mapping[str, str] = {},
+) -> tuple[BuildIssue, ...]:
+    """Validate cheap, scan-cached relationships among selected ordinary Mods."""
+
+    selected_ids = {
+        normalize_guid(content_id)
+        for content_id, enabled in selections.items()
+        if enabled
+    }
+    by_id = {
+        entry.content_id: entry
+        for entry in catalog.entries
+        if entry.kind is CatalogKind.STANDARD and entry.content_id is not None
+    }
+    issues: list[BuildIssue] = []
+    reported_conflicts: set[tuple[str, str]] = set()
+    reported_overlaps: set[tuple[str, str]] = set()
+    for content_id in sorted(selected_ids):
+        entry = by_id.get(content_id)
+        if entry is None:
+            continue
+        for required_id in entry.required_ids:
+            if required_id in selected_ids:
+                continue
+            required = by_id.get(required_id)
+            required_name = required.display_name if required is not None else required_id
+            issues.append(
+                BuildIssue(
+                    "missing_required_mod",
+                    f"{entry.display_name} requires {required_name}. Select both Mods.",
+                    entry.content_id,
+                    entry.manifest_path,
+                )
+            )
+        for incompatible_id in entry.incompatible_ids:
+            if incompatible_id not in selected_ids:
+                continue
+            pair = tuple(sorted((entry.content_id, incompatible_id)))
+            if pair in reported_conflicts:
+                continue
+            reported_conflicts.add(pair)
+            incompatible = by_id.get(incompatible_id)
+            incompatible_name = (
+                incompatible.display_name if incompatible is not None else incompatible_id
+            )
+            issues.append(
+                BuildIssue(
+                    "mutually_exclusive_mods",
+                    (
+                        f"{entry.display_name} cannot be used with {incompatible_name}. "
+                        "Choose only one."
+                    ),
+                    entry.content_id,
+                    entry.manifest_path,
+                )
+            )
+        for overlap_id in entry.unresolved_overlap_ids:
+            if overlap_id not in selected_ids:
+                continue
+            pair = tuple(sorted((entry.content_id, overlap_id)))
+            if pair in reported_overlaps:
+                continue
+            reported_overlaps.add(pair)
+            winner = conflict_winners.get(
+                standard_conflict_pair_key(*pair)
+            )
+            if winner in pair:
+                continue
+            overlap = by_id.get(overlap_id)
+            overlap_name = overlap.display_name if overlap is not None else overlap_id
+            issues.append(
+                BuildIssue(
+                    "unresolved_standard_overlap",
+                    (
+                        f"{entry.display_name} and {overlap_name} replace the same "
+                        "Majesty behavior, but neither package states a safe load "
+                        "order. Disable one of them."
+                    ),
+                    entry.content_id,
+                    entry.manifest_path,
+                )
+            )
+    if _standard_order_has_cycle(by_id, selected_ids, conflict_winners):
+        issues.append(
+            BuildIssue(
+                "conflicting_standard_order_choices",
+                (
+                    "The chosen conflict winners create an impossible Mod load "
+                    "order. Change one of the conflict choices."
+                ),
+            )
+        )
+    return tuple(issues)
+
+
+def _standard_order_has_cycle(
+    by_id: Mapping[str, CatalogEntry],
+    selected_ids: set[str],
+    conflict_winners: Mapping[str, str],
+) -> bool:
+    outgoing: dict[str, set[str]] = {item: set() for item in selected_ids if item in by_id}
+    for item, entry in by_id.items():
+        if item not in outgoing:
+            continue
+        for prerequisite in entry.load_after_ids:
+            if prerequisite in outgoing:
+                outgoing[prerequisite].add(item)
+    for pair_key, winner in conflict_winners.items():
+        pair = tuple(pair_key.split("|"))
+        if len(pair) != 2 or winner not in pair or any(item not in outgoing for item in pair):
+            continue
+        loser = pair[1] if winner == pair[0] else pair[0]
+        outgoing[loser].add(winner)
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(item: str) -> bool:
+        if item in visiting:
+            return True
+        if item in visited:
+            return False
+        visiting.add(item)
+        if any(visit(dependent) for dependent in outgoing[item]):
+            return True
+        visiting.remove(item)
+        visited.add(item)
+        return False
+
+    return any(visit(item) for item in outgoing if item not in visited)
+
+
 def _order_standard_ids(
     entries: Sequence[CatalogEntry],
     order_index: Mapping[str, int],
+    conflict_winners: Mapping[str, str] = {},
 ) -> tuple[str, ...]:
     """Apply detected before/after edges with stable saved-order tie breaking."""
 
@@ -594,6 +807,15 @@ def _order_standard_ids(
                 continue
             outgoing[prerequisite].add(item)
             incoming[item] += 1
+    for pair_key, winner in conflict_winners.items():
+        pair = tuple(pair_key.split("|"))
+        if len(pair) != 2 or winner not in pair or any(item not in by_id for item in pair):
+            continue
+        loser = pair[1] if winner == pair[0] else pair[0]
+        if winner in outgoing[loser]:
+            continue
+        outgoing[loser].add(winner)
+        incoming[winner] += 1
 
     ready = sorted(
         (item for item, count in incoming.items() if count == 0),

@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from majesty_cam.art import (
     compute_stock_relative_delta,
     find_positional_collisions,
+    parse_stock_imag_tile_references,
 )
 from majesty_cam.cam import CamArchive, CamEntry, CamSection, pad_name
 from majesty_cam.compose import (
@@ -27,6 +28,7 @@ from majesty_cam.compose import (
     _blank_positional_section,
     _build_manifest,
     _derive_runtime_capabilities,
+    _effective_analysis_tile_entries,
     _first_free_after_reserved,
     _generated_definition,
     _generated_mod_id,
@@ -34,6 +36,10 @@ from majesty_cam.compose import (
     _materialize_effective_stock_prefix,
     _materialize_imag_tile_dependencies,
     _merge_tactical_cursor_entry,
+    _imag_set_start,
+    _split_imag_sets,
+    _strip_unowned_secondary_imag_layers,
+    _prove_private_cursor_set_clone,
     _select_later_conflict_runs,
     compose_package,
     merge_art_resources,
@@ -106,7 +112,129 @@ def cursor_entry(sets):
     )
 
 
+def typed_cursor_entry(set_id, tile_indices):
+    direction = bytearray(28 + (len(tile_indices) - 1) * 8 + 4)
+    struct.pack_into("<I", direction, 4, len(tile_indices) << 16 | 1)
+    struct.pack_into("<I", direction, 16, 0x00010000)
+    for frame, tile_index in enumerate(tile_indices):
+        struct.pack_into("<I", direction, 28 + frame * 8, tile_index)
+    payload = bytearray(68)
+    struct.pack_into("<I", payload, 0, 1)
+    struct.pack_into("<i", payload, 64, 68)
+    payload.extend(direction)
+    return cursor_entry(((set_id, bytes(payload)),))
+
+
+def typed_imag_set_payload(tile_indices):
+    return _split_imag_sets(typed_cursor_entry(1, tile_indices))[1][0][1]
+
+
+class SecondaryImagLayerOwnershipTests(unittest.TestCase):
+    def archive(self, *, secondary_payload=b""):
+        image = cursor_entry(
+            (
+                (0xC0, typed_imag_set_payload((2,))),
+                (0x010000C0, typed_imag_set_payload((1,))),
+            )
+        )
+        return CamArchive(
+            sections=(
+                CamSection(b"IMAG", (image,)),
+                positional(b"TILE", (b"", secondary_payload, b"private-base")),
+            )
+        )
+
+    def analysis(self):
+        image = self.archive().sections[0].entries[0]
+        parsed = parse_stock_imag_tile_references(
+            image.data,
+            tile_count=3,
+            entry_name=image.name,
+        )
+        return SimpleNamespace(
+            imag_references=parsed.references,
+            retained_tile_dependencies=(1,),
+        )
+
+    def test_empty_stock_secondary_layer_is_removed_beneath_private_base(self):
+        result = _strip_unowned_secondary_imag_layers(
+            self.archive(),
+            self.analysis(),
+        )
+        sets = _split_imag_sets(result.sections[0].entries[0])[1]
+        self.assertEqual([set_id for set_id, _payload in sets], [0xC0])
+
+    def test_explicit_secondary_layer_payload_is_preserved(self):
+        archive = self.archive(secondary_payload=b"explicit-secondary")
+        result = _strip_unowned_secondary_imag_layers(
+            archive,
+            self.analysis(),
+        )
+        sets = _split_imag_sets(result.sections[0].entries[0])[1]
+        self.assertEqual(
+            [set_id for set_id, _payload in sets],
+            [0xC0, 0x010000C0],
+        )
+
+
 class TacticalCursorMergeTests(unittest.TestCase):
+    def test_private_cursor_clone_requires_coherent_auxiliary_stock_art(self):
+        stock_cursor = typed_cursor_entry(1005, (7, 8, 7))
+        private_cursor = typed_cursor_entry(1038, (20, 8, 20))
+        stock_tiles = positional(
+            b"TILE",
+            tuple(
+                b"stock-primary" if index == 7
+                else b"stock-aux" if index == 8
+                else b""
+                for index in range(21)
+            ),
+        )
+        private_tiles = positional(
+            b"TILE",
+            tuple(
+                b"stock-aux" if index == 8
+                else b"private-primary" if index == 20
+                else b""
+                for index in range(21)
+            ),
+        )
+        stock_start = _imag_set_start(stock_cursor, 1005)
+        primary_offsets = frozenset(
+            reference.offset - stock_start
+            for reference in parse_stock_imag_tile_references(
+                stock_cursor.data,
+                tile_count=len(stock_tiles.entries),
+                entry_name=stock_cursor.name,
+            ).references
+            if reference.set_id == 1005 and reference.tile_index == 7
+        )
+
+        accepted, reason = _prove_private_cursor_set_clone(
+            private_cursor,
+            private_tiles,
+            1038,
+            stock_cursor,
+            stock_tiles,
+            1005,
+            primary_offsets,
+        )
+        self.assertTrue(accepted, reason)
+
+        hybrid_entries = list(private_tiles.entries)
+        hybrid_entries[8] = replace(hybrid_entries[8], data=b"wrong-dataset-art")
+        accepted, reason = _prove_private_cursor_set_clone(
+            private_cursor,
+            replace(private_tiles, entries=tuple(hybrid_entries)),
+            1038,
+            stock_cursor,
+            stock_tiles,
+            1005,
+            primary_offsets,
+        )
+        self.assertFalse(accepted)
+        self.assertIn("different stock dataset", reason)
+
     def test_emitted_cursor_materializes_unchanged_stock_tile_dependencies(self):
         stock_tiles = positional(b"TILE", (b"zero", b"normal-cursor"))
         output_tiles = list(positional(b"TILE", (b"", b"")).entries)
@@ -155,6 +283,23 @@ class TacticalCursorMergeTests(unittest.TestCase):
         self.assertEqual(set_ids, (1000, 1038, 1039))
 
 
+class EffectiveArtDependencyTests(unittest.TestCase):
+    def test_promoted_fallthrough_tile_replaces_empty_package_placeholder(self):
+        archive = CamArchive(
+            sections=(positional(b"TILE", (b"",)),)
+        )
+        promoted = CamEntry(name=pad_name(b"stock-effective"), data=b"stock-art")
+        analysis = SimpleNamespace(
+            tile_delta=SimpleNamespace(
+                changes=(SimpleNamespace(index=0, entry=promoted),)
+            )
+        )
+
+        entries = _effective_analysis_tile_entries(archive, analysis)
+
+        self.assertEqual(entries, (promoted,))
+
+
 class NamedComposeTests(unittest.TestCase):
     def test_named_union_preserves_order_accepts_identical_and_renames(self):
         resources = (
@@ -186,6 +331,43 @@ class NamedComposeTests(unittest.TestCase):
 
 
 class PositionalComposeTests(unittest.TestCase):
+    def test_stock_lineage_slot_moves_even_without_another_mod_collision(self):
+        stock = positional(b"TILE", [b"s0", b"s1", b"s2"])
+        inherited = positional(b"TILE", [b"", b"base-1", b"base-2"])
+        deltas = {
+            "inherited": compute_stock_relative_delta(stock, inherited),
+        }
+
+        selected = _select_later_conflict_runs(
+            deltas,
+            (),
+            {"inherited": 0},
+            protected_indices={"inherited": (1,)},
+        )
+
+        self.assertEqual(selected["inherited"], {1, 2})
+
+    def test_stock_lineage_protection_applies_only_to_its_owner(self):
+        stock = positional(b"TILE", [b"s0", b"s1", b"s2"])
+        deltas = {
+            "inherited": compute_stock_relative_delta(
+                stock, positional(b"TILE", [b"", b"base-1", b"base-2"])
+            ),
+            "unrelated": compute_stock_relative_delta(
+                stock, positional(b"TILE", [b"", b"custom-1", b"custom-2"])
+            ),
+        }
+
+        selected = _select_later_conflict_runs(
+            deltas,
+            (),
+            {"inherited": 0, "unrelated": 1},
+            protected_indices={"inherited": (1,)},
+        )
+
+        self.assertEqual(selected["inherited"], {1, 2})
+        self.assertEqual(selected["unrelated"], set())
+
     def test_later_owner_moves_complete_contiguous_conflict_run(self):
         stock = positional(b"TILE", [b"s0", b"s1", b"s2", b"s3", b"s4"])
         alchemist = positional(
@@ -698,6 +880,11 @@ class DeclarativeDialogTests(unittest.TestCase):
             (game / "Data").mkdir()
             (game / "DataMX").mkdir()
             bdep = CamEntry(name=pad_name(b"BDEP"), data=b"PALACE : GUILD\r\n")
+            (game / "Data" / "miscdata.cam").write_bytes(
+                CamArchive(
+                    sections=(CamSection(extension=b"DATA", entries=(bdep,)),)
+                ).to_bytes()
+            )
             (game / "DataMX" / "mx_miscdata.cam").write_bytes(
                 CamArchive(
                     sections=(CamSection(extension=b"DATA", entries=(bdep,)),)
@@ -743,6 +930,69 @@ class DeclarativeDialogTests(unittest.TestCase):
             self.assertEqual(main_result.archive.to_bytes(), main.to_bytes())
             self.assertEqual(interface_result.archive.to_bytes(), interface.to_bytes())
             self.assertEqual(descriptions.document.records, ())
+
+    def test_bdep_merge_uses_proven_original_ancestry_without_reverting_mx(self):
+        with TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            (game / "Data").mkdir()
+            (game / "DataMX").mkdir()
+            original = CamEntry(
+                name=pad_name(b"BDEP"),
+                data=b"PAL1\r\nMARKET : PAL1\r\n",
+            )
+            expansion = CamEntry(
+                name=pad_name(b"BDEP"),
+                data=(
+                    b"PAL1\r\n"
+                    b"MARKET : PAL1 OUTPOST ||\r\n"
+                    b"OUTPOST : PAL1\r\n"
+                ),
+            )
+            for path, entry in (
+                (game / "Data" / "miscdata.cam", original),
+                (game / "DataMX" / "mx_miscdata.cam", expansion),
+            ):
+                path.write_bytes(
+                    CamArchive(
+                        sections=(CamSection(extension=b"DATA", entries=(entry,)),)
+                    ).to_bytes()
+                )
+            zoo_payload = original.data + b"ZOO1\r\nZOO2\r\nZOO3\r\n"
+            definition = ModDefinition(
+                schema_version=3,
+                mod_id="{00000000-0000-0000-0000-000000000004}",
+                internal_name="Zoo",
+                display_name="Zoo",
+                custom_buildings=(),
+                runtime_features=(),
+            )
+            inventory = SimpleNamespace(
+                selected=SimpleNamespace(
+                    alias="zoo",
+                    package=SimpleNamespace(definition=definition),
+                ),
+                resources=(
+                    CamResource(
+                        owner="zoo",
+                        source=Path("zoo.cam"),
+                        cam_order=0,
+                        section_order=0,
+                        entry_order=0,
+                        section=b"DATA",
+                        entry=CamEntry(name=pad_name(b"BDEP"), data=zoo_payload),
+                    ),
+                ),
+            )
+
+            result = merge_bdep_resource(game, (inventory,))
+            payload = result.archive.sections[0].entries[0].data
+
+            self.assertIn(b"MARKET : PAL1 OUTPOST ||\r\n", payload)
+            self.assertIn(b"OUTPOST : PAL1\r\n", payload)
+            self.assertEqual(
+                tuple(row.building_id for row in result.deltas[0].rows),
+                ("ZOO1", "ZOO2", "ZOO3"),
+            )
 
 
 class ControllerComposeTests(unittest.TestCase):

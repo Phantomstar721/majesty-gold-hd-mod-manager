@@ -66,7 +66,12 @@ class ManagerProfileTests(unittest.TestCase):
     def test_manager_profile_round_trip_keeps_build_gate(self):
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "profile.json"
-            profile = ManagerProfile(selections={ONE: True}, order=(ONE,)).with_successful_build(
+            pair = "|".join(sorted((ONE, TWO)))
+            profile = ManagerProfile(
+                selections={ONE: True},
+                order=(ONE,),
+                standard_conflict_winners={pair: TWO},
+            ).with_successful_build(
                 fingerprint="abc123", mod_id=TWO, path=Path(tmp) / "Merged"
             )
             save_profile(path, profile)
@@ -74,6 +79,7 @@ class ManagerProfileTests(unittest.TestCase):
 
             self.assertEqual(loaded.selections, {ONE: True})
             self.assertEqual(loaded.order, (ONE,))
+            self.assertEqual(loaded.standard_conflict_winners, {pair: TWO})
             self.assertEqual(loaded.last_build_fingerprint, "abc123")
             self.assertEqual(loaded.last_build_mod_id, TWO)
             self.assertEqual(normalize_guid("{" + ONE.lower() + "}"), ONE)

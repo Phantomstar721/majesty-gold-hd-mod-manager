@@ -771,6 +771,12 @@ class ManagerCatalogTests(unittest.TestCase):
                       <GPL><Target>Data/Attributes_v3.bcd</Target></GPL>
                     </Load></Dataset></DataConfiguration>
                   </Mod>
+                  <Mod id="{00000000-0000-4000-8000-000000000005}">
+                    <DisplayName lang="en_US">Misc Enhancements - Attributes Version 2</DisplayName>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <GPL><Target>Data/Attributes_v2.bcd</Target></GPL>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
                 </Majesty>
                 """,
                 encoding="utf-8",
@@ -790,9 +796,10 @@ class ManagerCatalogTests(unittest.TestCase):
                   </Mod>
                   <Mod id="{00000000-0000-4000-8000-000000000004}">
                     <DisplayName lang="en_US">ME Patch - Attributes V3 Spell Fix</DisplayName>
-                    <Description lang="en_US"><Short>
-                      Load AFTER Miscellaneous Enhancements with its Attributes V3 component.
-                    </Short></Description>
+                    <Description lang="en_US">
+                      <Short>Load AFTER Miscellaneous Enhancements with its Attributes V3 component.</Short>
+                      <Long>Do not combine with Attributes V1 or V2.</Long>
+                    </Description>
                     <DataConfiguration><Dataset base="Any"><Load>
                       <GPL><Target>Data/Attributes_Fix.bcd</Target></GPL>
                     </Load></Dataset></DataConfiguration>
@@ -811,8 +818,91 @@ class ManagerCatalogTests(unittest.TestCase):
 
             self.assertEqual(ai_patch.load_after_ids, (ai.content_id,))
             self.assertEqual(attrs_patch.load_after_ids, (attrs.content_id,))
+            self.assertEqual(ai_patch.required_ids, (ai.content_id,))
+            self.assertEqual(attrs_patch.required_ids, (attrs.content_id,))
+            self.assertIn(
+                by_name["Misc Enhancements - Attributes Version 2"].content_id,
+                attrs_patch.incompatible_ids,
+            )
             self.assertEqual(ai.load_before_ids, (ai_patch.content_id,))
             self.assertEqual(attrs.load_before_ids, (attrs_patch.content_id,))
+
+    def test_divergent_standard_definitions_require_a_known_order(self):
+        with TemporaryDirectory() as tmp:
+            workshop = Path(tmp) / "workshop"
+            first = workshop / "100"
+            second = workshop / "200"
+            third = workshop / "300"
+            for package in (first, second, third):
+                (package / "GPL").mkdir(parents=True)
+
+            _write_standard_source_mod(
+                first,
+                "00000000-0000-4000-8000-000000000001",
+                "Base Balance",
+                "expression #SharedValue 100\n",
+            )
+            _write_standard_source_mod(
+                second,
+                "00000000-0000-4000-8000-000000000002",
+                "Alternate Balance",
+                "expression #SharedValue 200\n",
+            )
+            _write_standard_source_mod(
+                third,
+                "00000000-0000-4000-8000-000000000003",
+                "Base Balance Copy",
+                "expression #SharedValue 100\n",
+            )
+
+            by_name = {
+                entry.display_name: entry
+                for entry in scan_catalog(workshop_roots=(workshop,)).standard
+            }
+            base = by_name["Base Balance"]
+            alternate = by_name["Alternate Balance"]
+            copy = by_name["Base Balance Copy"]
+
+            self.assertEqual(alternate.unresolved_overlap_ids, (base.content_id, copy.content_id))
+            self.assertNotIn(copy.content_id, base.unresolved_overlap_ids)
+
+    def test_precompiled_mod_uses_bundled_gpl_source_as_overlap_evidence(self):
+        with TemporaryDirectory() as tmp:
+            workshop = Path(tmp) / "workshop"
+            first = workshop / "100"
+            second = workshop / "200"
+            for package in (first, second):
+                (package / "GPL").mkdir(parents=True)
+            _write_standard_source_mod(
+                first,
+                "00000000-0000-4000-8000-000000000001",
+                "Source Mod",
+                "function peasant_basic(agent thisagent)\nbegin\n return;\nend\n",
+            )
+            (second / "GPL" / "shipped-source.gpl").write_text(
+                "function peasant_basic(agent thisagent)\nbegin\n $stopmoving(thisagent);\nend\n",
+                encoding="utf-8",
+            )
+            (second / "Precompiled.mmxml").write_text(
+                """
+                <Majesty><Mod id="{00000000-0000-4000-8000-000000000002}">
+                  <DisplayName lang="en_US">Precompiled Mod</DisplayName>
+                  <DataConfiguration><Dataset base="Any"><Load><GPL>
+                    <Target>Data/Precompiled.bcd</Target>
+                  </GPL></Load></Dataset></DataConfiguration>
+                </Mod></Majesty>
+                """,
+                encoding="utf-8",
+            )
+
+            by_name = {
+                entry.display_name: entry
+                for entry in scan_catalog(workshop_roots=(workshop,)).standard
+            }
+            self.assertEqual(
+                by_name["Precompiled Mod"].unresolved_overlap_ids,
+                (by_name["Source Mod"].content_id,),
+            )
 
     def test_ambiguous_manifests_and_unsafe_xml_fail_closed(self):
         with TemporaryDirectory() as tmp:
@@ -873,6 +963,26 @@ def _write_mod(
             {description}
           </Mod>
         </Majesty>
+        """,
+        encoding="utf-8",
+    )
+
+
+def _write_standard_source_mod(
+    package: Path,
+    content_id: str,
+    display_name: str,
+    source_text: str,
+) -> None:
+    (package / "GPL" / "Content.gpl").write_text(source_text, encoding="utf-8")
+    (package / "Mod.mmxml").write_text(
+        f"""
+        <Majesty><Mod id="{{{content_id}}}">
+          <DisplayName lang="en_US">{display_name}</DisplayName>
+          <DataConfiguration><Dataset base="Any"><Load><GPL>
+            <Target>Data/Content.bcd</Target><Source>GPL/Content.gpl</Source>
+          </GPL></Load></Dataset></DataConfiguration>
+        </Mod></Majesty>
         """,
         encoding="utf-8",
     )

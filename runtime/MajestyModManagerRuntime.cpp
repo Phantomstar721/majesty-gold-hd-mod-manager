@@ -407,6 +407,9 @@ struct RewardFlagRuntimeState {
     void* completionCallback;
     void* selectedBuilding;
     int rewardAmount;
+    void* lastValidationTarget;
+    int lastStockValidationResult;
+    int lastPrivateValidationResult;
 };
 std::vector<RewardFlagRuntimeState> g_rewardFlagStates;
 RewardFlagRuntimeState* g_activeRewardFlagState = nullptr;
@@ -3768,11 +3771,48 @@ RewardFlagRuntimeState* FindRewardStateByPanel(const std::string& panelKey) {
     return nullptr;
 }
 
+RewardFlagRuntimeState* FindRewardStateByPrivateMode(
+    std::uint32_t privateMode) {
+    for (auto& state : g_rewardFlagStates) {
+        if (state.record != nullptr &&
+            state.record->privateMode == privateMode) return &state;
+    }
+    return nullptr;
+}
+
 RewardFlagRuntimeState* FindRewardStateByModeObject(void* modeObject) {
+    // The registry owns the 0x20-byte immutable Fl00-shaped descriptor, but
+    // its validator/completion callbacks receive Majesty's larger live
+    // placement context (the selected target is at +0x60).  They are not the
+    // same allocation.  Preserve the direct check as a defensive convenience,
+    // then resolve through the same selected-mode manager used by stock AP41.
     for (auto& state : g_rewardFlagStates) {
         if (state.modeObject == modeObject) return &state;
     }
-    return nullptr;
+    if (g_imageBase == 0 || g_buildProfile == nullptr) return nullptr;
+    void* owner = *reinterpret_cast<void**>(
+        g_imageBase + g_buildProfile->flagModeOwnerRva);
+    if (owner == nullptr) return nullptr;
+    using GetManager = void* (__thiscall*)(void*);
+    using GetSelected = std::uint32_t (__thiscall*)(void*);
+    auto manager = reinterpret_cast<GetManager>(
+        g_imageBase + g_buildProfile->getFlagModeManagerRva)(owner);
+    if (manager == nullptr) return nullptr;
+    const auto selected = reinterpret_cast<GetSelected>(
+        g_imageBase + g_buildProfile->getSelectedFlagModeRva)(manager);
+    return FindRewardStateByPrivateMode(selected);
+}
+
+void* FindRegisteredRewardMode(std::uint32_t privateMode) {
+    using GetRegistry = void* (__cdecl*)();
+    using FindMode = void* (__thiscall*)(void*, std::uint32_t);
+    auto getRegistry = reinterpret_cast<GetRegistry>(
+        g_imageBase + g_buildProfile->getFlagModeRegistryRva);
+    void* registry = getRegistry();
+    if (registry == nullptr) return nullptr;
+    auto** vtable = *reinterpret_cast<void***>(registry);
+    auto find = reinterpret_cast<FindMode>(vtable[24]);
+    return find(registry, privateMode);
 }
 
 void SwapPrivateRewardAmount(RewardFlagRuntimeState* state) {
@@ -3837,13 +3877,68 @@ int __cdecl PrivateRewardTargetValidator(void* modeObject) {
     using StockValidator = int (__cdecl*)(void*);
     auto stock = reinterpret_cast<StockValidator>(
         g_imageBase + g_buildProfile->stockCaptureValidatorRva);
-    const int stockResult = stock(modeObject);
-    if (stockResult != 0) return stockResult;
     auto* state = FindRewardStateByModeObject(modeObject);
-    if (!RewardAvailabilityIsOpen(state)) return 1;
-    void* target = *reinterpret_cast<void**>(
-        static_cast<unsigned char*>(modeObject) + 0x60);
-    return RewardTargetIsLegal(state, target) ? 0 : 1;
+    const int stockResult = stock(modeObject);
+    void* target = modeObject == nullptr
+        ? nullptr
+        : *reinterpret_cast<void**>(
+              static_cast<unsigned char*>(modeObject) + 0x60);
+    if (stockResult != 0) {
+        if (state == nullptr || state->lastValidationTarget != target ||
+            state->lastStockValidationResult != stockResult) {
+            char trace[224] = {};
+            std::snprintf(
+                trace,
+                sizeof(trace),
+                "Private reward hover validator preserved stock result %d for mode object 0x%08lX.",
+                stockResult,
+                static_cast<unsigned long>(
+                    reinterpret_cast<std::uintptr_t>(modeObject)));
+            WriteLog(trace);
+        }
+        if (state != nullptr) {
+            state->lastValidationTarget = target;
+            state->lastStockValidationResult = stockResult;
+            state->lastPrivateValidationResult = stockResult;
+        }
+        return stockResult;
+    }
+    if (!RewardAvailabilityIsOpen(state)) {
+        if (state == nullptr || state->lastValidationTarget != target ||
+            state->lastStockValidationResult != 0 ||
+            state->lastPrivateValidationResult != 1) {
+            WriteLog(
+                "Private reward hover validator rejected a target because its declared availability gate is closed.");
+        }
+        if (state != nullptr) {
+            state->lastValidationTarget = target;
+            state->lastStockValidationResult = 0;
+            state->lastPrivateValidationResult = 1;
+        }
+        return 1;
+    }
+    const bool legal = RewardTargetIsLegal(state, target);
+    if (state == nullptr || state->lastValidationTarget != target ||
+        state->lastStockValidationResult != 0 ||
+        state->lastPrivateValidationResult != (legal ? 0 : 1)) {
+        char trace[256] = {};
+        std::snprintf(
+            trace,
+            sizeof(trace),
+            "Private reward hover validator resolved mode 0x%08lX, target 0x%08lX: %s.",
+            state == nullptr || state->record == nullptr
+                ? 0ul
+                : static_cast<unsigned long>(state->record->privateMode),
+            static_cast<unsigned long>(reinterpret_cast<std::uintptr_t>(target)),
+            legal ? "legal hostile-monster target" : "rejected private target");
+        WriteLog(trace);
+    }
+    if (state != nullptr) {
+        state->lastValidationTarget = target;
+        state->lastStockValidationResult = 0;
+        state->lastPrivateValidationResult = legal ? 0 : 1;
+    }
+    return legal ? 0 : 1;
 }
 
 void* __cdecl PrivateRewardCompletionTargetCheck(
@@ -3852,13 +3947,22 @@ void* __cdecl PrivateRewardCompletionTargetCheck(
     auto stock = reinterpret_cast<StockTargetCheck>(
         g_imageBase + g_buildProfile->stockFlagTargetCheckRva);
     void* target = stock(modeObject, picker);
-    if (target == nullptr) return nullptr;
+    if (target == nullptr) {
+        WriteLog(
+            "Private reward completion preserved the stock target check's null result.");
+        return nullptr;
+    }
     auto* state = FindRewardStateByModeObject(modeObject);
     if (!RewardAvailabilityIsOpen(state)) {
         PostRewardUnavailableAlert(state);
         return nullptr;
     }
-    return RewardTargetIsLegal(state, target) ? target : nullptr;
+    const bool legal = RewardTargetIsLegal(state, target);
+    WriteLog(
+        legal
+            ? "Private reward completion accepted the stock-selected hostile monster."
+            : "Private reward completion rejected the stock-selected target at its independent authorization boundary.");
+    return legal ? target : nullptr;
 }
 
 std::uintptr_t __fastcall RewardPanelActivation(void* controller, void*) {
@@ -3887,6 +3991,34 @@ void SetPrivateRewardMode(RewardFlagRuntimeState* state) {
     auto setMode = reinterpret_cast<SetMode>(
         g_imageBase + g_buildProfile->setFlagModeRva);
     setMode(owner, state->record->privateMode, state->rewardAmount);
+
+    // Read back the same stock manager state used by AP41's +/- re-arm path.
+    // Apart from providing a focused runtime trace, this proves that an
+    // authored private FourCC resolved to its own registered placement mode
+    // rather than leaving a previous mod's cursor active.
+    using GetManager = void* (__thiscall*)(void*);
+    using GetSelected = std::uint32_t (__thiscall*)(void*);
+    auto manager = reinterpret_cast<GetManager>(
+        g_imageBase + g_buildProfile->getFlagModeManagerRva)(owner);
+    const auto selected = manager == nullptr ? 0u :
+        reinterpret_cast<GetSelected>(
+            g_imageBase + g_buildProfile->getSelectedFlagModeRva)(manager);
+    void* registered = FindRegisteredRewardMode(state->record->privateMode);
+    const auto registeredCursor = registered == nullptr
+        ? 0u
+        : *reinterpret_cast<const std::uint32_t*>(
+              static_cast<const unsigned char*>(registered) + 4);
+    char trace[256] = {};
+    std::snprintf(
+        trace,
+        sizeof(trace),
+        "Armed private reward mode 0x%08lX with cursor %lu; stock manager selected 0x%08lX and registry returned 0x%08lX/cursor %lu.",
+        static_cast<unsigned long>(state->record->privateMode),
+        static_cast<unsigned long>(state->record->cursorOrdinal),
+        static_cast<unsigned long>(selected),
+        static_cast<unsigned long>(reinterpret_cast<std::uintptr_t>(registered)),
+        static_cast<unsigned long>(registeredCursor));
+    WriteLog(trace);
 }
 
 int __fastcall RewardPanelControl(
@@ -4040,7 +4172,7 @@ bool PrepareRewardFlagRuntimeRecords() {
             sizeof(std::uint32_t));
         FlushInstructionCache(GetCurrentProcess(), callback, kCallbackBytes);
         g_rewardFlagStates.push_back(
-            {&record, nullptr, callback, nullptr, -1});
+            {&record, nullptr, callback, nullptr, -1, nullptr, -999, -999});
     }
     return g_rewardFlagStates.size() ==
         g_stockControllerRegistry.hostileMonsterFlags.size();
@@ -4059,12 +4191,15 @@ extern "C" void __stdcall RegisterPrivateRewardFlagModes() {
     auto getRegistry = reinterpret_cast<GetRegistry>(
         g_imageBase + g_buildProfile->getFlagModeRegistryRva);
     for (auto& state : g_rewardFlagStates) {
-        void* mode = allocate(0x22);
+        // The stock Fl00 registration allocates exactly 0x20 bytes. The old
+        // standalone patch's unrelated 0x22 stack-state marker was once
+        // mistaken for this size; keep the manager clone literal here.
+        void* mode = allocate(0x20);
         if (mode == nullptr) {
             StopUnsafeManagerRuntimeLaunch(
                 "Private reward flag mode allocation failed at stock registry completion.");
         }
-        state.modeObject = construct(
+        void* constructed = construct(
             mode,
             state.record->privateMode,
             static_cast<int>(state.record->cursorOrdinal),
@@ -4074,10 +4209,37 @@ extern "C" void __stdcall RegisterPrivateRewardFlagModes() {
             state.completionCallback,
             0,
             0);
+        if (constructed != mode) {
+            StopUnsafeManagerRuntimeLaunch(
+                "Private reward flag mode did not preserve the stock constructor identity.");
+        }
+        state.modeObject = mode;
         void* registry = getRegistry();
         auto** vtable = *reinterpret_cast<void***>(registry);
         auto insert = reinterpret_cast<InsertMode>(vtable[25]);
         insert(registry, state.modeObject);
+
+        void* registered = FindRegisteredRewardMode(state.record->privateMode);
+        if (registered != state.modeObject) {
+            StopUnsafeManagerRuntimeLaunch(
+                "Private reward mode registry did not return the exact stock-constructed object after insertion.");
+        }
+        const auto registeredCursor =
+            *reinterpret_cast<const std::uint32_t*>(
+                static_cast<const unsigned char*>(registered) + 4);
+        if (registeredCursor != state.record->cursorOrdinal) {
+            StopUnsafeManagerRuntimeLaunch(
+                "Private reward mode registry changed the declared CUR1 selector after insertion.");
+        }
+
+        char trace[256] = {};
+        std::snprintf(
+            trace,
+            sizeof(trace),
+            "Registered private reward mode 0x%08lX with CUR1 selector %lu through the stock Fl00 registry lifecycle.",
+            static_cast<unsigned long>(state.record->privateMode),
+            static_cast<unsigned long>(state.record->cursorOrdinal));
+        WriteLog(trace);
     }
 }
 

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import hashlib
@@ -42,6 +43,9 @@ from majesty_cam.manager.build import (
     build_merged_package,
     create_build_plan,
     read_managed_build,
+    standard_conflict_pair_key,
+    standard_content_conflicts,
+    standard_selection_issues,
 )
 from majesty_cam.manager.catalog import (
     Catalog,
@@ -109,6 +113,68 @@ class ManagerBuildPlanTests(unittest.TestCase):
 
         self.assertLess(ordered.index(HAUNT_ID), ordered.index(ALCHEMIST_ID))
         self.assertEqual(set(ordered), {HAUNT_ID, ALCHEMIST_ID, OTHER_ID})
+
+    def test_standard_relationships_block_missing_or_ambiguous_selections(self):
+        original = _catalog_entry(HAUNT_ID, "Original Component")
+        patch_entry = _catalog_entry(
+            ALCHEMIST_ID,
+            "Patch Component",
+            required_ids=(HAUNT_ID,),
+        )
+        overlap = _catalog_entry(
+            OTHER_ID,
+            "Overlapping Mod",
+            unresolved_overlap_ids=(ALCHEMIST_ID,),
+        )
+        patch_entry = replace(
+            patch_entry,
+            unresolved_overlap_ids=(OTHER_ID,),
+        )
+        catalog = Catalog(entries=(original, patch_entry, overlap))
+
+        missing = standard_selection_issues(catalog, {ALCHEMIST_ID: True})
+        self.assertEqual([issue.code for issue in missing], ["missing_required_mod"])
+
+        ambiguous = standard_selection_issues(
+            catalog,
+            {HAUNT_ID: True, ALCHEMIST_ID: True, OTHER_ID: True},
+        )
+        self.assertEqual(
+            [issue.code for issue in ambiguous],
+            ["unresolved_standard_overlap"],
+        )
+
+        winner_key = standard_conflict_pair_key(ALCHEMIST_ID, OTHER_ID)
+        resolved = standard_selection_issues(
+            catalog,
+            {HAUNT_ID: True, ALCHEMIST_ID: True, OTHER_ID: True},
+            {winner_key: OTHER_ID},
+        )
+        self.assertEqual(resolved, ())
+        ordered = _order_standard_ids(
+            (overlap, patch_entry, original),
+            {OTHER_ID: 0, ALCHEMIST_ID: 1, HAUNT_ID: 2},
+            {winner_key: OTHER_ID},
+        )
+        self.assertLess(ordered.index(ALCHEMIST_ID), ordered.index(OTHER_ID))
+
+    def test_standard_conflict_details_list_only_divergent_shared_changes(self):
+        left = replace(
+            _catalog_entry(HAUNT_ID, "Left Mod"),
+            unresolved_overlap_ids=(ALCHEMIST_ID,),
+            content_definitions=(("dat_block:shared", "left"), ("dat_block:same", "x")),
+        )
+        right = replace(
+            _catalog_entry(ALCHEMIST_ID, "Right Mod"),
+            unresolved_overlap_ids=(HAUNT_ID,),
+            content_definitions=(("dat_block:shared", "right"), ("dat_block:same", "x")),
+        )
+        conflicts = standard_content_conflicts(
+            Catalog(entries=(left, right)),
+            {HAUNT_ID: True, ALCHEMIST_ID: True},
+        )
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0].change_keys, ("dat_block:shared",))
 
     def test_publication_rechecks_target_ownership_before_rename(self):
         with TemporaryDirectory() as tmp:
@@ -1009,7 +1075,7 @@ class ManagerBuildPlanTests(unittest.TestCase):
                     catalog, {OTHER_ID: True}, registry=registry, game_path=game
                 )
 
-            self.assertEqual(len(first.stock_compose_inputs), 11)
+            self.assertEqual(len(first.stock_compose_inputs), 12)
             self.assertEqual(
                 dict(first.stock_compose_inputs)["DataMX/mx_maindata.cam"],
                 "absent",
@@ -1370,6 +1436,25 @@ def _merge_entry(content_id: str, display_name: str, root: Path) -> CatalogEntry
     )
 
 
+def _catalog_entry(
+    content_id: str,
+    display_name: str,
+    **values,
+) -> CatalogEntry:
+    return CatalogEntry(
+        content_id=content_id,
+        raw_content_id=content_id,
+        display_name=display_name,
+        kind=CatalogKind.STANDARD,
+        source=CatalogSource.WORKSHOP,
+        package_root=Path(display_name),
+        manifest_path=Path(f"{display_name}.mmxml"),
+        has_cam=False,
+        merge_ready=False,
+        **values,
+    )
+
+
 def _prepared(
     content_id: str,
     display_name: str,
@@ -1401,6 +1486,7 @@ def _prepared(
 def _write_stock_activity_inputs(game: Path) -> None:
     payloads = {
         "Data/textdata.cam": b"stock text CAM",
+        "Data/miscdata.cam": b"stock Original misc CAM",
         "Data/maindata.cam": b"stock main CAM",
         "Data/interfacedata.cam": b"stock interface CAM",
         "DataMX/mx_gpltext.cam": b"stock AITX CAM",

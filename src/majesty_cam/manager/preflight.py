@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 from ..cam import read_cam
+from ..gpl import find_foreach_return_violations
 from ..compose import (
     ComposeError,
     SelectedMod,
@@ -412,6 +413,27 @@ def _validate_package(
                     package.root,
                 )
             )
+        for source in load.sources:
+            path = source.absolute_path
+            if path.suffix.casefold() != ".gpl":
+                continue
+            text = _read_gpl_source(path)
+            for violation in find_foreach_return_violations(text, str(path)):
+                issues.append(
+                    ReadinessIssue(
+                        "unsafe_gpl_foreach_return",
+                        (
+                            f"GPL return at line {violation.return_line} is inside "
+                            f"a foreach loop begun at line {violation.foreach_line}. "
+                            "Majesty beta2 can crash on this control-flow shape. "
+                            "Mod author: accumulate or select the result during "
+                            "foreach, then return it after the loop, following "
+                            "stock control flow. The Mod Manager will not rewrite "
+                            "author-owned GPL automatically."
+                        ),
+                        path,
+                    )
+                )
 
     if not package.definition.custom_buildings and not modern_definition:
         issues.append(
@@ -454,6 +476,16 @@ def _slug(display_name: str, content_id: str) -> str:
         value = "mod"
     uuid_suffix = content_id.replace("-", "").casefold()
     return f"{value}-{uuid_suffix}"
+
+
+def _read_gpl_source(path: Path) -> str:
+    payload = path.read_bytes()
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            return payload.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ComposeError(f"GPL source is not UTF-8 or Windows-1252: {path}")
 
 
 __all__ = [

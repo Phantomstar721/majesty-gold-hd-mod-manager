@@ -22,6 +22,50 @@ OTHER_MOD_ID = "818F1460-3095-4B42-A64C-D55C11D7624E"
 
 
 class ManagerPreflightTests(unittest.TestCase):
+    def test_package_preflight_rejects_return_inside_foreach(self):
+        definition = ModDefinition(
+            schema_version=3,
+            mod_id=MOD_ID,
+            internal_name="UnsafeControlFlowFixture",
+            display_name="Unsafe Control Flow Fixture",
+            custom_buildings=(),
+            runtime_features=(),
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "Content.bcd"
+            target.write_bytes(b"compiled")
+            source = root / "Content.gpl"
+            source.write_text(
+                "Function Select_Result() is integer\n"
+                "Begin\n"
+                "  foreach value in values do\n"
+                "    begin\n"
+                "      return value;\n"
+                "    end\n"
+                "End\n",
+                encoding="utf-8",
+            )
+            package = SimpleNamespace(definition=definition, root=root)
+            load = SimpleNamespace(
+                target=SimpleNamespace(absolute_path=target),
+                sources=(SimpleNamespace(absolute_path=source),),
+            )
+            inventory = SimpleNamespace(cams=(), gpl_loads=(load,))
+            issues = []
+            with patch(
+                "majesty_cam.manager.preflight.inventory_package",
+                return_value=inventory,
+            ):
+                _validate_package(package, alias="unsafe-control-flow", issues=issues)
+
+        self.assertEqual([item.code for item in issues], ["unsafe_gpl_foreach_return"])
+        self.assertIn("line 5", issues[0].message)
+        self.assertIn("foreach loop begun at line 3", issues[0].message)
+        self.assertIn("accumulate or select", issues[0].message)
+        self.assertIn("return it after the loop", issues[0].message)
+        self.assertIn("following stock control flow", issues[0].message)
+
     def test_v3_nonbuilding_package_does_not_require_bdep_art_or_buildings(self):
         definition = ModDefinition(
             schema_version=3,

@@ -6,9 +6,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from majesty_cam.tables import (
+    TableAncestryError,
     TableFormatError,
     TableMergeConflict,
     merge_bdep,
+    merge_bdep_stock_relative,
     parse_bdep,
 )
 
@@ -54,6 +56,95 @@ class BdepTests(unittest.TestCase):
     def test_parse_rejects_lf_line_endings(self):
         with self.assertRaisesRegex(TableFormatError, "CRLF"):
             parse_bdep(b"ABJ2 : ROOT\n")
+
+    def test_stock_relative_merge_recovers_original_based_additions_only(self):
+        original = b"PAL1\r\nMARKET : PAL1\r\n"
+        expansion = b"PAL1\r\nMARKET : PAL1 OUTPOST ||\r\nOUTPOST : PAL1\r\n"
+        zoo = original + b"ZOO1\r\nZOO2\r\nZOO3\r\n"
+
+        result = merge_bdep_stock_relative(
+            expansion,
+            (("Original", original), ("Expansion", expansion)),
+            (("zoo", zoo),),
+        )
+
+        self.assertIn(b"MARKET : PAL1 OUTPOST ||\r\n", result.payload)
+        self.assertIn(b"OUTPOST : PAL1\r\n", result.payload)
+        self.assertEqual(
+            tuple(row.building_id for row in result.deltas[0].rows),
+            ("ZOO1", "ZOO2", "ZOO3"),
+        )
+
+    def test_stock_relative_merge_preserves_unambiguous_replacement(self):
+        original = b"PAL1\r\nMARKET : PAL1\r\n"
+        expansion = b"PAL1\r\nMARKET : PAL1 OUTPOST ||\r\nOUTPOST : PAL1\r\n"
+        package = b"PAL1\r\nMARKET : CUSTOM\r\nOUTPOST : PAL1\r\n"
+
+        result = merge_bdep_stock_relative(
+            expansion,
+            (("Original", original), ("Expansion", expansion)),
+            (("custom", package),),
+        )
+
+        self.assertIn(b"MARKET : CUSTOM\r\n", result.payload)
+        self.assertEqual(
+            tuple(row.building_id for row in result.deltas[0].rows),
+            ("MARKET",),
+        )
+
+    def test_stock_relative_merge_preserves_reversion_on_complete_newer_topology(self):
+        original = b"PAL1\r\nMARKET : PAL1\r\n"
+        expansion = b"PAL1\r\nMARKET : PAL1 OUTPOST ||\r\nOUTPOST : PAL1\r\n"
+        package = b"PAL1\r\nMARKET : PAL1\r\nOUTPOST : PAL1\r\n"
+
+        result = merge_bdep_stock_relative(
+            expansion,
+            (("Original", original), ("Expansion", expansion)),
+            (("reversion", package),),
+        )
+
+        self.assertIn(b"MARKET : PAL1\r\n", result.payload)
+        self.assertEqual(
+            tuple(row.building_id for row in result.deltas[0].rows),
+            ("MARKET",),
+        )
+
+    def test_stock_relative_merge_rejects_same_topology_ancestry_ambiguity(self):
+        original = b"PAL1\r\nMARKET : PAL1\r\n"
+        expansion = b"PAL1\r\nMARKET : PAL1 OUTPOST ||\r\n"
+
+        with self.assertRaisesRegex(
+            TableAncestryError,
+            r"ambiguous between Original, Expansion.*MARKET",
+        ):
+            merge_bdep_stock_relative(
+                expansion,
+                (("Original", original), ("Expansion", expansion)),
+                (("ambiguous", original),),
+            )
+
+    def test_stock_relative_merge_rejects_truncated_table(self):
+        original = b"PAL1\r\nMARKET : PAL1\r\n"
+        expansion = original + b"OUTPOST : PAL1\r\n"
+
+        with self.assertRaisesRegex(TableAncestryError, "not a complete table"):
+            merge_bdep_stock_relative(
+                expansion,
+                (("Original", original), ("Expansion", expansion)),
+                (("fragment", b"ZOO1\r\n"),),
+            )
+
+    def test_stock_relative_merge_rejects_complete_newer_rows_out_of_order(self):
+        original = b"PAL1\r\nMARKET : PAL1\r\n"
+        expansion = original + b"OUTPOST : PAL1\r\n"
+        misordered = b"PAL1\r\nOUTPOST : PAL1\r\nMARKET : PAL1\r\n"
+
+        with self.assertRaisesRegex(TableAncestryError, "stock ordering"):
+            merge_bdep_stock_relative(
+                expansion,
+                (("Original", original), ("Expansion", expansion)),
+                (("misordered", misordered),),
+            )
 
 
 if __name__ == "__main__":

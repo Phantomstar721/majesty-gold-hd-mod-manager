@@ -203,6 +203,9 @@ following the
 - Ship complete effective tables when changing resources Majesty treats as
   positional or whole-table data.
 - Preserve unchanged stock entries, ordering, flags, padding, and references.
+- In GPL, do not exit a function with `return` from inside a `foreach` body.
+  Record the result during the loop and return it afterward, following Majesty's
+  stock control-flow pattern. The manager rejects this crash-prone source shape.
 - If the mod changes BDEP, main art, or interface art, include the complete
   effective stock-relative resource. A version-3 package may omit any of those
   domains it does not change and may provide at most one art provider per

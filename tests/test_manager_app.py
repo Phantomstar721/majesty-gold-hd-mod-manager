@@ -69,6 +69,19 @@ def _snapshot_with_required_qol(
     )
 
 
+class PlayerIssueTextTests(unittest.TestCase):
+    def test_foreach_return_preflight_uses_plain_player_language(self) -> None:
+        rendered = manager_app._player_issue_text(
+            "unsafe_gpl_foreach_return",
+            "GPL return at line 12 is inside a foreach loop begun at line 8.",
+        )
+
+        self.assertIn("can crash Majesty", rendered)
+        self.assertIn("author needs to update", rendered)
+        self.assertNotIn("GPL", rendered)
+        self.assertNotIn("foreach", rendered)
+
+
 @unittest.skipIf(
     manager_app._PYSIDE_IMPORT_ERROR is not None,
     "optional PySide6 desktop runtime is unavailable",
@@ -410,6 +423,39 @@ class ManagerAppLayoutTests(unittest.TestCase):
             unselected_card.findChild(QLabel, "compatibilityBadge").text(),
             "COMPATIBLE",
         )
+
+    def test_standard_overlap_is_a_compact_conflicts_button_not_inline_text(self) -> None:
+        from PySide6.QtWidgets import QLabel, QPushButton
+
+        content_id = "10000000-0000-4000-8000-000000000001"
+        other_id = "10000000-0000-4000-8000-000000000002"
+        entry = CatalogEntry(
+            content_id=content_id,
+            raw_content_id=content_id,
+            display_name="Example Mod",
+            kind=CatalogKind.STANDARD,
+            source=CatalogSource.WORKSHOP,
+            package_root=Path("C:/Steam/workshop/content/73230/123"),
+            manifest_path=Path("C:/Steam/workshop/content/73230/123/Example.mmxml"),
+            has_cam=False,
+            merge_ready=False,
+            unresolved_overlap_ids=(other_id,),
+            unresolved_overlap_names=("Another Mod",),
+        )
+        card = manager_app._ModCard(
+            entry,
+            selected=True,
+            prepared=None,
+            blocked_preflight=None,
+        )
+
+        button = card.findChild(QPushButton, "conflictsButton")
+        self.assertIsNotNone(button)
+        self.assertEqual(button.text(), "CONFLICTS")
+        details = " ".join(
+            label.text() for label in card.findChildren(QLabel, "cardDetail")
+        )
+        self.assertNotIn("Another Mod", details)
 
     def test_multi_mod_options_are_collapsible_and_update_in_place(self) -> None:
         from PySide6.QtWidgets import QLabel, QPushButton

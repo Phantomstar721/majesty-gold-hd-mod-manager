@@ -12,12 +12,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
+from functools import lru_cache
+import hashlib
+import json
 from pathlib import Path
 import re
 from typing import Callable, Mapping, Optional, Sequence, Tuple, Union
 import uuid
 import xml.etree.ElementTree as ET
 
+from majesty_cam.gpl import parse_dat, parse_gpl
 from majesty_cam.package import (
     DEFINITION_FILE_NAME,
     PackageFormatError,
@@ -102,6 +106,11 @@ class CatalogEntry:
     load_after_names: Tuple[str, ...] = ()
     load_before_ids: Tuple[str, ...] = ()
     load_before_names: Tuple[str, ...] = ()
+    required_ids: Tuple[str, ...] = ()
+    required_names: Tuple[str, ...] = ()
+    unresolved_overlap_ids: Tuple[str, ...] = ()
+    unresolved_overlap_names: Tuple[str, ...] = ()
+    content_definitions: Tuple[Tuple[str, str], ...] = ()
 
     @property
     def selectable(self) -> bool:
@@ -283,7 +292,8 @@ def scan_catalog(
             _parse_candidate(candidate, compatibility, merge_preflight)
         )
     entries, duplicate_issues = _deduplicate_entries(entries)
-    entries = _annotate_explicit_load_order(entries)
+    entries = _annotate_explicit_relationships(entries)
+    entries = _annotate_standard_content_overlaps(entries)
     entries.sort(key=_entry_sort_key)
     all_issues = list(root_issues)
     all_issues.extend(duplicate_issues)
@@ -620,6 +630,11 @@ def _parse_content_node(
         issues=tuple(_attach_content_id(issues, content_id)),
         description=description,
         details=details,
+        content_definitions=(
+            _content_definition_fingerprints(content, candidate.package_root)
+            if kind is CatalogKind.STANDARD
+            else ()
+        ),
     )
 
 
@@ -844,10 +859,213 @@ def _declared_load_resource_keys(content: ET.Element) -> frozenset[str]:
     return frozenset(keys)
 
 
+_MAX_ANALYZED_CONTENT_BYTES = 16 * 1024 * 1024
+
+
+def _content_definition_fingerprints(
+    content: ET.Element,
+    package_root: Path,
+) -> Tuple[Tuple[str, str], ...]:
+    """Inventory behavior-defining content without compiling or mutating it.
+
+    Ordinary Majesty Mods are loaded independently, so the manager cannot
+    semantically merge them.  It can still identify when two selected Mods
+    replace the same GPL/DAT definition or XML description.  The inventory is
+    created during the explicit content scan and then reused by checkbox
+    changes; no package files are reread on selection.
+    """
+
+    definitions: dict[str, str] = {}
+    for load in content.iter():
+        if _local_name(load.tag) != "Load":
+            continue
+        for resource in list(load):
+            kind = _local_name(resource.tag).casefold()
+            if kind == "gpl":
+                for path in _gpl_analysis_sources(resource, package_root):
+                    for key, digest in _semantic_file_definitions(path):
+                        definitions[key] = digest
+            elif kind == "descriptions":
+                path = _safe_declared_package_file(package_root, _element_text(resource))
+                if path is None:
+                    continue
+                raw = _read_analysis_bytes(path)
+                if raw is None or b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+                    continue
+                try:
+                    root = ET.fromstring(raw)
+                except ET.ParseError:
+                    continue
+                for child in list(root):
+                    key = _description_definition_key(child)
+                    if key is not None:
+                        definitions[key] = _xml_digest(child)
+    return tuple(sorted(definitions.items()))
+
+
+def _gpl_analysis_sources(resource: ET.Element, package_root: Path) -> Tuple[Path, ...]:
+    declared = []
+    for source in list(resource):
+        if _local_name(source.tag) != "Source":
+            continue
+        path = _safe_declared_package_file(package_root, _element_text(source))
+        if path is not None and path.suffix.casefold() in {".gpl", ".dat"}:
+            declared.append(path)
+    if declared:
+        return tuple(declared)
+
+    # Many historical Workshop Mods ship a precompiled BCD in the manifest
+    # but retain their matching GPL source tree beside it.  That source is the
+    # only available compatibility evidence, so inspect it conservatively.
+    source_root = package_root / "GPL"
+    try:
+        candidates = sorted(
+            (
+                path
+                for path in source_root.rglob("*")
+                if path.is_file() and path.suffix.casefold() in {".gpl", ".dat"}
+            ),
+            key=lambda item: item.as_posix().casefold(),
+        )
+    except OSError:
+        return ()
+    result = []
+    for candidate in candidates[:512]:
+        try:
+            relative = candidate.relative_to(package_root).as_posix()
+        except ValueError:
+            continue
+        safe = _safe_declared_package_file(package_root, relative)
+        if safe is not None:
+            result.append(safe)
+    return tuple(result)
+
+
+def _semantic_file_definitions(path: Path) -> Tuple[Tuple[str, str], ...]:
+    try:
+        info = path.stat()
+    except OSError:
+        return ()
+    return _semantic_file_definitions_cached(
+        str(path.resolve(strict=False)), info.st_mtime_ns, info.st_size
+    )
+
+
+@lru_cache(maxsize=4096)
+def _semantic_file_definitions_cached(
+    path_text: str,
+    _mtime_ns: int,
+    _size: int,
+) -> Tuple[Tuple[str, str], ...]:
+    path = Path(path_text)
+    text = _read_analysis_text(path)
+    if text is None:
+        return ()
+    try:
+        parsed = (
+            parse_dat(text, str(path))
+            if path.suffix.casefold() == ".dat"
+            else parse_gpl(text, str(path))
+            if path.suffix.casefold() == ".gpl"
+            else None
+        )
+    except ValueError:
+        parsed = None
+    if parsed is None:
+        return ()
+    return tuple(
+        (f"{item.kind.value}:{item.normalized_name}", _content_digest(item.text))
+        for item in parsed.items
+    )
+
+
+def _safe_declared_package_file(
+    package_root: Path,
+    raw_path: Optional[str],
+) -> Optional[Path]:
+    if not raw_path:
+        return None
+    try:
+        root = package_root.resolve(strict=True)
+        path = (root / raw_path.replace("\\", "/")).resolve(strict=True)
+        path.relative_to(root)
+        if not path.is_file() or path.stat().st_size > _MAX_ANALYZED_CONTENT_BYTES:
+            return None
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return path
+
+
+def _read_analysis_bytes(path: Path) -> Optional[bytes]:
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def _read_analysis_text(path: Path) -> Optional[str]:
+    raw = _read_analysis_bytes(path)
+    if raw is None:
+        return None
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return None
+
+
+def _content_digest(text: str) -> str:
+    normalized = "\n".join(line.rstrip() for line in text.replace("\r", "").split("\n"))
+    return hashlib.sha256(normalized.strip().encode("utf-8")).hexdigest()
+
+
+def _description_definition_key(element: ET.Element) -> Optional[str]:
+    attributes = {key.casefold(): value for key, value in element.attrib.items()}
+    identifier = attributes.get("id")
+    if not identifier:
+        return None
+    type_name = attributes.get("type", "")
+    subtype = attributes.get("subtype", "")
+    return ":".join(
+        (
+            "description",
+            _local_name(element.tag).casefold(),
+            type_name.casefold(),
+            subtype.casefold(),
+            identifier.casefold(),
+        )
+    )
+
+
+def _xml_digest(element: ET.Element) -> str:
+    def canonical(node: ET.Element) -> object:
+        return {
+            "tag": _local_name(node.tag).casefold(),
+            "attributes": sorted(
+                (key.casefold(), value.strip()) for key, value in node.attrib.items()
+            ),
+            "text": (node.text or "").strip(),
+            "children": [canonical(child) for child in list(node)],
+        }
+
+    payload = json.dumps(canonical(element), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 _LOAD_ORDER_SENTENCE = re.compile(
     r"(?:\bload(?:ed|s|ing)?\b.{0,40}\b(?:before|after|first)\b|"
     r"\b(?:before|after|first)\b.{0,40}\bload(?:ed|s|ing)?\b|"
     r"\bload\s+order\b)",
+    re.IGNORECASE,
+)
+_REQUIREMENT_SENTENCE = re.compile(
+    r"\b(?:requires?|required|must\s+(?:have|use|load)|will\s+not\s+work\s+standalone)\b",
+    re.IGNORECASE,
+)
+_INCOMPATIBILITY_SENTENCE = re.compile(
+    r"\b(?:do\s+not\s+(?:combine|use)|incompatible\s+with|not\s+compatible\s+with|"
+    r"cannot\s+be\s+used\s+with)\b",
     re.IGNORECASE,
 )
 _LOAD_AFTER_CURRENT = re.compile(
@@ -865,10 +1083,10 @@ _LOAD_NAME_STOPWORDS = frozenset(
 )
 
 
-def _annotate_explicit_load_order(
+def _annotate_explicit_relationships(
     entries: Sequence[CatalogEntry],
 ) -> list[CatalogEntry]:
-    """Resolve conservative before/after prose against installed mod names.
+    """Resolve conservative dependency/order/conflict prose against installed Mods.
 
     Historical Workshop manifests have no dependency schema, but many authors
     wrote explicit sentences such as "load X before this patch". We accept
@@ -884,6 +1102,10 @@ def _annotate_explicit_load_order(
     )
     after: dict[str, set[str]] = {entry.content_id: set() for entry in standard}
     before: dict[str, set[str]] = {entry.content_id: set() for entry in standard}
+    required: dict[str, set[str]] = {entry.content_id: set() for entry in standard}
+    incompatible: dict[str, set[str]] = {
+        entry.content_id: set(entry.incompatible_ids) for entry in standard
+    }
     by_id = {entry.content_id: entry for entry in standard}
 
     for entry in standard:
@@ -896,9 +1118,18 @@ def _annotate_explicit_load_order(
         sentences = tuple(
             part.strip()
             for part in re.split(r"(?<=[.!?])\s+", text)
-            if part.strip() and _LOAD_ORDER_SENTENCE.search(part)
+            if part.strip()
         )
         for sentence in sentences:
+            if _INCOMPATIBILITY_SENTENCE.search(sentence):
+                for target in _match_relationship_targets(entry, sentence, standard):
+                    if target.content_id is None:
+                        continue
+                    incompatible[entry.content_id].add(target.content_id)
+                    incompatible[target.content_id].add(entry.content_id)
+
+            if not _LOAD_ORDER_SENTENCE.search(sentence):
+                continue
             relation = (
                 "after"
                 if _LOAD_AFTER_CURRENT.search(sentence)
@@ -914,6 +1145,11 @@ def _annotate_explicit_load_order(
             if relation == "after":
                 after[entry.content_id].add(target.content_id)
                 before[target.content_id].add(entry.content_id)
+                if (
+                    _REQUIREMENT_SENTENCE.search(sentence)
+                    or "patch" in entry.display_name.casefold()
+                ):
+                    required[entry.content_id].add(target.content_id)
             else:
                 before[entry.content_id].add(target.content_id)
                 after[target.content_id].add(entry.content_id)
@@ -935,6 +1171,18 @@ def _annotate_explicit_load_order(
                 key=lambda item: (by_id[item].display_name.casefold(), item),
             )
         )
+        required_ids = tuple(
+            sorted(
+                required[entry.content_id],
+                key=lambda item: (by_id[item].display_name.casefold(), item),
+            )
+        )
+        incompatible_ids = tuple(
+            sorted(
+                incompatible[entry.content_id],
+                key=lambda item: (by_id[item].display_name.casefold(), item),
+            )
+        )
         result.append(
             replace(
                 entry,
@@ -942,6 +1190,94 @@ def _annotate_explicit_load_order(
                 load_after_names=tuple(by_id[item].display_name for item in after_ids),
                 load_before_ids=before_ids,
                 load_before_names=tuple(by_id[item].display_name for item in before_ids),
+                required_ids=required_ids,
+                required_names=tuple(by_id[item].display_name for item in required_ids),
+                incompatible_ids=incompatible_ids,
+                incompatible_names=tuple(
+                    by_id[item].display_name for item in incompatible_ids
+                ),
+            )
+        )
+    return result
+
+
+def _annotate_standard_content_overlaps(
+    entries: Sequence[CatalogEntry],
+) -> list[CatalogEntry]:
+    """Mark divergent standard-Mod definitions which lack a known safe order."""
+
+    standard = tuple(
+        entry
+        for entry in entries
+        if entry.kind is CatalogKind.STANDARD and entry.content_id is not None
+    )
+    by_id = {entry.content_id: entry for entry in standard}
+    definitions = {
+        entry.content_id: dict(entry.content_definitions) for entry in standard
+    }
+    unresolved: dict[str, set[str]] = {entry.content_id: set() for entry in standard}
+    after: dict[str, set[str]] = {
+        entry.content_id: set(entry.load_after_ids) for entry in standard
+    }
+    before: dict[str, set[str]] = {
+        entry.content_id: set(entry.load_before_ids) for entry in standard
+    }
+
+    for left_index, left in enumerate(standard):
+        left_definitions = definitions[left.content_id]
+        if not left_definitions:
+            continue
+        for right in standard[left_index + 1 :]:
+            right_definitions = definitions[right.content_id]
+            shared = set(left_definitions).intersection(right_definitions)
+            if not any(
+                left_definitions[key] != right_definitions[key] for key in shared
+            ):
+                continue
+            already_ordered = (
+                right.content_id in after[left.content_id]
+                or left.content_id in after[right.content_id]
+            )
+            if already_ordered:
+                continue
+            if left.manifest_path == right.manifest_path:
+                first, second = sorted(
+                    (left, right), key=lambda item: item.collection_index
+                )
+                after[second.content_id].add(first.content_id)
+                before[first.content_id].add(second.content_id)
+                continue
+            unresolved[left.content_id].add(right.content_id)
+            unresolved[right.content_id].add(left.content_id)
+
+    result = []
+    for entry in entries:
+        if entry.content_id not in by_id:
+            result.append(entry)
+            continue
+        after_ids = tuple(
+            sorted(after[entry.content_id], key=lambda item: (by_id[item].display_name.casefold(), item))
+        )
+        before_ids = tuple(
+            sorted(before[entry.content_id], key=lambda item: (by_id[item].display_name.casefold(), item))
+        )
+        overlap_ids = tuple(
+            sorted(
+                unresolved[entry.content_id],
+                key=lambda item: (by_id[item].display_name.casefold(), item),
+            )
+        )
+        result.append(
+            replace(
+                entry,
+                load_after_ids=after_ids,
+                load_after_names=tuple(by_id[item].display_name for item in after_ids),
+                load_before_ids=before_ids,
+                load_before_names=tuple(by_id[item].display_name for item in before_ids),
+                unresolved_overlap_ids=overlap_ids,
+                unresolved_overlap_names=tuple(
+                    by_id[item].display_name for item in overlap_ids
+                ),
             )
         )
     return result
@@ -952,15 +1288,12 @@ def _match_load_order_target(
     sentence: str,
     candidates: Sequence[CatalogEntry],
 ) -> Optional[CatalogEntry]:
-    sentence_tokens = _load_name_tokens(sentence)
-    matches = []
-    for candidate in candidates:
-        if candidate.content_id == current.content_id:
-            continue
-        tokens = _load_name_tokens(candidate.display_name)
-        if len(tokens) < 2 or not tokens.issubset(sentence_tokens):
-            continue
-        matches.append((len(tokens), len(candidate.display_name), candidate))
+    matches = [
+        (score, len(candidate.display_name), candidate)
+        for score, candidate in _scored_relationship_targets(
+            current, sentence, candidates
+        )
+    ]
     if not matches:
         return None
     matches.sort(
@@ -975,6 +1308,50 @@ def _match_load_order_target(
     if len(matches) > 1 and matches[1][:2] == best[:2]:
         return None
     return best[2]
+
+
+def _match_relationship_targets(
+    current: CatalogEntry,
+    sentence: str,
+    candidates: Sequence[CatalogEntry],
+) -> Tuple[CatalogEntry, ...]:
+    """Return every unambiguous installed Mod named by one relationship sentence."""
+
+    scored = _scored_relationship_targets(current, sentence, candidates)
+    return tuple(
+        candidate
+        for _score, candidate in sorted(
+            scored,
+            key=lambda item: (
+                item[1].display_name.casefold(),
+                item[1].content_id or "",
+            ),
+        )
+    )
+
+
+def _scored_relationship_targets(
+    current: CatalogEntry,
+    sentence: str,
+    candidates: Sequence[CatalogEntry],
+) -> list[tuple[int, CatalogEntry]]:
+    sentence_tokens = _load_name_tokens(sentence)
+    matches: list[tuple[int, CatalogEntry]] = []
+    for candidate in candidates:
+        if candidate.content_id == current.content_id:
+            continue
+        token_options = [_load_name_tokens(candidate.display_name)]
+        if candidate.variant_label:
+            token_options.append(_load_name_tokens(candidate.variant_label))
+        matching = [
+            tokens
+            for tokens in token_options
+            if len(tokens) >= 2 and tokens.issubset(sentence_tokens)
+        ]
+        if not matching:
+            continue
+        matches.append((max(len(tokens) for tokens in matching), candidate))
+    return matches
 
 
 def _load_name_tokens(value: str) -> frozenset[str]:

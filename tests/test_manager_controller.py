@@ -54,6 +54,38 @@ VARIANT_B_ID = "10000000-0000-4000-8000-000000000002"
 
 
 class ManagerControllerTests(unittest.TestCase):
+    def test_standard_checkbox_does_not_rehash_managed_output(self):
+        with TemporaryDirectory() as tmp:
+            paths = _manager_paths(Path(tmp))
+            controller = ManagerController(
+                paths=paths, registry=CompatibilityRegistry(specs={})
+            )
+            entry = CatalogEntry(
+                content_id=STANDARD_ID,
+                raw_content_id=STANDARD_ID,
+                display_name="Standard Mod",
+                kind=CatalogKind.STANDARD,
+                source=CatalogSource.LOCAL_MODS,
+                package_root=paths.local_mods_root / "Standard",
+                manifest_path=paths.local_mods_root / "Standard" / "mod.mmxml",
+                has_cam=False,
+                merge_ready=False,
+            )
+            controller.catalog = Catalog(entries=(entry,))
+            controller.selections = {STANDARD_ID: False}
+            controller.order = (STANDARD_ID,)
+            controller._replan()
+
+            with patch(
+                "majesty_cam.manager.controller.read_managed_build",
+                return_value=None,
+            ) as read_build:
+                controller.snapshot()
+                controller.set_selected(STANDARD_ID, True)
+                controller.set_selected(STANDARD_ID, False)
+
+            read_build.assert_called_once_with(paths.merged_output_root)
+
     def test_standard_variant_selection_is_exclusive_without_replanning_merge(self):
         with TemporaryDirectory() as tmp:
             paths = _manager_paths(Path(tmp))
@@ -338,6 +370,7 @@ class ManagerControllerTests(unittest.TestCase):
                 "majesty_cam.manager.controller.read_managed_build",
                 return_value=current_build,
             ):
+                controller._refresh_managed_build_cache()
                 current = controller.snapshot()
             self.assertFalse(current.build_required)
             self.assertTrue(current.can_build)
@@ -348,6 +381,7 @@ class ManagerControllerTests(unittest.TestCase):
                 "majesty_cam.manager.controller.read_managed_build",
                 return_value=stale_build,
             ):
+                controller._refresh_managed_build_cache()
                 stale = controller.snapshot()
             self.assertTrue(stale.build_required)
             self.assertFalse(stale.can_launch)
