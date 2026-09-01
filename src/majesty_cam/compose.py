@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ET
 from ._subprocess import no_console_window_options
 from .art import (
     ArtArchiveAnalysis,
+    ArtFormatError,
     ArtRelocationReport,
     ImagRelocationReport,
     PaletteRelocationReport,
@@ -28,6 +29,7 @@ from .art import (
     analyze_art_archive,
     find_positional_collisions,
     parse_best_imag_tile_references,
+    parse_imag_tile_references,
     parse_stock_imag_tile_references,
     rewrite_best_imag_entries,
     rewrite_stock_imag_entries,
@@ -1217,6 +1219,12 @@ def _compose_art_domain(
             source_entry = rewritten_tiles[owner][change.index]
             _place_positional(output_tiles, destination, source_entry, owner, b"TILE")
 
+    _materialize_imag_tile_dependencies(
+        output_tiles,
+        stock_tiles,
+        imag_entries,
+    )
+
     stock_images = _require_section(stock, b"IMAG")
     sections = [
         CamSection(
@@ -1280,6 +1288,57 @@ def _compose_art_domain(
             palette_reports=tuple(palette_reports),
         ),
     )
+
+
+def _materialize_imag_tile_dependencies(
+    output_tiles: list[CamEntry],
+    stock_tiles: CamSection,
+    imag_entries: Sequence[CamEntry],
+) -> tuple[int, ...]:
+    """Close stock TILE dependencies of every emitted IMAG record.
+
+    Synthesized resources such as merged CUR1 contain both retained stock sets
+    and private sets. The mod analyses account for package-owned art, but the
+    synthesized record can still reference unchanged stock TILEs. Materialize
+    those exact stock payloads so a composed positional table never blanks a
+    valid stock frame during a private-to-stock UI transition.
+    """
+
+    referenced: set[int] = set()
+    for entry in imag_entries:
+        accepted = False
+        errors: list[Exception] = []
+        for parser in (
+            parse_imag_tile_references,
+            parse_stock_imag_tile_references,
+        ):
+            try:
+                parsed = parser(
+                    entry.data,
+                    tile_count=len(output_tiles),
+                    entry_name=entry.name,
+                )
+            except (ArtFormatError, ValueError) as exc:
+                errors.append(exc)
+                continue
+            accepted = True
+            referenced.update(reference.tile_index for reference in parsed.references)
+        if not accepted:
+            raise ComposeError(
+                f"{_display_key(entry.name[:4])}: cannot prove emitted IMAG TILE "
+                f"dependencies: {errors[0]}"
+            )
+
+    materialized = []
+    for index in sorted(referenced):
+        if output_tiles[index].data or index >= len(stock_tiles.entries):
+            continue
+        stock_entry = stock_tiles.entries[index]
+        if not stock_entry.data:
+            continue
+        output_tiles[index] = stock_entry
+        materialized.append(index)
+    return tuple(materialized)
 
 
 def _split_imag_sets(entry: CamEntry) -> tuple[bytes, tuple[tuple[int, bytes], ...]]:

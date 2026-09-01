@@ -32,6 +32,7 @@ from majesty_cam.compose import (
     _generated_mod_id,
     _validate_generated_runtime_evidence,
     _materialize_effective_stock_prefix,
+    _materialize_imag_tile_dependencies,
     _merge_tactical_cursor_entry,
     _select_later_conflict_runs,
     compose_package,
@@ -106,6 +107,28 @@ def cursor_entry(sets):
 
 
 class TacticalCursorMergeTests(unittest.TestCase):
+    def test_emitted_cursor_materializes_unchanged_stock_tile_dependencies(self):
+        stock_tiles = positional(b"TILE", (b"zero", b"normal-cursor"))
+        output_tiles = list(positional(b"TILE", (b"", b"")).entries)
+        parsed = SimpleNamespace(
+            references=(SimpleNamespace(tile_index=1),),
+        )
+        with patch(
+            "majesty_cam.compose.parse_imag_tile_references",
+            return_value=parsed,
+        ), patch(
+            "majesty_cam.compose.parse_stock_imag_tile_references",
+            return_value=parsed,
+        ):
+            materialized = _materialize_imag_tile_dependencies(
+                output_tiles,
+                stock_tiles,
+                (cursor_entry(((1000, b"stock"),)),),
+            )
+
+        self.assertEqual(materialized, (1,))
+        self.assertEqual(output_tiles[1].data, b"normal-cursor")
+
     def test_stock_sets_fall_through_and_private_sets_combine(self):
         stock = cursor_entry(((1000, b"stock"),))
         ancestor = cursor_entry(((1000, b"original"),))
