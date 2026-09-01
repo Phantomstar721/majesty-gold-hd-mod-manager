@@ -7,16 +7,29 @@ from typing import Mapping, Optional, Sequence, Tuple, Union
 import xml.etree.ElementTree as ET
 
 from .runtime_capabilities import is_runtime_capability_name
+from .runtime_features import (
+    EnchantmentRowFeature,
+    NameGeneratorFeature,
+    RuntimeFeature,
+    normalize_runtime_features,
+)
+from .stock_controller_features import (
+    ControllerFeature,
+    ControllerFeatureError,
+    StockAp41Fl00HostileMonsterFlag,
+    controller_feature_mapping,
+    normalize_controller_features,
+    parse_controller_feature,
+)
 
 
 DEFINITION_FILE_NAME = "mod-definition.json"
-# Version 1 remains readable for legacy manager adapters and older third-party
-# packages.  Version 2 is the current authoring contract: it lets a
-# package declare runtime features without requiring a UUID-keyed manager
-# update.  Keep the supported set explicit so an unknown future schema fails
-# closed instead of being partially interpreted as version 2.
-DEFINITION_SCHEMA_VERSION = 2
-SUPPORTED_DEFINITION_SCHEMA_VERSIONS = frozenset((1, 2))
+# Versions 1 and 2 remain readable indefinitely for existing packages and
+# trusted compatibility adapters. Version 3 is the author-facing declarative
+# contract. Keep the supported set explicit so unknown future schemas fail
+# closed instead of being partially interpreted as the newest known shape.
+DEFINITION_SCHEMA_VERSION = 3
+SUPPORTED_DEFINITION_SCHEMA_VERSIONS = frozenset((1, 2, 3))
 
 
 class PackageFormatError(ValueError):
@@ -121,9 +134,18 @@ class ModMetadata:
 @dataclass(frozen=True)
 class CustomBuildingDefinition:
     local_name: str
-    dialog_id: str
+    # Schema v1/v2 packages own an explicit private FourCC. Schema v3 packages
+    # deliberately omit it; composition derives their authored source DialogID
+    # from XML and allocates a collision-free internal ID.
+    dialog_id: Optional[str]
     controller_base: str
     panel_resource_template: str
+
+
+# Backward-compatible descriptive alias for the schema's AP78-specific record
+# name; the runtime module intentionally uses the reusable shorter class name.
+Ap78EnchantmentRowFeature = EnchantmentRowFeature
+PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature]
 
 
 @dataclass(frozen=True)
@@ -134,6 +156,7 @@ class ModDefinition:
     display_name: str
     custom_buildings: Tuple[CustomBuildingDefinition, ...]
     runtime_capabilities: Tuple[str, ...] = ()
+    runtime_features: Tuple[PackageRuntimeFeature, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -229,10 +252,12 @@ def load_mod_definition(path: Union[str, Path]) -> ModDefinition:
 def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
     """Parse one supported, exact ``mod-definition.json`` object shape.
 
-    Version 1 is the original building-only contract.  Version 2 adds only
-    package-owned runtime capability declarations. Private positional text is
-    handled separately: the manager discovers and proves those bindings from
-    the package's stock-relative AITX and GPL data.
+    Version 1 is the original building-only contract. Version 2 adds only
+    package-owned runtime capability declarations. Version 3 replaces opaque
+    capability strings with exact, typed feature records and manager-owned
+    custom-building dialog allocation. Private positional text is handled
+    separately: the manager discovers and proves those bindings from the
+    package's stock-relative AITX and GPL data.
     """
 
     common_fields = {
@@ -251,11 +276,12 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         raise PackageFormatError(
             "unsupported mod definition schema_version: " f"{schema_version!r}"
         )
-    expected = (
-        common_fields
-        if schema_version == 1
-        else common_fields | {"runtime_capabilities"}
-    )
+    if schema_version == 1:
+        expected = common_fields
+    elif schema_version == 2:
+        expected = common_fields | {"runtime_capabilities"}
+    else:
+        expected = common_fields | {"runtime_features"}
     _require_exact_fields(value, expected, "mod definition")
 
     mod_id = _required_string(value["mod_id"], "mod definition mod_id")
@@ -273,12 +299,9 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
     buildings = []
     seen_local_names = set()
     seen_dialog_ids = set()
-    building_fields = {
-        "local_name",
-        "dialog_id",
-        "controller_base",
-        "panel_resource_template",
-    }
+    building_fields = {"local_name", "controller_base", "panel_resource_template"}
+    if schema_version < 3:
+        building_fields.add("dialog_id")
     for index, raw_building in enumerate(raw_buildings):
         context = f"custom_buildings[{index}]"
         if not isinstance(raw_building, Mapping):
@@ -286,7 +309,11 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         _require_exact_fields(raw_building, building_fields, context)
         building = CustomBuildingDefinition(
             local_name=_required_string(raw_building["local_name"], f"{context}.local_name"),
-            dialog_id=_required_string(raw_building["dialog_id"], f"{context}.dialog_id"),
+            dialog_id=(
+                _required_string(raw_building["dialog_id"], f"{context}.dialog_id")
+                if schema_version < 3
+                else None
+            ),
             controller_base=_required_string(
                 raw_building["controller_base"], f"{context}.controller_base"
             ),
@@ -303,12 +330,29 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             )
         seen_local_names.add(local_key)
 
-        dialog_key = building.dialog_id.casefold()
-        if dialog_key in seen_dialog_ids:
-            raise PackageFormatError(
-                f"duplicate custom building dialog_id: {building.dialog_id!r}"
+        if schema_version == 3:
+            _required_fourcc(building.controller_base, f"{context}.controller_base")
+            _required_fourcc(
+                building.panel_resource_template,
+                f"{context}.panel_resource_template",
             )
-        seen_dialog_ids.add(dialog_key)
+            if (
+                building.controller_base,
+                building.panel_resource_template,
+            ) not in {("AP07", "AP10"), ("AP10", "AP10"), ("MX09", "MX09")}:
+                raise PackageFormatError(
+                    f"{context} requests an unsupported stock controller/panel "
+                    "combination; supported combinations are AP07/AP10 and "
+                    "AP10/AP10, and MX09/MX09"
+                )
+        else:
+            assert building.dialog_id is not None
+            dialog_key = building.dialog_id.casefold()
+            if dialog_key in seen_dialog_ids:
+                raise PackageFormatError(
+                    f"duplicate custom building dialog_id: {building.dialog_id!r}"
+                )
+            seen_dialog_ids.add(dialog_key)
         buildings.append(building)
 
     raw_capabilities = value.get("runtime_capabilities", ())
@@ -332,6 +376,108 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         seen_capabilities.add(capability)
         capabilities.append(capability)
 
+    raw_features = value.get("runtime_features", ())
+    if not isinstance(raw_features, (list, tuple)):
+        raise PackageFormatError("mod definition runtime_features must be an array")
+    features: list[PackageRuntimeFeature] = []
+    controller_features: list[ControllerFeature] = []
+    seen_feature_keys: set[tuple[str, ...]] = set()
+    for index, raw_feature in enumerate(raw_features):
+        context = f"runtime_features[{index}]"
+        if not isinstance(raw_feature, Mapping):
+            raise PackageFormatError(f"{context} must be an object")
+        feature_type = _required_string(raw_feature.get("type"), f"{context}.type")
+        if feature_type == "stock.name-generator.v1":
+            _require_exact_fields(
+                raw_feature, {"type", "generator_id", "name_tables"}, context
+            )
+            generator_id = _required_fourcc(
+                raw_feature["generator_id"], f"{context}.generator_id"
+            )
+            raw_tables = raw_feature["name_tables"]
+            if not isinstance(raw_tables, (list, tuple)) or len(raw_tables) != 4:
+                raise PackageFormatError(
+                    f"{context}.name_tables must contain exactly four FourCCs"
+                )
+            tables = tuple(
+                _required_fourcc(table, f"{context}.name_tables[{table_index}]")
+                for table_index, table in enumerate(raw_tables)
+            )
+            feature: RuntimeFeature = NameGeneratorFeature(
+                generator_id=generator_id,
+                name_part_ids=(tables[0], tables[1], tables[2], tables[3]),
+            )
+            feature_key = (feature_type, generator_id.casefold())
+        elif feature_type == "stock.ap78-enchantment-row.v1":
+            _require_exact_fields(
+                raw_feature, {"type", "overlay_id", "display_text"}, context
+            )
+            overlay_id = _required_fourcc(
+                raw_feature["overlay_id"], f"{context}.overlay_id"
+            )
+            display_text = _required_string(
+                raw_feature["display_text"], f"{context}.display_text"
+            )
+            feature = EnchantmentRowFeature(
+                overlay_id=overlay_id,
+                display_text=display_text,
+            )
+            feature_key = (feature_type, overlay_id.casefold())
+        else:
+            try:
+                controller = parse_controller_feature(raw_feature)
+            except ControllerFeatureError as exc:
+                if str(exc).startswith("unsupported controller feature type"):
+                    raise PackageFormatError(
+                        f"{context}.type is unsupported: {feature_type!r}"
+                    ) from exc
+                raise PackageFormatError(f"{context} is invalid: {exc}") from exc
+            feature = controller
+            controller_features.append(controller)
+            mapping = controller_feature_mapping(controller)
+            if feature_type == "stock.ap22-resource-meter.v1":
+                local_identity = str(mapping["resource_key"])
+            elif feature_type == "stock.ap99-research-row.v1":
+                local_identity = str(mapping["recipe_key"])
+            elif feature_type in {
+                "stock.ap24-timed-rage-action.v1",
+                "stock.ap24-rage-command-action.v1",
+                "stock.ap69-sovereign-target-action.v1",
+                "stock.ap41-fl00-hostile-monster-flag.v1",
+            }:
+                local_identity = str(mapping["action_key"])
+            elif feature_type in {
+                "stock.ap10-ap69-secondary-panel.v1",
+                "stock.ap17-upgrade-research-gate.v1",
+            }:
+                local_identity = str(mapping["parent_building"])
+            else:  # pragma: no cover - the typed parser owns this closed union
+                local_identity = ""
+            feature_key = (
+                feature_type,
+                str(mapping["panel_key"]).casefold(),
+                local_identity.casefold(),
+            )
+        if feature_key in seen_feature_keys:
+            raise PackageFormatError(
+                f"duplicate runtime feature identity: {feature_key[1]!r}"
+            )
+        seen_feature_keys.add(feature_key)
+        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature)):
+            try:
+                normalize_runtime_features((feature,))
+            except ValueError as exc:
+                raise PackageFormatError(f"{context} is invalid: {exc}") from exc
+        features.append(feature)
+
+    if controller_features:
+        try:
+            normalize_controller_features(controller_features)
+        except ControllerFeatureError as exc:
+            raise PackageFormatError(
+                f"mod definition controller runtime_features are invalid: {exc}"
+            ) from exc
+
     return ModDefinition(
         schema_version=schema_version,
         mod_id=mod_id,
@@ -339,6 +485,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         display_name=display_name,
         custom_buildings=tuple(buildings),
         runtime_capabilities=tuple(capabilities),
+        runtime_features=tuple(features),
     )
 
 
@@ -586,18 +733,50 @@ def _validate_definition_object(definition: ModDefinition) -> ModDefinition:
         "internal_name": definition.internal_name,
         "display_name": definition.display_name,
         "custom_buildings": [
-            {
+            dict(
+                {
                 "local_name": building.local_name,
-                "dialog_id": building.dialog_id,
                 "controller_base": building.controller_base,
                 "panel_resource_template": building.panel_resource_template,
-            }
+                },
+                **(
+                    {"dialog_id": building.dialog_id}
+                    if definition.schema_version < 3
+                    else {}
+                ),
+            )
             for building in definition.custom_buildings
         ],
     }
     if definition.schema_version == 2:
         value["runtime_capabilities"] = list(definition.runtime_capabilities)
+    elif definition.schema_version == 3:
+        value["runtime_features"] = [
+            _runtime_feature_mapping(feature)
+            for feature in definition.runtime_features
+        ]
     return parse_mod_definition(value)
+
+
+def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
+    if isinstance(feature, NameGeneratorFeature):
+        return {
+            "type": "stock.name-generator.v1",
+            "generator_id": feature.generator_id,
+            "name_tables": list(feature.name_part_ids),
+        }
+    if isinstance(feature, EnchantmentRowFeature):
+        return {
+            "type": "stock.ap78-enchantment-row.v1",
+            "overlay_id": feature.overlay_id,
+            "display_text": feature.display_text,
+        }
+    try:
+        return controller_feature_mapping(feature)
+    except ControllerFeatureError as exc:
+        raise PackageFormatError(
+            "mod definition runtime_features contains an unsupported object"
+        ) from exc
 
 
 def _localized_children(parent: ET.Element, name: str) -> Tuple[LocalizedText, ...]:
@@ -637,6 +816,19 @@ def _required_string(value: object, context: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise PackageFormatError(f"{context} must be a non-empty string")
     return value.strip()
+
+
+def _required_fourcc(value: object, context: str) -> str:
+    fourcc = _required_string(value, context)
+    try:
+        encoded = fourcc.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise PackageFormatError(f"{context} must be an ASCII FourCC") from exc
+    if len(encoded) != 4 or any(byte < 0x21 or byte > 0x7E for byte in encoded):
+        raise PackageFormatError(
+            f"{context} must be exactly four printable ASCII characters"
+        )
+    return fourcc
 
 
 def _require_exact_fields(
@@ -679,6 +871,7 @@ def _json_object_without_duplicates(pairs: Sequence[Tuple[str, object]]) -> dict
 
 
 __all__ = [
+    "Ap78EnchantmentRowFeature",
     "CamLoad",
     "CustomBuildingDefinition",
     "DatasetLoad",
@@ -693,8 +886,11 @@ __all__ = [
     "ModDefinition",
     "ModMetadata",
     "ModPackage",
+    "NameGeneratorFeature",
     "PackageFormatError",
+    "PackageRuntimeFeature",
     "PackagePath",
+    "RuntimeFeature",
     "load_mod_definition",
     "load_package",
     "parse_mod_definition",

@@ -5,10 +5,9 @@ section.  A mod CAM commonly contains thousands of empty records so the game
 falls through to the stock archive, followed by a private block of records.
 Consequently, entry names are useful diagnostics but are not allocation keys.
 
-This module deliberately understands only the IMAG frame layouts proved by the
-Phantoms Haunt and Alchemist packages.  It never searches an IMAG byte string
-for integer-looking values.  Unknown direction layouts fail closed before any
-bytes are changed.
+This module deliberately understands only explicitly audited IMAG frame
+layouts.  It never searches an IMAG byte string for integer-looking values.
+Unknown direction layouts fail closed before any bytes are changed.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ from .cam import CamArchive, CamEntry, CamFormatError, CamSection, pad_extension
 IMAG = b"IMAG"
 TILE = b"TILE"
 SPLT = b"SPLT"
+PALT = b"PALT"
 
 IMAG_HEADER_SIZE = 20
 IMAG_SET_ENTRY_SIZE = 8
@@ -431,11 +431,9 @@ def parse_imag_tile_references(
     * ``extended`` -- actor and building frames with geometry fields;
     * ``projectile`` -- the 32-direction projectile table.
 
-    These three layouts cover every IMAG emitted by the current Phantoms Haunt
-    and Alchemist main/interface builders, including ``PHTIraw textures`` and
-    ``ALTIraw textures``.  The parser validates the animation-set directory,
-    direction directory, frame count, record boundary and every low-16 TILE
-    index before returning offsets that may be rewritten.
+    The parser validates the animation-set directory, direction directory,
+    frame count, record boundary and every low-16 TILE index before returning
+    offsets that may be rewritten.
     """
 
     raw_name = _entry_name_bytes(entry_name)
@@ -550,12 +548,6 @@ def parse_imag_tile_references(
                     )
                 )
 
-        # Stock building IMAG set 208 carries one additional TILE reference in
-        # the final u32 of the set, after its direction records.  It is present
-        # in every ordinary stock building family (including the three Fervus
-        # levels cloned by Phantoms Haunt) and is not part of a frame table.
-        # Treat the field explicitly so relocation preserves the complete stock
-        # building-image lifecycle without scanning arbitrary integer values.
         terminal_offset = set_end - 4
         if (
             set_id == BUILDING_TERMINAL_TILE_SET_ID
@@ -591,6 +583,183 @@ def parse_imag_tile_references(
     )
 
 
+def parse_stock_imag_tile_references(
+    data: bytes,
+    *,
+    tile_count: int,
+    entry_name: str | bytes = b"",
+) -> ParsedImag:
+    """Parse an inherited retail IMAG by Majesty's end-anchored frame table.
+
+    This is deliberately separate from the historical custom-package parser:
+    existing mods were authored against that narrower schema. Exact retail
+    IMAG records, however, use variable control-word spans followed by a
+    declared frame/lane table anchored at each direction boundary.
+    """
+
+    raw_name = _entry_name_bytes(entry_name)
+    if tile_count < 0 or tile_count > LOW16_SENTINEL:
+        raise ArtFormatError(f"Invalid TILE count {tile_count}; IMAG indices are low-16")
+    if len(data) < IMAG_HEADER_SIZE + 4:
+        raise UnsupportedImagShapeError(
+            f"IMAG {_display_name(raw_name)!r} is too short for a set table"
+        )
+    set_count = _u32(data, IMAG_HEADER_SIZE)
+    table_start = IMAG_HEADER_SIZE + 4
+    table_end = table_start + set_count * IMAG_SET_ENTRY_SIZE
+    if set_count <= 0 or set_count > MAX_IMAG_SETS or table_end > len(data):
+        raise UnsupportedImagShapeError(
+            f"IMAG {_display_name(raw_name)!r} has invalid set count {set_count}"
+        )
+    set_entries = tuple(
+        (
+            _u32(data, table_start + index * IMAG_SET_ENTRY_SIZE),
+            _u32(data, table_start + index * IMAG_SET_ENTRY_SIZE + 4),
+        )
+        for index in range(set_count)
+    )
+    set_offsets = tuple(offset for _set_id, offset in set_entries)
+    if (
+        set_offsets != tuple(sorted(set_offsets))
+        or len(set(set_offsets)) != len(set_offsets)
+        or set_offsets[0] < table_end
+        or set_offsets[-1] >= len(data)
+    ):
+        raise UnsupportedImagShapeError(
+            f"IMAG {_display_name(raw_name)!r} has an invalid set directory"
+        )
+
+    references: list[ImagTileReference] = []
+    for set_index, (set_id, set_start) in enumerate(set_entries):
+        set_end = (
+            set_entries[set_index + 1][1]
+            if set_index + 1 < len(set_entries)
+            else len(data)
+        )
+        direction_count = _u32(data, set_start)
+        pointer_start = set_start + IMAG_SET_FIXED_SIZE
+        pointer_end = pointer_start + direction_count * 4
+        if (
+            direction_count <= 0
+            or direction_count > MAX_DIRECTIONS
+            or pointer_end > set_end
+        ):
+            raise UnsupportedImagShapeError(
+                f"IMAG {_display_name(raw_name)!r} set {set_id} has an invalid "
+                f"direction count {direction_count}"
+            )
+        relative_offsets = tuple(
+            _u32(data, pointer_start + direction * 4)
+            for direction in range(direction_count)
+        )
+        if (
+            relative_offsets != tuple(sorted(relative_offsets))
+            or len(set(relative_offsets)) != len(relative_offsets)
+            or any(relative < IMAG_SET_FIXED_SIZE + direction_count * 4 for relative in relative_offsets)
+        ):
+            raise UnsupportedImagShapeError(
+                f"IMAG {_display_name(raw_name)!r} set {set_id} has invalid "
+                "direction offsets"
+            )
+        anchors = tuple(set_start + relative for relative in relative_offsets)
+        for direction, anchor in enumerate(anchors):
+            direction_end = (
+                anchors[direction + 1]
+                if direction + 1 < len(anchors)
+                else set_end
+            )
+            if anchor + 8 > direction_end:
+                raise UnsupportedImagShapeError(
+                    _direction_error(raw_name, set_id, direction, "is truncated")
+                )
+            count_word = _u32(data, anchor + 4)
+            frame_count = count_word >> 16
+            stream_count = count_word & 0xFFFF
+            total = frame_count * stream_count
+            frame_start = direction_end - total * 8
+            if (
+                frame_count <= 0
+                or stream_count <= 0
+                or total > MAX_FRAMES
+                or frame_start < anchor + 8
+                or (frame_start - anchor) % 4
+            ):
+                raise UnsupportedImagShapeError(
+                    _direction_error(
+                        raw_name,
+                        set_id,
+                        direction,
+                        f"has an invalid {frame_count} frame x {stream_count} lane table",
+                    )
+                )
+            for stream in range(stream_count):
+                for frame in range(frame_count):
+                    offset = frame_start + stream * frame_count * 8 + frame * 8 + 4
+                    encoded = _u32(data, offset)
+                    tile_index = encoded & 0xFFFF
+                    if tile_index == LOW16_SENTINEL:
+                        continue
+                    if tile_index >= tile_count:
+                        raise UnsupportedImagShapeError(
+                            f"IMAG {_display_name(raw_name)!r} set {set_id} direction "
+                            f"{direction} frame {frame} references missing TILE "
+                            f"{tile_index} of {tile_count}"
+                        )
+                    references.append(
+                        ImagTileReference(
+                            entry_name=raw_name,
+                            set_id=set_id,
+                            direction=direction,
+                            frame=stream * frame_count + frame,
+                            offset=offset,
+                            encoded_value=encoded,
+                            layout="stock-end-anchored",
+                        )
+                    )
+    return ParsedImag(
+        entry_name=raw_name,
+        references=tuple(references),
+        layouts=("stock-end-anchored",),
+        set_count=set_count,
+    )
+
+
+def parse_best_imag_tile_references(
+    data: bytes,
+    *,
+    tile_count: int,
+    entry_name: str | bytes = b"",
+    preferred_tile_indices: Iterable[int] = (),
+) -> ParsedImag:
+    """Select the proven IMAG layout that explains the package's art delta.
+
+    Older custom packages use the historical fixed-header layout while some
+    stock-derived records retain Majesty's end-anchored frame table. Both
+    parsers are structural and fail closed. When both accept a record, the
+    layout accounting for more of the package's changed TILE slots wins; a tie
+    preserves the historical parser for backward compatibility.
+    """
+
+    preferred = frozenset(preferred_tile_indices)
+    candidates: list[ParsedImag] = []
+    errors: list[ArtFormatError] = []
+    for parser in (parse_imag_tile_references, parse_stock_imag_tile_references):
+        try:
+            candidates.append(
+                parser(data, tile_count=tile_count, entry_name=entry_name)
+            )
+        except ArtFormatError as exc:
+            errors.append(exc)
+    if not candidates:
+        raise errors[0]
+    return max(
+        candidates,
+        key=lambda parsed: len(
+            {reference.tile_index for reference in parsed.references} & preferred
+        ),
+    )
+
+
 def rewrite_imag_entries(
     entries: Sequence[CamEntry],
     mapping: Mapping[int, int],
@@ -605,7 +774,6 @@ def rewrite_imag_entries(
     parsed reference set, the operation fails without returning partial data.
     """
 
-    normalized = _validated_low16_mapping(mapping)
     parsed = [
         parse_imag_tile_references(
             entry.data,
@@ -614,6 +782,70 @@ def rewrite_imag_entries(
         )
         for entry in entries
     ]
+    return _rewrite_parsed_imag_entries(
+        entries,
+        mapping,
+        parsed,
+        require_all_referenced=require_all_referenced,
+    )
+
+
+def rewrite_stock_imag_entries(
+    entries: Sequence[CamEntry],
+    mapping: Mapping[int, int],
+    *,
+    tile_count: int,
+    require_all_referenced: bool = True,
+) -> ImagRewriteResult:
+    parsed = [
+        parse_stock_imag_tile_references(
+            entry.data,
+            tile_count=tile_count,
+            entry_name=entry.name,
+        )
+        for entry in entries
+    ]
+    return _rewrite_parsed_imag_entries(
+        entries,
+        mapping,
+        parsed,
+        require_all_referenced=require_all_referenced,
+    )
+
+
+def rewrite_best_imag_entries(
+    entries: Sequence[CamEntry],
+    mapping: Mapping[int, int],
+    *,
+    tile_count: int,
+    preferred_tile_indices: Iterable[int],
+    require_all_referenced: bool = True,
+) -> ImagRewriteResult:
+    parsed = [
+        parse_best_imag_tile_references(
+            entry.data,
+            tile_count=tile_count,
+            entry_name=entry.name,
+            preferred_tile_indices=preferred_tile_indices,
+        )
+        for entry in entries
+    ]
+    return _rewrite_parsed_imag_entries(
+        entries,
+        mapping,
+        parsed,
+        require_all_referenced=require_all_referenced,
+    )
+
+
+def _rewrite_parsed_imag_entries(
+    entries: Sequence[CamEntry],
+    mapping: Mapping[int, int],
+    parsed: Sequence[ParsedImag],
+    *,
+    require_all_referenced: bool,
+) -> ImagRewriteResult:
+    normalized = _validated_low16_mapping(mapping)
     referenced = {
         reference.tile_index
         for image in parsed
@@ -720,19 +952,19 @@ def validate_external_palette_closure(
     """Prove that every payload-bearing TILE can resolve its external SPLT.
 
     Majesty's TILE records fall through independently, but an emitted main-art
-    archive owns its positional SPLT table.  The completed Haunt and Alchemist
-    packages therefore materialize the effective stock palette prefix instead
-    of writing zero-length palette records.  Rejecting an incomplete closure
-    here prevents valid TILE pixels from being decoded through empty palettes.
+    archive owns its positional SPLT table.  A composed package therefore
+    materializes the effective stock palette prefix instead of writing
+    zero-length palette records.  Rejecting an incomplete closure here prevents
+    valid TILE pixels from being decoded through empty palettes.
     """
 
     if tiles.extension != TILE:
         raise ArtFormatError(
             f"Expected a TILE section, found {tiles.extension!r}"
         )
-    if palettes.extension != SPLT:
+    if palettes.extension not in {SPLT, PALT}:
         raise ArtFormatError(
-            f"Expected an SPLT section, found {palettes.extension!r}"
+            f"Expected an SPLT/PALT section, found {palettes.extension!r}"
         )
 
     references: list[TilePaletteReference] = []
@@ -831,6 +1063,7 @@ def analyze_art_archive(
     mod: CamArchive,
     *,
     mod_id: str,
+    fallthrough_ancestors: Sequence[CamArchive] = (),
 ) -> ArtArchiveAnalysis:
     """Inventory TILE/SPLT deltas and prove all IMAG frame-field locations."""
 
@@ -838,11 +1071,25 @@ def analyze_art_archive(
     mod_tile = _required_section(mod, TILE)
     tile_delta = compute_stock_relative_delta(stock_tile, mod_tile)
 
-    stock_palette = _optional_section(stock, SPLT)
-    mod_palette = _optional_section(mod, SPLT)
-    if (stock_palette is None) != (mod_palette is None):
+    stock_palette = next(
+        (section for section in stock.sections if section.extension in {SPLT, PALT}),
+        None,
+    )
+    mod_palette = next(
+        (section for section in mod.sections if section.extension in {SPLT, PALT}),
+        None,
+    )
+    if stock_palette is None and mod_palette is not None:
         raise ArtFormatError(
-            "Stock and mod must either both contain SPLT or both omit it"
+            "A mod positional palette table requires the same stock palette section"
+        )
+    if (
+        stock_palette is not None
+        and mod_palette is not None
+        and stock_palette.extension != mod_palette.extension
+    ):
+        raise ArtFormatError(
+            "Stock and mod positional palette section types do not match"
         )
     palette_delta = (
         compute_stock_relative_delta(stock_palette, mod_palette)
@@ -851,20 +1098,91 @@ def analyze_art_archive(
     )
 
     imag_section = _required_section(mod, IMAG)
-    parsed_images = [
-        parse_imag_tile_references(
-            entry.data,
-            tile_count=len(mod_tile.entries),
-            entry_name=entry.name,
-        )
-        for entry in imag_section.entries
-    ]
+    stock_imag = _optional_section(stock, IMAG)
+    stock_imag_payloads: dict[bytes, set[bytes]] = {}
+    for archive in (stock, *fallthrough_ancestors):
+        section = _optional_section(archive, IMAG)
+        for entry in (() if section is None else section.entries):
+            stock_imag_payloads.setdefault(
+                entry.name.rstrip(b"\x00")[:4], set()
+            ).add(entry.data)
+    parsed_images = []
+    for entry in imag_section.entries:
+        key = entry.name.rstrip(b"\x00")[:4]
+        inherited = entry.data in stock_imag_payloads.get(key, set())
+        if inherited:
+            parsed = parse_stock_imag_tile_references(
+                entry.data,
+                tile_count=len(mod_tile.entries),
+                entry_name=entry.name,
+            )
+        else:
+            parsed = parse_best_imag_tile_references(
+                entry.data,
+                tile_count=len(mod_tile.entries),
+                entry_name=entry.name,
+                preferred_tile_indices=tile_delta.changed_indices,
+            )
+        if key == b"CUR1":
+            inherited_sets: set[int] = set()
+            stock_set_payloads: dict[int, set[bytes]] = {}
+            for archive in (stock, *fallthrough_ancestors):
+                section = _optional_section(archive, IMAG)
+                candidate = next(
+                    (
+                        item
+                        for item in (() if section is None else section.entries)
+                        if item.name.rstrip(b"\x00")[:4] == b"CUR1"
+                    ),
+                    None,
+                )
+                if candidate is None:
+                    continue
+                for set_id, payload in _imag_set_payloads(candidate.data):
+                    stock_set_payloads.setdefault(set_id, set()).add(payload)
+            for set_id, payload in _imag_set_payloads(entry.data):
+                if payload in stock_set_payloads.get(set_id, set()):
+                    inherited_sets.add(set_id)
+            parsed = replace(
+                parsed,
+                references=tuple(
+                    reference
+                    for reference in parsed.references
+                    if reference.set_id not in inherited_sets
+                ),
+            )
+        parsed_images.append(parsed)
     imag_references = tuple(
         reference
         for image in parsed_images
         for reference in image.references
     )
     referenced_tiles = {reference.tile_index for reference in imag_references}
+
+    ancestor_tiles = tuple(
+        section
+        for archive in fallthrough_ancestors
+        if (section := _optional_section(archive, TILE)) is not None
+    )
+    inherited_tile_changes = tuple(
+        change.index
+        for change in tile_delta.changes
+        if change.index not in referenced_tiles
+        and any(
+            change.index < len(section.entries)
+            and section.entries[change.index].data == change.entry.data
+            for section in ancestor_tiles
+        )
+    )
+    if inherited_tile_changes:
+        inherited = set(inherited_tile_changes)
+        tile_delta = replace(
+            tile_delta,
+            changes=tuple(
+                change for change in tile_delta.changes if change.index not in inherited
+            ),
+            stock_identical_count=tile_delta.stock_identical_count + len(inherited),
+        )
 
     # A namespaced IMAG owns the nonempty TILE payloads it references even
     # when those payloads happen to match the Original Majesty ancestor.  The
@@ -918,6 +1236,37 @@ def analyze_art_archive(
     referenced_palettes = {
         reference.palette_index for reference in palette_references
     }
+    if palette_delta is not None:
+        ancestor_palettes = tuple(
+            section
+            for archive in fallthrough_ancestors
+            if (
+                section := _optional_section(archive, palette_delta.extension)
+            ) is not None
+        )
+        inherited_palette_changes = {
+            change.index
+            for change in palette_delta.changes
+            if change.index not in referenced_palettes
+            and any(
+                change.index < len(section.entries)
+                and section.entries[change.index].data == change.entry.data
+                for section in ancestor_palettes
+            )
+        }
+        if inherited_palette_changes:
+            palette_delta = replace(
+                palette_delta,
+                changes=tuple(
+                    change
+                    for change in palette_delta.changes
+                    if change.index not in inherited_palette_changes
+                ),
+                stock_identical_count=(
+                    palette_delta.stock_identical_count
+                    + len(inherited_palette_changes)
+                ),
+            )
 
     return ArtArchiveAnalysis(
         mod_id=mod_id,
@@ -942,6 +1291,38 @@ def analyze_art_archive(
         supported_imag_layouts=tuple(
             sorted({layout for image in parsed_images for layout in image.layouts})
         ),
+    )
+
+
+def _imag_set_payloads(data: bytes) -> tuple[tuple[int, bytes], ...]:
+    if len(data) < IMAG_HEADER_SIZE + 4:
+        raise UnsupportedImagShapeError("IMAG is too short for a set table")
+    count = _u32(data, IMAG_HEADER_SIZE)
+    table_start = IMAG_HEADER_SIZE + 4
+    table_end = table_start + count * IMAG_SET_ENTRY_SIZE
+    if count <= 0 or count > MAX_IMAG_SETS or table_end > len(data):
+        raise UnsupportedImagShapeError("IMAG has an invalid set table")
+    directory = tuple(
+        (
+            _u32(data, table_start + index * IMAG_SET_ENTRY_SIZE),
+            _u32(data, table_start + index * IMAG_SET_ENTRY_SIZE + 4),
+        )
+        for index in range(count)
+    )
+    offsets = tuple(offset for _set_id, offset in directory)
+    if (
+        offsets != tuple(sorted(offsets))
+        or len(set(offsets)) != len(offsets)
+        or offsets[0] < table_end
+        or offsets[-1] >= len(data)
+    ):
+        raise UnsupportedImagShapeError("IMAG has invalid set offsets")
+    return tuple(
+        (
+            set_id,
+            data[offset:(directory[index + 1][1] if index + 1 < count else len(data))],
+        )
+        for index, (set_id, offset) in enumerate(directory)
     )
 
 
@@ -989,7 +1370,7 @@ def _parse_direction_layout(
     set_id: int,
     direction: int,
 ) -> tuple[str, int, int]:
-    """Select one audited direction schema from structural discriminators."""
+    """Select one audited custom-package direction schema."""
 
     if anchor + 12 > direction_end:
         raise UnsupportedImagShapeError(
@@ -1010,10 +1391,6 @@ def _parse_direction_layout(
                 _direction_error(entry_name, set_id, direction, "is truncated")
             )
         discriminator = _u32(data, anchor + 8)
-        # The direction's bit 16 control word, rather than the animation-set
-        # ID, selects the extra fixed geometry pair seen in interface, actor,
-        # and particle records.  This distinction is visible in stock clones:
-        # AP progress bars use the 20-byte base while PHTI/ALTI use 28 bytes.
         base_header_size = 28 if _u32(data, anchor + 16) != 0 else 20
         if discriminator & ~0x7:
             raise UnsupportedImagShapeError(
@@ -1024,10 +1401,7 @@ def _parse_direction_layout(
                     f"uses unsupported geometry mask {discriminator:#x}",
                 )
             )
-        if discriminator == 0:
-            layout = "compact"
-        else:
-            layout = "extended"
+        layout = "compact" if discriminator == 0 else "extended"
         first_tile = anchor + base_header_size + 8 * _bit_count(discriminator)
         frame_count = total_early_fields
     else:
@@ -1070,7 +1444,6 @@ def _parse_direction_layout(
 
 
 def _bit_count(value: int) -> int:
-    # Keep this compatible with the repository's minimum Python runtime.
     return bin(value).count("1")
 
 
@@ -1184,10 +1557,14 @@ __all__ = [
     "analyze_art_archive",
     "compute_stock_relative_delta",
     "find_positional_collisions",
+    "parse_best_imag_tile_references",
     "parse_imag_tile_references",
+    "parse_stock_imag_tile_references",
     "parse_tile_palette_reference",
     "plan_art_relocation",
     "rewrite_imag_entries",
+    "rewrite_best_imag_entries",
+    "rewrite_stock_imag_entries",
     "rewrite_imag_tile_indices",
     "rewrite_tile_palette_indices",
     "validate_external_palette_closure",

@@ -10,8 +10,17 @@ from ..compose import (
     SelectedMod,
     discover_selected_private_activity_texts,
     inventory_package,
+    resolve_building_dialogs,
+    resolve_controller_registry,
+    resolve_runtime_feature_registry,
+    validate_controller_stock_evidence,
 )
-from ..package import ModPackage, PackageFormatError, load_package
+from ..package import (
+    DEFINITION_FILE_NAME,
+    ModPackage,
+    PackageFormatError,
+    load_package,
+)
 from .capabilities import (
     DERIVED_RUNTIME_CAPABILITIES,
     GENERIC_RUNTIME_CAPABILITIES,
@@ -69,10 +78,26 @@ def prepare_merge_package(
 
     normalized_id = normalize_guid(content_id)
     source_root = source_root.resolve(strict=False)
-    spec = registry.get(normalized_id)
-    replacement = spec.available_replacement() if spec is not None else None
+    configured_spec = registry.get(normalized_id)
+    replacement = (
+        configured_spec.available_replacement()
+        if configured_spec is not None
+        else None
+    )
     effective_root = replacement or source_root
     substituted = replacement is not None and replacement != source_root
+    package_owns_definition = (
+        effective_root / DEFINITION_FILE_NAME
+    ).is_file()
+    # A package-owned v2/v3 definition is the public contract and must win over
+    # any legacy manager adapter left installed for older Workshop revisions.
+    # A complete manager substitution remains adapter-owned by design.
+    spec = (
+        configured_spec
+        if configured_spec is not None
+        and (substituted or not package_owns_definition)
+        else None
+    )
     definition = None if substituted else (spec.definition_path if spec else None)
     alias = spec.alias if spec else _slug(display_name, normalized_id)
     priority = spec.merge_priority if spec else 1000
@@ -151,13 +176,25 @@ def prepare_merge_package(
                         "legacy_merge_definition_requires_adapter",
                         (
                             "schema-version 1 mod-definition.json cannot own its "
-                            "runtime-capability requirements; use schema version 2 "
+                            "runtime-feature requirements; use schema version 3 "
                             "or a trusted manager compatibility adapter"
                         ),
                         effective_root / "mod-definition.json",
                     )
                 )
         _validate_package(package, alias=alias, issues=issues)
+        if isinstance(package, ModPackage) and package.definition is not None:
+            inventory = inventory_package(SelectedMod(alias, package))
+            resolve_runtime_feature_registry(
+                (inventory,),
+                capabilities,
+            )
+            building_dialogs = resolve_building_dialogs((inventory,))
+            resolve_controller_registry(
+                (inventory,),
+                capabilities,
+                building_dialogs=building_dialogs,
+            )
     except (OSError, PackageFormatError, ComposeError, ValueError) as exc:
         issues.append(
             ReadinessIssue(
@@ -238,6 +275,37 @@ def catalog_merge_preflight(
                 content_id=prepared.content_id,
             )
         )
+        return tuple(issues)
+
+    try:
+        inventory = inventory_package(prepared.selected_mod)
+        runtime_features = resolve_runtime_feature_registry(
+            (inventory,),
+            prepared.runtime_capabilities,
+        )
+        dialogs = resolve_building_dialogs((inventory,))
+        controller = resolve_controller_registry(
+            (inventory,),
+            prepared.runtime_capabilities,
+            building_dialogs=dialogs,
+        )
+        validate_controller_stock_evidence(
+            game_path,
+            (inventory,),
+            controller.registry,
+            controller_panels=controller.panels,
+            runtime_feature_registry=runtime_features,
+        )
+    except (ComposeError, OSError, ValueError) as exc:
+        issues.append(
+            CatalogIssue(
+                code="unsafe_runtime_features",
+                message=str(exc),
+                severity=IssueSeverity.ERROR,
+                path=prepared.effective_root,
+                content_id=prepared.content_id,
+            )
+        )
     return tuple(issues)
 
 
@@ -265,6 +333,14 @@ def _validate_package(
     for cam_path in inventory.cams:
         archive = read_cam(cam_path)
         extensions = {section.extension for section in archive.sections}
+        if (b"IMAG" in extensions or b"SPLT" in extensions or b"PALT" in extensions) and b"TILE" not in extensions:
+            issues.append(
+                ReadinessIssue(
+                    "untyped_art",
+                    "An IMAG/palette archive has no TILE section and cannot be relocated safely.",
+                    cam_path,
+                )
+            )
         if b"DATA" in extensions:
             for section in archive.sections:
                 if section.extension == b"DATA" and any(
@@ -280,10 +356,19 @@ def _validate_package(
                         cam_path,
                     )
                 )
+            if b"SPLT" in extensions and b"PALT" in extensions:
+                issues.append(
+                    ReadinessIssue(
+                        "ambiguous_art_palette",
+                        "An art archive cannot contain both SPLT and PALT sections.",
+                        cam_path,
+                    )
+                )
             domain = "main" if b"SPLT" in extensions else "interface"
             art_domains[domain] += 1
 
-    if not has_bdep:
+    modern_definition = package.definition.schema_version >= 3
+    if not has_bdep and not modern_definition:
         issues.append(
             ReadinessIssue(
                 "missing_bdep",
@@ -292,11 +377,16 @@ def _validate_package(
             )
         )
     for domain, count in art_domains.items():
-        if count != 1:
+        invalid_count = count > 1 if modern_definition else count != 1
+        if invalid_count:
             issues.append(
                 ReadinessIssue(
                     f"invalid_{domain}_art_provider_count",
-                    f"Expected exactly one {domain} TILE/IMAG provider; found {count}.",
+                    (
+                        f"Expected at most one {domain} TILE/IMAG provider; found {count}."
+                        if modern_definition
+                        else f"Expected exactly one {domain} TILE/IMAG provider; found {count}."
+                    ),
                     package.root,
                 )
             )
@@ -323,7 +413,7 @@ def _validate_package(
                 )
             )
 
-    if not package.definition.custom_buildings:
+    if not package.definition.custom_buildings and not modern_definition:
         issues.append(
             ReadinessIssue(
                 "missing_custom_buildings",
@@ -332,11 +422,27 @@ def _validate_package(
             )
         )
     for building in package.definition.custom_buildings:
-        if not _CG_DIALOG.fullmatch(building.dialog_id):
+        if modern_definition:
+            continue
+        if (
+            building.dialog_id is None
+            or not _CG_DIALOG.fullmatch(building.dialog_id)
+        ):
             issues.append(
                 ReadinessIssue(
                     "unsafe_dialog_id",
                     f"{building.local_name} DialogID must be a private CGxx ID; got {building.dialog_id!r}.",
+                    package.root,
+                )
+            )
+    if modern_definition and package.definition.custom_buildings:
+        try:
+            resolve_building_dialogs((inventory,))
+        except (ComposeError, ValueError) as exc:
+            issues.append(
+                ReadinessIssue(
+                    "invalid_building_dialog_binding",
+                    str(exc),
                     package.root,
                 )
             )

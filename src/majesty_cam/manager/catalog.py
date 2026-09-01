@@ -89,6 +89,19 @@ class CatalogEntry:
     compatibility_applied: bool = False
     generated: bool = False
     issues: Tuple[CatalogIssue, ...] = ()
+    description: Optional[str] = None
+    details: Optional[str] = None
+    collection_id: Optional[str] = None
+    collection_name: Optional[str] = None
+    collection_index: int = 0
+    collection_size: int = 1
+    variant_label: Optional[str] = None
+    incompatible_ids: Tuple[str, ...] = ()
+    incompatible_names: Tuple[str, ...] = ()
+    load_after_ids: Tuple[str, ...] = ()
+    load_after_names: Tuple[str, ...] = ()
+    load_before_ids: Tuple[str, ...] = ()
+    load_before_names: Tuple[str, ...] = ()
 
     @property
     def selectable(self) -> bool:
@@ -131,6 +144,12 @@ class CatalogEntry:
         if self.source is not CatalogSource.WORKSHOP:
             return None
         return _published_file_id_from_path(self.package_root)
+
+    @property
+    def in_collection(self) -> bool:
+        """Whether this row belongs to a multi-option manifest."""
+
+        return self.collection_id is not None and self.collection_size > 1
 
 
 @dataclass(frozen=True)
@@ -258,11 +277,13 @@ def scan_catalog(
         seen_manifests.add(key)
         unique_candidates.append(candidate)
 
-    entries = [
-        _parse_candidate(candidate, compatibility, merge_preflight)
-        for candidate in unique_candidates
-    ]
+    entries = []
+    for candidate in unique_candidates:
+        entries.extend(
+            _parse_candidate(candidate, compatibility, merge_preflight)
+        )
     entries, duplicate_issues = _deduplicate_entries(entries)
+    entries = _annotate_explicit_load_order(entries)
     entries.sort(key=_entry_sort_key)
     all_issues = list(root_issues)
     all_issues.extend(duplicate_issues)
@@ -364,7 +385,7 @@ def _parse_candidate(
     candidate: _Candidate,
     compatibility: Optional[CompatibilityResolver],
     merge_preflight: Optional[MergePreflightCallback],
-) -> CatalogEntry:
+) -> Tuple[CatalogEntry, ...]:
     manifest = candidate.manifest_path
     expected_tag = "Mod" if manifest.suffix.casefold() == ".mmxml" else "Quest"
     inferred_kind = CatalogKind.STANDARD if expected_tag == "Mod" else CatalogKind.QUEST
@@ -393,7 +414,7 @@ def _parse_candidate(
                 path=manifest,
             )
         )
-        return _invalid_entry(candidate, inferred_kind, issues)
+        return (_invalid_entry(candidate, inferred_kind, issues),)
 
     upper = xml_bytes.upper()
     if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
@@ -405,7 +426,7 @@ def _parse_candidate(
                 path=manifest,
             )
         )
-        return _invalid_entry(candidate, inferred_kind, issues)
+        return (_invalid_entry(candidate, inferred_kind, issues),)
     try:
         xml_root = ET.fromstring(xml_bytes)
     except ET.ParseError as exc:
@@ -417,12 +438,16 @@ def _parse_candidate(
                 path=manifest,
             )
         )
-        return _invalid_entry(candidate, inferred_kind, issues)
+        return (_invalid_entry(candidate, inferred_kind, issues),)
 
     content_nodes = [
         node for node in xml_root.iter() if _local_name(node.tag) == expected_tag
     ]
-    if len(content_nodes) != 1:
+    # Majesty's stock Mod catalog permits one .mmxml document to publish
+    # several independent Mod elements.  Each element has its own UUID and is
+    # independently selectable in the game's Mod dialog.  Quest manifests and
+    # strict Merge package loading retain their narrower shapes.
+    if not content_nodes or (expected_tag != "Mod" and len(content_nodes) != 1):
         issues.append(
             CatalogIssue(
                 code="invalid_manifest_shape",
@@ -434,9 +459,41 @@ def _parse_candidate(
                 path=manifest,
             )
         )
-        return _invalid_entry(candidate, inferred_kind, issues)
+        return (_invalid_entry(candidate, inferred_kind, issues),)
 
-    content = content_nodes[0]
+    multiple_mod_elements = expected_tag == "Mod" and len(content_nodes) > 1
+    parsed = tuple(
+        _parse_content_node(
+            candidate,
+            content,
+            expected_tag=expected_tag,
+            inherited_issues=issues,
+            multiple_mod_elements=multiple_mod_elements,
+            compatibility=compatibility,
+            merge_preflight=merge_preflight,
+        )
+        for content in content_nodes
+    )
+    if multiple_mod_elements:
+        return _annotate_mod_collection(candidate, parsed, tuple(content_nodes))
+    return parsed
+
+
+def _parse_content_node(
+    candidate: _Candidate,
+    content: ET.Element,
+    *,
+    expected_tag: str,
+    inherited_issues: Sequence[CatalogIssue],
+    multiple_mod_elements: bool,
+    compatibility: Optional[CompatibilityResolver],
+    merge_preflight: Optional[MergePreflightCallback],
+) -> CatalogEntry:
+    """Turn one stock-selectable Mod or Quest element into a catalog row."""
+
+    manifest = candidate.manifest_path
+    issues = list(inherited_issues)
+
     raw_content_id = _clean_text(content.get("id"))
     content_id = None
     if raw_content_id is None:
@@ -462,6 +519,7 @@ def _parse_candidate(
             )
 
     display_name = _display_name(content) or manifest.stem
+    description, details = _content_descriptions(content)
     if _display_name(content) is None and expected_tag == "Mod":
         issues.append(
             CatalogIssue(
@@ -508,6 +566,19 @@ def _parse_candidate(
                 content_id=content_id,
             )
         )
+    elif kind is CatalogKind.MERGE and multiple_mod_elements:
+        issues.append(
+            CatalogIssue(
+                code="multi_mod_merge_manifest",
+                message=(
+                    "A CAM-changing Mod must be the only Mod element in its "
+                    "manifest before it can be combined safely."
+                ),
+                severity=IssueSeverity.ERROR,
+                path=manifest,
+                content_id=content_id,
+            )
+        )
     elif kind is CatalogKind.MERGE and content_id is not None:
         merge_ready, compatibility_applied, definition_issues = _merge_readiness(
             candidate.package_root, content_id, compatibility
@@ -547,6 +618,8 @@ def _parse_candidate(
         compatibility_applied=compatibility_applied,
         generated=generated,
         issues=tuple(_attach_content_id(issues, content_id)),
+        description=description,
+        details=details,
     )
 
 
@@ -596,6 +669,323 @@ def _display_name(content: ET.Element) -> Optional[str]:
             if _local_name(child.tag) == "Name" and _element_text(child):
                 return _element_text(child)
     return None
+
+
+def _content_descriptions(content: ET.Element) -> Tuple[Optional[str], Optional[str]]:
+    """Return distinct author Short/Long text without blending it into diagnostics."""
+
+    descendants = tuple(content.iter())
+
+    def localized(tag_name: str) -> Optional[str]:
+        candidates = [
+            node
+            for node in descendants
+            if node is not content
+            and _local_name(node.tag) == tag_name
+            and _element_text(node)
+        ]
+        for node in candidates:
+            language = (_clean_text(node.get("lang")) or "").replace(
+                "-", "_"
+            ).casefold()
+            if language == "en_us":
+                return _element_text(node)
+        return _element_text(candidates[0]) if candidates else None
+
+    short = localized("Short")
+    long = localized("Long")
+    if short is not None or long is not None:
+        return short or long, long
+
+    # A leaf Description is also valid author text. A container Description
+    # with nested Short/Long nodes was handled above and must not be flattened.
+    descriptions = [
+        node
+        for node in descendants
+        if node is not content
+        and _local_name(node.tag) == "Description"
+        and not list(node)
+        and _element_text(node)
+    ]
+    for node in descriptions:
+        language = (_clean_text(node.get("lang")) or "").replace(
+            "-", "_"
+        ).casefold()
+        if language == "en_us":
+            return _element_text(node), None
+    if descriptions:
+        return _element_text(descriptions[0]), None
+    return None, None
+
+
+def _annotate_mod_collection(
+    candidate: _Candidate,
+    entries: Tuple[CatalogEntry, ...],
+    content_nodes: Tuple[ET.Element, ...],
+) -> Tuple[CatalogEntry, ...]:
+    """Describe and conflict-check the independent Mods in one manifest.
+
+    A shared manifest is only a visual collection.  Two options become
+    mutually exclusive when their declared load resources overlap, including
+    conventional numbered/versioned alternatives such as ``Attributes_v1`` /
+    ``Attributes_v2``.  Independent toggles in the same Workshop item remain
+    combinable.
+    """
+
+    if len(entries) != len(content_nodes):
+        return entries
+    collection_name = _collection_name(
+        tuple(entry.display_name for entry in entries),
+        candidate.manifest_path.stem,
+    )
+    collection_id = (
+        f"{candidate.source.value}:"
+        f"{candidate.manifest_path.resolve(strict=False).as_posix().casefold()}"
+    )
+    resource_keys = tuple(_declared_load_resource_keys(node) for node in content_nodes)
+    conflicts: list[set[int]] = [set() for _entry in entries]
+    for left in range(len(entries)):
+        for right in range(left + 1, len(entries)):
+            if resource_keys[left].intersection(resource_keys[right]):
+                conflicts[left].add(right)
+                conflicts[right].add(left)
+
+    result = []
+    for index, entry in enumerate(entries):
+        conflict_entries = tuple(
+            entries[other]
+            for other in sorted(conflicts[index])
+            if entries[other].content_id is not None
+        )
+        result.append(
+            replace(
+                entry,
+                collection_id=collection_id,
+                collection_name=collection_name,
+                collection_index=index,
+                collection_size=len(entries),
+                variant_label=_variant_label(entry.display_name, collection_name),
+                incompatible_ids=tuple(
+                    item.content_id for item in conflict_entries if item.content_id
+                ),
+                incompatible_names=tuple(item.display_name for item in conflict_entries),
+            )
+        )
+    return tuple(result)
+
+
+def _collection_name(names: Tuple[str, ...], fallback: str) -> str:
+    if not names:
+        return fallback
+    prefix_words = names[0].split()
+    for name in names[1:]:
+        words = name.split()
+        limit = min(len(prefix_words), len(words))
+        index = 0
+        while (
+            index < limit
+            and prefix_words[index].casefold() == words[index].casefold()
+        ):
+            index += 1
+        prefix_words = prefix_words[:index]
+        if not prefix_words:
+            break
+    cleaned = " ".join(prefix_words).rstrip(" \t-:+/([{")
+    if len(cleaned) < 3:
+        return fallback
+    return cleaned
+
+
+def _variant_label(display_name: str, collection_name: str) -> str:
+    if display_name.casefold() == collection_name.casefold():
+        return "Main version"
+    if display_name.casefold().startswith(collection_name.casefold()):
+        suffix = display_name[len(collection_name):].lstrip(" \t-:+/([{ ")
+        if suffix:
+            return suffix
+    return display_name
+
+
+def _declared_load_resource_keys(content: ET.Element) -> frozenset[str]:
+    keys: set[str] = set()
+    for load in content.iter():
+        if _local_name(load.tag) != "Load":
+            continue
+        for resource in list(load):
+            kind = _local_name(resource.tag).casefold()
+            target = next(
+                (
+                    child
+                    for child in list(resource)
+                    if _local_name(child.tag) == "Target" and _element_text(child)
+                ),
+                None,
+            )
+            raw_path = _element_text(target) if target is not None else _element_text(resource)
+            if not raw_path:
+                continue
+            normalized = re.sub(r"/+", "/", raw_path.replace("\\", "/")).casefold()
+            keys.add(f"{kind}:{normalized}")
+            path = normalized.rsplit("/", 1)
+            directory = path[0] + "/" if len(path) == 2 else ""
+            filename = path[-1]
+            stem, dot, extension = filename.rpartition(".")
+            if not dot:
+                stem, extension = filename, ""
+            family = re.sub(
+                r"(?:[_ -]?(?:version|ver|v)?\d+)$",
+                "",
+                stem,
+                flags=re.IGNORECASE,
+            ).rstrip("_ -")
+            if family:
+                family_path = directory + family + (("." + extension) if extension else "")
+                keys.add(f"{kind}:variant-family:{family_path}")
+    return frozenset(keys)
+
+
+_LOAD_ORDER_SENTENCE = re.compile(
+    r"(?:\bload(?:ed|s|ing)?\b.{0,40}\b(?:before|after|first)\b|"
+    r"\b(?:before|after|first)\b.{0,40}\bload(?:ed|s|ing)?\b|"
+    r"\bload\s+order\b)",
+    re.IGNORECASE,
+)
+_LOAD_AFTER_CURRENT = re.compile(
+    r"(?:\bload\s+after\b|\bloaded\s+before\s+(?:this|it|the\s+patch)\b|"
+    r"\bfirst\b.*\b(?:this|the)\s+patch\b.*\bafter\b)",
+    re.IGNORECASE,
+)
+_LOAD_BEFORE_CURRENT = re.compile(
+    r"(?:\bload\s+before\b|\bloaded\s+after\s+(?:this|it|the\s+patch)\b|"
+    r"\b(?:this|the)\s+patch\b.*\bfirst\b)",
+    re.IGNORECASE,
+)
+_LOAD_NAME_STOPWORDS = frozenset(
+    {"a", "an", "and", "for", "mod", "of", "or", "patch", "the", "with"}
+)
+
+
+def _annotate_explicit_load_order(
+    entries: Sequence[CatalogEntry],
+) -> list[CatalogEntry]:
+    """Resolve conservative before/after prose against installed mod names.
+
+    Historical Workshop manifests have no dependency schema, but many authors
+    wrote explicit sentences such as "load X before this patch". We accept
+    only those strong direction phrases and only when one installed entry has
+    the most specific matching display-name tokens. Ambiguous prose is left
+    alone rather than guessed.
+    """
+
+    standard = tuple(
+        entry
+        for entry in entries
+        if entry.kind is CatalogKind.STANDARD and entry.content_id is not None
+    )
+    after: dict[str, set[str]] = {entry.content_id: set() for entry in standard}
+    before: dict[str, set[str]] = {entry.content_id: set() for entry in standard}
+    by_id = {entry.content_id: entry for entry in standard}
+
+    for entry in standard:
+        text = " ".join(
+            value for value in (entry.description, entry.details) if value
+        )
+        if not text:
+            continue
+        text = re.sub(r"\s+", " ", text).strip()
+        sentences = tuple(
+            part.strip()
+            for part in re.split(r"(?<=[.!?])\s+", text)
+            if part.strip() and _LOAD_ORDER_SENTENCE.search(part)
+        )
+        for sentence in sentences:
+            relation = (
+                "after"
+                if _LOAD_AFTER_CURRENT.search(sentence)
+                else "before"
+                if _LOAD_BEFORE_CURRENT.search(sentence)
+                else None
+            )
+            if relation is None:
+                continue
+            target = _match_load_order_target(entry, sentence, standard)
+            if target is None or target.content_id is None:
+                continue
+            if relation == "after":
+                after[entry.content_id].add(target.content_id)
+                before[target.content_id].add(entry.content_id)
+            else:
+                before[entry.content_id].add(target.content_id)
+                after[target.content_id].add(entry.content_id)
+
+    result = []
+    for entry in entries:
+        if entry.content_id not in by_id:
+            result.append(entry)
+            continue
+        after_ids = tuple(
+            sorted(
+                after[entry.content_id],
+                key=lambda item: (by_id[item].display_name.casefold(), item),
+            )
+        )
+        before_ids = tuple(
+            sorted(
+                before[entry.content_id],
+                key=lambda item: (by_id[item].display_name.casefold(), item),
+            )
+        )
+        result.append(
+            replace(
+                entry,
+                load_after_ids=after_ids,
+                load_after_names=tuple(by_id[item].display_name for item in after_ids),
+                load_before_ids=before_ids,
+                load_before_names=tuple(by_id[item].display_name for item in before_ids),
+            )
+        )
+    return result
+
+
+def _match_load_order_target(
+    current: CatalogEntry,
+    sentence: str,
+    candidates: Sequence[CatalogEntry],
+) -> Optional[CatalogEntry]:
+    sentence_tokens = _load_name_tokens(sentence)
+    matches = []
+    for candidate in candidates:
+        if candidate.content_id == current.content_id:
+            continue
+        tokens = _load_name_tokens(candidate.display_name)
+        if len(tokens) < 2 or not tokens.issubset(sentence_tokens):
+            continue
+        matches.append((len(tokens), len(candidate.display_name), candidate))
+    if not matches:
+        return None
+    matches.sort(
+        key=lambda item: (
+            -item[0],
+            -item[1],
+            item[2].display_name.casefold(),
+            item[2].content_id or "",
+        )
+    )
+    best = matches[0]
+    if len(matches) > 1 and matches[1][:2] == best[:2]:
+        return None
+    return best[2]
+
+
+def _load_name_tokens(value: str) -> frozenset[str]:
+    normalized = value.casefold()
+    normalized = re.sub(r"\bmisc\b", "miscellaneous", normalized)
+    normalized = re.sub(r"\bversion\s*(\d+)\b", r"v\1", normalized)
+    return frozenset(
+        token
+        for token in re.findall(r"[a-z0-9]+", normalized)
+        if token not in _LOAD_NAME_STOPWORDS
+    )
 
 
 def _is_tool_delivery(content_id: Optional[str], content: ET.Element) -> bool:
@@ -705,7 +1095,8 @@ def _merge_readiness(
                 message=(
                     "schema-version 1 mod-definition.json cannot declare the "
                     "runtime features required for safe combining; this mod needs "
-                    "a trusted manager compatibility adapter or a version-2 definition"
+                    "a trusted manager compatibility adapter or a newer definition "
+                    "(new packages should use schema version 3)"
                 ),
                 severity=IssueSeverity.ERROR,
                 path=definition_path,
@@ -876,12 +1267,19 @@ def _entry_sort_key(entry: CatalogEntry) -> tuple:
         CatalogKind.QUEST: 1,
         CatalogKind.MERGE: 2,
     }[entry.kind]
+    has_error = any(issue.severity is IssueSeverity.ERROR for issue in entry.issues)
+    problem_rank = (
+        2
+        if entry.kind is CatalogKind.STANDARD and entry.tool_delivery
+        else 1
+        if has_error or (entry.kind is CatalogKind.MERGE and not entry.merge_ready)
+        else 0
+    )
     return (
         kind_rank,
-        # Tool-delivery subscriptions are useful context, but are not gameplay
-        # mods and cannot be selected.  Keep them after every ordinary Standard
-        # entry without disturbing alphabetical ordering in the other tabs.
-        1 if entry.kind is CatalogKind.STANDARD and entry.tool_delivery else 0,
+        # Ready content stays alphabetical first. Items which need attention
+        # follow alphabetically, with non-gameplay tool deliveries last.
+        problem_rank,
         entry.display_name.casefold(),
         entry.content_id or "",
         str(entry.manifest_path).casefold(),

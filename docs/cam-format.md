@@ -1,10 +1,10 @@
 # CAM Container Format
 
-Working notes for Majesty Gold HD `*.cam` archives.
+Validated container reference for Majesty Gold HD `*.cam` archives.
 
 ## Container
 
-All known local samples begin with:
+Validated game and SDK samples begin with:
 
 ```text
 43 59 4C 42 50 43 20 20 01 00 01 00
@@ -16,7 +16,7 @@ ASCII plus version bytes:
 CYLBPC  \x01\x00\x01\x00
 ```
 
-All integer fields observed so far are little-endian unsigned 32-bit values.
+Container integer fields are little-endian unsigned 32-bit values.
 
 ## File Header
 
@@ -69,13 +69,11 @@ order and entry order, but readers should slice by absolute offset and size.
 - `IMAG`: image/animation descriptors.
 - `TILE`: sprite frame pixel data or terrain tile data, depending on archive.
 - `SPLT`: palette data.
-- `CUT `: small fixed-size resource in `maindata.cam`; not investigated yet.
+- `CUT `: small fixed-size opaque resource in `maindata.cam`.
 
-See `docs/audio-modding-findings.md` for the in-game audio lookup findings.
+## Reader/writer validation
 
-## First Milestone
-
-The first shippable milestone is container-safe:
+A container-safe implementation must:
 
 1. Read all SDK example CAMs.
 2. Unpack them with a manifest.

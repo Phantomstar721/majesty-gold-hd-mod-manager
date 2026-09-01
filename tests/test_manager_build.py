@@ -22,6 +22,15 @@ from majesty_cam.runtime_capabilities import (
     RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH,
     encode_runtime_capability_manifest,
 )
+from majesty_cam.runtime_features import (
+    RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH,
+    encode_runtime_feature_registry,
+)
+from majesty_cam.stock_controller_registry import (
+    CONTROLLER_REGISTRY_RELATIVE_PATH,
+    encode_stock_controller_registry,
+    resolve_stock_controller_registry,
+)
 from majesty_cam.manager.build import (
     MANAGER_OUTPUT_SENTINEL,
     ManagerBuildError,
@@ -29,6 +38,7 @@ from majesty_cam.manager.build import (
     _publish_staging,
     _require_current_plan_sources,
     _is_manager_owned_output,
+    _order_standard_ids,
     build_merged_package,
     create_build_plan,
     read_managed_build,
@@ -56,6 +66,50 @@ OTHER_ID = "48CDD934-B338-4373-A4A4-A99A8E7F917F"
 
 
 class ManagerBuildPlanTests(unittest.TestCase):
+    def test_detected_standard_dependency_overrides_saved_order_stably(self):
+        prerequisite = CatalogEntry(
+            content_id=HAUNT_ID,
+            raw_content_id=HAUNT_ID,
+            display_name="Original Component",
+            kind=CatalogKind.STANDARD,
+            source=CatalogSource.WORKSHOP,
+            package_root=Path("original"),
+            manifest_path=Path("original.mmxml"),
+            has_cam=False,
+            merge_ready=False,
+        )
+        patch_entry = CatalogEntry(
+            content_id=ALCHEMIST_ID,
+            raw_content_id=ALCHEMIST_ID,
+            display_name="Patch Component",
+            kind=CatalogKind.STANDARD,
+            source=CatalogSource.WORKSHOP,
+            package_root=Path("patch"),
+            manifest_path=Path("patch.mmxml"),
+            has_cam=False,
+            merge_ready=False,
+            load_after_ids=(HAUNT_ID,),
+        )
+        unrelated = CatalogEntry(
+            content_id=OTHER_ID,
+            raw_content_id=OTHER_ID,
+            display_name="Unrelated",
+            kind=CatalogKind.STANDARD,
+            source=CatalogSource.WORKSHOP,
+            package_root=Path("other"),
+            manifest_path=Path("other.mmxml"),
+            has_cam=False,
+            merge_ready=False,
+        )
+
+        ordered = _order_standard_ids(
+            (patch_entry, unrelated, prerequisite),
+            {ALCHEMIST_ID: 0, OTHER_ID: 1, HAUNT_ID: 2},
+        )
+
+        self.assertLess(ordered.index(HAUNT_ID), ordered.index(ALCHEMIST_ID))
+        self.assertEqual(set(ordered), {HAUNT_ID, ALCHEMIST_ID, OTHER_ID})
+
     def test_publication_rechecks_target_ownership_before_rename(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -169,6 +223,25 @@ class ManagerBuildPlanTests(unittest.TestCase):
                 "sha256": hashlib.sha256(capability_payload).hexdigest(),
                 "record_count": 0,
             }
+            feature_path = root / Path(RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH)
+            feature_payload = encode_runtime_feature_registry(())
+            feature_path.write_bytes(feature_payload)
+            feature_record = {
+                "path": RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH,
+                "sha256": hashlib.sha256(feature_payload).hexdigest(),
+                "name_generator_count": 0,
+                "enchantment_row_count": 0,
+            }
+            controller_path = root / CONTROLLER_REGISTRY_RELATIVE_PATH
+            controller_payload = encode_stock_controller_registry(
+                resolve_stock_controller_registry((), {})
+            )
+            controller_path.write_bytes(controller_payload)
+            controller_record = {
+                "path": CONTROLLER_REGISTRY_RELATIVE_PATH.as_posix(),
+                "sha256": hashlib.sha256(controller_payload).hexdigest(),
+                "record_count": 0,
+            }
             report = root / "CAM-MERGE-REPORT.json"
             report.write_text(
                 json.dumps(
@@ -176,6 +249,8 @@ class ManagerBuildPlanTests(unittest.TestCase):
                         "runtime": {
                             "capabilities": [],
                             "capability_manifest": capability_record,
+                            "feature_registry": feature_record,
+                            "controller_registry": controller_record,
                         }
                     }
                 ),
@@ -200,7 +275,7 @@ class ManagerBuildPlanTests(unittest.TestCase):
                 )
             ]
             sentinel = {
-                "schema_version": 2,
+                "schema_version": 4,
                 "fingerprint": "fixture",
                 "mod_id": OTHER_ID,
                 "selected_source_ids": [],
@@ -210,6 +285,8 @@ class ManagerBuildPlanTests(unittest.TestCase):
                     "record_count": 0,
                 },
                 "capability_manifest": capability_record,
+                "runtime_feature_registry": feature_record,
+                "controller_registry": controller_record,
                 "generated_files": generated_files,
             }
             (root / MANAGER_OUTPUT_SENTINEL).write_text(
@@ -234,6 +311,8 @@ class ManagerBuildPlanTests(unittest.TestCase):
                     manifest,
                     report,
                     capability_path,
+                    feature_path,
+                    controller_path,
                     registry_path,
                     *generated_resources,
                 )
@@ -930,7 +1009,15 @@ class ManagerBuildPlanTests(unittest.TestCase):
                     catalog, {OTHER_ID: True}, registry=registry, game_path=game
                 )
 
-            self.assertEqual(len(first.stock_compose_inputs), 9)
+            self.assertEqual(len(first.stock_compose_inputs), 11)
+            self.assertEqual(
+                dict(first.stock_compose_inputs)["DataMX/mx_maindata.cam"],
+                "absent",
+            )
+            self.assertEqual(
+                dict(first.stock_compose_inputs)["DataMX/mx_interfacedata.cam"],
+                "absent",
+            )
             self.assertNotEqual(first.fingerprint, changed.fingerprint)
             (game / "MajestyHD.exe").write_bytes(b"exe")
             paths = SimpleNamespace(
@@ -1000,6 +1087,76 @@ class ManagerBuildPlanTests(unittest.TestCase):
                         game_path=game,
                         phase="after Prepare",
                     )
+
+    def test_optional_mx_art_presence_hash_and_absence_invalidate_plan(self):
+        registry = CompatibilityRegistry(specs={})
+        optional_paths = (
+            "DataMX/mx_maindata.cam",
+            "DataMX/mx_interfacedata.cam",
+        )
+        mutations = (
+            ("appears", None, b"appeared"),
+            ("changes", b"original", b"changed"),
+            ("disappears", b"original", None),
+        )
+        for relative in optional_paths:
+            for label, initial, changed in mutations:
+                with self.subTest(path=relative, mutation=label), TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    game = root / "game"
+                    _write_stock_activity_inputs(game)
+                    optional = game / relative
+                    if initial is not None:
+                        optional.parent.mkdir(parents=True, exist_ok=True)
+                        optional.write_bytes(initial)
+                    package_root = root / "MergeMod"
+                    package_root.mkdir()
+                    (package_root / "payload.bin").write_bytes(b"fixture")
+                    catalog = Catalog(
+                        entries=(
+                            _merge_entry(OTHER_ID, "Other CAM", package_root),
+                        )
+                    )
+                    prepared = _prepared(
+                        OTHER_ID, "Other CAM", package_root, registry=registry
+                    )
+                    with patch(
+                        "majesty_cam.manager.build.prepare_merge_package",
+                        return_value=prepared,
+                    ), patch(
+                        "majesty_cam.manager.build.discover_selected_private_activity_texts",
+                        return_value=(),
+                    ):
+                        before = create_build_plan(
+                            catalog,
+                            {OTHER_ID: True},
+                            registry=registry,
+                            game_path=game,
+                        )
+                        if changed is None:
+                            optional.unlink()
+                        else:
+                            optional.parent.mkdir(parents=True, exist_ok=True)
+                            optional.write_bytes(changed)
+                        after = create_build_plan(
+                            catalog,
+                            {OTHER_ID: True},
+                            registry=registry,
+                            game_path=game,
+                        )
+
+                    self.assertTrue(before.valid)
+                    self.assertTrue(after.valid)
+                    self.assertNotEqual(before.fingerprint, after.fingerprint)
+                    with self.assertRaisesRegex(
+                        ManagerBuildError,
+                        "stock composition inputs changed after Prepare",
+                    ):
+                        _require_current_plan_sources(
+                            before,
+                            game_path=game,
+                            phase="after Prepare",
+                        )
 
     def test_missing_or_symlinked_stock_input_fails_closed(self):
         registry = CompatibilityRegistry(specs={})

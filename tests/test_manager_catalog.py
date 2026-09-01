@@ -147,6 +147,32 @@ class ManagerCatalogTests(unittest.TestCase):
             self.assertTrue(adapted.selectable)
             self.assertTrue(adapted.compatibility_applied)
 
+    def test_schema_v3_nonbuilding_definition_is_merge_selectable(self):
+        with TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "Mods"
+            package = mods / "DeclarativeCAM"
+            package.mkdir(parents=True)
+            _write_mod(package, MERGE_ID, "Declarative CAM", cam=True)
+            (package / "mod-definition.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 3,
+                        "mod_id": MERGE_ID,
+                        "internal_name": "DeclarativeCAM",
+                        "display_name": "Declarative CAM",
+                        "custom_buildings": [],
+                        "runtime_features": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            entry = scan_catalog(local_mods_root=mods).merge[0]
+
+            self.assertTrue(entry.merge_ready)
+            self.assertTrue(entry.selectable)
+            self.assertFalse(entry.compatibility_applied)
+
     def test_unknown_package_owned_runtime_capability_is_red_and_not_selectable(self):
         with TemporaryDirectory() as tmp:
             mods = Path(tmp) / "Mods"
@@ -549,6 +575,30 @@ class ManagerCatalogTests(unittest.TestCase):
                 ["Quest alpha", "quest Zebra"],
             )
 
+    def test_incompatible_merge_entries_sort_after_ready_entries(self):
+        with TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "Mods"
+            bad_id = "00000000-0000-4000-8000-000000000031"
+            ready_id = "00000000-0000-4000-8000-000000000032"
+            bad = mods / "bad"
+            ready = mods / "ready"
+            bad.mkdir(parents=True)
+            ready.mkdir(parents=True)
+            _write_mod(bad, bad_id, "Alpha Needs Attention", cam=True)
+            _write_mod(ready, ready_id, "Zulu Ready", cam=True)
+
+            catalog = scan_catalog(
+                local_mods_root=mods,
+                compatibility={ready_id: object()},
+            )
+
+            self.assertEqual(
+                [entry.display_name for entry in catalog.merge],
+                ["Zulu Ready", "Alpha Needs Attention"],
+            )
+            self.assertTrue(catalog.merge[0].selectable)
+            self.assertFalse(catalog.merge[1].selectable)
+
     def test_workshop_container_ignores_non_numeric_backup_directories(self):
         with TemporaryDirectory() as tmp:
             workshop = Path(tmp) / "workshop"
@@ -563,6 +613,206 @@ class ManagerCatalogTests(unittest.TestCase):
 
             self.assertEqual([entry.display_name for entry in catalog.entries], ["Live"])
             self.assertTrue(catalog.entries[0].selectable)
+
+    def test_stock_multi_mod_manifest_expands_to_independent_standard_rows(self):
+        with TemporaryDirectory() as tmp:
+            workshop = Path(tmp) / "workshop"
+            item = workshop / "123456"
+            item.mkdir(parents=True)
+            manifest = item / "Options.mmxml"
+            manifest.write_text(
+                """
+                <Majesty>
+                  <Mod id="{00000000-0000-4000-8000-000000000003}">
+                    <DisplayName lang="en_US">Option Charlie</DisplayName>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <GPL><Target>Data/C.bcd</Target><Source>GPL/C.gpl</Source></GPL>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
+                  <Mod id="{00000000-0000-4000-8000-000000000001}">
+                    <DisplayName lang="en_US">Option Alpha</DisplayName>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <Descriptions>Data/A.xml</Descriptions>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
+                  <Mod id="{00000000-0000-4000-8000-000000000002}">
+                    <DisplayName lang="en_US">Option Bravo</DisplayName>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <GPL><Target>Data/B.bcd</Target><Source>GPL/B.gpl</Source></GPL>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
+                </Majesty>
+                """,
+                encoding="utf-8",
+            )
+
+            catalog = scan_catalog(workshop_roots=(workshop,))
+
+            self.assertEqual(
+                [entry.display_name for entry in catalog.standard],
+                ["Option Alpha", "Option Bravo", "Option Charlie"],
+            )
+            self.assertTrue(all(entry.selectable for entry in catalog.standard))
+            self.assertTrue(
+                all(entry.manifest_path == manifest.resolve() for entry in catalog.standard)
+            )
+            self.assertEqual(
+                {entry.workshop_item_id for entry in catalog.standard}, {"123456"}
+            )
+            self.assertFalse(
+                any("invalid_manifest_shape" in _issue_codes(entry) for entry in catalog.entries)
+            )
+
+    def test_multi_mod_collection_detects_only_overlapping_variants(self):
+        with TemporaryDirectory() as tmp:
+            workshop = Path(tmp) / "workshop"
+            item = workshop / "987654"
+            item.mkdir(parents=True)
+            (item / "Options.mmxml").write_text(
+                """
+                <Majesty>
+                  <Mod id="{00000000-0000-4000-8000-000000000001}">
+                    <DisplayName lang="en_US">Example - Attributes V1</DisplayName>
+                    <Description lang="en_US">
+                      <Short>The simpler attribute set.</Short>
+                      <Long>The longer author explanation stays separate.</Long>
+                    </Description>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <GPL><Target>Data/Attributes_v1.bcd</Target></GPL>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
+                  <Mod id="{00000000-0000-4000-8000-000000000002}">
+                    <DisplayName lang="en_US">Example - Attributes V2</DisplayName>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <GPL><Target>Data/Attributes_v2.bcd</Target></GPL>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
+                  <Mod id="{00000000-0000-4000-8000-000000000003}">
+                    <DisplayName lang="en_US">Example - Extra Maps</DisplayName>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <Descriptions>Data/ExtraMaps.xml</Descriptions>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
+                </Majesty>
+                """,
+                encoding="utf-8",
+            )
+
+            entries = scan_catalog(workshop_roots=(workshop,)).standard
+            by_name = {entry.display_name: entry for entry in entries}
+            v1 = by_name["Example - Attributes V1"]
+            v2 = by_name["Example - Attributes V2"]
+            maps = by_name["Example - Extra Maps"]
+
+            self.assertEqual({entry.collection_name for entry in entries}, {"Example"})
+            self.assertTrue(all(entry.in_collection for entry in entries))
+            self.assertEqual(v1.description, "The simpler attribute set.")
+            self.assertEqual(
+                v1.details, "The longer author explanation stays separate."
+            )
+            self.assertEqual(v1.incompatible_ids, (v2.content_id,))
+            self.assertEqual(v2.incompatible_ids, (v1.content_id,))
+            self.assertEqual(maps.incompatible_ids, ())
+            self.assertEqual(v1.variant_label, "Attributes V1")
+
+    def test_multi_mod_manifest_blocks_only_cam_changing_elements(self):
+        with TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "Mods"
+            package = mods / "Mixed"
+            package.mkdir(parents=True)
+            (package / "Mixed.mmxml").write_text(
+                f"""
+                <Majesty>
+                  <Mod id="{STANDARD_ID}">
+                    <DisplayName lang="en_US">Ordinary Option</DisplayName>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <GPL><Target>Data/Plain.bcd</Target><Source>GPL/Plain.gpl</Source></GPL>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
+                  <Mod id="{MERGE_ID}">
+                    <DisplayName lang="en_US">CAM Option</DisplayName>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <CAM>Data/Content.cam</CAM>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
+                </Majesty>
+                """,
+                encoding="utf-8",
+            )
+
+            catalog = scan_catalog(local_mods_root=mods)
+
+            self.assertEqual(len(catalog.standard), 1)
+            self.assertTrue(catalog.standard[0].selectable)
+            self.assertEqual(len(catalog.merge), 1)
+            self.assertFalse(catalog.merge[0].selectable)
+            self.assertIn("multi_mod_merge_manifest", _issue_codes(catalog.merge[0]))
+            self.assertNotIn("missing_merge_definition", _issue_codes(catalog.merge[0]))
+
+    def test_explicit_legacy_description_orders_matching_installed_components(self):
+        with TemporaryDirectory() as tmp:
+            workshop = Path(tmp) / "workshop"
+            original = workshop / "100"
+            patch = workshop / "200"
+            original.mkdir(parents=True)
+            patch.mkdir()
+            (original / "Original.mmxml").write_text(
+                """
+                <Majesty>
+                  <Mod id="{00000000-0000-4000-8000-000000000001}">
+                    <DisplayName lang="en_US">Misc Enhancements - AI Improvements</DisplayName>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <GPL><Target>Data/AI.bcd</Target></GPL>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
+                  <Mod id="{00000000-0000-4000-8000-000000000002}">
+                    <DisplayName lang="en_US">Misc Enhancements - Attributes Version 3</DisplayName>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <GPL><Target>Data/Attributes_v3.bcd</Target></GPL>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
+                </Majesty>
+                """,
+                encoding="utf-8",
+            )
+            (patch / "Patch.mmxml").write_text(
+                """
+                <Majesty>
+                  <Mod id="{00000000-0000-4000-8000-000000000003}">
+                    <DisplayName lang="en_US">ME Patch - AI Tower Fix</DisplayName>
+                    <Description lang="en_US"><Long>
+                      REQUIRES Miscellaneous Enhancements with its AI Improvements
+                      component enabled, loaded BEFORE this patch.
+                    </Long></Description>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <GPL><Target>Data/AI_Fix.bcd</Target></GPL>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
+                  <Mod id="{00000000-0000-4000-8000-000000000004}">
+                    <DisplayName lang="en_US">ME Patch - Attributes V3 Spell Fix</DisplayName>
+                    <Description lang="en_US"><Short>
+                      Load AFTER Miscellaneous Enhancements with its Attributes V3 component.
+                    </Short></Description>
+                    <DataConfiguration><Dataset base="Any"><Load>
+                      <GPL><Target>Data/Attributes_Fix.bcd</Target></GPL>
+                    </Load></Dataset></DataConfiguration>
+                  </Mod>
+                </Majesty>
+                """,
+                encoding="utf-8",
+            )
+
+            entries = scan_catalog(workshop_roots=(workshop,)).standard
+            by_name = {entry.display_name: entry for entry in entries}
+            ai = by_name["Misc Enhancements - AI Improvements"]
+            attrs = by_name["Misc Enhancements - Attributes Version 3"]
+            ai_patch = by_name["ME Patch - AI Tower Fix"]
+            attrs_patch = by_name["ME Patch - Attributes V3 Spell Fix"]
+
+            self.assertEqual(ai_patch.load_after_ids, (ai.content_id,))
+            self.assertEqual(attrs_patch.load_after_ids, (attrs.content_id,))
+            self.assertEqual(ai.load_before_ids, (ai_patch.content_id,))
+            self.assertEqual(attrs.load_before_ids, (attrs_patch.content_id,))
 
     def test_ambiguous_manifests_and_unsafe_xml_fail_closed(self):
         with TemporaryDirectory() as tmp:

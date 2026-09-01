@@ -249,6 +249,55 @@ QFrame#qolCard {
     border-radius: 6px;
 }
 
+QFrame#modCollection {
+    background-color: #17130e;
+    border: 1px solid #635034;
+    border-radius: 7px;
+}
+QFrame#modCollection[selectionState="active"] { border-color: #a58648; }
+QFrame#modCollection[selectionState="empty"] { border-color: #4b4338; }
+
+QFrame#collectionHeader {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #302518, stop:1 #201912);
+    border: 0;
+    border-bottom: 1px solid #58462e;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+}
+
+QWidget#collectionChildren { background-color: #15110d; border: 0; }
+
+QPushButton#collectionToggle {
+    color: #f1d483;
+    background-color: #1a1510;
+    border: 1px solid #76603b;
+    border-radius: 4px;
+    padding: 0;
+    font-size: 17px;
+    font-weight: 700;
+}
+QPushButton#collectionToggle:hover { background-color: #392a18; border-color: #c9a451; }
+
+QLabel#collectionName {
+    color: #f2e4c4;
+    font-family: Georgia;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+QLabel#collectionSummary {
+    color: #aaa397;
+    background-color: #211c16;
+    border: 1px solid #51483c;
+    border-radius: 3px;
+    padding: 3px 7px;
+    font-size: 10px;
+    font-weight: 700;
+}
+QLabel#collectionSummary[state="active"] { color: #f0d486; border-color: #8d713c; }
+QLabel#collectionSummary[state="empty"] { color: #8f8b83; }
+
 QFrame#modCard:hover,
 QFrame#qolCard:hover { background-color: #282016; border-color: #6b5a3c; }
 
@@ -281,9 +330,32 @@ QLabel#cardStatus[tone="danger"] { color: #f28379; }
 QLabel#cardDetail,
 QLabel#qolDescription { color: #a6aaa8; font-size: 12px; }
 QLabel#cardDetail[tone="danger"] { color: #e0a09a; }
+QLabel#authorDescription {
+    color: #b9b2a6;
+    background-color: #17140f;
+    border-left: 2px solid #6c5a3b;
+    padding: 7px 9px;
+    font-size: 11px;
+}
+
+QPushButton#contentDetailsButton {
+    min-width: 52px;
+    min-height: 20px;
+    max-height: 20px;
+    padding: 0 7px;
+    font-size: 9px;
+}
+
+QPushButton#collectionDetailsButton {
+    min-height: 22px;
+    padding: 1px 8px;
+    font-size: 10px;
+}
 
 QLabel#sourceBadge,
 QLabel#kindBadge,
+QLabel#variantBadge,
+QLabel#variantGroupBadge,
 QLabel#neutralBadge,
 QLabel#compatibilityBadge,
 QLabel#requiredBadge,
@@ -296,6 +368,9 @@ QLabel#qolStatusBadge {
 
 QLabel#sourceBadge { color: #c4b8a6; background-color: #2a241d; border: 1px solid #51463a; }
 QLabel#kindBadge { color: #d3bd8d; background-color: #2b2116; border: 1px solid #625033; }
+QLabel#variantBadge { color: #cbbd9b; background-color: #29241d; border: 1px solid #554a38; }
+QLabel#variantGroupBadge { color: #a9c9b2; background-color: #1b2a1e; border: 1px solid #42634a; }
+QLabel#variantGroupBadge[conflicts="true"] { color: #e6c47d; background-color: #352817; border-color: #786035; }
 
 QLabel#kindBadge[catalogKind="quest"] {
     color: #d4bdd5;

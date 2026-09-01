@@ -13,7 +13,7 @@ from majesty_cam.manager.compatibility import (
     CompatibilityRegistry,
     CompatibilitySpec,
 )
-from majesty_cam.manager.preflight import prepare_merge_package
+from majesty_cam.manager.preflight import _validate_package, prepare_merge_package
 from majesty_cam.package import ModDefinition
 
 
@@ -22,6 +22,28 @@ OTHER_MOD_ID = "818F1460-3095-4B42-A64C-D55C11D7624E"
 
 
 class ManagerPreflightTests(unittest.TestCase):
+    def test_v3_nonbuilding_package_does_not_require_bdep_art_or_buildings(self):
+        definition = ModDefinition(
+            schema_version=3,
+            mod_id=MOD_ID,
+            internal_name="DataOnlyFixture",
+            display_name="Data-Only Fixture",
+            custom_buildings=(),
+            runtime_features=(),
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = SimpleNamespace(definition=definition, root=root)
+            inventory = SimpleNamespace(cams=(), gpl_loads=())
+            issues = []
+            with patch(
+                "majesty_cam.manager.preflight.inventory_package",
+                return_value=inventory,
+            ):
+                _validate_package(package, alias="data-only", issues=issues)
+
+        self.assertEqual(issues, [])
+
     def test_trusted_adapter_cannot_remove_generic_runtime_prerequisites(self):
         definition = ModDefinition(
             schema_version=1,
@@ -201,6 +223,66 @@ class ManagerPreflightTests(unittest.TestCase):
             [issue.code for issue in unadapted.issues],
         )
         self.assertFalse(adapted.issues)
+
+    def test_package_owned_v3_definition_overrides_legacy_manager_adapter(self):
+        definition = ModDefinition(
+            schema_version=3,
+            mod_id=MOD_ID,
+            internal_name="CurrentFixture",
+            display_name="Current Fixture",
+            custom_buildings=(),
+            runtime_features=(),
+        )
+        package = SimpleNamespace(
+            definition=definition,
+            mod_id=MOD_ID,
+            manifest_path=Path("fixture.mmxml"),
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "mod-definition.json").write_text("{}", encoding="utf-8")
+            adapter_path = root / "legacy-adapter.json"
+            adapter_path.write_text("{}", encoding="utf-8")
+            spec = CompatibilitySpec(
+                mod_id=MOD_ID,
+                alias="legacy-fixture",
+                definition_path=adapter_path,
+                replacement_roots=(),
+                merge_priority=25,
+                badge="Legacy adapter",
+                runtime_capabilities=("alchemist.nm18-name-generator",),
+                resolution_owners=(),
+            )
+            with patch(
+                "majesty_cam.manager.preflight.load_package",
+                return_value=package,
+            ) as load, patch(
+                "majesty_cam.manager.preflight._validate_package"
+            ), patch(
+                "majesty_cam.manager.preflight.inventory_package"
+            ), patch(
+                "majesty_cam.manager.preflight.resolve_runtime_feature_registry"
+            ), patch(
+                "majesty_cam.manager.preflight.resolve_building_dialogs",
+                return_value={},
+            ), patch(
+                "majesty_cam.manager.preflight.resolve_controller_registry"
+            ):
+                result = prepare_merge_package(
+                    content_id=MOD_ID,
+                    display_name="Current Fixture",
+                    source_root=root,
+                    registry=CompatibilityRegistry(specs={MOD_ID: spec}),
+                )
+
+        load.assert_called_once_with(root.resolve(), definition=None)
+        self.assertIsNone(result.compatibility)
+        self.assertIsNone(result.badge)
+        self.assertEqual(result.priority, 1000)
+        self.assertNotIn(
+            "alchemist.nm18-name-generator", result.runtime_capabilities
+        )
+        self.assertFalse(result.issues)
 
     def test_v2_package_runtime_capabilities_join_generic_launcher_features(self):
         definition = ModDefinition(

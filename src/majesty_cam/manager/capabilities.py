@@ -8,6 +8,11 @@ discovery and the deeper build preflight.
 from __future__ import annotations
 
 from ..runtime_capabilities import PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY
+from ..runtime_features import (
+    ENCHANTMENT_ROW_RUNTIME_CAPABILITY,
+    NAME_GENERATOR_RUNTIME_CAPABILITY,
+)
+from ..stock_controller_registry import STOCK_CONTROLLER_RUNTIME_CAPABILITY
 
 
 GENERIC_RUNTIME_CAPABILITIES = (
@@ -16,7 +21,12 @@ GENERIC_RUNTIME_CAPABILITIES = (
 )
 
 DERIVED_RUNTIME_CAPABILITIES = frozenset(
-    (PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY,)
+    (
+        PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY,
+        ENCHANTMENT_ROW_RUNTIME_CAPABILITY,
+        NAME_GENERATOR_RUNTIME_CAPABILITY,
+        STOCK_CONTROLLER_RUNTIME_CAPABILITY,
+    )
 )
 
 SUPPORTED_RUNTIME_CAPABILITIES = frozenset(
@@ -27,6 +37,9 @@ SUPPORTED_RUNTIME_CAPABILITIES = frozenset(
         "alchemist.nm18-name-generator",
         "generic-visitor-lists.v1",
         "phantom.nm19-name-generator",
+        ENCHANTMENT_ROW_RUNTIME_CAPABILITY,
+        NAME_GENERATOR_RUNTIME_CAPABILITY,
+        STOCK_CONTROLLER_RUNTIME_CAPABILITY,
         *DERIVED_RUNTIME_CAPABILITIES,
     )
 )

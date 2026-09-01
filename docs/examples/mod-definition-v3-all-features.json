@@ -1,0 +1,143 @@
+{
+  "schema_version": 3,
+  "mod_id": "{12345678-1234-4567-89ab-1234567890ab}",
+  "internal_name": "ExampleCraftingGuild",
+  "display_name": "Example Crafting Guild",
+  "custom_buildings": [
+    {
+      "local_name": "ExampleCraftingGuild",
+      "controller_base": "AP10",
+      "panel_resource_template": "AP10"
+    },
+    {
+      "local_name": "ExampleRewardBuilding",
+      "controller_base": "MX09",
+      "panel_resource_template": "MX09"
+    }
+  ],
+  "runtime_features": [
+    {
+      "type": "stock.name-generator.v1",
+      "generator_id": "NM42",
+      "name_tables": ["HN81", "HN82", "HN83", "HN84"]
+    },
+    {
+      "type": "stock.ap78-enchantment-row.v1",
+      "overlay_id": "OV42",
+      "display_text": "Example enchantment description"
+    },
+    {
+      "type": "stock.mx09-ap41-reward-panel.v1",
+      "panel_key": "reward-panel",
+      "parent_building": "ExampleRewardBuilding",
+      "source_dialog_id": "ERP1",
+      "open_command_id": 5001
+    },
+    {
+      "type": "stock.ap41-fl00-hostile-monster-flag.v1",
+      "panel_key": "reward-panel",
+      "action_key": "capture",
+      "private_mode": "RF01",
+      "private_flag_id": "RF01",
+      "cursor_ordinal": 38,
+      "availability_attribute_id": null,
+      "unavailable_alert_text": null
+    },
+    {
+      "type": "stock.ap10-ap69-secondary-panel.v1",
+      "panel_key": "crafting-panel",
+      "parent_building": "ExampleCraftingGuild",
+      "source_dialog_id": "EXPN",
+      "building_family_id": "EXG",
+      "open_command_id": 8001
+    },
+    {
+      "type": "stock.ap22-resource-meter.v1",
+      "panel_key": "crafting-panel",
+      "resource_key": "reagents",
+      "attribute_id": "EXR0",
+      "label_control_id": 11001,
+      "count_control_id": 11002,
+      "binding_control_id": 11003
+    },
+    {
+      "type": "stock.ap99-research-row.v1",
+      "panel_key": "crafting-panel",
+      "recipe_key": "first-recipe",
+      "action_control_id": 11010,
+      "descriptor_template_control_id": 5020,
+      "completion_template_control_id": 5020,
+      "required_level": 1,
+      "price": 250,
+      "price_control_id": 12010,
+      "progress_control_id": 11011,
+      "active_display_control_id": 11012,
+      "icon_control_id": 0,
+      "completion_text": "First Recipe"
+    },
+    {
+      "type": "stock.ap17-upgrade-research-gate.v1",
+      "panel_key": "crafting-panel",
+      "parent_building": "ExampleCraftingGuild",
+      "upgrade_control_id": 8002,
+      "upgrade_price_control_id": 8003,
+      "requirements": [
+        {
+          "building_level": 1,
+          "recipe_key": "first-recipe"
+        }
+      ]
+    },
+    {
+      "type": "stock.ap24-timed-rage-action.v1",
+      "panel_key": "crafting-panel",
+      "action_key": "timed-blessing",
+      "action_control_id": 11020,
+      "descriptor_template_control_id": 4416,
+      "level_price_template_control_id": 4414,
+      "required_level": 3,
+      "gold_cost": 1500,
+      "resource_key": "reagents",
+      "resource_cost": 1,
+      "callback_symbol": "Example_DoTimedBlessing",
+      "duration_ms": 30000,
+      "icon_control_id": 12020,
+      "price_control_id": 10020,
+      "progress_control_id": 11021,
+      "active_display_control_id": 11022
+    },
+    {
+      "type": "stock.ap24-rage-command-action.v1",
+      "panel_key": "crafting-panel",
+      "action_key": "instant-action",
+      "action_control_id": 11030,
+      "visual_template_control_id": 4402,
+      "completion_template_research_control_id": 5020,
+      "required_level": 3,
+      "resource_key": "reagents",
+      "resource_cost": 5,
+      "callback_symbol": "Example_DoInstantAction",
+      "icon_control_id": 12030,
+      "price_control_id": 10030
+    },
+    {
+      "type": "stock.ap69-sovereign-target-action.v1",
+      "panel_key": "crafting-panel",
+      "action_key": "target-action",
+      "visual_control_id": 11040,
+      "private_control_id": 11041,
+      "visual_template_control_id": 4403,
+      "target_template_control_id": 4402,
+      "stock_target_mode": "Sp23",
+      "stock_executor_mode": "Sp14",
+      "private_mode": "ExS1",
+      "private_unit_id": "EXS1",
+      "cursor_ordinal": 39,
+      "required_level": 3,
+      "resource_key": "reagents",
+      "resource_cost": 5,
+      "icon_control_id": 12040,
+      "price_control_id": 10040
+    }
+  ]
+}

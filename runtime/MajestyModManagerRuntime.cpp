@@ -16,6 +16,8 @@
 #include "FreestyleCamRuntime.h"
 #include "IntentTextRegistry.h"
 #include "RuntimeCapabilityManifest.h"
+#include "RuntimeFeatureRegistry.h"
+#include "StockControllerRegistry.h"
 
 namespace {
 
@@ -103,6 +105,30 @@ struct MajestyBuildProfile {
     std::uintptr_t sovereignConstructionOverrideRva;
     unsigned char expectedSovereignConstructionOverride[9];
     std::size_t sovereignConstructionOverrideSize;
+    std::uintptr_t openDialogRva;
+    std::uintptr_t stockAp41HandlerRva;
+    std::uintptr_t stockAp41ActivationRva;
+    std::uintptr_t stockAp41RefreshRva;
+    std::uintptr_t attackRewardAmountRva;
+    std::uintptr_t flagModeOwnerRva;
+    std::uintptr_t getFlagModeManagerRva;
+    std::uintptr_t getSelectedFlagModeRva;
+    std::uintptr_t setFlagModeRva;
+    std::uintptr_t modeRegistryCompletionRva;
+    unsigned char expectedModeRegistryCompletion[11];
+    std::uintptr_t modeRegistryResumeRva;
+    std::uintptr_t stockCaptureCallbackRva;
+    unsigned char expectedStockCallbackCreate[11];
+    std::uintptr_t stockCaptureValidatorRva;
+    std::uintptr_t stockFlagTargetCheckRva;
+    std::uintptr_t displayClassifierRva;
+    std::uintptr_t selectedAgentRva;
+    std::uintptr_t findAttachedRelationRva;
+    std::uintptr_t systemAlertOwnerRva;
+    std::uintptr_t prepareSystemAlertRva;
+    std::uintptr_t postLiteralSystemAlertRva;
+    std::uintptr_t flagModeConstructorRva;
+    std::uintptr_t getFlagModeRegistryRva;
 };
 
 // Each profile is traced independently from the same stock dialog, Rage,
@@ -153,6 +179,12 @@ constexpr MajestyBuildProfile kPublicBuildProfile = {
     0x00065FF5, {0xE8, 0x76, 0x3F, 0x07, 0x00}, 0x000D9F70,
     0x000DA020, {0x6A, 0xFF, 0x68, 0x07, 0xA0, 0x6F, 0x00},
     0x000DA0A8, {0x8B, 0x4C, 0x24, 0x1C, 0x8B, 0xD8, 0x00, 0x00, 0x00}, 6,
+    0x000B03F0, 0x000A92F0, 0x000A9230, 0x000A94A0,
+    0x003C17A4, 0x003C12F0, 0x00054B90, 0x000556D0, 0x00054E70,
+    0x0005E4E4, {0x8B,0x4C,0x24,0x10,0x64,0x89,0x0D,0,0,0,0}, 0x0005E4EF,
+    0x0005D400, {0x57,0x68,0x04,0xBA,0x73,0x00,0xE8,0xB6,0xF7,0xFF,0xFF},
+    0x0005D360, 0x0005D2D0, 0x00108510, 0x00067540, 0x001A7730,
+    0x003C1394, 0x0006ABE0, 0x0006ACE0, 0x0019D1E0, 0x0019EF30,
 };
 
 constexpr MajestyBuildProfile kBeta2BuildProfile = {
@@ -200,104 +232,38 @@ constexpr MajestyBuildProfile kBeta2BuildProfile = {
     0x00067025, {0xE8, 0x56, 0x35, 0x07, 0x00}, 0x000DA580,
     0x000DA630, {0x6A, 0xFF, 0x68, 0xD7, 0xF5, 0x70, 0x00},
     0x000DA6B8, {0x8B, 0x4C, 0x24, 0x1C, 0x8B, 0xD8, 0x00, 0x00, 0x00}, 6,
+    0x000B0CE0, 0x000A9BE0, 0x000A9B20, 0x000A9D90,
+    0x003E028C, 0x003DFDA8, 0x00055BC0, 0x00056700, 0x00055EA0,
+    0x0005F514, {0x8B,0x4C,0x24,0x10,0x64,0x89,0x0D,0,0,0,0}, 0x0005F51F,
+    0x0005E430, {0x57,0x68,0xD4,0x4A,0x75,0x00,0xE8,0xB6,0xF7,0xFF,0xFF},
+    0x0005E390, 0x0005E300, 0x0010A6E0, 0x00068780, 0x001BC6E0,
+    0x003DFE4C, 0x0006BE70, 0x0006BFE0, 0x001B2190, 0x001B3EE0,
 };
 
 const MajestyBuildProfile* g_buildProfile = nullptr;
-constexpr std::uint32_t kCgalDialogId = 0x4C414743;
-constexpr std::uint32_t kCgbrDialogId = 0x52424743;
 constexpr std::uint32_t kAp10DialogId = 0x30315041;
 constexpr std::uint32_t kAp69DialogId = 0x39365041;
-constexpr std::uint32_t kBrewingParentCommandId = 0x00001F49;
-constexpr std::uint32_t kBuildingUpgradeControlId = 0x00001F47;
-constexpr std::uint32_t kBuildingUpgradePriceControlId = 0x00001F4F;
-constexpr std::uint32_t kInvigoratingElixerControlId = 0x00002A10;
-constexpr std::uint32_t kInvigoratingElixerIconControlId =
-    kInvigoratingElixerControlId + 1000;
-constexpr std::uint32_t kInvigoratingElixerPriceControlId =
-    kInvigoratingElixerControlId - 1000;
-constexpr std::uint32_t kInvigoratingElixerProgressControlId = 0x00002009;
-constexpr std::uint32_t kInvigoratingElixerActiveDisplayControlId = 0x0000227A;
-constexpr std::uint32_t kStockArrowsResearchControlId = 0x0000139C;
-constexpr std::uint32_t kStockTeleportAmuletResearchControlId = 0x000013B3;
-constexpr std::uint32_t kStockArrowsResearchPrice = 250;
+constexpr std::uint32_t kAp41DialogId = 0x31345041;
+constexpr std::uint32_t kMx09DialogId = 0x3930584D;
 constexpr std::size_t kResearchDescriptorDwordCount = 5;
 constexpr std::size_t kResearchDescriptorSize =
     kResearchDescriptorDwordCount * sizeof(std::uint32_t);
-constexpr std::uint32_t kWeaponOilResearchControlId = 0x00002A13;
-constexpr std::uint32_t kWeaponOilResearchPriceControlId =
-    kWeaponOilResearchControlId + 1000;
-constexpr std::uint32_t kWeaponOilResearchPrice = 250;
-constexpr std::uint32_t kWeaponOilProgressControlId = 0x00002A11;
-constexpr std::uint32_t kWeaponOilActiveDisplayControlId = 0x00002A12;
-constexpr std::uint32_t kPhoenixPhialResearchControlId = 0x00002A16;
-constexpr std::uint32_t kPhoenixPhialResearchIconControlId =
-    kPhoenixPhialResearchControlId + 500;
-constexpr std::uint32_t kPhoenixPhialResearchPriceControlId =
-    kPhoenixPhialResearchControlId + 1000;
-constexpr std::uint32_t kPhoenixPhialResearchPrice = 750;
-constexpr std::uint32_t kPhoenixPhialProgressControlId = 0x00002A17;
-constexpr std::uint32_t kPhoenixPhialActiveDisplayControlId = 0x00002A18;
-constexpr std::uint32_t kPhilosophersStoneControlId = 0x00002A21;
-constexpr std::uint32_t kArcaneInfusionVisualControlId = 0x00001132;
-constexpr std::uint32_t kPhilosophersStoneVisualControlId = 0x00001133;
-constexpr std::uint32_t kArcaneInfusionVisualPriceControlId =
-    kArcaneInfusionVisualControlId - 1000;
-constexpr std::uint32_t kPhilosophersStoneVisualPriceControlId =
-    kPhilosophersStoneVisualControlId - 1000;
-constexpr std::uint32_t kReagentMeterLabelControlId = 0x00002A23;
-constexpr std::uint32_t kReagentMeterCountControlId = 0x00002A24;
-constexpr std::uint32_t kReagentMeterCountBindingId = 0x00002A25;
-// Majesty registers #ATTRIB_ReturnAmount as the packed four-character ID
-// APV0. The Laboratory mirrors its stock num_resources balance there so the
-// native panel reads the same value that the GPL action commit consumes.
-constexpr std::uint32_t kReagentStockAttributeId = 0x30565041;
-constexpr int kReagentActionCost = 10;
-constexpr int kInvigoratingElixerReagentCost = 1;
-constexpr std::uint32_t kStockLightningStormControlId = 0x00001145;
-constexpr std::uint32_t kStockLightningStormMode = 0x34317053;
-constexpr std::uint32_t kStockVinesControlId = 0x00001132;
-constexpr std::uint32_t kStockVinesMode = 0x33327053;
 constexpr std::uint32_t kStockUnaffordableGoldCost = 0x3FFFFFFF;
-constexpr std::uint32_t kStockFervusSecondSpellMode = 0x33327053;
-constexpr std::uint32_t kStockFervusThirdSpellMode = 0x34327053;
-constexpr std::uint32_t kPhilosophersStoneMode = 0x31536C41;
-constexpr std::uint32_t kPhilosophersStoneUnitId = 0x31534C41;
-constexpr std::uint32_t kPhilosophersStoneCursorOrdinal = 39;
 constexpr std::uint32_t kRageOfKrolmCommandId = 1;
-constexpr std::uint32_t kInvigoratingElixerGoldCost = 1500;
-constexpr DWORD kInvigoratingElixerDurationMs = 30000;
 constexpr std::uint32_t kRageOfKrolmCountAttributeId = 0x07425041;
 constexpr std::uint32_t kPlayerGoldDataId = 0x00505041;
 constexpr std::uint32_t kCurrentResearchAttributeId = 0x2C425041;
 constexpr std::uint32_t kResearchStartedAtAttributeId = 0x38425041;
 constexpr std::uint32_t kResearchDurationAttributeId = 0x0D425041;
-constexpr std::uint32_t kWeaponOilCompletionAttributeId = 0x2A425041;
-constexpr std::uint32_t kPhoenixPhialCompletionAttributeId = 0x29425041;
-constexpr std::uint32_t kStockPetrifyControlId = 0x0000113E;
-constexpr std::uint32_t kStockFervusHealingControlId = 0x00001140;
-constexpr std::uint32_t kStockFervusBuildingClassId = 0x00514241;
-constexpr std::uint32_t kLaboratoryBuildingClassId = 0x00424C41;
-constexpr std::uint32_t kArrowsGlobalTextId = 0x000000CA;
-constexpr std::uint32_t kParalyticOilOverlayId = 0x316F4C41;
-constexpr std::uint32_t kTransmutationOilOverlayId = 0x326F4C41;
-constexpr std::uint32_t kPoisonedWeaponOverlayId = 0x336F4C41;
-constexpr std::uint32_t kSpeedTonicOverlayId = 0x31305258;
-constexpr std::uint32_t kFirstStockEnchantmentOverlayId = 0x32425243;
 constexpr std::uint32_t kStockLastNameGeneratorId = 0x37314D4E;
-constexpr std::uint32_t kAlchemistNameGeneratorId = 0x38314D4E;
-constexpr std::uint32_t kAlchemistGivenNamesId = 0x39364E48;
-constexpr std::uint32_t kAlchemistEndingsId = 0x30374E48;
-constexpr std::uint32_t kAlchemistThirdNamePartId = 0x31374E48;
-constexpr std::uint32_t kAlchemistFourthNamePartId = 0x32374E48;
-constexpr std::uint32_t kPhantomNameGeneratorId = 0x39314D4E;
-constexpr std::uint32_t kPhantomGivenNamesId = 0x33374E48;
-constexpr std::uint32_t kPhantomEndingsId = 0x34374E48;
-constexpr std::uint32_t kPhantomThirdNamePartId = 0x35374E48;
-constexpr std::uint32_t kPhantomFourthNamePartId = 0x36374E48;
 constexpr wchar_t kIntentRegistryEnvironment[] =
     L"MAJESTY_MOD_MANAGER_INTENT_REGISTRY";
 constexpr wchar_t kCapabilityManifestEnvironment[] =
     L"MAJESTY_MOD_MANAGER_CAPABILITIES";
+constexpr wchar_t kRuntimeFeatureRegistryEnvironment[] =
+    L"MAJESTY_MOD_MANAGER_FEATURES";
+constexpr wchar_t kStockControllerRegistryEnvironment[] =
+    L"MAJESTY_MOD_MANAGER_CONTROLLERS";
 constexpr wchar_t kRuntimeReadyEventEnvironment[] =
     L"MAJESTY_BUILDING_RUNTIME_READY_EVENT";
 constexpr int kSidebarWidth = 200;
@@ -340,31 +306,16 @@ std::uintptr_t g_nameRegistryCompletionResume = 0;
 std::uintptr_t g_sovereignCursorTransitionResume = 0;
 std::uintptr_t g_sovereignExecutorResume = 0;
 std::uintptr_t g_sovereignConstructionResume = 0;
-LONG g_privateEnchantmentRowKind = 0;
-const char g_paralyticOilEnchantmentText[] =
-    "Paralytic Oil - brief stun on weapon hit";
-const char g_transmutationOilEnchantmentText[] =
-    "Transmutation Oil - +5 gold on weapon hit";
-const char g_poisonedWeaponEnchantmentText[] =
-    "Poisoned Weapon - poison on weapon hit";
 struct MajestyStringView {
     const char* data;
     std::uint32_t capacityFlags;
     std::uint32_t length;
 };
-const MajestyStringView g_paralyticOilEnchantmentString = {
-    g_paralyticOilEnchantmentText,
-    sizeof(g_paralyticOilEnchantmentText) - 1,
-    sizeof(g_paralyticOilEnchantmentText) - 1};
-const MajestyStringView g_transmutationOilEnchantmentString = {
-    g_transmutationOilEnchantmentText,
-    sizeof(g_transmutationOilEnchantmentText) - 1,
-    sizeof(g_transmutationOilEnchantmentText) - 1};
-const MajestyStringView g_poisonedWeaponEnchantmentString = {
-    g_poisonedWeaponEnchantmentText,
-    sizeof(g_poisonedWeaponEnchantmentText) - 1,
-    sizeof(g_poisonedWeaponEnchantmentText) - 1};
 static_assert(sizeof(MajestyStringView) == 12, "Majesty x86 string view changed");
+const MajestyStringView* g_privateEnchantmentRowString = nullptr;
+MajestyRuntimeFeatures::Registry g_runtimeFeatureRegistry;
+MajestyStockControllers::Registry g_stockControllerRegistry;
+std::vector<MajestyStringView> g_runtimeEnchantmentViews;
 
 enum class PrivateIntentRegistryState {
     Absent,
@@ -374,6 +325,18 @@ enum class PrivateIntentRegistryState {
 };
 
 enum class CapabilityManifestState {
+    Absent,
+    Loaded,
+    Invalid,
+};
+
+enum class RuntimeFeatureRegistryState {
+    Absent,
+    Loaded,
+    Invalid,
+};
+
+enum class StockControllerRegistryState {
     Absent,
     Loaded,
     Invalid,
@@ -389,62 +352,97 @@ std::vector<MajestyIntentText::RegistryRecord> g_privateIntentRecords;
 std::vector<MajestyStringView> g_privateIntentViews;
 MajestyRuntimeCapabilities::Manifest g_runtimeCapabilities;
 
-const char* g_invigoratingGplFunctionName =
-    "Alchemist_DoInvigoratingElixer";
-const char* g_arcaneInfusionGplFunctionName =
-    "Alchemist_Arcane_Infusion";
 HMODULE g_runtimeModule = nullptr;
 std::uintptr_t g_imageBase = 0;
 WNDPROC g_originalWindowProcedure = nullptr;
-LONG g_cgalSecondaryArmed = 0;
+LONG g_secondaryPanelArmed = 0;
 LONG g_ap10ControllerContext = 0;
-LONG g_cgalControllerContext = 0;
-LONG g_customBrewingActive = 0;
-LONG g_customBrewingHandle = 0;
-LONG g_captureCgalController = 0;
-LONG g_captureBrewingController = 0;
-LONG g_cgalController = 0;
-LONG g_customBrewingController = 0;
-LONG g_invigoratingElixerActive = 0;
-LONG g_invigoratingRageHandle = 0;
-LONG g_arcaneInfusionRageHandle = 0;
-LONG g_invigoratingRageDispatch = 0;
+LONG g_parentControllerContext = 0;
+LONG g_secondaryPanelActive = 0;
+LONG g_secondaryPanelHandle = 0;
+LONG g_captureParentController = 0;
+LONG g_captureChildController = 0;
+LONG g_parentController = 0;
+LONG g_childController = 0;
+const MajestyStockControllers::SecondaryPanelRecord* g_parentPanelRecord = nullptr;
+const MajestyStockControllers::SecondaryPanelRecord* g_activePanelRecord = nullptr;
+const MajestyStockControllers::RewardPanelRecord* g_parentRewardPanelRecord = nullptr;
+const MajestyStockControllers::RewardPanelRecord* g_activeRewardPanelRecord = nullptr;
+const MajestyStockControllers::TimedRageActionRecord* g_activeTimedRageAction = nullptr;
+LONG g_timedRageActive = 0;
+const MajestyStockControllers::TimedRageActionRecord* g_pendingTimedRageAction = nullptr;
+const MajestyStockControllers::RageCommandActionRecord* g_pendingRageCommandAction = nullptr;
+LONG g_pendingRageHandle = 0;
+LONG g_privateRageDispatch = 0;
+const char* g_privateRageCallback = nullptr;
 bool g_stockResearchRouteReady = false;
-const char g_weaponOilCompletionName[] = "Weapon Oil";
-const char g_phoenixPhialCompletionName[] = "Phoenix Phial";
-std::uint32_t* g_weaponOilResearchDescriptor = nullptr;
-std::uint32_t* g_phoenixPhialResearchDescriptor = nullptr;
-std::uint32_t g_invigoratingSpellDescriptor[6] = {};
-std::uint32_t g_philosophersStoneSpellDescriptor[6] = {};
-std::uint32_t g_arcaneInfusionVisualDescriptor[6] = {};
-std::uint32_t g_philosophersStoneVisualDescriptor[6] = {};
-LONG g_pendingSovereignControl = 0;
-LONG g_pendingSovereignLaboratory = 0;
-LONG g_executingSovereignKind = 0;
+struct PrivateResearchDescriptor {
+    const MajestyStockControllers::ResearchRowRecord* record;
+    std::uint32_t* descriptor;
+};
+std::vector<PrivateResearchDescriptor> g_privateResearchDescriptors;
+const char* g_privateResearchCompletionText = nullptr;
 
-struct LaboratoryActivitySnapshot {
+enum class PrivateSpellDescriptorKind {
+    TimedRage,
+    RageCommandVisual,
+    SovereignVisual,
+    SovereignTarget,
+};
+struct PrivateSpellDescriptor {
+    PrivateSpellDescriptorKind kind;
+    const void* record;
+    std::uint32_t descriptor[6];
+};
+std::vector<PrivateSpellDescriptor> g_privateSpellDescriptors;
+
+const MajestyStockControllers::SovereignTargetActionRecord*
+    g_pendingSovereignAction = nullptr;
+LONG g_pendingSovereignBuilding = 0;
+LONG g_executingSovereignUnit = 0;
+
+struct RewardFlagRuntimeState {
+    const MajestyStockControllers::HostileMonsterFlagRecord* record;
+    void* modeObject;
+    void* completionCallback;
+    void* selectedBuilding;
+    int rewardAmount;
+};
+std::vector<RewardFlagRuntimeState> g_rewardFlagStates;
+RewardFlagRuntimeState* g_activeRewardFlagState = nullptr;
+void* g_rewardParentVtable[kAp10VtableEntries] = {};
+void* g_rewardPanelVtable[kAp69VtableEntries] = {};
+using RewardControllerControl = int (__thiscall*)(void*, std::uint32_t);
+using RewardControllerActivation = std::uintptr_t (__thiscall*)(void*);
+using RewardControllerRefresh = std::uintptr_t (__thiscall*)(
+    void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t);
+RewardControllerControl g_stockRewardParentControl = nullptr;
+RewardControllerControl g_stockRewardPanelControl = nullptr;
+RewardControllerActivation g_stockRewardPanelActivation = nullptr;
+RewardControllerRefresh g_stockRewardPanelRefresh = nullptr;
+std::uintptr_t g_modeRegistryResume = 0;
+
+struct BuildingActivitySnapshot {
     int command;
     int startedAt;
     int duration;
 };
 
-struct LaboratoryResearchOwner {
+struct ResearchOwner {
     unsigned char* context;
-    std::uint32_t recipe;
+    const MajestyStockControllers::ResearchRowRecord* record;
     DWORD startedAt;
     DWORD duration;
     bool pending;
     bool active;
 };
 
-LaboratoryResearchOwner g_laboratoryResearchOwner = {};
-LONG g_laboratoryResearchCompletionStaged = 0;
-LONG g_laboratoryResearchCompletedThisUpdate = 0;
-DWORD g_invigoratingElixerStartedAt = 0;
-DWORD g_lastBrewingProgressTraceSecond = 0xFFFFFFFF;
-int g_lastReagentMeterTraceStock = -1;
-void* g_customBrewingVtable[kAp69VtableEntries] = {};
-void* g_customLaboratoryVtable[kAp10VtableEntries] = {};
+ResearchOwner g_researchOwner = {};
+LONG g_researchCompletionStaged = 0;
+LONG g_researchCompletedThisUpdate = 0;
+DWORD g_timedRageStartedAt = 0;
+void* g_childControllerVtable[kAp69VtableEntries] = {};
+void* g_parentControllerVtable[kAp10VtableEntries] = {};
 
 using ControllerSetup = void (__thiscall*)(void*);
 using ControllerControl = int (__thiscall*)(void*, std::uint32_t);
@@ -455,13 +453,11 @@ using GameUpdate = void (__thiscall*)(void*);
 ControllerSetup g_stockAp69Setup = nullptr;
 ControllerControl g_stockAp69Control = nullptr;
 ControllerEvent g_stockAp69Event = nullptr;
-ControllerSetup g_stockLaboratorySetup = nullptr;
-ControllerControl g_stockLaboratoryControl = nullptr;
-ControllerEvent g_stockLaboratoryEvent = nullptr;
-ControllerActivity g_stockLaboratoryActivity = nullptr;
+ControllerSetup g_stockParentSetup = nullptr;
+ControllerControl g_stockParentControl = nullptr;
+ControllerEvent g_stockParentEvent = nullptr;
+ControllerActivity g_stockParentActivity = nullptr;
 GameUpdate g_stockGameUpdate = nullptr;
-
-bool StockArcaneInfusionComplete();
 
 void WriteLog(const char* message) {
     char modulePath[MAX_PATH] = {};
@@ -658,6 +654,250 @@ CapabilityManifestState LoadRuntimeCapabilityManifest() {
 
 bool HasRuntimeCapability(const char* capability) {
     return g_runtimeCapabilities.Has(capability);
+}
+
+RuntimeFeatureRegistryState LoadRuntimeFeatureRegistry() {
+    wchar_t registryPath[32768] = {};
+    SetLastError(ERROR_SUCCESS);
+    const DWORD pathLength = GetEnvironmentVariableW(
+        kRuntimeFeatureRegistryEnvironment,
+        registryPath,
+        static_cast<DWORD>(sizeof(registryPath) / sizeof(registryPath[0])));
+    if (pathLength == 0) {
+        if (GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+            WriteLog(
+                "No manager runtime feature registry was supplied; manager launch is incomplete.");
+            return RuntimeFeatureRegistryState::Absent;
+        }
+        WriteLog(
+            "Manager runtime feature registry rejected: its environment path is empty or unreadable.");
+        return RuntimeFeatureRegistryState::Invalid;
+    }
+    if (pathLength >= sizeof(registryPath) / sizeof(registryPath[0]) ||
+        !IsCanonicalAbsolutePath(registryPath)) {
+        WriteLog(
+            "Manager runtime feature registry rejected: its environment path is not a canonical absolute path.");
+        return RuntimeFeatureRegistryState::Invalid;
+    }
+
+    const HANDLE file = CreateFileW(
+        registryPath,
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        char message[192] = {};
+        sprintf_s(
+            message,
+            "Manager runtime feature registry rejected: the supplied file could not be opened (error %lu).",
+            GetLastError());
+        WriteLog(message);
+        return RuntimeFeatureRegistryState::Invalid;
+    }
+
+    LARGE_INTEGER fileSize = {};
+    if (!GetFileSizeEx(file, &fileSize) || fileSize.QuadPart < 0 ||
+        static_cast<unsigned long long>(fileSize.QuadPart) >
+            MajestyRuntimeFeatures::kMaximumRegistryBytes) {
+        WriteLog(
+            "Manager runtime feature registry rejected: its file size is outside the supported bounds.");
+        CloseHandle(file);
+        return RuntimeFeatureRegistryState::Invalid;
+    }
+    std::vector<unsigned char> bytes(
+        static_cast<std::size_t>(fileSize.QuadPart));
+    std::size_t totalRead = 0;
+    while (totalRead < bytes.size()) {
+        DWORD readNow = 0;
+        const DWORD request = static_cast<DWORD>(bytes.size() - totalRead);
+        if (!ReadFile(
+                file,
+                bytes.data() + totalRead,
+                request,
+                &readNow,
+                nullptr) || readNow == 0) {
+            WriteLog(
+                "Manager runtime feature registry rejected: its file could not be read completely.");
+            CloseHandle(file);
+            return RuntimeFeatureRegistryState::Invalid;
+        }
+        totalRead += readNow;
+    }
+    CloseHandle(file);
+
+    MajestyRuntimeFeatures::Registry registry;
+    std::string parseError;
+    if (!MajestyRuntimeFeatures::ParseRegistry(
+            bytes.data(), bytes.size(), &registry, &parseError)) {
+        char message[384] = {};
+        sprintf_s(
+            message,
+            "Manager runtime feature registry rejected before hook installation: %s.",
+            parseError.c_str());
+        WriteLog(message);
+        return RuntimeFeatureRegistryState::Invalid;
+    }
+    g_runtimeFeatureRegistry = std::move(registry);
+    g_runtimeEnchantmentViews.clear();
+    g_runtimeEnchantmentViews.reserve(
+        g_runtimeFeatureRegistry.enchantmentRows.size());
+    for (const auto& row : g_runtimeFeatureRegistry.enchantmentRows) {
+        MajestyStringView view = {};
+        view.data = row.displayText.data();
+        view.capacityFlags = static_cast<std::uint32_t>(row.displayText.size());
+        view.length = static_cast<std::uint32_t>(row.displayText.size());
+        g_runtimeEnchantmentViews.push_back(view);
+    }
+    char message[256] = {};
+    sprintf_s(
+        message,
+        "Loaded validated MMFR registry with %u name generators and %u enchantment rows.",
+        static_cast<unsigned int>(
+            g_runtimeFeatureRegistry.nameGenerators.size()),
+        static_cast<unsigned int>(
+            g_runtimeFeatureRegistry.enchantmentRows.size()));
+    WriteLog(message);
+    return RuntimeFeatureRegistryState::Loaded;
+}
+
+StockControllerRegistryState LoadStockControllerRegistry() {
+    wchar_t registryPath[32768] = {};
+    SetLastError(ERROR_SUCCESS);
+    const DWORD pathLength = GetEnvironmentVariableW(
+        kStockControllerRegistryEnvironment,
+        registryPath,
+        static_cast<DWORD>(sizeof(registryPath) / sizeof(registryPath[0])));
+    if (pathLength == 0) {
+        if (GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+            WriteLog(
+                "No manager stock-controller registry was supplied; manager launch is incomplete.");
+            return StockControllerRegistryState::Absent;
+        }
+        WriteLog(
+            "Manager stock-controller registry rejected: its environment path is empty or unreadable.");
+        return StockControllerRegistryState::Invalid;
+    }
+    if (pathLength >= sizeof(registryPath) / sizeof(registryPath[0]) ||
+        !IsCanonicalAbsolutePath(registryPath)) {
+        WriteLog(
+            "Manager stock-controller registry rejected: its environment path is not a canonical absolute path.");
+        return StockControllerRegistryState::Invalid;
+    }
+
+    const HANDLE file = CreateFileW(
+        registryPath,
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        char message[192] = {};
+        sprintf_s(
+            message,
+            "Manager stock-controller registry rejected: the supplied file could not be opened (error %lu).",
+            GetLastError());
+        WriteLog(message);
+        return StockControllerRegistryState::Invalid;
+    }
+
+    LARGE_INTEGER fileSize = {};
+    if (!GetFileSizeEx(file, &fileSize) || fileSize.QuadPart < 0 ||
+        static_cast<unsigned long long>(fileSize.QuadPart) >
+            MajestyStockControllers::kMaximumRegistryBytes) {
+        WriteLog(
+            "Manager stock-controller registry rejected: its file size is outside the supported bounds.");
+        CloseHandle(file);
+        return StockControllerRegistryState::Invalid;
+    }
+    std::vector<unsigned char> bytes(
+        static_cast<std::size_t>(fileSize.QuadPart));
+    std::size_t totalRead = 0;
+    while (totalRead < bytes.size()) {
+        DWORD readNow = 0;
+        const DWORD request = static_cast<DWORD>(bytes.size() - totalRead);
+        if (!ReadFile(
+                file,
+                bytes.data() + totalRead,
+                request,
+                &readNow,
+                nullptr) || readNow == 0) {
+            WriteLog(
+                "Manager stock-controller registry rejected: its file could not be read completely.");
+            CloseHandle(file);
+            return StockControllerRegistryState::Invalid;
+        }
+        totalRead += readNow;
+    }
+    CloseHandle(file);
+
+    MajestyStockControllers::Registry registry;
+    std::string parseError;
+    if (!MajestyStockControllers::ParseRegistry(
+            bytes.data(), bytes.size(), &registry, &parseError)) {
+        char message[384] = {};
+        sprintf_s(
+            message,
+            "Manager stock-controller registry rejected before hook installation: %s.",
+            parseError.c_str());
+        WriteLog(message);
+        return StockControllerRegistryState::Invalid;
+    }
+    g_stockControllerRegistry = std::move(registry);
+    char message[192] = {};
+    sprintf_s(
+        message,
+        "Loaded validated MMCR registry with %u stock-controller panels and %u total recipes.",
+        static_cast<unsigned int>(g_stockControllerRegistry.panels.size()),
+        static_cast<unsigned int>(
+            g_stockControllerRegistry.meters.size() +
+            g_stockControllerRegistry.researchRows.size() +
+            g_stockControllerRegistry.upgradeGates.size() +
+            g_stockControllerRegistry.timedRageActions.size() +
+            g_stockControllerRegistry.rageCommandActions.size() +
+            g_stockControllerRegistry.sovereignTargetActions.size() +
+            g_stockControllerRegistry.rewardPanels.size() +
+            g_stockControllerRegistry.hostileMonsterFlags.size()));
+    WriteLog(message);
+    return StockControllerRegistryState::Loaded;
+}
+
+bool PrepareStockControllerRuntimeRecords() {
+    g_privateResearchDescriptors.clear();
+    g_privateResearchDescriptors.reserve(
+        g_stockControllerRegistry.researchRows.size());
+    for (const auto& row : g_stockControllerRegistry.researchRows) {
+        g_privateResearchDescriptors.push_back({&row, nullptr});
+    }
+    g_privateSpellDescriptors.clear();
+    g_privateSpellDescriptors.reserve(
+        g_stockControllerRegistry.timedRageActions.size() +
+        g_stockControllerRegistry.rageCommandActions.size() +
+        g_stockControllerRegistry.sovereignTargetActions.size() * 2);
+    for (const auto& action : g_stockControllerRegistry.timedRageActions) {
+        g_privateSpellDescriptors.push_back(
+            {PrivateSpellDescriptorKind::TimedRage, &action, {}});
+    }
+    for (const auto& action : g_stockControllerRegistry.rageCommandActions) {
+        g_privateSpellDescriptors.push_back(
+            {PrivateSpellDescriptorKind::RageCommandVisual, &action, {}});
+    }
+    for (const auto& action : g_stockControllerRegistry.sovereignTargetActions) {
+        g_privateSpellDescriptors.push_back(
+            {PrivateSpellDescriptorKind::SovereignVisual, &action, {}});
+        g_privateSpellDescriptors.push_back(
+            {PrivateSpellDescriptorKind::SovereignTarget, &action, {}});
+    }
+    return g_privateResearchDescriptors.size() ==
+            g_stockControllerRegistry.researchRows.size() &&
+        g_privateSpellDescriptors.size() ==
+            g_stockControllerRegistry.timedRageActions.size() +
+            g_stockControllerRegistry.rageCommandActions.size() +
+            g_stockControllerRegistry.sovereignTargetActions.size() * 2;
 }
 
 PrivateIntentRegistryState LoadPrivateIntentRegistry() {
@@ -951,7 +1191,7 @@ bool ValidateResearchCompletionDispatchSlot() {
     return false;
 }
 
-bool ValidateAlchemistSecondaryControllerProfile() {
+bool ValidateStockControllerRecipeProfile() {
     return MatchesProfileBytes(
                g_buildProfile->secondaryControllerResultRva,
                g_buildProfile->expectedResultSite,
@@ -1060,7 +1300,7 @@ bool ValidateAlchemistSecondaryControllerProfile() {
                "sovereign spell-unit selection");
 }
 
-bool ValidateAlchemistPrivateOilRowsProfile() {
+bool ValidatePrivateEnchantmentRowsProfile() {
     return MatchesProfileBytes(
                g_buildProfile->heroEnchantmentsSwitchRva,
                g_buildProfile->expectedHeroEnchantmentsSwitch,
@@ -1076,6 +1316,34 @@ bool ValidateAlchemistPrivateOilRowsProfile() {
                g_buildProfile->expectedStockStringAssignEntry,
                sizeof(g_buildProfile->expectedStockStringAssignEntry),
                "AP78 stock string assignment function");
+}
+
+bool ValidatePrivateRewardFlagProfile() {
+    return MatchesProfileBytes(
+               g_buildProfile->secondaryControllerResultRva,
+               g_buildProfile->expectedResultSite,
+               sizeof(g_buildProfile->expectedResultSite),
+               "reward secondary-controller result") &&
+        MatchesProfileBytes(
+               g_buildProfile->dialogCreationRva,
+               g_buildProfile->expectedCreationEntry,
+               sizeof(g_buildProfile->expectedCreationEntry),
+               "reward dialog creation") &&
+        MatchesProfileBytes(
+               g_buildProfile->dialogFactoryRva,
+               g_buildProfile->expectedFactoryEntry,
+               sizeof(g_buildProfile->expectedFactoryEntry),
+               "reward dialog factory") &&
+        MatchesProfileBytes(
+               g_buildProfile->modeRegistryCompletionRva,
+               g_buildProfile->expectedModeRegistryCompletion,
+               sizeof(g_buildProfile->expectedModeRegistryCompletion),
+               "Fl00 mode registry completion") &&
+        MatchesProfileBytes(
+               g_buildProfile->stockCaptureCallbackRva + 0xCF,
+               g_buildProfile->expectedStockCallbackCreate,
+               sizeof(g_buildProfile->expectedStockCallbackCreate),
+               "Fl00 completion callback creation");
 }
 
 bool ValidatePrivateNameGeneratorProfile() {
@@ -1115,20 +1383,19 @@ bool ValidateMajestyBuildProfile() {
         !ValidateCustomGuildFactoryFallback()) {
         return false;
     }
-    if (HasRuntimeCapability(
-            MajestyRuntimeCapabilities::kAlchemistSecondaryController) &&
-        !ValidateAlchemistSecondaryControllerProfile()) {
+    if (!g_stockControllerRegistry.panels.empty() &&
+        !ValidateStockControllerRecipeProfile()) {
         return false;
     }
-    if (HasRuntimeCapability(
-            MajestyRuntimeCapabilities::kAlchemistPrivateOilRows) &&
-        !ValidateAlchemistPrivateOilRowsProfile()) {
+    if (!g_stockControllerRegistry.rewardPanels.empty() &&
+        !ValidatePrivateRewardFlagProfile()) {
         return false;
     }
-    if ((HasRuntimeCapability(
-             MajestyRuntimeCapabilities::kAlchemistNameGenerator) ||
-         HasRuntimeCapability(
-             MajestyRuntimeCapabilities::kPhantomNameGenerator)) &&
+    if (!g_runtimeFeatureRegistry.enchantmentRows.empty() &&
+        !ValidatePrivateEnchantmentRowsProfile()) {
+        return false;
+    }
+    if (!g_runtimeFeatureRegistry.nameGenerators.empty() &&
         !ValidatePrivateNameGeneratorProfile()) {
         return false;
     }
@@ -1302,7 +1569,7 @@ bool SetControllerControlInteger(
         void*, std::uint32_t, int, std::uint32_t);
     auto setInteger = reinterpret_cast<SetControlInteger>(
         vtable[0x5C / sizeof(void*)]);
-    // Literal AP22 Healing Potion count dispatch at Beta2
+    // Literal AP22 quantity-binding dispatch at Beta2
     // 0x004A34B1..0x004A34D0. AP22 targets the numeric binding embedded in
     // the type-5 quantity record, passes the calculated integer, and preserves
     // the stock trailing zero consumed by the three-argument panel virtual.
@@ -1329,10 +1596,10 @@ DWORD SimulationClock() {
     return *reinterpret_cast<volatile DWORD*>(g_imageBase + g_buildProfile->simulationClockRva);
 }
 
-unsigned char* LaboratoryPanelContext() {
+unsigned char* ActiveParentPanelContext() {
     using GetPanelContext = void* (__thiscall*)(void*);
     const auto parentController = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&g_cgalController, 0, 0));
+        InterlockedCompareExchange(&g_parentController, 0, 0));
     if (parentController == 0) {
         return nullptr;
     }
@@ -1364,8 +1631,8 @@ void WritePackedAttributeValue(
     writePackedAttribute(context, attributeId, value);
 }
 
-LaboratoryActivitySnapshot CaptureLaboratoryActivity(void* context) {
-    LaboratoryActivitySnapshot snapshot = {};
+BuildingActivitySnapshot CaptureBuildingActivity(void* context) {
+    BuildingActivitySnapshot snapshot = {};
     snapshot.command = ReadPackedAttributeValue(
         context, kCurrentResearchAttributeId);
     snapshot.startedAt = ReadPackedAttributeValue(
@@ -1375,8 +1642,8 @@ LaboratoryActivitySnapshot CaptureLaboratoryActivity(void* context) {
     return snapshot;
 }
 
-void RestoreLaboratoryActivity(
-    void* context, const LaboratoryActivitySnapshot& snapshot) {
+void RestoreBuildingActivity(
+    void* context, const BuildingActivitySnapshot& snapshot) {
     WritePackedAttributeValue(
         context, kCurrentResearchAttributeId, snapshot.command);
     WritePackedAttributeValue(
@@ -1385,24 +1652,25 @@ void RestoreLaboratoryActivity(
         context, kResearchDurationAttributeId, snapshot.duration);
 }
 
-void ClearLaboratoryActivity(void* context) {
-    const LaboratoryActivitySnapshot empty = {};
-    RestoreLaboratoryActivity(context, empty);
+void ClearBuildingActivity(void* context) {
+    const BuildingActivitySnapshot empty = {};
+    RestoreBuildingActivity(context, empty);
 }
 
-bool LaboratoryResearchIsActive() {
-    return g_laboratoryResearchOwner.pending ||
-        g_laboratoryResearchOwner.active;
+bool PrivateResearchIsActive() {
+    return g_researchOwner.pending ||
+        g_researchOwner.active;
 }
 
-bool LaboratoryResearchMatches(
-    const void* context, std::uint32_t recipe) {
-    return g_laboratoryResearchOwner.active &&
-        g_laboratoryResearchOwner.context == context &&
-        g_laboratoryResearchOwner.recipe == recipe;
+bool PrivateResearchMatches(
+    const void* context,
+    const MajestyStockControllers::ResearchRowRecord* record) {
+    return g_researchOwner.active &&
+        g_researchOwner.context == context &&
+        g_researchOwner.record == record;
 }
 
-int LaboratoryBuildingLevel(const void* context) {
+int SelectedBuildingLevel(const void* context) {
     // AP99 0x004A91A2 derives the research tier from the high byte of +0x7C:
     // 0x32 is level 2, 0x33 is level 3, and every other stock value is level 1.
     const auto encoded =
@@ -1415,65 +1683,87 @@ int LaboratoryBuildingLevel(const void* context) {
     return encoded == 0x33000000u ? 3 : 1;
 }
 
-bool LaboratoryUpgradeResearchComplete(void* context) {
-    if (context == nullptr) {
-        return false;
+const MajestyStockControllers::UpgradeGateRecord* ActiveUpgradeGate() {
+    if (g_parentPanelRecord == nullptr) {
+        return nullptr;
     }
-    const int level = LaboratoryBuildingLevel(context);
-    if (level == 1) {
-        return ReadPackedAttributeValue(
-            context, kWeaponOilCompletionAttributeId, 0) != 0;
+    for (const auto& gate : g_stockControllerRegistry.upgradeGates) {
+        if (gate.panelKey == g_parentPanelRecord->panelKey) {
+            return &gate;
+        }
     }
-    if (level == 2) {
-        return ReadPackedAttributeValue(
-            context, kPhoenixPhialCompletionAttributeId, 0) != 0;
+    return nullptr;
+}
+
+const PrivateResearchDescriptor* FindPrivateResearchDescriptor(
+    const MajestyStockControllers::ResearchRowRecord* record) {
+    for (const auto& item : g_privateResearchDescriptors) {
+        if (item.record == record) {
+            return &item;
+        }
+    }
+    return nullptr;
+}
+
+bool UpgradeResearchComplete(void* context) {
+    const auto* gate = ActiveUpgradeGate();
+    if (gate == nullptr || context == nullptr) {
+        return gate == nullptr;
+    }
+    const int level = SelectedBuildingLevel(context);
+    for (const auto& requirement : gate->requirements) {
+        if (static_cast<int>(requirement.buildingLevel) != level) {
+            continue;
+        }
+        const MajestyStockControllers::ResearchRowRecord* row = nullptr;
+        for (const auto& candidate : g_stockControllerRegistry.researchRows) {
+            if (candidate.panelKey == gate->panelKey &&
+                candidate.recipeKey == requirement.recipeKey) {
+                row = &candidate;
+                break;
+            }
+        }
+        const auto* state = FindPrivateResearchDescriptor(row);
+        const std::uint32_t* descriptor = state == nullptr
+            ? nullptr : state->descriptor;
+        if (descriptor == nullptr && row != nullptr &&
+            g_resolveResearchDescriptorTrampoline != 0) {
+            using ResolveResearchDescriptor = const std::uint32_t* (__cdecl*)(
+                std::uint32_t);
+            auto resolve = reinterpret_cast<ResolveResearchDescriptor>(
+                g_resolveResearchDescriptorTrampoline);
+            descriptor = resolve(row->completionTemplateControlId);
+        }
+        if (descriptor == nullptr || descriptor[4] == 0) {
+            StopUnsafeManagerRuntimeLaunch(
+                "An upgrade recipe could not resolve its declared stock AP99 completion template.");
+        }
+        return ReadPackedAttributeValue(context, descriptor[4], 0) != 0;
     }
     return true;
 }
 
-void ApplyLaboratoryUpgradeResearchGate(
+void ApplyUpgradeResearchGate(
     std::uint32_t controller, void* context) {
-    if (controller == 0 || context == nullptr ||
-        LaboratoryUpgradeResearchComplete(context)) {
+    const auto* gate = ActiveUpgradeGate();
+    if (gate == nullptr || controller == 0 || context == nullptr ||
+        UpgradeResearchComplete(context)) {
         return;
     }
-    // Guardhouse AP17 delegates its main-panel upgrade row to the stock base
-    // presenter. An unmet prerequisite keeps control 0x1F47 visible but sends
-    // its disabled message, then hides the 0x1F4F price child. Privatize only
-    // the prerequisite attribute selection for the Laboratory's two tiers.
+    // AP17's stock presenter remains authoritative.  The resolved recipe
+    // changes only which completed AP99 attribute gates the current tier.
     SendControllerMessage(
-        controller, kBuildingUpgradeControlId, 0x0A, 1, 0);
+        controller, gate->upgradeControlId, 0x0A, 1, 0);
     SetControllerControlVisible(
-        controller, kBuildingUpgradePriceControlId, false);
+        controller, gate->upgradePriceControlId, false);
 }
 
-void RefreshWeaponOilResearch(std::uint32_t controller) {
+void RefreshPrivateResearchRows(std::uint32_t controller) {
     if (!g_stockResearchRouteReady || controller == 0) {
         return;
     }
     void* panel = *reinterpret_cast<void**>(controller + 0x24);
-    unsigned char* context = LaboratoryPanelContext();
-    if (panel == nullptr || context == nullptr) {
-        return;
-    }
-    // AP99's iterator at 0x004A93D0 discovers only stock control IDs in the
-    // hard-coded [0x1388,0x13EC) range, then calls this exact row presenter.
-    // Our private 0x2A13 row must enter after that discovery filter. The stock
-    // presenter still owns level/current-research checks, completion-attribute
-    // lockout, price, enabled state, art swap, and tooltip refresh.
-    using RefreshSingleResearchRow = void (__cdecl*)(
-        void*, void*, std::uint32_t);
-    auto refreshSingleResearchRow = reinterpret_cast<RefreshSingleResearchRow>(
-        g_imageBase + g_buildProfile->refreshSingleResearchRowRva);
-    refreshSingleResearchRow(panel, context, kWeaponOilResearchControlId);
-}
-
-void RefreshPhoenixPhialResearch(std::uint32_t controller) {
-    if (!g_stockResearchRouteReady || controller == 0) {
-        return;
-    }
-    void* panel = *reinterpret_cast<void**>(controller + 0x24);
-    unsigned char* context = LaboratoryPanelContext();
+    unsigned char* context = ActiveParentPanelContext();
     if (panel == nullptr || context == nullptr) {
         return;
     }
@@ -1481,10 +1771,15 @@ void RefreshPhoenixPhialResearch(std::uint32_t controller) {
         void*, void*, std::uint32_t);
     auto refreshSingleResearchRow = reinterpret_cast<RefreshSingleResearchRow>(
         g_imageBase + g_buildProfile->refreshSingleResearchRowRva);
-    refreshSingleResearchRow(panel, context, kPhoenixPhialResearchControlId);
+    for (const auto& row : g_stockControllerRegistry.researchRows) {
+        if (g_activePanelRecord != nullptr &&
+            row.panelKey == g_activePanelRecord->panelKey) {
+            refreshSingleResearchRow(panel, context, row.actionControlId);
+        }
+    }
 }
 
-void RefreshInvigoratingElixer(std::uint32_t controller) {
+void RefreshTimedRageRows(std::uint32_t controller) {
     if (controller == 0) {
         return;
     }
@@ -1502,56 +1797,61 @@ void RefreshInvigoratingElixer(std::uint32_t controller) {
     if (panel == nullptr || player == nullptr) {
         return;
     }
-    // AP69's iterator at 0x004AE5C0 discovers only stock spell IDs. Invoke
-    // its exact per-row worker for the private Vigor family, preserving the
-    // native descriptor level comparison, icon/price state, and text update.
     auto refreshSingleSpellRow = reinterpret_cast<RefreshSingleSpellRow>(
         g_imageBase + g_buildProfile->refreshSingleSpellRowRva);
-    refreshSingleSpellRow(
-        panel, player, kInvigoratingElixerControlId, 0);
+    for (const auto& action : g_stockControllerRegistry.timedRageActions) {
+        if (g_activePanelRecord != nullptr &&
+            action.panelKey == g_activePanelRecord->panelKey) {
+            refreshSingleSpellRow(panel, player, action.actionControlId, 0);
+        }
+    }
 }
 
-int LaboratoryReagentStock() {
-    unsigned char* context = LaboratoryPanelContext();
-    if (context == nullptr) {
+int ResourceStock(const MajestyStockControllers::ResourceMeterRecord* meter) {
+    unsigned char* context = ActiveParentPanelContext();
+    if (context == nullptr || meter == nullptr) {
         return 0;
     }
     const int value = ReadPackedAttributeValue(
-        context, kReagentStockAttributeId, 0);
+        context, meter->attributeId, 0);
     return value < 0 ? 0 : value;
 }
 
-void UpdateLaboratoryReagentMeter(std::uint32_t controller) {
+const MajestyStockControllers::ResourceMeterRecord* FindActiveMeter(
+    const std::string& resourceKey) {
+    if (g_activePanelRecord == nullptr) {
+        return nullptr;
+    }
+    return g_stockControllerRegistry.FindMeter(
+        g_activePanelRecord->panelKey, resourceKey);
+}
+
+void UpdateResourceMeters(std::uint32_t controller) {
     if (controller == 0) {
         return;
     }
-    const int stock = LaboratoryReagentStock();
-    // The AP22-style inventory count is ordinary Laboratory storage, not a
-    // level-3 sovereign-spell control. Keep it visible at every Laboratory
-    // level while the level gate continues to hide only Infusion and Stone.
-    SetControllerControlVisible(controller, kReagentMeterLabelControlId, true);
-    SetControllerControlVisible(controller, kReagentMeterCountControlId, true);
-    const bool countPublished = SetControllerControlInteger(
-        controller, kReagentMeterCountBindingId, stock);
-    if (stock != g_lastReagentMeterTraceStock) {
-        g_lastReagentMeterTraceStock = stock;
-        char trace[160] = {};
-        sprintf_s(
-            trace,
-            "Reagent count refresh: stock=%d AP22-binding=%s.",
-            stock,
-            countPublished ? "published" : "unavailable");
-        WriteLog(trace);
+    for (const auto& meter : g_stockControllerRegistry.meters) {
+        if (g_activePanelRecord == nullptr ||
+            meter.panelKey != g_activePanelRecord->panelKey) {
+            continue;
+        }
+        const int stock = ResourceStock(&meter);
+        SetControllerControlVisible(controller, meter.labelControlId, true);
+        SetControllerControlVisible(controller, meter.countControlId, true);
+        SetControllerControlInteger(controller, meter.bindingControlId, stock);
     }
 }
 
-void RefreshSovereignBrewingRow(
-    std::uint32_t controller, std::uint32_t controlId) {
-    if (controller == 0) {
+bool CompletionTemplateIsComplete(
+    const MajestyStockControllers::RageCommandActionRecord& action);
+
+void RefreshPrivateActionRows(
+    std::uint32_t controller, bool runStockPresenter) {
+    if (controller == 0 || g_activePanelRecord == nullptr) {
         return;
     }
     void* panel = *reinterpret_cast<void**>(controller + 0x24);
-    unsigned char* context = LaboratoryPanelContext();
+    unsigned char* context = ActiveParentPanelContext();
     using GetUiManager = void* (__cdecl*)();
     using GetCurrentPlayer = void* (__thiscall*)(void*);
     using RefreshSingleSpellRow = void (__cdecl*)(
@@ -1567,157 +1867,82 @@ void RefreshSovereignBrewingRow(
     }
     auto refreshSingleSpellRow = reinterpret_cast<RefreshSingleSpellRow>(
         g_imageBase + g_buildProfile->refreshSingleSpellRowRva);
-    refreshSingleSpellRow(panel, player, controlId, 0);
-
-    // AP69's stock level gate owns the compound row. Preserve its exact result
-    // for the Laboratory: the action and icon do not exist before level 3;
-    // once unlocked, only the private Reagent/completion availability differs.
-    const bool levelAvailable = LaboratoryBuildingLevel(context) >= 3;
-    SetControllerControlVisible(controller, controlId, levelAvailable);
-    SetControllerControlVisible(
-        controller, controlId + 1000, levelAvailable);
-    SetControllerControlVisible(controller, controlId - 1000, false);
-    if (levelAvailable) {
-        const bool unavailable =
-            LaboratoryReagentStock() < kReagentActionCost ||
-            (controlId == kArcaneInfusionVisualControlId &&
-                StockArcaneInfusionComplete());
-        SendControllerMessage(
-            controller, controlId, 0x0A, unavailable ? 1 : 0, 0);
-    }
-}
-
-void RefreshSovereignBrewingRows(std::uint32_t controller) {
-    RefreshSovereignBrewingRow(controller, kArcaneInfusionVisualControlId);
-    RefreshSovereignBrewingRow(controller, kPhilosophersStoneVisualControlId);
-}
-
-void UpdateSovereignBrewingGate(std::uint32_t controller) {
-    if (controller == 0) {
-        return;
-    }
-    unsigned char* context = LaboratoryPanelContext();
-    if (context == nullptr) {
-        return;
-    }
-    const bool levelAvailable = LaboratoryBuildingLevel(context) >= 3;
-    const std::uint32_t controlIds[2] = {
-        kArcaneInfusionVisualControlId,
-        kPhilosophersStoneVisualControlId};
-    for (const std::uint32_t controlId : controlIds) {
-        // AP69 has already constructed and presented this complete stock row.
-        // The Laboratory changes only the private Reagent gate and suppresses
-        // the unused stock gold child; do not run AP69's presenter again from
-        // the game-update loop.
-        SetControllerControlVisible(controller, controlId, levelAvailable);
-        SetControllerControlVisible(
-            controller, controlId + 1000, levelAvailable);
-        SetControllerControlVisible(controller, controlId - 1000, false);
+    for (const auto& action : g_stockControllerRegistry.rageCommandActions) {
+        if (action.panelKey != g_activePanelRecord->panelKey) continue;
+        if (runStockPresenter) {
+            refreshSingleSpellRow(panel, player, action.actionControlId, 0);
+        }
+        const bool levelAvailable =
+            SelectedBuildingLevel(context) >= static_cast<int>(action.requiredLevel);
+        SetControllerControlVisible(controller, action.actionControlId, levelAvailable);
+        SetControllerControlVisible(controller, action.iconControlId, levelAvailable);
+        SetControllerControlVisible(controller, action.priceControlId, false);
         if (levelAvailable) {
             const bool unavailable =
-                LaboratoryReagentStock() < kReagentActionCost ||
-                (controlId == kArcaneInfusionVisualControlId &&
-                    (StockArcaneInfusionComplete() ||
-                     InterlockedCompareExchange(
-                         &g_arcaneInfusionRageHandle, 0, 0) != 0));
+                ResourceStock(FindActiveMeter(action.resourceKey)) <
+                    static_cast<int>(action.resourceCost) ||
+                CompletionTemplateIsComplete(action) ||
+                InterlockedCompareExchange(&g_pendingRageHandle, 0, 0) != 0;
             SendControllerMessage(
-                controller, controlId, 0x0A, unavailable ? 1 : 0, 0);
+                controller, action.actionControlId, 0x0A,
+                unavailable ? 1 : 0, 0);
+        }
+    }
+    for (const auto& action : g_stockControllerRegistry.sovereignTargetActions) {
+        if (action.panelKey != g_activePanelRecord->panelKey) continue;
+        if (runStockPresenter) {
+            refreshSingleSpellRow(panel, player, action.visualControlId, 0);
+        }
+        const bool levelAvailable =
+            SelectedBuildingLevel(context) >= static_cast<int>(action.requiredLevel);
+        SetControllerControlVisible(controller, action.visualControlId, levelAvailable);
+        SetControllerControlVisible(controller, action.iconControlId, levelAvailable);
+        SetControllerControlVisible(controller, action.priceControlId, false);
+        if (levelAvailable) {
+            const bool unavailable =
+                ResourceStock(FindActiveMeter(action.resourceKey)) <
+                    static_cast<int>(action.resourceCost);
+            SendControllerMessage(
+                controller, action.visualControlId, 0x0A,
+                unavailable ? 1 : 0, 0);
         }
     }
 }
 
-void UpdateWeaponOilPresentation(std::uint32_t controller) {
+void UpdateResearchPresentations(std::uint32_t controller) {
     if (!g_stockResearchRouteReady || controller == 0) {
         return;
     }
-    unsigned char* context = LaboratoryPanelContext();
+    unsigned char* context = ActiveParentPanelContext();
     if (context == nullptr) {
         return;
     }
-    const bool active = LaboratoryResearchMatches(
-        context, kWeaponOilResearchControlId);
-
-    if (active) {
-        // AP17's exact active display-swap order, with its progress surface
-        // privatized to the AP24 control class already proven stable in CGBR.
-        SetControllerControlVisible(
-            controller, kWeaponOilResearchControlId, false);
-        SetControllerControlVisible(
-            controller, kWeaponOilResearchPriceControlId, false);
-        SetControllerControlVisible(
-            controller, kWeaponOilActiveDisplayControlId, true);
-        SetControllerControlVisible(
-            controller, kWeaponOilProgressControlId, true);
-        const DWORD now = SimulationClock();
-        const DWORD elapsed = now > g_laboratoryResearchOwner.startedAt
-            ? now - g_laboratoryResearchOwner.startedAt
-            : 0;
-        std::uint32_t progress[4] = {
-            7, elapsed, 0, g_laboratoryResearchOwner.duration};
-        SendControllerMessage(
-            controller,
-            kWeaponOilProgressControlId,
-            0x29,
-            0,
-            reinterpret_cast<std::uint32_t>(progress));
-        SendControllerMessage(
-            controller, kWeaponOilProgressControlId, 0x08, 0, 0);
-    } else {
-        // AP17's exact inverse swap. AP99 refresh owns whether the restored
-        // Weapon Oil row is visible, enabled, researching, or permanently
-        // completed. Do not re-show the action here: AP99 0x004A9160 may
-        // have hidden its complete compound row for a building-level gate.
-        SetControllerControlVisible(
-            controller, kWeaponOilProgressControlId, false);
-        SetControllerControlVisible(
-            controller, kWeaponOilActiveDisplayControlId, false);
-        if (LaboratoryResearchIsActive()) {
+    for (const auto& row : g_stockControllerRegistry.researchRows) {
+        if (g_activePanelRecord == nullptr ||
+            row.panelKey != g_activePanelRecord->panelKey) continue;
+        const bool active = PrivateResearchMatches(context, &row);
+        if (active) {
+            SetControllerControlVisible(controller, row.actionControlId, false);
+            SetControllerControlVisible(controller, row.priceControlId, false);
+            SetControllerControlVisible(controller, row.activeDisplayControlId, true);
+            SetControllerControlVisible(controller, row.progressControlId, true);
+            const DWORD now = SimulationClock();
+            const DWORD elapsed = now > g_researchOwner.startedAt
+                ? now - g_researchOwner.startedAt : 0;
+            std::uint32_t progress[4] = {
+                7, elapsed, 0, g_researchOwner.duration};
             SendControllerMessage(
-                controller, kWeaponOilResearchControlId, 0x0A, 1, 0);
-        }
-    }
-}
-
-void UpdatePhoenixPhialPresentation(std::uint32_t controller) {
-    if (!g_stockResearchRouteReady || controller == 0) {
-        return;
-    }
-    unsigned char* context = LaboratoryPanelContext();
-    if (context == nullptr) {
-        return;
-    }
-    const bool active = LaboratoryResearchMatches(
-        context, kPhoenixPhialResearchControlId);
-
-    if (active) {
-        SetControllerControlVisible(controller, kPhoenixPhialResearchControlId, false);
-        SetControllerControlVisible(
-            controller, kPhoenixPhialResearchPriceControlId, false);
-        SetControllerControlVisible(controller, kPhoenixPhialActiveDisplayControlId, true);
-        SetControllerControlVisible(controller, kPhoenixPhialProgressControlId, true);
-        const DWORD now = SimulationClock();
-        const DWORD elapsed = now > g_laboratoryResearchOwner.startedAt
-            ? now - g_laboratoryResearchOwner.startedAt
-            : 0;
-        std::uint32_t progress[4] = {
-            7, elapsed, 0, g_laboratoryResearchOwner.duration};
-        SendControllerMessage(
-            controller,
-            kPhoenixPhialProgressControlId,
-            0x29,
-            0,
-            reinterpret_cast<std::uint32_t>(progress));
-        SendControllerMessage(
-            controller, kPhoenixPhialProgressControlId, 0x08, 0, 0);
-    } else {
-        // As with Weapon Oil, AP99 0x004A9160 exclusively owns restoration
-        // of the compound Phoenix row. In particular, its descriptor-level
-        // gate hides action, icon, and price together at Laboratory level 1.
-        SetControllerControlVisible(controller, kPhoenixPhialProgressControlId, false);
-        SetControllerControlVisible(controller, kPhoenixPhialActiveDisplayControlId, false);
-        if (LaboratoryResearchIsActive()) {
+                controller, row.progressControlId, 0x29, 0,
+                reinterpret_cast<std::uint32_t>(progress));
             SendControllerMessage(
-                controller, kPhoenixPhialResearchControlId, 0x0A, 1, 0);
+                controller, row.progressControlId, 0x08, 0, 0);
+        } else {
+            SetControllerControlVisible(controller, row.progressControlId, false);
+            SetControllerControlVisible(controller, row.activeDisplayControlId, false);
+            if (PrivateResearchIsActive()) {
+                SendControllerMessage(
+                    controller, row.actionControlId, 0x0A, 1, 0);
+            }
         }
     }
 }
@@ -1725,13 +1950,13 @@ void UpdatePhoenixPhialPresentation(std::uint32_t controller) {
 void* StockCurrentPlayerAgent() {
     // AP24 constructor 0x004B1620 obtains the player's agent from the panel
     // context's +0x80 player slot, and refresh 0x004B1340 reads packed
-    // attribute APB\x07 through 0x005B9FD0. Reproduce that exact read so Vigor
+    // attribute APB\x07 through 0x005B9FD0. Reproduce that exact read so timed actions
     // and Rage share Majesty's native Palace-owned exclusion state.
     using GetPanelContext = void* (__thiscall*)(void*);
     using GetUiManager = void* (__cdecl*)();
     using GetPlayerAgent = void* (__thiscall*)(void*, std::uint32_t);
     const auto parentController = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&g_cgalController, 0, 0));
+        InterlockedCompareExchange(&g_parentController, 0, 0));
     if (parentController == 0) {
         return nullptr;
     }
@@ -1761,20 +1986,34 @@ int StockRageOfKrolmCount() {
     return ReadPackedAttributeValue(playerAgent, kRageOfKrolmCountAttributeId, 0);
 }
 
-bool StockArcaneInfusionComplete() {
-    // ResearchArrows is a stock persistent completion bit. The Palace never
-    // owns Guardhouse research, so the same per-agent attribute is a clean,
-    // save-safe owner for this one-per-kingdom Alchemist infusion.
+bool CompletionTemplateIsComplete(
+    const MajestyStockControllers::RageCommandActionRecord& action) {
     void* playerAgent = StockCurrentPlayerAgent();
-    return playerAgent != nullptr && ReadPackedAttributeValue(
-        playerAgent, kWeaponOilCompletionAttributeId, 0) != 0;
+    if (playerAgent == nullptr) {
+        return false;
+    }
+    if (g_resolveResearchDescriptorTrampoline == 0) {
+        StopUnsafeManagerRuntimeLaunch(
+            "A Rage controller recipe reached its completion gate without the validated AP99 resolver.");
+    }
+    using ResolveResearchDescriptor = const std::uint32_t* (__cdecl*)(
+        std::uint32_t);
+    auto resolve = reinterpret_cast<ResolveResearchDescriptor>(
+        g_resolveResearchDescriptorTrampoline);
+    const auto* descriptor = resolve(
+        action.completionTemplateResearchControlId);
+    if (descriptor == nullptr || descriptor[4] == 0) {
+        StopUnsafeManagerRuntimeLaunch(
+            "A Rage controller recipe could not resolve its declared AP99 completion template.");
+    }
+    return ReadPackedAttributeValue(playerAgent, descriptor[4], 0) != 0;
 }
 
 int StockCurrentPlayerGold() {
     // AP24 click handler 0x004B2A60 obtains the UI manager, resolves its
     // current player, and invokes that player's vtable +0x20 data reader with
     // APP (Gold) before it deducts or submits Rage. Reproduce the same read at
-    // Vigor's private boundary; its GPL remains the payment/effect owner.
+    // the private boundary; GPL remains the payment/effect owner.
     using GetUiManager = void* (__cdecl*)();
     using GetCurrentPlayer = void* (__thiscall*)(void*);
     using GetPlayerData = int (__thiscall*)(void*, std::uint32_t);
@@ -1796,161 +2035,112 @@ int StockCurrentPlayerGold() {
     return getPlayerData(player, kPlayerGoldDataId);
 }
 
-void UpdateBrewingPresentation(std::uint32_t controller) {
+void UpdateSecondaryPanelPresentation(std::uint32_t controller) {
     if (controller == 0 ||
         controller != static_cast<std::uint32_t>(
-            InterlockedCompareExchange(&g_customBrewingController, 0, 0))) {
+            InterlockedCompareExchange(&g_childController, 0, 0))) {
         return;
     }
-    unsigned char* context = LaboratoryPanelContext();
+    unsigned char* context = ActiveParentPanelContext();
     if (context == nullptr) {
         return;
     }
-    const bool vigorLevelAvailable = LaboratoryBuildingLevel(context) >= 3;
+    UpdateResearchPresentations(controller);
+    UpdateResourceMeters(controller);
+    RefreshPrivateActionRows(controller, false);
     const DWORD now = SimulationClock();
-    DWORD elapsed = now - g_invigoratingElixerStartedAt;
-    bool active = InterlockedCompareExchange(
-        &g_invigoratingElixerActive, 0, 0) != 0;
-    if (active && elapsed >= kInvigoratingElixerDurationMs) {
-        InterlockedExchange(&g_invigoratingElixerActive, 0);
-        active = false;
-        elapsed = 0;
-    }
-
-    UpdateWeaponOilPresentation(controller);
-    UpdatePhoenixPhialPresentation(controller);
-    UpdateLaboratoryReagentMeter(controller);
-    UpdateSovereignBrewingGate(controller);
-    if (active && vigorLevelAvailable) {
-        const DWORD traceSecond = elapsed / 1000;
-        const bool traceProgress =
-            traceSecond != g_lastBrewingProgressTraceSecond;
-        if (traceProgress) {
-            g_lastBrewingProgressTraceSecond = traceSecond;
-            char trace[160] = {};
-            sprintf_s(
-                trace,
-                "Brewing progress dispatch: controller=0x%08X now=%u start=%u elapsed=%u.",
-                controller,
-                now,
-                g_invigoratingElixerStartedAt,
-                elapsed);
-            WriteLog(trace);
+    for (const auto& action : g_stockControllerRegistry.timedRageActions) {
+        if (g_activePanelRecord == nullptr ||
+            action.panelKey != g_activePanelRecord->panelKey) continue;
+        const bool levelAvailable =
+            SelectedBuildingLevel(context) >= static_cast<int>(action.requiredLevel);
+        DWORD elapsed = now - g_timedRageStartedAt;
+        bool active = InterlockedCompareExchange(
+            &g_timedRageActive, 0, 0) != 0 &&
+            g_activeTimedRageAction == &action;
+        if (active && elapsed >= action.durationMs) {
+            InterlockedExchange(&g_timedRageActive, 0);
+            g_activeTimedRageAction = nullptr;
+            active = false;
+            elapsed = 0;
         }
-        // AP24's active branch, in stock order: replace the ordinary Rage
-        // button/price pair with the complete 0x227A/INSr display pair.
-        SetControllerControlVisible(
-            controller, kInvigoratingElixerControlId, false);
-        SetControllerControlVisible(
-            controller, kInvigoratingElixerIconControlId, true);
-        SetControllerControlVisible(
-            controller, kInvigoratingElixerPriceControlId, false);
-        SetControllerControlVisible(
-            controller, kInvigoratingElixerActiveDisplayControlId, true);
-        SetControllerControlVisible(
-            controller, kInvigoratingElixerProgressControlId, true);
-        // This is AP24's exact INSr message contract: operation 7, elapsed
-        // simulation time, zero origin, and total simulation duration.
-        std::uint32_t progress[4] = {
-            7, elapsed, 0, kInvigoratingElixerDurationMs};
-        const auto progressDispatchResult = SendControllerMessage(
-            controller,
-            kInvigoratingElixerProgressControlId,
-            0x29,
-            0,
-            reinterpret_cast<std::uint32_t>(progress));
-        if (traceProgress) {
-            char trace[128] = {};
-            sprintf_s(
-                trace,
-                "Brewing progress message result: 0x%08X.",
-                progressDispatchResult);
-            WriteLog(trace);
-        }
-        SendControllerMessage(
-            controller,
-            kInvigoratingElixerProgressControlId,
-            0x08,
-            0,
-            0);
-    } else {
-        // AP24's inactive branch performs the exact inverse display swap. An
-        // active Palace count remains global, but a selected under-level Lab
-        // must still hide the complete Vigor family just as AP69 hides its
-        // ordinary action/icon/price row before descriptor level 3.
-        // AP69 0x004AE4D0 already presented this row during setup/event
-        // refresh and owns its level-3 enabled state and registered price.
-        // Restore only the AP24 display swap; never send an enabled state or
-        // price text here because either would overwrite AP69's stock gate.
-        SetControllerControlVisible(
-            controller, kInvigoratingElixerControlId, vigorLevelAvailable);
-        SetControllerControlVisible(
-            controller, kInvigoratingElixerIconControlId, vigorLevelAvailable);
-        SetControllerControlVisible(
-            controller, kInvigoratingElixerPriceControlId, vigorLevelAvailable);
-        SetControllerControlVisible(
-            controller, kInvigoratingElixerActiveDisplayControlId, false);
-        SetControllerControlVisible(
-            controller, kInvigoratingElixerProgressControlId, false);
-        if (StockRageOfKrolmCount() != 0 ||
-            LaboratoryReagentStock() < kInvigoratingElixerReagentCost ||
-            InterlockedCompareExchange(&g_arcaneInfusionRageHandle, 0, 0) != 0) {
-            // AP24's Palace-owned mutual-exclusion state can only make an
-            // otherwise stock-presented row more restrictive.
+        if (active && levelAvailable) {
+            SetControllerControlVisible(controller, action.actionControlId, false);
+            SetControllerControlVisible(controller, action.iconControlId, true);
+            SetControllerControlVisible(controller, action.priceControlId, false);
+            SetControllerControlVisible(controller, action.activeDisplayControlId, true);
+            SetControllerControlVisible(controller, action.progressControlId, true);
+            std::uint32_t progress[4] = {7, elapsed, 0, action.durationMs};
             SendControllerMessage(
-                controller, kInvigoratingElixerControlId, 0x0A, 1, 0);
+                controller, action.progressControlId, 0x29, 0,
+                reinterpret_cast<std::uint32_t>(progress));
+            SendControllerMessage(
+                controller, action.progressControlId, 0x08, 0, 0);
+        } else {
+            SetControllerControlVisible(controller, action.actionControlId, levelAvailable);
+            SetControllerControlVisible(controller, action.iconControlId, levelAvailable);
+            SetControllerControlVisible(controller, action.priceControlId, levelAvailable);
+            SetControllerControlVisible(controller, action.activeDisplayControlId, false);
+            SetControllerControlVisible(controller, action.progressControlId, false);
+            const auto* meter = FindActiveMeter(action.resourceKey);
+            if (StockRageOfKrolmCount() != 0 ||
+                ResourceStock(meter) < static_cast<int>(action.resourceCost) ||
+                InterlockedCompareExchange(&g_pendingRageHandle, 0, 0) != 0) {
+                SendControllerMessage(
+                    controller, action.actionControlId, 0x0A, 1, 0);
+            }
         }
     }
 }
 
-bool CaptureSubmittedLaboratoryResearch(
-    const LaboratoryActivitySnapshot& activityToRestore) {
-    if (!g_laboratoryResearchOwner.pending ||
-        g_laboratoryResearchOwner.context == nullptr) {
+bool CaptureSubmittedResearch(
+    const BuildingActivitySnapshot& activityToRestore) {
+    if (!g_researchOwner.pending ||
+        g_researchOwner.context == nullptr) {
         return false;
     }
-    const LaboratoryActivitySnapshot submitted =
-        CaptureLaboratoryActivity(g_laboratoryResearchOwner.context);
+    const BuildingActivitySnapshot submitted =
+        CaptureBuildingActivity(g_researchOwner.context);
     if (submitted.command !=
-            static_cast<int>(g_laboratoryResearchOwner.recipe) ||
+            static_cast<int>(g_researchOwner.record->actionControlId) ||
         submitted.duration <= 0) {
         return false;
     }
 
-    RestoreLaboratoryActivity(
-        g_laboratoryResearchOwner.context, activityToRestore);
-    g_laboratoryResearchOwner.startedAt =
+    RestoreBuildingActivity(
+        g_researchOwner.context, activityToRestore);
+    g_researchOwner.startedAt =
         static_cast<DWORD>(submitted.startedAt);
-    g_laboratoryResearchOwner.duration =
+    g_researchOwner.duration =
         static_cast<DWORD>(submitted.duration);
-    g_laboratoryResearchOwner.pending = false;
-    g_laboratoryResearchOwner.active = true;
+    g_researchOwner.pending = false;
+    g_researchOwner.active = true;
 
     char trace[192] = {};
     sprintf_s(
         trace,
-        "Captured queued Laboratory research 0x%08X tuple %u/%u and restored AP10 activity.",
-        g_laboratoryResearchOwner.recipe,
-        g_laboratoryResearchOwner.startedAt,
-        g_laboratoryResearchOwner.duration);
+        "Captured queued private research 0x%08X tuple %u/%u and restored AP10 activity.",
+        g_researchOwner.record->actionControlId,
+        g_researchOwner.startedAt,
+        g_researchOwner.duration);
     WriteLog(trace);
     return true;
 }
 
-void StageLaboratoryResearchForStockCompletion() {
-    unsigned char* context = g_laboratoryResearchOwner.context;
+void StageResearchForStockCompletion() {
+    unsigned char* context = g_researchOwner.context;
     WritePackedAttributeValue(
         context,
         kCurrentResearchAttributeId,
-        static_cast<int>(g_laboratoryResearchOwner.recipe));
+        static_cast<int>(g_researchOwner.record->actionControlId));
     WritePackedAttributeValue(
         context,
         kResearchStartedAtAttributeId,
-        static_cast<int>(g_laboratoryResearchOwner.startedAt));
+        static_cast<int>(g_researchOwner.startedAt));
     WritePackedAttributeValue(
         context,
         kResearchDurationAttributeId,
-        static_cast<int>(g_laboratoryResearchOwner.duration));
+        static_cast<int>(g_researchOwner.duration));
 }
 
 void __cdecl ResearchCompletionBridge(
@@ -1959,11 +2149,11 @@ void __cdecl ResearchCompletionBridge(
     std::uint32_t eventRecord,
     std::uint32_t eventArgument,
     std::uint32_t eventType) {
-    const bool privateLaboratoryCompletion =
+    const bool privateResearchCompletion =
         eventType == 2 &&
-        g_laboratoryResearchOwner.active &&
-        g_laboratoryResearchOwner.context == context;
-    if (!privateLaboratoryCompletion) {
+        g_researchOwner.active &&
+        g_researchOwner.context == context;
+    if (!privateResearchCompletion) {
         g_stockResearchCompletion(
             commandOwner, context, eventRecord, eventArgument, eventType);
         return;
@@ -1974,45 +2164,44 @@ void __cdecl ResearchCompletionBridge(
     // so publish AP99's captured tuple only for this literal stock callback.
     // This avoids predicting the event from elapsed time and preserves the
     // original descriptor lookup, attribute write, alert, and cleanup order.
-    const LaboratoryActivitySnapshot liveActivity =
-        CaptureLaboratoryActivity(context);
-    StageLaboratoryResearchForStockCompletion();
+    const BuildingActivitySnapshot liveActivity =
+        CaptureBuildingActivity(context);
+    StageResearchForStockCompletion();
 
     using ResolveResearchDescriptor = const std::uint32_t* (__cdecl*)(
         std::uint32_t);
     auto resolveResearchDescriptor = reinterpret_cast<ResolveResearchDescriptor>(
         g_resolveResearchDescriptorTrampoline);
-    const std::uint32_t recipe = g_laboratoryResearchOwner.recipe;
-    const auto* expectedDescriptor = recipe == kWeaponOilResearchControlId
-        ? g_weaponOilResearchDescriptor
-        : g_phoenixPhialResearchDescriptor;
+    const std::uint32_t recipe = g_researchOwner.record->actionControlId;
+    const auto* state = FindPrivateResearchDescriptor(g_researchOwner.record);
+    const auto* expectedDescriptor = state == nullptr
+        ? nullptr : state->descriptor;
     if (resolveResearchDescriptor(recipe) != expectedDescriptor) {
-        RestoreLaboratoryActivity(context, liveActivity);
-        WriteLog(
-            "Laboratory research completion refused: AP99 lost its private descriptor registration.");
-        return;
+        RestoreBuildingActivity(context, liveActivity);
+        StopUnsafeManagerRuntimeLaunch(
+            "Private research completion found that AP99 lost its manager descriptor registration.");
     }
 
-    InterlockedExchange(&g_laboratoryResearchCompletionStaged, 1);
+    InterlockedExchange(&g_researchCompletionStaged, 1);
     g_stockResearchCompletion(
         commandOwner, context, eventRecord, eventArgument, eventType);
-    const LaboratoryActivitySnapshot stockResult =
-        CaptureLaboratoryActivity(context);
+    const BuildingActivitySnapshot stockResult =
+        CaptureBuildingActivity(context);
     const bool completed = stockResult.command != static_cast<int>(recipe);
-    RestoreLaboratoryActivity(context, liveActivity);
+    RestoreBuildingActivity(context, liveActivity);
     if (!completed) {
-        InterlockedExchange(&g_laboratoryResearchCompletionStaged, 0);
+        InterlockedExchange(&g_researchCompletionStaged, 0);
         WriteLog(
-            "Stock event 0x2009 returned without retiring Laboratory research.");
+            "Stock event 0x2009 returned without retiring private research.");
         return;
     }
 
-    g_laboratoryResearchOwner = {};
-    InterlockedExchange(&g_laboratoryResearchCompletedThisUpdate, 1);
+    g_researchOwner = {};
+    InterlockedExchange(&g_researchCompletedThisUpdate, 1);
     char trace[128] = {};
     sprintf_s(
         trace,
-        "Observed native event 0x2009 complete Laboratory research 0x%08X.",
+        "Observed native event 0x2009 complete private research 0x%08X.",
         recipe);
     WriteLog(trace);
 }
@@ -2020,46 +2209,44 @@ void __cdecl ResearchCompletionBridge(
 void __fastcall GameUpdateRefreshBridge(void* gameState, void*) {
     // This call site is Majesty's stock state-3 update dispatch. Run the
     // original update first, exactly as the unmodified main loop does, then
-    // refresh the live Brewing row on that same main/UI thread. The custom
-    // Laboratory research owner also advances here so it uses the stock
+    // refresh the live secondary row on that same main/UI thread. The private
+    // research owner also advances here so it uses the stock
     // simulation clock and never introduces a timer or worker thread.
-    LaboratoryActivitySnapshot activityBeforeUpdate = {};
+    BuildingActivitySnapshot activityBeforeUpdate = {};
     const bool researchSubmissionPending =
-        g_laboratoryResearchOwner.pending &&
-        g_laboratoryResearchOwner.context != nullptr;
+        g_researchOwner.pending &&
+        g_researchOwner.context != nullptr;
     if (researchSubmissionPending) {
-        activityBeforeUpdate = CaptureLaboratoryActivity(
-            g_laboratoryResearchOwner.context);
+        activityBeforeUpdate = CaptureBuildingActivity(
+            g_researchOwner.context);
     }
 
     g_stockGameUpdate(gameState);
     if (researchSubmissionPending &&
-        CaptureSubmittedLaboratoryResearch(activityBeforeUpdate) &&
-        InterlockedCompareExchange(&g_customBrewingActive, 0, 0) != 0) {
+        CaptureSubmittedResearch(activityBeforeUpdate) &&
+        InterlockedCompareExchange(&g_secondaryPanelActive, 0, 0) != 0) {
         const auto controller = static_cast<std::uint32_t>(
-            InterlockedCompareExchange(&g_customBrewingController, 0, 0));
-        RefreshWeaponOilResearch(controller);
-        RefreshPhoenixPhialResearch(controller);
+            InterlockedCompareExchange(&g_childController, 0, 0));
+        RefreshPrivateResearchRows(controller);
     }
     if (InterlockedExchange(
-            &g_laboratoryResearchCompletedThisUpdate, 0) != 0) {
-        if (InterlockedCompareExchange(&g_customBrewingActive, 0, 0) != 0) {
+            &g_researchCompletedThisUpdate, 0) != 0) {
+        if (InterlockedCompareExchange(&g_secondaryPanelActive, 0, 0) != 0) {
             const auto controller = static_cast<std::uint32_t>(
-                InterlockedCompareExchange(&g_customBrewingController, 0, 0));
-            RefreshWeaponOilResearch(controller);
-            RefreshPhoenixPhialResearch(controller);
+                InterlockedCompareExchange(&g_childController, 0, 0));
+            RefreshPrivateResearchRows(controller);
         }
-        InterlockedExchange(&g_laboratoryResearchCompletionStaged, 0);
+        InterlockedExchange(&g_researchCompletionStaged, 0);
         // Event 0x2009 has already completed and refreshed the private rows in
         // this update. Resume ordinary AP69 presentation on the next update.
         return;
     }
-    if (InterlockedCompareExchange(&g_customBrewingActive, 0, 0) == 0) {
+    if (InterlockedCompareExchange(&g_secondaryPanelActive, 0, 0) == 0) {
         return;
     }
     const auto controller = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&g_customBrewingController, 0, 0));
-    UpdateBrewingPresentation(controller);
+        InterlockedCompareExchange(&g_childController, 0, 0));
+    UpdateSecondaryPanelPresentation(controller);
 }
 
 bool InstallGameUpdateRefreshBridge() {
@@ -2070,7 +2257,7 @@ bool InstallGameUpdateRefreshBridge() {
             g_buildProfile->expectedGameUpdateCall,
             sizeof(g_buildProfile->expectedGameUpdateCall)) != 0) {
         WriteLog(
-            "Brewing refresh bridge refused: stock game-update call bytes are unknown.");
+            "Secondary-panel refresh bridge refused: stock game-update call bytes are unknown.");
         return false;
     }
     g_stockGameUpdate = reinterpret_cast<GameUpdate>(
@@ -2089,7 +2276,7 @@ bool InstallGameUpdateRefreshBridge() {
             PAGE_EXECUTE_READWRITE,
             &oldProtection)) {
         WriteLog(
-            "Brewing refresh bridge failed: VirtualProtect rejected the call site.");
+            "Secondary-panel refresh bridge failed: VirtualProtect rejected the call site.");
         return false;
     }
     std::memcpy(callSite, patch, sizeof(patch));
@@ -2097,40 +2284,24 @@ bool InstallGameUpdateRefreshBridge() {
     DWORD ignored = 0;
     VirtualProtect(callSite, sizeof(patch), oldProtection, &ignored);
     WriteLog(
-        "Installed Brewing refresh bridge on Majesty's stock state-3 update dispatch.");
+        "Installed controller-recipe refresh bridge on Majesty's stock state-3 update dispatch.");
     return true;
 }
 
-int HandleInvigoratingElixer(std::uint32_t controller) {
-    if (InterlockedCompareExchange(&g_invigoratingElixerActive, 0, 0) != 0) {
-        WriteLog("Ignored Invigorating Elixer while its thirty-second effect is active.");
-        return 0;
+std::uint32_t SelectedBuildingAgent() {
+    unsigned char* context = ActiveParentPanelContext();
+    return context == nullptr
+        ? 0u : *reinterpret_cast<std::uint32_t*>(context + 0x70);
+}
+
+bool SubmitPrivateRageCommand(const char* callbackSymbol) {
+    unsigned char* context = ActiveParentPanelContext();
+    const std::uint32_t building = SelectedBuildingAgent();
+    if (context == nullptr || building == 0 || callbackSymbol == nullptr) {
+        WriteLog(
+            "Controller recipe could not submit its stock Rage command because the selected building context is unavailable.");
+        return false;
     }
-    if (StockRageOfKrolmCount() != 0) {
-        WriteLog("Ignored Invigorating Elixer while stock Rage owns the Palace count.");
-        return 0;
-    }
-    if (InterlockedCompareExchange(&g_arcaneInfusionRageHandle, 0, 0) != 0) {
-        WriteLog("Ignored Invigorating Elixer while Arcane Infusion is pending.");
-        return 0;
-    }
-    if (LaboratoryReagentStock() < kInvigoratingElixerReagentCost) {
-        UpdateBrewingPresentation(controller);
-        WriteLog("Stock-style private gate rejected Vigor: no Reagent is stored.");
-        return 0;
-    }
-    const int currentGold = StockCurrentPlayerGold();
-    if (currentGold < static_cast<int>(kInvigoratingElixerGoldCost)) {
-        char trace[160] = {};
-        sprintf_s(
-            trace,
-            "Stock AP24 affordability gate rejected Invigorating Elixer: gold=%d cost=%u.",
-            currentGold,
-            kInvigoratingElixerGoldCost);
-        WriteLog(trace);
-        return 0;
-    }
-    using GetPanelContext = void* (__thiscall*)(void*);
     struct CommandMetadata {
         std::uint32_t first;
         std::uint32_t second;
@@ -2138,79 +2309,76 @@ int HandleInvigoratingElixer(std::uint32_t controller) {
     using GetCommandMetadata = void (__thiscall*)(void*, CommandMetadata*);
     using SubmitBuildingCommand = void (__cdecl*)(
         std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t);
-    auto getPanelContext = reinterpret_cast<GetPanelContext>(
-        g_imageBase + g_buildProfile->getPanelContextRva);
     auto getCommandMetadata = reinterpret_cast<GetCommandMetadata>(
         g_imageBase + g_buildProfile->getCommandMetadataRva);
     auto submitBuildingCommand = reinterpret_cast<SubmitBuildingCommand>(
         g_imageBase + g_buildProfile->submitBuildingCommandRva);
-    const auto parentController = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&g_cgalController, 0, 0));
-    if (parentController == 0) {
-        WriteLog("Invigorating Elixer had no captured Laboratory controller.");
-        return 0;
-    }
-    // CGBR borrows AP10's context only to construct its stock secondary-panel
-    // surface. Gameplay must resolve through the captured CGAL parent or the
-    // deterministic command targets the borrowed Fervus building instead.
-    auto* context = static_cast<unsigned char*>(
-        getPanelContext(reinterpret_cast<void*>(parentController)));
-    if (context == nullptr) {
-        WriteLog("Invigorating Elixer had no selected-building context.");
-        return 0;
-    }
-    const auto building = *reinterpret_cast<std::uint32_t*>(context + 0x70);
-    if (building == 0) {
-        WriteLog("Invigorating Elixer selected-building agent was null.");
-        return 0;
-    }
     // Stock AP24 carries both metadata words from this panel context in Rage
     // command 1. Preserve that command packet exactly.
     CommandMetadata metadata = {};
     getCommandMetadata(context, &metadata);
-    InterlockedExchange(&g_invigoratingRageHandle, static_cast<LONG>(building));
+    InterlockedExchange(&g_pendingRageHandle, static_cast<LONG>(building));
     submitBuildingCommand(
         kRageOfKrolmCommandId,
         building,
         metadata.first,
         metadata.second);
-    g_invigoratingElixerStartedAt = SimulationClock();
-    g_lastBrewingProgressTraceSecond = 0xFFFFFFFF;
-    InterlockedExchange(&g_invigoratingElixerActive, 1);
-    UpdateBrewingPresentation(controller);
-    char trace[192] = {};
-    sprintf_s(
-        trace,
-        "Submitted Invigorating Elixer through stock Rage command metadata "
-        "0x%08X:0x%08X.",
-        metadata.first,
-        metadata.second);
-    WriteLog(trace);
+    WriteLog("Submitted a controller recipe through stock Rage command metadata.");
+    return true;
+}
+
+int HandleTimedRageAction(
+    std::uint32_t controller,
+    const MajestyStockControllers::TimedRageActionRecord& action) {
+    if (InterlockedCompareExchange(&g_timedRageActive, 0, 0) != 0 ||
+        StockRageOfKrolmCount() != 0 ||
+        InterlockedCompareExchange(&g_pendingRageHandle, 0, 0) != 0 ||
+        ResourceStock(FindActiveMeter(action.resourceKey)) <
+            static_cast<int>(action.resourceCost)) {
+        UpdateSecondaryPanelPresentation(controller);
+        WriteLog("Stock AP24 ownership or resource gating rejected a timed controller action.");
+        return 0;
+    }
+    const int currentGold = StockCurrentPlayerGold();
+    if (currentGold < static_cast<int>(action.goldCost)) {
+        WriteLog("Stock AP24 affordability gating rejected a timed controller action.");
+        return 0;
+    }
+    g_pendingTimedRageAction = &action;
+    g_pendingRageCommandAction = nullptr;
+    if (!SubmitPrivateRageCommand(action.callbackSymbol.c_str())) {
+        g_pendingTimedRageAction = nullptr;
+        InterlockedExchange(&g_pendingRageHandle, 0);
+        return 0;
+    }
+    g_activeTimedRageAction = &action;
+    g_timedRageStartedAt = SimulationClock();
+    InterlockedExchange(&g_timedRageActive, 1);
+    UpdateSecondaryPanelPresentation(controller);
     return 0;
 }
 
-int BeginLaboratoryResearch(
+int BeginPrivateResearch(
     std::uint32_t controller,
-    std::uint32_t recipe,
-    const char* recipeName) {
+    const MajestyStockControllers::ResearchRowRecord& row) {
     if (!g_stockResearchRouteReady) {
-        WriteLog("Laboratory research refused: stock research route was not validated.");
+        WriteLog("Private research refused: the stock AP99 route was not validated.");
         return 0;
     }
-    unsigned char* context = LaboratoryPanelContext();
+    unsigned char* context = ActiveParentPanelContext();
     if (context == nullptr) {
-        WriteLog("Laboratory research had no selected Laboratory context.");
+        WriteLog("Private research had no selected parent context.");
         return 0;
     }
     const auto commandOwner = *reinterpret_cast<std::uint32_t*>(context + 0x94);
     if (commandOwner == 0 ||
         *reinterpret_cast<std::uint32_t*>(context + 0x70) == 0) {
-        WriteLog("Laboratory research had no native command owner or building.");
+        WriteLog("Private research had no native command owner or selected building.");
         return 0;
     }
-    if (LaboratoryResearchIsActive()) {
-        UpdateBrewingPresentation(controller);
-        WriteLog("Laboratory research rejected: its private owner is already active.");
+    if (PrivateResearchIsActive()) {
+        UpdateSecondaryPanelPresentation(controller);
+        WriteLog("Private research rejected: the stock-shaped singleton owner is already active.");
         return 0;
     }
 
@@ -2220,20 +2388,18 @@ int BeginLaboratoryResearch(
     // exact research tuple stock produces, then restore AP10.
     // Payment, level/completion checks, duration selection, and command
     // construction therefore remain native while ownership is separated.
-    const LaboratoryActivitySnapshot liveActivity =
-        CaptureLaboratoryActivity(context);
-    ClearLaboratoryActivity(context);
+    const BuildingActivitySnapshot liveActivity =
+        CaptureBuildingActivity(context);
+    ClearBuildingActivity(context);
 
     using CanSubmitResearch = bool (__thiscall*)(void*, std::uint32_t);
     auto canSubmitResearch = reinterpret_cast<CanSubmitResearch>(
         g_imageBase + g_buildProfile->canSubmitResearchRva);
-    if (!canSubmitResearch(reinterpret_cast<void*>(controller), recipe)) {
-        RestoreLaboratoryActivity(context, liveActivity);
-        RefreshWeaponOilResearch(controller);
-        RefreshPhoenixPhialResearch(controller);
-        char trace[160] = {};
-        sprintf_s(trace, "Stock eligibility gate rejected %s research.", recipeName);
-        WriteLog(trace);
+    if (!canSubmitResearch(
+            reinterpret_cast<void*>(controller), row.actionControlId)) {
+        RestoreBuildingActivity(context, liveActivity);
+        RefreshPrivateResearchRows(controller);
+        WriteLog("Stock eligibility gating rejected private research.");
         return 0;
     }
 
@@ -2241,116 +2407,81 @@ int BeginLaboratoryResearch(
         std::uint32_t, void*, std::uint32_t);
     auto submitResearchCommand = reinterpret_cast<SubmitResearchCommand>(
         g_imageBase + g_buildProfile->submitResearchCommandRva);
-    g_laboratoryResearchOwner.context = context;
-    g_laboratoryResearchOwner.recipe = recipe;
-    g_laboratoryResearchOwner.startedAt = 0;
-    g_laboratoryResearchOwner.duration = 0;
-    g_laboratoryResearchOwner.pending = true;
-    g_laboratoryResearchOwner.active = false;
-    submitResearchCommand(commandOwner, context, recipe);
+    g_researchOwner.context = context;
+    g_researchOwner.record = &row;
+    g_researchOwner.startedAt = 0;
+    g_researchOwner.duration = 0;
+    g_researchOwner.pending = true;
+    g_researchOwner.active = false;
+    submitResearchCommand(commandOwner, context, row.actionControlId);
 
     // Networked building commands normally apply on the next stock game
     // update, not inside SubmitResearchCommand. Handle the synchronous shape
     // if present; otherwise restore AP10 now and let GameUpdateRefreshBridge
     // capture the queued tuple on the exact update where stock installs it.
     const bool capturedSynchronously =
-        CaptureSubmittedLaboratoryResearch(liveActivity);
+        CaptureSubmittedResearch(liveActivity);
     if (!capturedSynchronously) {
-        RestoreLaboratoryActivity(context, liveActivity);
+        RestoreBuildingActivity(context, liveActivity);
     }
 
-    RefreshWeaponOilResearch(controller);
-    RefreshPhoenixPhialResearch(controller);
-    UpdateBrewingPresentation(controller);
-    char trace[224] = {};
-    sprintf_s(
-        trace,
-        "Submitted %s through stock research; private capture is %s.",
-        recipeName,
-        capturedSynchronously ? "complete" : "pending queued command");
-    WriteLog(trace);
+    RefreshPrivateResearchRows(controller);
+    UpdateSecondaryPanelPresentation(controller);
+    WriteLog(capturedSynchronously
+        ? "Submitted private research through AP99 and captured its stock tuple synchronously."
+        : "Submitted private research through AP99; its queued stock tuple remains pending.");
     return 0;
 }
 
-int HandleWeaponOilResearch(std::uint32_t controller) {
-    return BeginLaboratoryResearch(
-        controller, kWeaponOilResearchControlId, "Weapon Oil");
-}
-
-int HandlePhoenixPhialResearch(std::uint32_t controller) {
-    return BeginLaboratoryResearch(
-        controller, kPhoenixPhialResearchControlId, "Phoenix Phial");
-}
-
-int HandleArcaneInfusion(std::uint32_t controller) {
-    unsigned char* context = LaboratoryPanelContext();
-    if (context == nullptr || LaboratoryBuildingLevel(context) < 3 ||
-        LaboratoryReagentStock() < kReagentActionCost ||
-        StockArcaneInfusionComplete()) {
-        RefreshSovereignBrewingRows(controller);
-        WriteLog("Stock-style private gate rejected Arcane Infusion.");
+int HandleRageCommandAction(
+    std::uint32_t controller,
+    const MajestyStockControllers::RageCommandActionRecord& action) {
+    unsigned char* context = ActiveParentPanelContext();
+    if (context == nullptr ||
+        SelectedBuildingLevel(context) < static_cast<int>(action.requiredLevel) ||
+        ResourceStock(FindActiveMeter(action.resourceKey)) <
+            static_cast<int>(action.resourceCost) ||
+        CompletionTemplateIsComplete(action)) {
+        RefreshPrivateActionRows(controller, false);
+        WriteLog("Stock-shaped resource, level, or completion gating rejected a Rage controller action.");
         return 0;
     }
-    if (InterlockedCompareExchange(&g_invigoratingRageHandle, 0, 0) != 0 ||
-        InterlockedCompareExchange(&g_arcaneInfusionRageHandle, 0, 0) != 0) {
-        WriteLog("Arcane Infusion rejected while a Laboratory Rage command is pending.");
+    if (InterlockedCompareExchange(&g_pendingRageHandle, 0, 0) != 0) {
+        WriteLog("A Rage controller action was rejected while the singleton Rage command is pending.");
         return 0;
     }
+    g_pendingTimedRageAction = nullptr;
+    g_pendingRageCommandAction = &action;
+    if (!SubmitPrivateRageCommand(action.callbackSymbol.c_str())) {
+        g_pendingRageCommandAction = nullptr;
+        InterlockedExchange(&g_pendingRageHandle, 0);
+    }
+    UpdateSecondaryPanelPresentation(controller);
+    return 0;
+}
 
-    const auto building = *reinterpret_cast<std::uint32_t*>(context + 0x70);
+int HandleSovereignTargetAction(
+    std::uint32_t controller,
+    const MajestyStockControllers::SovereignTargetActionRecord& action) {
+    unsigned char* context = ActiveParentPanelContext();
+    if (context == nullptr ||
+        SelectedBuildingLevel(context) < static_cast<int>(action.requiredLevel) ||
+        ResourceStock(FindActiveMeter(action.resourceKey)) <
+            static_cast<int>(action.resourceCost)) {
+        RefreshPrivateActionRows(controller, false);
+        WriteLog("Stock-shaped resource or level gating rejected a sovereign target action.");
+        return 0;
+    }
+    const std::uint32_t building = SelectedBuildingAgent();
     if (building == 0) {
-        WriteLog("Arcane Infusion had no selected Laboratory agent.");
+        WriteLog("Sovereign target action had no selected building agent.");
         return 0;
     }
-    struct CommandMetadata {
-        std::uint32_t first;
-        std::uint32_t second;
-    };
-    using GetCommandMetadata = void (__thiscall*)(void*, CommandMetadata*);
-    using SubmitBuildingCommand = void (__cdecl*)(
-        std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t);
-    auto getCommandMetadata = reinterpret_cast<GetCommandMetadata>(
-        g_imageBase + g_buildProfile->getCommandMetadataRva);
-    auto submitBuildingCommand = reinterpret_cast<SubmitBuildingCommand>(
-        g_imageBase + g_buildProfile->submitBuildingCommandRva);
-    CommandMetadata metadata = {};
-    getCommandMetadata(context, &metadata);
-    InterlockedExchange(&g_arcaneInfusionRageHandle, static_cast<LONG>(building));
-    submitBuildingCommand(
-        kRageOfKrolmCommandId,
-        building,
-        metadata.first,
-        metadata.second);
-    UpdateBrewingPresentation(controller);
-    WriteLog("Submitted Arcane Infusion through stock Rage command metadata.");
-    return 0;
-}
-
-int HandlePhilosophersStone(std::uint32_t controller) {
-    unsigned char* context = LaboratoryPanelContext();
-    if (context == nullptr || LaboratoryBuildingLevel(context) < 3 ||
-        LaboratoryReagentStock() < kReagentActionCost) {
-        RefreshSovereignBrewingRows(controller);
-        WriteLog("Rejected a reagent action through the Laboratory's private stock gate.");
-        return 0;
-    }
-    const auto laboratory = *reinterpret_cast<std::uint32_t*>(context + 0x70);
-    if (laboratory == 0) {
-        WriteLog("Reagent action had no selected Laboratory agent.");
-        return 0;
-    }
-    const std::uint32_t privateControlId = kPhilosophersStoneControlId;
-    // The visible controls remain AP69's literal, proven 0x1132/0x1133 rows.
-    // Stone's private descriptor enters Majesty's literal Vines mode. Target
-    // construction, validation, cancellation, and click dispatch therefore
-    // remain stock. The scoped transition changes only the cursor artwork,
-    // and the target commit changes only private mode, Lab owner, and cost.
-    // Publish the selected Lab first; the pending control is the commit hook's
-    // sentinel and therefore becomes visible last.
-    InterlockedExchange(
-        &g_pendingSovereignLaboratory, static_cast<LONG>(laboratory));
-    InterlockedExchange(
-        &g_pendingSovereignControl, static_cast<LONG>(privateControlId));
+    // Preserve AP69's stock target lifecycle. Publish the selected building
+    // first and the immutable action record last; the latter is the commit
+    // hook's ownership sentinel.
+    InterlockedExchange(&g_pendingSovereignBuilding, static_cast<LONG>(building));
+    g_pendingSovereignAction = &action;
     // AP69's stock slot-3 handler accepts only 0x1131..0x114C, then calls this
     // exact cdecl helper.  Invoke that same helper with the private descriptor
     // identity; calling the vtable with 0x2A20/0x2A21 would fall through to the
@@ -2358,19 +2489,23 @@ int HandlePhilosophersStone(std::uint32_t controller) {
     using BeginSovereignTarget = void (__cdecl*)(std::uint32_t);
     auto beginSovereignTarget = reinterpret_cast<BeginSovereignTarget>(
         g_imageBase + g_buildProfile->sovereignSpellClickRva);
-    beginSovereignTarget(privateControlId);
+    beginSovereignTarget(action.privateControlId);
     return 0;
 }
 
-// 0x004A7F40 constructs stock Arrows as a five-dword research descriptor:
+// 0x004A7F40 constructs a stock five-dword research descriptor:
 // duration, required building level, base research price, GMTX name, and
-// completion attribute APB* / ResearchArrows. Clone that descriptor under a
+// completion attribute. Clone that descriptor under a
 // private command key and change only the explicitly private gameplay price.
 // Every stock consumer can then run unchanged while completion remains
-// distinguishable from real Guardhouse Arrows by descriptor identity.
-extern "C" const std::uint32_t* __stdcall ResolvePrivateWeaponOilDescriptor() {
-    if (g_weaponOilResearchDescriptor != nullptr) {
-        return g_weaponOilResearchDescriptor;
+// distinguishable from its template by descriptor identity.
+const std::uint32_t* ResolvePrivateResearchDescriptor(
+    PrivateResearchDescriptor* state) {
+    if (state == nullptr || state->record == nullptr) {
+        return nullptr;
+    }
+    if (state->descriptor != nullptr) {
+        return state->descriptor;
     }
     if (g_resolveResearchDescriptorTrampoline == 0) {
         return nullptr;
@@ -2379,92 +2514,34 @@ extern "C" const std::uint32_t* __stdcall ResolvePrivateWeaponOilDescriptor() {
         std::uint32_t);
     auto resolveStockDescriptor = reinterpret_cast<ResolveResearchDescriptor>(
         g_resolveResearchDescriptorTrampoline);
-    // Resolve lazily from the first real UI/command lookup. Majesty's stock
-    // resolver performs its own registry initialization here; calling it from
-    // the DLL startup thread is earlier than stock permits.
-    const auto* stockArrows = resolveStockDescriptor(
-        kStockArrowsResearchControlId);
-    if (stockArrows == nullptr ||
-        stockArrows[2] != kStockArrowsResearchPrice ||
-        stockArrows[3] != kArrowsGlobalTextId ||
-        stockArrows[4] != 0x2A425041) {
+    const auto* templateDescriptor = resolveStockDescriptor(
+        state->record->descriptorTemplateControlId);
+    const auto* completionDescriptor = resolveStockDescriptor(
+        state->record->completionTemplateControlId);
+    if (templateDescriptor == nullptr || completionDescriptor == nullptr ||
+        completionDescriptor[4] == 0) {
         WriteLog(
-            "Weapon Oil descriptor lookup failed: stock Arrows descriptor contract changed.");
+            "Private AP99 descriptor resolution failed: a declared stock template is unavailable.");
         return nullptr;
     }
-    // Stock 0x004A83E0 allocates every five-dword descriptor with Majesty's
-    // operator new immediately before inserting it into the AP99 registry.
-    // The registry owns that allocation and frees it at 0x004A8190 when the
-    // quest is unloaded. Use the same ownership contract; a DLL-static array
-    // is not a legal registry value and will be passed to stock free on the
-    // next quest load.
+    // AP99 allocates every five-dword descriptor through Majesty's operator
+    // new immediately before registry insertion. The registry owns and frees
+    // the allocation when the quest is unloaded; mirror that exact lifetime.
     using StockOperatorNew = void* (__cdecl*)(std::size_t);
     auto stockOperatorNew = reinterpret_cast<StockOperatorNew>(
         g_imageBase + g_buildProfile->stockOperatorNewRva);
-    g_weaponOilResearchDescriptor = static_cast<std::uint32_t*>(
+    state->descriptor = static_cast<std::uint32_t*>(
         stockOperatorNew(kResearchDescriptorSize));
-    if (g_weaponOilResearchDescriptor == nullptr) {
-        WriteLog(
-            "Weapon Oil descriptor lookup failed: stock allocation returned null.");
+    if (state->descriptor == nullptr) {
+        WriteLog("Private AP99 descriptor allocation returned null.");
         return nullptr;
     }
     std::memcpy(
-        g_weaponOilResearchDescriptor,
-        stockArrows,
-        kResearchDescriptorSize);
-    g_weaponOilResearchDescriptor[1] = 1;
-    g_weaponOilResearchDescriptor[2] = kWeaponOilResearchPrice;
-    WriteLog("Lazily cloned Majesty's initialized stock Arrows descriptor for Weapon Oil.");
-    return g_weaponOilResearchDescriptor;
-}
-
-extern "C" const std::uint32_t* __stdcall ResolvePrivatePhoenixPhialDescriptor() {
-    if (g_phoenixPhialResearchDescriptor != nullptr) {
-        return g_phoenixPhialResearchDescriptor;
-    }
-    if (g_resolveResearchDescriptorTrampoline == 0) {
-        return nullptr;
-    }
-    using ResolveResearchDescriptor = const std::uint32_t* (__cdecl*)(
-        std::uint32_t);
-    auto resolveStockDescriptor = reinterpret_cast<ResolveResearchDescriptor>(
-        g_resolveResearchDescriptorTrampoline);
-    // Keep AP99 Arrows' level-1 timing gate, use the private testing price,
-    // and copy AP99 Teleportation Amulets' one-time ResearchPowerfulItem
-    // completion attribute. Building-level tuning is intentionally deferred.
-    const auto* stockArrows = resolveStockDescriptor(
-        kStockArrowsResearchControlId);
-    const auto* stockAmulet = resolveStockDescriptor(
-        kStockTeleportAmuletResearchControlId);
-    if (stockArrows == nullptr || stockAmulet == nullptr ||
-        stockArrows[2] != kStockArrowsResearchPrice ||
-        stockArrows[4] == 0 || stockAmulet[4] == 0) {
-        WriteLog(
-            "Phoenix Phial descriptor lookup failed: stock Teleportation Amulet descriptor changed.");
-        return nullptr;
-    }
-    using StockOperatorNew = void* (__cdecl*)(std::size_t);
-    auto stockOperatorNew = reinterpret_cast<StockOperatorNew>(
-        g_imageBase + g_buildProfile->stockOperatorNewRva);
-    g_phoenixPhialResearchDescriptor = static_cast<std::uint32_t*>(
-        stockOperatorNew(kResearchDescriptorSize));
-    if (g_phoenixPhialResearchDescriptor == nullptr) {
-        WriteLog(
-            "Phoenix Phial descriptor lookup failed: stock allocation returned null.");
-        return nullptr;
-    }
-    std::memcpy(
-        g_phoenixPhialResearchDescriptor,
-        stockArrows,
-        kResearchDescriptorSize);
-    // AP99 0x004A9160 owns the complete stock level gate, including the
-    // preceding-tier construction check and all three compound row children.
-    g_phoenixPhialResearchDescriptor[1] = 2;
-    g_phoenixPhialResearchDescriptor[2] = kPhoenixPhialResearchPrice;
-    g_phoenixPhialResearchDescriptor[4] = stockAmulet[4];
-    WriteLog(
-        "Lazily composed Phoenix Phial from stock Arrows research and Teleportation Amulet completion.");
-    return g_phoenixPhialResearchDescriptor;
+        state->descriptor, templateDescriptor, kResearchDescriptorSize);
+    state->descriptor[1] = state->record->requiredLevel;
+    state->descriptor[2] = state->record->price;
+    state->descriptor[4] = completionDescriptor[4];
+    return state->descriptor;
 }
 
 bool RegisterPrivateResearchDescriptors() {
@@ -2476,32 +2553,32 @@ bool RegisterPrivateResearchDescriptors() {
         std::uint32_t);
     auto resolveResearchDescriptor = reinterpret_cast<ResolveResearchDescriptor>(
         g_resolveResearchDescriptorTrampoline);
-    const auto* registeredWeaponOil =
-        resolveResearchDescriptor(kWeaponOilResearchControlId);
-    const auto* registeredPhoenixPhial =
-        resolveResearchDescriptor(kPhoenixPhialResearchControlId);
-    if (registeredWeaponOil != nullptr &&
-        registeredWeaponOil == g_weaponOilResearchDescriptor &&
-        registeredPhoenixPhial != nullptr &&
-        registeredPhoenixPhial == g_phoenixPhialResearchDescriptor) {
-        return true;
+    bool allRegistered = true;
+    bool allAbsent = true;
+    for (const auto& state : g_privateResearchDescriptors) {
+        const auto* registered = resolveResearchDescriptor(
+            state.record->actionControlId);
+        allRegistered = allRegistered && registered != nullptr &&
+            registered == state.descriptor;
+        allAbsent = allAbsent && registered == nullptr;
     }
-    if (registeredWeaponOil != nullptr || registeredPhoenixPhial != nullptr) {
+    if (allRegistered) return true;
+    if (!allAbsent) {
         WriteLog(
-            "Private Laboratory research registration failed: AP99 returned an occupied descriptor key.");
+            "Private AP99 registration failed: the stock registry contains a mixed or occupied descriptor set.");
         return false;
     }
 
-    // A null lookup for both private keys is the same boundary stock uses when
-    // rebuilding this registry for a newly loaded quest. Stock has already
-    // freed the previous quest's owned descriptors, so retire our borrowed
-    // identities before allocating their replacements through 0x006EE542.
-    g_weaponOilResearchDescriptor = nullptr;
-    g_phoenixPhialResearchDescriptor = nullptr;
-    const auto* weaponOil = ResolvePrivateWeaponOilDescriptor();
-    const auto* phoenixPhial = ResolvePrivatePhoenixPhialDescriptor();
-    if (weaponOil == nullptr || phoenixPhial == nullptr) {
-        return false;
+    // All-null is the exact boundary at which AP99 rebuilt the registry for a
+    // newly loaded quest and freed the preceding stock-owned descriptors.
+    // Retire every borrowed identity before allocating replacements.
+    for (auto& state : g_privateResearchDescriptors) {
+        state.descriptor = nullptr;
+    }
+    for (auto& state : g_privateResearchDescriptors) {
+        if (ResolvePrivateResearchDescriptor(&state) == nullptr) {
+            return false;
+        }
     }
 
     // AP99's stock descriptor construction at 0x004A83E0 inserts every
@@ -2509,46 +2586,43 @@ bool RegisterPrivateResearchDescriptors() {
     // later consumer, including completion at 0x004E0430, resolves through
     // the same map. Majesty clears and rebuilds this registry when a quest is
     // loaded without unloading this DLL. Re-resolve the private keys on every
-    // CGBR setup and create new stock-owned clones after that rebuild has
+    // secondary setup and create new stock-owned clones after that rebuild has
     // removed and freed the previous ones. Presentation, submission, and
     // completion therefore receive one stable identity for the current quest
     // while stock retains its normal teardown ownership.
     using FindOrInsert = void** (__thiscall*)(void*, const std::uint32_t*);
     auto findOrInsert = reinterpret_cast<FindOrInsert>(
         g_researchDescriptorRegistryFindOrInsert);
-    const std::uint32_t keys[2] = {
-        kWeaponOilResearchControlId,
-        kPhoenixPhialResearchControlId};
-    void* const descriptors[2] = {
-        g_weaponOilResearchDescriptor,
-        g_phoenixPhialResearchDescriptor};
-    for (std::size_t index = 0; index < 2; ++index) {
-        const std::uint32_t key = keys[index];
+    for (const auto& state : g_privateResearchDescriptors) {
+        const std::uint32_t key = state.record->actionControlId;
         void** slot = findOrInsert(
             reinterpret_cast<void*>(g_researchDescriptorRegistryMap), &key);
-        if (slot == nullptr || (*slot != nullptr && *slot != descriptors[index])) {
+        if (slot == nullptr ||
+            (*slot != nullptr && *slot != state.descriptor)) {
             WriteLog(
-                "Private Laboratory research registration failed: AP99 returned an occupied descriptor slot.");
+                "Private AP99 registration failed: the stock registry returned an occupied descriptor slot.");
             return false;
         }
-        *slot = descriptors[index];
+        *slot = state.descriptor;
     }
-    if (resolveResearchDescriptor(kWeaponOilResearchControlId) != weaponOil ||
-        resolveResearchDescriptor(kPhoenixPhialResearchControlId) != phoenixPhial) {
-        WriteLog(
-            "Private Laboratory research registration failed: AP99 could not resolve the inserted descriptors.");
-        return false;
+    for (const auto& state : g_privateResearchDescriptors) {
+        if (resolveResearchDescriptor(state.record->actionControlId) !=
+                state.descriptor) {
+            WriteLog(
+                "Private AP99 registration failed: an inserted descriptor could not be resolved.");
+            return false;
+        }
     }
     const bool registryWasPreviouslyObserved =
         g_privateResearchDescriptorsRegistered;
     g_privateResearchDescriptorsRegistered = true;
     WriteLog(registryWasPreviouslyObserved
-        ? "Re-registered Weapon Oil and Phoenix Phial after AP99 rebuilt its stock research registry."
-        : "Registered Weapon Oil and Phoenix Phial through AP99's stock Blacksmith research registry.");
+        ? "Re-registered private research descriptors after AP99 rebuilt its stock registry."
+        : "Registered private research descriptors through AP99's stock registry.");
     return true;
 }
 
-bool InstallPrivateWeaponOilResearchDescriptor() {
+bool InstallPrivateResearchDescriptorRegistry() {
     auto* entry = reinterpret_cast<unsigned char*>(
         g_imageBase + g_buildProfile->resolveResearchDescriptorRva);
     if (std::memcmp(
@@ -2556,7 +2630,7 @@ bool InstallPrivateWeaponOilResearchDescriptor() {
             g_buildProfile->expectedResolveResearchDescriptorEntry,
             sizeof(g_buildProfile->expectedResolveResearchDescriptorEntry)) != 0) {
         WriteLog(
-            "Weapon Oil descriptor refused: stock research resolver bytes are unknown.");
+            "Private research descriptors refused: stock AP99 resolver bytes are unknown.");
         return false;
     }
     // AP99's resolver contains two literal `mov ecx, registry; call ...`
@@ -2588,7 +2662,7 @@ bool InstallPrivateWeaponOilResearchDescriptor() {
     }
     if (matchingMapLoads < 2 || registryMap == 0 || findOrInsert == 0) {
         WriteLog(
-            "Private Laboratory research refused: AP99 registry insertion contract changed.");
+            "Private research descriptors refused: AP99 registry insertion changed.");
         return false;
     }
     g_resolveResearchDescriptorTrampoline =
@@ -2596,7 +2670,7 @@ bool InstallPrivateWeaponOilResearchDescriptor() {
     g_researchDescriptorRegistryMap = registryMap;
     g_researchDescriptorRegistryFindOrInsert = findOrInsert;
     WriteLog(
-        "Validated AP99's stock Blacksmith research descriptor registry for private registration.");
+        "Validated AP99's stock research descriptor registry for private registration.");
     return true;
 }
 
@@ -2608,12 +2682,12 @@ bool InstallResearchCompletionBridge() {
     // The stock order-processor table stores event ID 0x2009 immediately
     // before its completion callback and event ID 0x200B immediately after.
     // Validate that full Blacksmith dispatch tuple before privatizing the one
-    // callback pointer for the Laboratory's scoped AP10/AP99 ownership handoff.
+    // callback pointer for the scoped AP10/AP99 ownership handoff.
     if (dispatchSlot[-1] != 0x00002009u ||
         dispatchSlot[0] != stockCompletion ||
         dispatchSlot[1] != 0x0000200Bu) {
         WriteLog(
-            "Laboratory research completion bridge refused: stock event 0x2009 dispatch changed.");
+            "Private research completion bridge refused: stock event 0x2009 dispatch changed.");
         return false;
     }
     g_stockResearchCompletion = reinterpret_cast<ResearchCompletion>(
@@ -2625,7 +2699,7 @@ bool InstallResearchCompletionBridge() {
             PAGE_READWRITE,
             &oldProtection)) {
         WriteLog(
-            "Laboratory research completion bridge failed: event 0x2009 dispatch is not writable.");
+            "Private research completion bridge failed: event 0x2009 dispatch is not writable.");
         return false;
     }
     dispatchSlot[0] = reinterpret_cast<std::uint32_t>(&ResearchCompletionBridge);
@@ -2633,160 +2707,174 @@ bool InstallResearchCompletionBridge() {
     VirtualProtect(
         dispatchSlot, sizeof(*dispatchSlot), oldProtection, &ignored);
     WriteLog(
-        "Installed scoped Laboratory bridge on stock Blacksmith event 0x2009 completion.");
+        "Installed the scoped private-research bridge on stock event 0x2009 completion.");
     return true;
 }
 
-extern "C" const std::uint32_t* __stdcall ResolvePrivateInvigoratingDescriptor() {
-    if (g_invigoratingSpellDescriptor[4] != 0) {
-        return g_invigoratingSpellDescriptor;
+const MajestyStockControllers::SecondaryPanelRecord* PanelForSpellRecord(
+    const PrivateSpellDescriptor& state) {
+    switch (state.kind) {
+    case PrivateSpellDescriptorKind::TimedRage:
+        return g_stockControllerRegistry.FindPanelByKey(
+            static_cast<const MajestyStockControllers::TimedRageActionRecord*>(
+                state.record)->panelKey);
+    case PrivateSpellDescriptorKind::RageCommandVisual:
+        return g_stockControllerRegistry.FindPanelByKey(
+            static_cast<const MajestyStockControllers::RageCommandActionRecord*>(
+                state.record)->panelKey);
+    case PrivateSpellDescriptorKind::SovereignVisual:
+    case PrivateSpellDescriptorKind::SovereignTarget:
+        return g_stockControllerRegistry.FindPanelByKey(
+            static_cast<const MajestyStockControllers::SovereignTargetActionRecord*>(
+                state.record)->panelKey);
     }
-    if (g_resolveSpellDescriptorTrampoline == 0) {
+    return nullptr;
+}
+
+const std::uint32_t* BuildPrivateSpellDescriptor(
+    PrivateSpellDescriptor* state) {
+    if (state == nullptr || state->record == nullptr ||
+        g_resolveSpellDescriptorTrampoline == 0) {
         return nullptr;
     }
+    if (state->descriptor[1] != 0) return state->descriptor;
+    const auto* panel = PanelForSpellRecord(*state);
+    if (panel == nullptr) return nullptr;
     using ResolveSpellDescriptor = const std::uint32_t* (__cdecl*)(
         std::uint32_t);
     auto resolveStockDescriptor = reinterpret_cast<ResolveSpellDescriptor>(
         g_resolveSpellDescriptorTrampoline);
-    const auto* stockHealing = resolveStockDescriptor(kStockFervusHealingControlId);
-    const auto* stockPetrify = resolveStockDescriptor(kStockPetrifyControlId);
-    if (stockHealing == nullptr || stockPetrify == nullptr ||
-        stockHealing[0] != kStockFervusBuildingClassId ||
-        stockHealing[1] != kAp69DialogId ||
-        stockHealing[3] != 1 ||
-        stockPetrify[3] != 3 || stockPetrify[4] == 0) {
-        WriteLog(
-            "Vigor descriptor lookup failed: stock Healing/Petrify contract changed.");
-        return nullptr;
+    const std::uint32_t* source = nullptr;
+    switch (state->kind) {
+    case PrivateSpellDescriptorKind::TimedRage: {
+        const auto& action =
+            *static_cast<const MajestyStockControllers::TimedRageActionRecord*>(
+                state->record);
+        source = resolveStockDescriptor(action.descriptorTemplateControlId);
+        const auto* priceTemplate = resolveStockDescriptor(
+            action.levelPriceTemplateControlId);
+        if (source == nullptr || priceTemplate == nullptr ||
+            priceTemplate[3] != action.requiredLevel ||
+            priceTemplate[4] != action.goldCost) {
+            WriteLog(
+                "Timed AP24 descriptor failed: its declared stock templates do not match the recipe values.");
+            return nullptr;
+        }
+        std::memcpy(state->descriptor, source, 5 * sizeof(std::uint32_t));
+        state->descriptor[0] = panel->buildingFamilyId;
+        state->descriptor[1] = panel->childDialogId;
+        state->descriptor[3] = action.requiredLevel;
+        state->descriptor[4] = action.goldCost;
+        break;
     }
-    std::memcpy(
-        g_invigoratingSpellDescriptor,
-        stockHealing,
-        sizeof(g_invigoratingSpellDescriptor));
-    g_invigoratingSpellDescriptor[0] = kLaboratoryBuildingClassId;
-    g_invigoratingSpellDescriptor[1] = kCgbrDialogId;
-    g_invigoratingSpellDescriptor[3] = stockPetrify[3];
-    g_invigoratingSpellDescriptor[4] = stockPetrify[4];
-    WriteLog(
-        "Lazily composed Vigor from AP69 Healing and level-3 1500-gold Petrify.");
-    return g_invigoratingSpellDescriptor;
+    case PrivateSpellDescriptorKind::RageCommandVisual: {
+        const auto& action =
+            *static_cast<const MajestyStockControllers::RageCommandActionRecord*>(
+                state->record);
+        source = resolveStockDescriptor(action.visualTemplateControlId);
+        if (source == nullptr || source[3] != action.requiredLevel) {
+            WriteLog(
+                "Rage action descriptor failed: its declared stock visual template does not match the recipe level.");
+            return nullptr;
+        }
+        std::memcpy(state->descriptor, source, 5 * sizeof(std::uint32_t));
+        state->descriptor[0] = panel->buildingFamilyId;
+        state->descriptor[1] = panel->childDialogId;
+        state->descriptor[3] = action.requiredLevel;
+        state->descriptor[4] = 0;
+        break;
+    }
+    case PrivateSpellDescriptorKind::SovereignVisual: {
+        const auto& action =
+            *static_cast<const MajestyStockControllers::SovereignTargetActionRecord*>(
+                state->record);
+        source = resolveStockDescriptor(action.visualTemplateControlId);
+        if (source == nullptr) {
+            WriteLog("Sovereign visual descriptor stock template is unavailable.");
+            return nullptr;
+        }
+        std::memcpy(state->descriptor, source, 5 * sizeof(std::uint32_t));
+        state->descriptor[0] = panel->buildingFamilyId;
+        state->descriptor[1] = panel->childDialogId;
+        state->descriptor[4] = 0;
+        break;
+    }
+    case PrivateSpellDescriptorKind::SovereignTarget: {
+        const auto& action =
+            *static_cast<const MajestyStockControllers::SovereignTargetActionRecord*>(
+                state->record);
+        source = resolveStockDescriptor(action.targetTemplateControlId);
+        if (source == nullptr || source[2] != action.stockTargetMode) {
+            WriteLog(
+                "Sovereign target descriptor failed: its declared stock target mode does not match the template.");
+            return nullptr;
+        }
+        std::memcpy(state->descriptor, source, 5 * sizeof(std::uint32_t));
+        state->descriptor[0] = panel->buildingFamilyId;
+        state->descriptor[1] = panel->childDialogId;
+        state->descriptor[2] = action.stockTargetMode;
+        state->descriptor[3] = 1;
+        state->descriptor[4] = 0;
+        break;
+    }
+    }
+    return state->descriptor;
 }
 
-extern "C" const std::uint32_t* __stdcall ResolvePrivateSovereignVisualDescriptor(
+extern "C" const std::uint32_t* __stdcall ResolvePrivateSpellDescriptor(
     std::uint32_t controlId) {
-    const bool infusion = controlId == kArcaneInfusionVisualControlId;
-    std::uint32_t* descriptor = infusion
-        ? g_arcaneInfusionVisualDescriptor
-        : g_philosophersStoneVisualDescriptor;
-    if (descriptor[1] == 0) {
-        if (g_resolveSpellDescriptorTrampoline == 0) {
-            return nullptr;
+    if (g_activePanelRecord == nullptr) return nullptr;
+    for (auto& state : g_privateSpellDescriptors) {
+        const auto* panel = PanelForSpellRecord(state);
+        if (panel != g_activePanelRecord) continue;
+        bool matches = false;
+        switch (state.kind) {
+        case PrivateSpellDescriptorKind::TimedRage:
+            matches = static_cast<const MajestyStockControllers::TimedRageActionRecord*>(
+                state.record)->actionControlId == controlId;
+            break;
+        case PrivateSpellDescriptorKind::RageCommandVisual:
+            matches = static_cast<const MajestyStockControllers::RageCommandActionRecord*>(
+                state.record)->actionControlId == controlId;
+            break;
+        case PrivateSpellDescriptorKind::SovereignVisual:
+            matches = static_cast<const MajestyStockControllers::SovereignTargetActionRecord*>(
+                state.record)->visualControlId == controlId;
+            break;
+        case PrivateSpellDescriptorKind::SovereignTarget:
+            matches = static_cast<const MajestyStockControllers::SovereignTargetActionRecord*>(
+                state.record)->privateControlId == controlId;
+            break;
         }
-        using ResolveSpellDescriptor = const std::uint32_t* (__cdecl*)(
-            std::uint32_t);
-        auto resolveStockDescriptor = reinterpret_cast<ResolveSpellDescriptor>(
-            g_resolveSpellDescriptorTrampoline);
-        const auto* stock = resolveStockDescriptor(controlId);
-        const std::uint32_t expectedMode = infusion
-            ? kStockFervusSecondSpellMode
-            : kStockFervusThirdSpellMode;
-        const std::uint32_t expectedLevel = infusion ? 3u : 2u;
-        const std::uint32_t expectedCost = infusion ? 1000u : 500u;
-        if (stock == nullptr || stock[0] != kStockFervusBuildingClassId ||
-            stock[1] != kAp69DialogId || stock[2] != expectedMode ||
-            stock[3] != expectedLevel || stock[4] != expectedCost) {
-            WriteLog("Sovereign visual descriptor failed: stock Fervus row changed.");
-            return nullptr;
+        if (!matches) continue;
+        const std::uint32_t* descriptor = BuildPrivateSpellDescriptor(&state);
+        if (descriptor == nullptr) {
+            StopUnsafeManagerRuntimeLaunch(
+                "A matched controller recipe could not resolve its declared stock spell template.");
         }
-        std::memcpy(
-            descriptor, stock, sizeof(g_arcaneInfusionVisualDescriptor));
-        descriptor[1] = kCgbrDialogId;
-        descriptor[4] = 0;
-        WriteLog(
-            "Composed a private sovereign visual from its matching stock Fervus row.");
-    }
-
-    // AP69's unavailable tooltip always formats descriptor[0]/[3] as a
-    // building prerequisite when the row is disabled. Keep the real private
-    // Laboratory requirement below level three. Once it is satisfied, use
-    // level zero of that same private class. Stock's checked lookup has no
-    // level-zero description to append, so the independent 10-Reagent gate
-    // can disable the row without falsely naming an unrelated building.
-    unsigned char* context = LaboratoryPanelContext();
-    const bool laboratoryLevelMet = context != nullptr &&
-        LaboratoryBuildingLevel(context) >= 3;
-    descriptor[0] = kLaboratoryBuildingClassId;
-    descriptor[3] = laboratoryLevelMet ? 0u : 3u;
-    return descriptor;
-}
-
-extern "C" const std::uint32_t* __stdcall ResolvePrivateSovereignDescriptor(
-    std::uint32_t) {
-    std::uint32_t* descriptor = g_philosophersStoneSpellDescriptor;
-    if (descriptor[0] != 0) {
+        if (state.kind == PrivateSpellDescriptorKind::SovereignVisual) {
+            const auto& action =
+                *static_cast<const MajestyStockControllers::SovereignTargetActionRecord*>(
+                    state.record);
+            unsigned char* context = ActiveParentPanelContext();
+            const bool levelMet = context != nullptr &&
+                SelectedBuildingLevel(context) >=
+                    static_cast<int>(action.requiredLevel);
+            state.descriptor[3] = levelMet ? 0u : action.requiredLevel;
+        }
         return descriptor;
     }
-    if (g_resolveSpellDescriptorTrampoline == 0) {
-        return nullptr;
-    }
-    using ResolveSpellDescriptor = const std::uint32_t* (__cdecl*)(
-        std::uint32_t);
-    auto resolveStockDescriptor = reinterpret_cast<ResolveSpellDescriptor>(
-        g_resolveSpellDescriptorTrampoline);
-    const std::uint32_t stockControlId = kStockVinesControlId;
-    const std::uint32_t stockBuildingClassId = kStockFervusBuildingClassId;
-    const std::uint32_t stockDialogId = kAp69DialogId;
-    const std::uint32_t stockMode = kStockVinesMode;
-    const std::uint32_t stockLevel = 3u;
-    const std::uint32_t stockCost = 1000;
-    const auto* stock = resolveStockDescriptor(stockControlId);
-    if (stock == nullptr || stock[0] != stockBuildingClassId ||
-        stock[1] != stockDialogId || stock[2] != stockMode ||
-        stock[3] != stockLevel || stock[4] != stockCost) {
-        WriteLog("Sovereign execution descriptor failed: stock temple spell changed.");
-        return nullptr;
-    }
-    std::memcpy(descriptor, stock, sizeof(g_philosophersStoneSpellDescriptor));
-    descriptor[0] = kLaboratoryBuildingClassId;
-    descriptor[1] = kCgbrDialogId;
-    descriptor[2] = stockMode;
-    // Stone keeps Vines' global unit targeting. The Lab owns the
-    // level-three/10-Reagent gate and the GPL birth commit consumes stock, so
-    // the private command carries no temple-gold charge.
-    descriptor[3] = 1;
-    descriptor[4] = 0;
-    WriteLog("Composed private sovereign targeting from its matching stock temple spell.");
-    return descriptor;
+    return nullptr;
 }
 
 __declspec(naked) void ResolveSpellDescriptorHook() {
     __asm {
-        cmp dword ptr [esp + 4], 2A10h
-        je check_private_context
-        cmp dword ptr [esp + 4], 1132h
-        je sovereign_visual_descriptor
-        cmp dword ptr [esp + 4], 1133h
-        je sovereign_visual_descriptor
-        cmp dword ptr [esp + 4], 2A21h
-        jne stock_resolver
-
-        cmp dword ptr [g_customBrewingActive], 1
+        cmp dword ptr [g_secondaryPanelActive], 1
         jne stock_resolver
         push dword ptr [esp + 4]
-        call ResolvePrivateSovereignDescriptor
-        ret
-
-    sovereign_visual_descriptor:
-        cmp dword ptr [g_customBrewingActive], 1
-        jne stock_resolver
-        push dword ptr [esp + 4]
-        call ResolvePrivateSovereignVisualDescriptor
-        ret
-
-    check_private_context:
-        cmp dword ptr [g_customBrewingActive], 1
-        jne stock_resolver
-        call ResolvePrivateInvigoratingDescriptor
+        call ResolvePrivateSpellDescriptor
+        test eax, eax
+        jz stock_resolver
         ret
 
     stock_resolver:
@@ -2794,7 +2882,7 @@ __declspec(naked) void ResolveSpellDescriptorHook() {
     }
 }
 
-bool InstallPrivateInvigoratingSpellDescriptor() {
+bool InstallPrivateSpellDescriptorResolver() {
     auto* entry = reinterpret_cast<unsigned char*>(
         g_imageBase + g_buildProfile->resolveSpellDescriptorRva);
     if (std::memcmp(
@@ -2802,7 +2890,7 @@ bool InstallPrivateInvigoratingSpellDescriptor() {
             g_buildProfile->expectedResolveSpellDescriptorEntry,
             sizeof(g_buildProfile->expectedResolveSpellDescriptorEntry)) != 0) {
         WriteLog(
-            "Vigor descriptor refused: stock spell resolver bytes are unknown.");
+            "Private spell descriptors refused: stock resolver bytes are unknown.");
         return false;
     }
     auto* trampoline = reinterpret_cast<unsigned char*>(VirtualAlloc(
@@ -2811,7 +2899,7 @@ bool InstallPrivateInvigoratingSpellDescriptor() {
         MEM_COMMIT | MEM_RESERVE,
         PAGE_EXECUTE_READWRITE));
     if (trampoline == nullptr) {
-        WriteLog("Vigor descriptor failed: trampoline allocation was rejected.");
+        WriteLog("Private spell descriptor trampoline allocation was rejected.");
         return false;
     }
     std::memcpy(
@@ -2844,21 +2932,26 @@ bool InstallPrivateInvigoratingSpellDescriptor() {
             PAGE_EXECUTE_READWRITE,
             &oldProtection)) {
         WriteLog(
-            "Vigor descriptor failed: VirtualProtect rejected the resolver.");
+            "Private spell descriptor resolver was not writable.");
         return false;
     }
     std::memcpy(entry, patch, sizeof(patch));
     FlushInstructionCache(GetCurrentProcess(), entry, sizeof(patch));
     DWORD ignored = 0;
     VirtualProtect(entry, sizeof(patch), oldProtection, &ignored);
-    WriteLog("Installed scoped stock AP69 descriptor alias for Vigor.");
+    WriteLog("Installed the scoped stock AP69 descriptor resolver.");
     return true;
 }
 
-// Majesty has no data-driven cursor override for a private action that must
-// retain a hard-coded stock target mode. Reproduce the stock transition
-// literally and privatize only the cursor ordinal while the matching Lab
-// action owns that Vines target session.
+extern "C" std::uint32_t __stdcall ResolvePendingSovereignCursor(
+    std::uint32_t mode, std::uint32_t stockOrdinal) {
+    const auto* action = g_pendingSovereignAction;
+    return action != nullptr && action->stockTargetMode == mode
+        ? action->cursorOrdinal : stockOrdinal;
+}
+
+// Preserve the stock target transition literally and change only the cursor
+// ordinal while the exact immutable controller recipe owns the session.
 __declspec(naked) void SovereignCursorTransitionHook() {
     __asm {
         mov edx, dword ptr [esi]
@@ -2867,14 +2960,11 @@ __declspec(naked) void SovereignCursorTransitionHook() {
         mov dword ptr [esi + 40h], ebx
         mov dword ptr [esi + 38h], ebx
         mov eax, dword ptr [edi + 4]
-
-        cmp dword ptr [g_pendingSovereignControl], 2A21h
-        jne present_cursor
-        cmp dword ptr [edi], 33327053h
-        jne present_cursor
-        mov eax, 39
-
-    present_cursor:
+        push eax
+        push dword ptr [edi]
+        call ResolvePendingSovereignCursor
+        mov edx, dword ptr [esi]
+        mov edx, dword ptr [edx + 48h]
         push ebx
         push eax
         mov ecx, esi
@@ -2890,28 +2980,28 @@ extern "C" void __cdecl SubmitPrivateSovereignCommand(
     std::uint32_t y,
     std::uint32_t target,
     std::uint32_t cost) {
-    const auto pending = static_cast<std::uint32_t>(InterlockedCompareExchange(
-        &g_pendingSovereignControl, 0, 0));
-    const auto laboratory = static_cast<std::uint32_t>(InterlockedCompareExchange(
-        &g_pendingSovereignLaboratory, 0, 0));
-    const bool matchingStone = mode == kStockVinesMode &&
-        pending == kPhilosophersStoneControlId;
-    if (laboratory != 0 && matchingStone) {
-        if (LaboratoryReagentStock() < kReagentActionCost) {
+    const auto* action = g_pendingSovereignAction;
+    const auto building = static_cast<std::uint32_t>(InterlockedCompareExchange(
+        &g_pendingSovereignBuilding, 0, 0));
+    if (action != nullptr && building != 0 &&
+        mode == action->stockTargetMode) {
+        const auto* meter = g_stockControllerRegistry.FindMeter(
+            action->panelKey, action->resourceKey);
+        if (ResourceStock(meter) < static_cast<int>(action->resourceCost)) {
             // Stock temple spells still submit their current target packet
             // when the player cannot afford another cast. Their sovereign
             // executor rejects that packet at its native gold-affordability
             // branch, presents the stock failure feedback, and leaves the
             // repeat-cast target lifecycle intact. Preserve the stock mode and
-            // use an unreachable cost only as the private Reagent predicate's
+            // use an unreachable cost only as the private resource predicate's
             // input to that exact downstream branch.
             cost = kStockUnaffordableGoldCost;
-            WriteLog("Submitted a depleted private target through Majesty's stock unaffordable-spell route.");
+            WriteLog("Submitted a depleted private target through the stock unaffordable-spell route.");
         } else {
-            mode = kPhilosophersStoneMode;
-            target = laboratory;
+            mode = action->privateMode;
+            target = building;
             cost = 0;
-            WriteLog("Committed a private reagent action through its stock temple target packet.");
+            WriteLog("Committed a private controller action through its stock sovereign target packet.");
         }
     }
     using SubmitCommand = void (__cdecl*)(
@@ -2922,16 +3012,29 @@ extern "C" void __cdecl SubmitPrivateSovereignCommand(
     submit(mode, player, x, y, target, cost);
 }
 
+extern "C" std::uint32_t __stdcall ResolvePrivateSovereignExecutorMode(
+    std::uint32_t mode) {
+    const auto* action =
+        g_stockControllerRegistry.FindSovereignByPrivateMode(mode);
+    if (action == nullptr) return mode;
+    InterlockedExchange(
+        &g_executingSovereignUnit,
+        static_cast<LONG>(action->privateUnitId));
+    return action->stockExecutorMode;
+}
+
+extern "C" std::uint32_t __stdcall ResolvePrivateSovereignUnit(
+    std::uint32_t stockUnit) {
+    const auto privateUnit = static_cast<std::uint32_t>(InterlockedExchange(
+        &g_executingSovereignUnit, 0));
+    return privateUnit == 0 ? stockUnit : privateUnit;
+}
+
 __declspec(naked) void PublicSovereignExecutorHook() {
     __asm {
-        mov eax, dword ptr [esp + 4]
-        cmp eax, 31536C41h
-        je private_stone
-        jmp stock_entry
-    private_stone:
-        mov dword ptr [g_executingSovereignKind], 2
-        mov dword ptr [esp + 4], 34317053h
-    stock_entry:
+        push dword ptr [esp + 4]
+        call ResolvePrivateSovereignExecutorMode
+        mov dword ptr [esp + 4], eax
         push -1
         push 006FA007h
         jmp dword ptr [g_sovereignExecutorResume]
@@ -2940,14 +3043,9 @@ __declspec(naked) void PublicSovereignExecutorHook() {
 
 __declspec(naked) void Beta2SovereignExecutorHook() {
     __asm {
-        mov eax, dword ptr [esp + 4]
-        cmp eax, 31536C41h
-        je private_stone
-        jmp stock_entry
-    private_stone:
-        mov dword ptr [g_executingSovereignKind], 2
-        mov dword ptr [esp + 4], 34317053h
-    stock_entry:
+        push dword ptr [esp + 4]
+        call ResolvePrivateSovereignExecutorMode
+        mov dword ptr [esp + 4], eax
         push -1
         push 0070F5D7h
         jmp dword ptr [g_sovereignExecutorResume]
@@ -2956,13 +3054,8 @@ __declspec(naked) void Beta2SovereignExecutorHook() {
 
 __declspec(naked) void PublicSovereignConstructionHook() {
     __asm {
-        cmp dword ptr [g_executingSovereignKind], 2
-        jne stock_result
-        mov eax, 31534C41h
-        jmp clear_result
-    clear_result:
-        mov dword ptr [g_executingSovereignKind], 0
-    stock_result:
+        push eax
+        call ResolvePrivateSovereignUnit
         mov ecx, dword ptr [esp + 1Ch]
         mov ebx, eax
         jmp dword ptr [g_sovereignConstructionResume]
@@ -2971,13 +3064,8 @@ __declspec(naked) void PublicSovereignConstructionHook() {
 
 __declspec(naked) void Beta2SovereignConstructionHook() {
     __asm {
-        cmp dword ptr [g_executingSovereignKind], 2
-        jne stock_result
-        mov eax, 31534C41h
-        jmp clear_result
-    clear_result:
-        mov dword ptr [g_executingSovereignKind], 0
-    stock_result:
+        push eax
+        call ResolvePrivateSovereignUnit
         mov ecx, dword ptr [esp + 1Ch]
         mov ebx, eax
         jmp dword ptr [g_sovereignConstructionResume]
@@ -3099,7 +3187,7 @@ bool InstallPrivateSovereignSpellRoute() {
     std::memcpy(construction, constructionPatch, constructionSize);
     FlushInstructionCache(GetCurrentProcess(), construction, constructionSize);
     VirtualProtect(construction, constructionSize, oldProtection, &ignored);
-    WriteLog("Installed private Philosopher's Stone temple target and cursor route.");
+    WriteLog("Installed the private sovereign target, executor, and cursor route.");
     return true;
 }
 
@@ -3107,21 +3195,31 @@ bool InstallPrivateSovereignSpellRoute() {
 // completion attribute, formats GMTX 0xBC ("Research Complete") with its name,
 // posts the green alert, and clears the activity attributes. At 0x004DFFC7 EDI
 // is the resolved name pointer. Keep that exact call and replace only EDI when
-// EBX is our private Arrows descriptor clone.
+// EBX is one of the private descriptor clones.
+
+extern "C" const char* __stdcall ResolvePrivateResearchCompletionText(
+    const std::uint32_t* descriptor) {
+    for (const auto& state : g_privateResearchDescriptors) {
+        if (state.descriptor == descriptor) {
+            return state.record->completionText.c_str();
+        }
+    }
+    return nullptr;
+}
 
 __declspec(naked) void ResearchCompletionNamePushHook() {
     __asm {
-        cmp ebx, dword ptr [g_weaponOilResearchDescriptor]
-        jne check_phoenix_name
-        push offset g_weaponOilCompletionName
+        pushfd
+        pushad
+        push ebx
+        call ResolvePrivateResearchCompletionText
+        mov dword ptr [g_privateResearchCompletionText], eax
+        popad
+        popfd
+        cmp dword ptr [g_privateResearchCompletionText], 0
+        je stock_name
+        push dword ptr [g_privateResearchCompletionText]
         jmp finish_stock_sequence
-
-    check_phoenix_name:
-        cmp ebx, dword ptr [g_phoenixPhialResearchDescriptor]
-        jne stock_name
-        push offset g_phoenixPhialCompletionName
-        jmp finish_stock_sequence
-
     stock_name:
         push edi
 
@@ -3140,7 +3238,7 @@ bool InstallResearchCompletionNameClone() {
             g_buildProfile->expectedResearchCompletionNamePush,
             sizeof(g_buildProfile->expectedResearchCompletionNamePush)) != 0) {
         WriteLog(
-            "Weapon Oil completion label refused: stock research-completion bytes are unknown.");
+            "Private research completion text refused: stock completion bytes are unknown.");
         return false;
     }
     g_researchCompletionNamePushResume =
@@ -3160,7 +3258,7 @@ bool InstallResearchCompletionNameClone() {
             PAGE_EXECUTE_READWRITE,
             &oldProtection)) {
         WriteLog(
-            "Weapon Oil completion label failed: VirtualProtect rejected the stock site.");
+            "Private research completion text failed: the stock site is not writable.");
         return false;
     }
     std::memcpy(site, patch, sizeof(patch));
@@ -3168,7 +3266,7 @@ bool InstallResearchCompletionNameClone() {
     DWORD ignored = 0;
     VirtualProtect(site, sizeof(patch), oldProtection, &ignored);
     WriteLog(
-        "Installed scoped Weapon Oil name substitution in Majesty's stock research-completion alert.");
+        "Installed scoped private text substitution in the stock research-completion alert.");
     return true;
 }
 
@@ -3203,7 +3301,7 @@ bool ValidateStockResearchRoute() {
             completionEntry,
             g_buildProfile->expectedResearchCompletionEntry,
             sizeof(g_buildProfile->expectedResearchCompletionEntry)) != 0) {
-        WriteLog("Weapon Oil refused: Majesty's stock AP99 research bytes are unknown.");
+        WriteLog("Private research refused: Majesty's stock AP99 bytes are unknown.");
         return false;
     }
     WriteLog("Validated AP99 native research refresh and command route.");
@@ -3213,15 +3311,9 @@ bool ValidateStockResearchRoute() {
 __declspec(naked) void RageCommandDispatchHook() {
     __asm {
         mov ecx, dword ptr [ebp + 0Ch]
-        cmp ecx, dword ptr [g_invigoratingRageHandle]
-        je vigor_dispatch
-        cmp ecx, dword ptr [g_arcaneInfusionRageHandle]
+        cmp ecx, dword ptr [g_pendingRageHandle]
         jne stock_dispatch
-        mov dword ptr [g_invigoratingRageDispatch], 2
-        jmp stock_dispatch
-
-    vigor_dispatch:
-        mov dword ptr [g_invigoratingRageDispatch], 1
+        mov dword ptr [g_privateRageDispatch], 1
 
     stock_dispatch:
         push ecx
@@ -3230,38 +3322,41 @@ __declspec(naked) void RageCommandDispatchHook() {
     }
 }
 
-void LogPrivateRageDispatch() {
-    WriteLog("Matched the Laboratory Rage command; invoking its private GPL clone.");
+extern "C" void __cdecl SelectPrivateRageCallback() {
+    g_privateRageCallback = nullptr;
+    if (g_pendingTimedRageAction != nullptr) {
+        g_privateRageCallback =
+            g_pendingTimedRageAction->callbackSymbol.c_str();
+        g_pendingTimedRageAction = nullptr;
+    } else if (g_pendingRageCommandAction != nullptr) {
+        g_privateRageCallback =
+            g_pendingRageCommandAction->callbackSymbol.c_str();
+        g_pendingRageCommandAction = nullptr;
+    }
+    if (g_privateRageCallback == nullptr) {
+        StopUnsafeManagerRuntimeLaunch(
+            "A matched private Rage command lost its immutable controller recipe before GPL dispatch.");
+    }
+    WriteLog("Matched an exact controller-recipe Rage command handle.");
 }
 
 __declspec(naked) void RagePrivateBranchHook() {
     __asm {
-        cmp dword ptr [g_invigoratingRageDispatch], 1
-        je vigor
-        cmp dword ptr [g_invigoratingRageDispatch], 2
-        je infusion
+        cmp dword ptr [g_privateRageDispatch], 1
+        je private_recipe
         jmp stock_rage
 
-    vigor:
-        mov dword ptr [g_invigoratingRageDispatch], 0
-        mov dword ptr [g_invigoratingRageHandle], 0
+    private_recipe:
+        mov dword ptr [g_privateRageDispatch], 0
+        mov dword ptr [g_pendingRageHandle], 0
         pushfd
         pushad
-        call LogPrivateRageDispatch
+        call SelectPrivateRageCallback
         popad
         popfd
-        push dword ptr [g_invigoratingGplFunctionName]
-        jmp dword ptr [g_rageGplConstructionResume]
-
-    infusion:
-        mov dword ptr [g_invigoratingRageDispatch], 0
-        mov dword ptr [g_arcaneInfusionRageHandle], 0
-        pushfd
-        pushad
-        call LogPrivateRageDispatch
-        popad
-        popfd
-        push dword ptr [g_arcaneInfusionGplFunctionName]
+        cmp dword ptr [g_privateRageCallback], 0
+        je stock_rage
+        push dword ptr [g_privateRageCallback]
         jmp dword ptr [g_rageGplConstructionResume]
 
     stock_rage:
@@ -3335,72 +3430,63 @@ bool InstallPrivateRageRoute() {
     return true;
 }
 
-void __fastcall BrewingControllerSetup(void* controller, void*) {
+void __fastcall SecondaryPanelControllerSetup(void* controller, void*) {
     g_stockAp69Setup(controller);
-    if (!RegisterPrivateResearchDescriptors()) {
-        WriteLog(
-            "Brewing setup could not register its private AP99 research descriptors.");
-        return;
+    if (g_activePanelRecord == nullptr) {
+        StopUnsafeManagerRuntimeLaunch(
+            "A captured secondary controller has no resolved MMCR panel owner.");
     }
-    // AP69 owns initial construction and presentation of the two literal stock
-    // Fervus rows. Invoke that presenter once at setup, then retain only the
-    // private Reagent gate during ordinary game updates.
-    RefreshSovereignBrewingRows(reinterpret_cast<std::uint32_t>(controller));
-    // Custom active-display swaps run before the native row presenters so
-    // AP99/AP69 remain the final authority for inactive availability, price,
-    // and building-level gating.
-    UpdateBrewingPresentation(reinterpret_cast<std::uint32_t>(controller));
-    RefreshInvigoratingElixer(reinterpret_cast<std::uint32_t>(controller));
-    RefreshWeaponOilResearch(reinterpret_cast<std::uint32_t>(controller));
-    RefreshPhoenixPhialResearch(reinterpret_cast<std::uint32_t>(controller));
-
-    // Focused stock-boundary trace for multi-Laboratory eligibility. AP69's
-    // row presenter owns the building-class/level gate, AP24 owns the shared
-    // Palace Rage count, and AP24's click path owns the treasury check. Log
-    // those same inputs once when CGBR is constructed; do not alter any state.
-    unsigned char* context = LaboratoryPanelContext();
-    char eligibilityTrace[256] = {};
-    sprintf_s(
-        eligibilityTrace,
-        "Vigor eligibility at Brewing setup: context=0x%08X building=0x%08X "
-        "selectedLevel=%d encodedClass=0x%08X rageCount=%d gold=%d active=%d.",
-        reinterpret_cast<std::uint32_t>(context),
-        context == nullptr ? 0u : *reinterpret_cast<std::uint32_t*>(context + 0x70),
-        context == nullptr ? 0 : LaboratoryBuildingLevel(context),
-        context == nullptr ? 0u : *reinterpret_cast<std::uint32_t*>(context + 0x7C),
-        StockRageOfKrolmCount(),
-        StockCurrentPlayerGold(),
-        static_cast<int>(InterlockedCompareExchange(
-            &g_invigoratingElixerActive, 0, 0)));
-    WriteLog(eligibilityTrace);
+    if (!RegisterPrivateResearchDescriptors()) {
+        StopUnsafeManagerRuntimeLaunch(
+            "Private AP99 descriptors could not be registered at the stock secondary-panel setup boundary.");
+    }
+    for (auto& state : g_privateSpellDescriptors) {
+        if (PanelForSpellRecord(state) == g_activePanelRecord &&
+            BuildPrivateSpellDescriptor(&state) == nullptr) {
+            StopUnsafeManagerRuntimeLaunch(
+                "A declared stock spell template could not be cloned at the AP69 setup boundary.");
+        }
+    }
+    const auto value = reinterpret_cast<std::uint32_t>(controller);
+    RefreshPrivateActionRows(value, true);
+    RefreshTimedRageRows(value);
+    RefreshPrivateResearchRows(value);
+    UpdateSecondaryPanelPresentation(value);
 }
 
-int __fastcall BrewingControllerControl(
+int __fastcall SecondaryPanelControllerControl(
     void* controller, void*, std::uint32_t controlId) {
-    if (controlId == kInvigoratingElixerControlId) {
-        return HandleInvigoratingElixer(
-            reinterpret_cast<std::uint32_t>(controller));
-    }
-    if (controlId == kWeaponOilResearchControlId) {
-        return HandleWeaponOilResearch(
-            reinterpret_cast<std::uint32_t>(controller));
-    }
-    if (controlId == kPhoenixPhialResearchControlId) {
-        return HandlePhoenixPhialResearch(
-            reinterpret_cast<std::uint32_t>(controller));
-    }
-    if (controlId == kArcaneInfusionVisualControlId) {
-        return HandleArcaneInfusion(
-            reinterpret_cast<std::uint32_t>(controller));
-    }
-    if (controlId == kPhilosophersStoneVisualControlId) {
-        return HandlePhilosophersStone(
-            reinterpret_cast<std::uint32_t>(controller));
+    const auto value = reinterpret_cast<std::uint32_t>(controller);
+    if (g_activePanelRecord != nullptr) {
+        for (const auto& action : g_stockControllerRegistry.timedRageActions) {
+            if (action.panelKey == g_activePanelRecord->panelKey &&
+                action.actionControlId == controlId) {
+                return HandleTimedRageAction(value, action);
+            }
+        }
+        for (const auto& row : g_stockControllerRegistry.researchRows) {
+            if (row.panelKey == g_activePanelRecord->panelKey &&
+                row.actionControlId == controlId) {
+                return BeginPrivateResearch(value, row);
+            }
+        }
+        for (const auto& action : g_stockControllerRegistry.rageCommandActions) {
+            if (action.panelKey == g_activePanelRecord->panelKey &&
+                action.actionControlId == controlId) {
+                return HandleRageCommandAction(value, action);
+            }
+        }
+        for (const auto& action : g_stockControllerRegistry.sovereignTargetActions) {
+            if (action.panelKey == g_activePanelRecord->panelKey &&
+                action.visualControlId == controlId) {
+                return HandleSovereignTargetAction(value, action);
+            }
+        }
     }
     return g_stockAp69Control(controller, controlId);
 }
 
-void __fastcall BrewingControllerEvent(
+void __fastcall SecondaryPanelControllerEvent(
     void* controller,
     void*,
     std::uint32_t argument1,
@@ -3408,16 +3494,17 @@ void __fastcall BrewingControllerEvent(
     std::uint32_t argument3,
     std::uint32_t argument4) {
     if (InterlockedCompareExchange(
-            &g_laboratoryResearchCompletionStaged, 0, 0) != 0) {
-        // CGBR inherits AP69 only for its stable streamed-panel controller.
-        // A stock AP17 research completion never enters AP69's Fervus spell
+            &g_researchCompletionStaged, 0, 0) != 0) {
+        // This controller inherits AP69 only for its stable streamed-panel
+        // lifecycle. A stock AP17 research completion never enters AP69's
         // event renderer. Preserve that class boundary during the one staged
         // completion update; the post-update AP99 refresh below the bridge
         // restores the completed private research rows immediately afterward.
         return;
     }
     g_stockAp69Event(controller, argument1, argument2, argument3, argument4);
-    UpdateBrewingPresentation(reinterpret_cast<std::uint32_t>(controller));
+    UpdateSecondaryPanelPresentation(
+        reinterpret_cast<std::uint32_t>(controller));
     // AP99 0x004A9600 refreshes its research rows only for this exact event
     // set. Do not repaint the compound control every frame; doing so resets
     // its native in-progress drawing to the disabled base state.
@@ -3428,44 +3515,48 @@ void __fastcall BrewingControllerEvent(
             (argument3 == kCurrentResearchAttributeId ||
              argument3 == 0x02425041));
     if (stockResearchRefresh) {
-        RefreshInvigoratingElixer(reinterpret_cast<std::uint32_t>(controller));
-        RefreshWeaponOilResearch(reinterpret_cast<std::uint32_t>(controller));
-        RefreshPhoenixPhialResearch(reinterpret_cast<std::uint32_t>(controller));
+        const auto value = reinterpret_cast<std::uint32_t>(controller);
+        RefreshTimedRageRows(value);
+        RefreshPrivateResearchRows(value);
+        RefreshPrivateActionRows(value, true);
     }
 }
 
-void ClearBrewingControllerOwnedState() {
-    InterlockedExchange(&g_customBrewingHandle, 0);
-    InterlockedExchange(&g_customBrewingActive, 0);
-    InterlockedExchange(&g_captureBrewingController, 0);
-    InterlockedExchange(&g_pendingSovereignControl, 0);
-    InterlockedExchange(&g_pendingSovereignLaboratory, 0);
+void ClearSecondaryPanelControllerOwnedState() {
+    InterlockedExchange(&g_secondaryPanelHandle, 0);
+    InterlockedExchange(&g_secondaryPanelActive, 0);
+    InterlockedExchange(&g_captureChildController, 0);
+    g_pendingSovereignAction = nullptr;
+    InterlockedExchange(&g_pendingSovereignBuilding, 0);
+    g_activePanelRecord = nullptr;
+    g_activeRewardPanelRecord = nullptr;
+    g_activeRewardFlagState = nullptr;
 }
 
-void __cdecl BrewingControllerDestroyed(void*, void*) {
-    // The generic registry has already cleared g_customBrewingController after
+void __cdecl SecondaryPanelControllerDestroyed(void*, void*) {
+    // The generic registry has already cleared g_childController after
     // proving this is still the exact captured instance. Invalidate only state
     // owned by that private child dialog; the live parent remains valid when
     // Majesty performs an ordinary secondary-panel transition.
-    ClearBrewingControllerOwnedState();
+    ClearSecondaryPanelControllerOwnedState();
     WriteLog(
         "Invalidated manager-owned secondary-controller state at Majesty's stock teardown boundary.");
 }
 
-bool InstallBrewingControllerVtable(std::uint32_t controller) {
+bool InstallSecondaryPanelControllerVtable(std::uint32_t controller) {
     auto*** objectVtable = reinterpret_cast<void***>(controller);
     auto** stockVtable = *objectVtable;
     if (g_stockAp69Setup == nullptr) {
         std::memcpy(
-            g_customBrewingVtable,
+            g_childControllerVtable,
             stockVtable,
-            sizeof(g_customBrewingVtable));
+            sizeof(g_childControllerVtable));
         if (!MajestyControllerLifecycle::RegisterManagedVtable(
-                g_customBrewingVtable,
+                g_childControllerVtable,
                 stockVtable,
                 kAp69VtableEntries,
-                &g_customBrewingController,
-                &BrewingControllerDestroyed,
+                &g_childController,
+                &SecondaryPanelControllerDestroyed,
                 nullptr)) {
             WriteLog(
                 "Refused the private secondary controller because its stock destructor could not be registered safely.");
@@ -3474,140 +3565,94 @@ bool InstallBrewingControllerVtable(std::uint32_t controller) {
         g_stockAp69Setup = reinterpret_cast<ControllerSetup>(stockVtable[1]);
         g_stockAp69Control = reinterpret_cast<ControllerControl>(stockVtable[3]);
         g_stockAp69Event = reinterpret_cast<ControllerEvent>(stockVtable[8]);
-        g_customBrewingVtable[1] = reinterpret_cast<void*>(&BrewingControllerSetup);
-        g_customBrewingVtable[3] = reinterpret_cast<void*>(&BrewingControllerControl);
-        g_customBrewingVtable[8] = reinterpret_cast<void*>(&BrewingControllerEvent);
+        g_childControllerVtable[1] = reinterpret_cast<void*>(&SecondaryPanelControllerSetup);
+        g_childControllerVtable[3] = reinterpret_cast<void*>(&SecondaryPanelControllerControl);
+        g_childControllerVtable[8] = reinterpret_cast<void*>(&SecondaryPanelControllerEvent);
     }
-    *objectVtable = g_customBrewingVtable;
-    void* panel = *reinterpret_cast<void**>(controller + 0x24);
-    if (panel != nullptr) {
-        auto** panelVtable = *reinterpret_cast<void***>(panel);
-        void* streamedDialog = *reinterpret_cast<void**>(
-            reinterpret_cast<std::uintptr_t>(panel) + 4);
-        auto** streamedDialogVtable = streamedDialog == nullptr
-            ? nullptr
-            : *reinterpret_cast<void***>(streamedDialog);
-        char trace[256] = {};
-        sprintf_s(
-            trace,
-            "Brewing panel dispatch: panel=0x%08X vtable=0x%08X visible=0x%08X "
-            "message=0x%08X stream=0x%08X streamVtable=0x%08X streamMessage=0x%08X.",
-            reinterpret_cast<std::uint32_t>(panel),
-            reinterpret_cast<std::uint32_t>(panelVtable),
-            reinterpret_cast<std::uint32_t>(panelVtable[0x20 / sizeof(void*)]),
-            reinterpret_cast<std::uint32_t>(panelVtable[0x68 / sizeof(void*)]),
-            reinterpret_cast<std::uint32_t>(streamedDialog),
-            reinterpret_cast<std::uint32_t>(streamedDialogVtable),
-            streamedDialogVtable == nullptr
-                ? 0
-                : reinterpret_cast<std::uint32_t>(
-                      streamedDialogVtable[0x64 / sizeof(void*)]));
-        WriteLog(trace);
-        if (streamedDialog != nullptr) {
-            using FindStreamControl = void* (__thiscall*)(void*, std::uint32_t);
-            auto findControl = reinterpret_cast<FindStreamControl>(
-                g_imageBase + g_buildProfile->findStreamControlRva);
-            void* progress = findControl(
-                streamedDialog, kInvigoratingElixerProgressControlId);
-            void* activeDisplay = findControl(
-                streamedDialog, kInvigoratingElixerActiveDisplayControlId);
-            void* weaponOilProgress = findControl(
-                streamedDialog, kWeaponOilProgressControlId);
-            void* weaponOilActiveDisplay = findControl(
-                streamedDialog, kWeaponOilActiveDisplayControlId);
-            sprintf_s(
-                trace,
-                "Brewing stock control lookup: INSr/0x2009=0x%08X "
-                "active/0x227A=0x%08X.",
-                reinterpret_cast<std::uint32_t>(progress),
-                reinterpret_cast<std::uint32_t>(activeDisplay));
-            WriteLog(trace);
-            sprintf_s(
-                trace,
-                "Weapon Oil AP24 display lookup: progress/0x2A11=0x%08X "
-                "active/0x2A12=0x%08X.",
-                reinterpret_cast<std::uint32_t>(weaponOilProgress),
-                reinterpret_cast<std::uint32_t>(weaponOilActiveDisplay));
-            WriteLog(trace);
-        }
-    }
+    *objectVtable = g_childControllerVtable;
     InterlockedExchange(
-        &g_customBrewingController, static_cast<LONG>(controller));
-    UpdateBrewingPresentation(controller);
+        &g_childController, static_cast<LONG>(controller));
+    UpdateSecondaryPanelPresentation(controller);
     return true;
 }
 
-int __fastcall LaboratoryControllerControl(
+int __fastcall ParentPanelControllerControl(
     void* controller, void*, std::uint32_t controlId) {
-    if (controlId == kBuildingUpgradeControlId) {
+    const auto* gate = ActiveUpgradeGate();
+    if (gate != nullptr && controlId == gate->upgradeControlId) {
         using GetPanelContext = void* (__thiscall*)(void*);
         auto getPanelContext = reinterpret_cast<GetPanelContext>(
             g_imageBase + g_buildProfile->getPanelContextRva);
         void* context = getPanelContext(controller);
-        if (!LaboratoryUpgradeResearchComplete(context)) {
-            ApplyLaboratoryUpgradeResearchGate(
+        if (!UpgradeResearchComplete(context)) {
+            ApplyUpgradeResearchGate(
                 reinterpret_cast<std::uint32_t>(controller), context);
             WriteLog(
-                "Rejected Laboratory upgrade through the stock Guardhouse prerequisite result.");
+                "Rejected a parent upgrade through its declared stock research prerequisite.");
             return 0;
         }
     }
-    if (controlId == kBrewingParentCommandId) {
-        if (InterlockedCompareExchange(&g_customBrewingActive, 0, 0) == 1) {
+    if (g_parentPanelRecord != nullptr &&
+        controlId == g_parentPanelRecord->openCommandId) {
+        if (InterlockedCompareExchange(&g_secondaryPanelActive, 0, 0) == 1) {
             // AP10 translates visual control 0x1F44 into command 0x1F49. Consume
             // that command before stock closes the primary panel and opens AP69.
-            WriteLog("Ignored repeated Brewing command with AP10's stock no-action result.");
+            WriteLog("Ignored a repeated secondary-panel command with AP10's stock no-action result.");
             return 0;
         }
         // Arm on AP10's actual secondary-panel command, not when the parent
-        // CGAL panel opens. Stock APd1 guild-member navigation may legitimately
+        // panel opens. Stock APd1 guild-member navigation may legitimately
         // occur between parent-panel creations; it must not own or cancel this
         // one-command handoff.
-        InterlockedExchange(&g_cgalSecondaryArmed, 1);
-        WriteLog("Armed CGAL secondary mapping from AP10's stock Brewing command.");
-        return g_stockLaboratoryControl(controller, controlId);
+        InterlockedExchange(&g_secondaryPanelArmed, 1);
+        WriteLog("Armed a manager secondary mapping from its AP10 command.");
+        return g_stockParentControl(controller, controlId);
     }
-    const int result = g_stockLaboratoryControl(controller, controlId);
+    const int result = g_stockParentControl(controller, controlId);
     using GetPanelContext = void* (__thiscall*)(void*);
     auto getPanelContext = reinterpret_cast<GetPanelContext>(
         g_imageBase + g_buildProfile->getPanelContextRva);
-    ApplyLaboratoryUpgradeResearchGate(
+    ApplyUpgradeResearchGate(
         reinterpret_cast<std::uint32_t>(controller), getPanelContext(controller));
     return result;
 }
 
-void __fastcall LaboratoryControllerSetup(void* controller, void*) {
-    g_stockLaboratorySetup(controller);
+void __fastcall ParentPanelControllerSetup(void* controller, void*) {
+    g_stockParentSetup(controller);
+    if (g_parentPanelRecord == nullptr) {
+        StopUnsafeManagerRuntimeLaunch(
+            "A captured parent controller has no resolved MMCR panel owner.");
+    }
 
     // The stock dialog-creation lifecycle does not finish at the factory
     // result. It inserts and lays out the returned controller, then invokes
     // vtable slot 1 as the final setup presenter. AP17 applies its Guardhouse
     // prerequisite at this boundary. Run the same disabled-control/hidden-
     // price presentation only after AP10 has finished publishing its normal
-    // upgrade row, changing solely the Laboratory's prerequisite attribute.
+    // upgrade row, changing solely the resolved prerequisite attribute.
     using GetPanelContext = void* (__thiscall*)(void*);
     auto getPanelContext = reinterpret_cast<GetPanelContext>(
         g_imageBase + g_buildProfile->getPanelContextRva);
     void* context = getPanelContext(controller);
-    ApplyLaboratoryUpgradeResearchGate(
+    ApplyUpgradeResearchGate(
         reinterpret_cast<std::uint32_t>(controller), context);
 }
 
-void __fastcall LaboratoryControllerActivity(void* controller, void*) {
+void __fastcall ParentPanelControllerActivity(void* controller, void*) {
     using GetPanelContext = void* (__thiscall*)(void*);
     auto getPanelContext = reinterpret_cast<GetPanelContext>(
         g_imageBase + g_buildProfile->getPanelContextRva);
     auto* context = static_cast<unsigned char*>(getPanelContext(controller));
     if (context != nullptr) {
         if (InterlockedCompareExchange(
-                &g_laboratoryResearchCompletionStaged, 0, 0) != 0) {
+                &g_researchCompletionStaged, 0, 0) != 0) {
             // AP17 never invokes AP10's guild-activity renderer during its
             // stock research completion update. CurrentResearch is cleared
-            // partway through that update, and an upgrade may replace CGAL's
-            // live panel context. This vtable exists only on CGAL, so preserve
-            // the stock class boundary for every CGAL activity pass across
+            // partway through that update, and an upgrade may replace the
+            // live panel context. This vtable exists only on the resolved parent, so preserve
+            // the stock class boundary for every private parent activity pass across
             // the complete staged lifecycle.
-            ApplyLaboratoryUpgradeResearchGate(
+            ApplyUpgradeResearchGate(
                 reinterpret_cast<std::uint32_t>(controller), context);
             return;
         }
@@ -3617,22 +3662,25 @@ void __fastcall LaboratoryControllerActivity(void* controller, void*) {
             g_imageBase + g_buildProfile->readPackedAttributeRva);
         const int currentResearch = readPackedAttribute(
             context, kCurrentResearchAttributeId, 0);
-        if (currentResearch == static_cast<int>(kWeaponOilResearchControlId) ||
-            currentResearch == static_cast<int>(kPhoenixPhialResearchControlId)) {
+        const auto* privateResearch =
+            g_stockControllerRegistry.FindResearchByCommand(
+                static_cast<std::uint32_t>(currentResearch));
+        if (privateResearch != nullptr && g_parentPanelRecord != nullptr &&
+            privateResearch->panelKey == g_parentPanelRecord->panelKey) {
             // AP17 does not run AP10's guild-activity renderer while its
             // native research command owns CurrentResearch. Preserve that
-            // stock class boundary for the combined CGAL/AP99 surface.
-            ApplyLaboratoryUpgradeResearchGate(
+            // stock class boundary for the combined private/AP99 surface.
+            ApplyUpgradeResearchGate(
                 reinterpret_cast<std::uint32_t>(controller), context);
             return;
         }
     }
-    g_stockLaboratoryActivity(controller);
-    ApplyLaboratoryUpgradeResearchGate(
+    g_stockParentActivity(controller);
+    ApplyUpgradeResearchGate(
         reinterpret_cast<std::uint32_t>(controller), context);
 }
 
-void __fastcall LaboratoryControllerEvent(
+void __fastcall ParentPanelControllerEvent(
     void* controller,
     void*,
     std::uint32_t argument1,
@@ -3644,67 +3692,434 @@ void __fastcall LaboratoryControllerEvent(
     // shared attribute-event handler at 0x00496241/67/D3, so neither call
     // passes through AP10 slot 1 or slot 13. Let that complete unchanged, then
     // apply the prerequisite presentation to the final stock row state.
-    g_stockLaboratoryEvent(
+    g_stockParentEvent(
         controller, argument1, argument2, argument3, argument4);
     using GetPanelContext = void* (__thiscall*)(void*);
     auto getPanelContext = reinterpret_cast<GetPanelContext>(
         g_imageBase + g_buildProfile->getPanelContextRva);
-    ApplyLaboratoryUpgradeResearchGate(
+    ApplyUpgradeResearchGate(
         reinterpret_cast<std::uint32_t>(controller), getPanelContext(controller));
 }
 
-void __cdecl LaboratoryControllerDestroyed(void*, void*) {
+void __cdecl ParentPanelControllerDestroyed(void*, void*) {
     // The parent controller owns every borrowed context used by its private
     // secondary panel. Once stock destroys that exact parent, invalidate the
     // complete dependent UI chain. Gameplay state and active effects remain
     // under their native simulation lifecycles.
-    InterlockedExchange(&g_captureCgalController, 0);
-    InterlockedExchange(&g_cgalSecondaryArmed, 0);
+    InterlockedExchange(&g_captureParentController, 0);
+    InterlockedExchange(&g_secondaryPanelArmed, 0);
     InterlockedExchange(&g_ap10ControllerContext, 0);
-    InterlockedExchange(&g_cgalControllerContext, 0);
-    InterlockedExchange(&g_customBrewingController, 0);
-    ClearBrewingControllerOwnedState();
+    InterlockedExchange(&g_parentControllerContext, 0);
+    InterlockedExchange(&g_childController, 0);
+    g_parentPanelRecord = nullptr;
+    g_activePanelRecord = nullptr;
+    g_parentRewardPanelRecord = nullptr;
+    g_activeRewardPanelRecord = nullptr;
+    g_activeRewardFlagState = nullptr;
+    ClearSecondaryPanelControllerOwnedState();
     WriteLog(
         "Invalidated manager-owned parent-controller state at Majesty's stock teardown boundary.");
 }
 
-bool InstallLaboratoryControllerVtable(std::uint32_t controller) {
+bool InstallParentPanelControllerVtable(std::uint32_t controller) {
     auto*** objectVtable = reinterpret_cast<void***>(controller);
     auto** stockVtable = *objectVtable;
-    if (g_stockLaboratoryControl == nullptr) {
+    if (g_stockParentControl == nullptr) {
         std::memcpy(
-            g_customLaboratoryVtable,
+            g_parentControllerVtable,
             stockVtable,
-            sizeof(g_customLaboratoryVtable));
+            sizeof(g_parentControllerVtable));
         if (!MajestyControllerLifecycle::RegisterManagedVtable(
-                g_customLaboratoryVtable,
+                g_parentControllerVtable,
                 stockVtable,
                 kAp10VtableEntries,
-                &g_cgalController,
-                &LaboratoryControllerDestroyed,
+                &g_parentController,
+                &ParentPanelControllerDestroyed,
                 nullptr)) {
             WriteLog(
                 "Refused the private parent controller because its stock destructor could not be registered safely.");
             return false;
         }
-        g_stockLaboratorySetup =
+        g_stockParentSetup =
             reinterpret_cast<ControllerSetup>(stockVtable[1]);
-        g_stockLaboratoryControl =
+        g_stockParentControl =
             reinterpret_cast<ControllerControl>(stockVtable[3]);
-        g_stockLaboratoryEvent =
+        g_stockParentEvent =
             reinterpret_cast<ControllerEvent>(stockVtable[8]);
-        g_stockLaboratoryActivity =
+        g_stockParentActivity =
             reinterpret_cast<ControllerActivity>(stockVtable[13]);
-        g_customLaboratoryVtable[1] =
-            reinterpret_cast<void*>(&LaboratoryControllerSetup);
-        g_customLaboratoryVtable[3] =
-            reinterpret_cast<void*>(&LaboratoryControllerControl);
-        g_customLaboratoryVtable[8] =
-            reinterpret_cast<void*>(&LaboratoryControllerEvent);
-        g_customLaboratoryVtable[13] =
-            reinterpret_cast<void*>(&LaboratoryControllerActivity);
+        g_parentControllerVtable[1] =
+            reinterpret_cast<void*>(&ParentPanelControllerSetup);
+        g_parentControllerVtable[3] =
+            reinterpret_cast<void*>(&ParentPanelControllerControl);
+        g_parentControllerVtable[8] =
+            reinterpret_cast<void*>(&ParentPanelControllerEvent);
+        g_parentControllerVtable[13] =
+            reinterpret_cast<void*>(&ParentPanelControllerActivity);
     }
-    *objectVtable = g_customLaboratoryVtable;
+    *objectVtable = g_parentControllerVtable;
+    return true;
+}
+
+RewardFlagRuntimeState* FindRewardStateByPanel(const std::string& panelKey) {
+    for (auto& state : g_rewardFlagStates) {
+        if (state.record != nullptr && state.record->panelKey == panelKey) return &state;
+    }
+    return nullptr;
+}
+
+RewardFlagRuntimeState* FindRewardStateByModeObject(void* modeObject) {
+    for (auto& state : g_rewardFlagStates) {
+        if (state.modeObject == modeObject) return &state;
+    }
+    return nullptr;
+}
+
+void SwapPrivateRewardAmount(RewardFlagRuntimeState* state) {
+    if (state == nullptr) return;
+    auto* stockAmount = reinterpret_cast<int*>(
+        g_imageBase + g_buildProfile->attackRewardAmountRva);
+    const int privateAmount = state->rewardAmount;
+    state->rewardAmount = *stockAmount;
+    *stockAmount = privateAmount;
+}
+
+void PostRewardUnavailableAlert(const RewardFlagRuntimeState* state) {
+    if (state == nullptr || state->record == nullptr ||
+        !state->record->hasAvailabilityGate) return;
+    void* owner = *reinterpret_cast<void**>(
+        g_imageBase + g_buildProfile->systemAlertOwnerRva);
+    using PrepareAlert = void (__thiscall*)(void*, int, std::uint32_t, int);
+    using PostLiteralAlert = void (__cdecl*)(const char*, int, int);
+    auto prepare = reinterpret_cast<PrepareAlert>(
+        g_imageBase + g_buildProfile->prepareSystemAlertRva);
+    auto post = reinterpret_cast<PostLiteralAlert>(
+        g_imageBase + g_buildProfile->postLiteralSystemAlertRva);
+    prepare(owner, 1, 0x8000FF00u, 255);
+    post(state->record->unavailableAlertText.c_str(), -1, 1);
+}
+
+bool RewardAvailabilityIsOpen(const RewardFlagRuntimeState* state) {
+    if (state == nullptr || state->record == nullptr) return false;
+    if (!state->record->hasAvailabilityGate) return true;
+    if (state->selectedBuilding == nullptr) return false;
+    using ReadPackedAttribute = int (__thiscall*)(
+        void*, std::uint32_t, std::uint32_t);
+    auto read = reinterpret_cast<ReadPackedAttribute>(
+        g_imageBase + g_buildProfile->readPackedAttributeRva);
+    return read(
+        state->selectedBuilding,
+        state->record->availabilityAttributeId,
+        0) != 0;
+}
+
+bool RewardTargetIsLegal(
+    const RewardFlagRuntimeState* state, void* target) {
+    if (state == nullptr || state->record == nullptr || target == nullptr) return false;
+    using DisplayClassifier = int (__cdecl*)(void*);
+    auto classify = reinterpret_cast<DisplayClassifier>(
+        g_imageBase + g_buildProfile->displayClassifierRva);
+    if (classify(target) != 4) return false;
+    auto** vtable = *reinterpret_cast<void***>(target);
+    using GetPlayerNumber = int (__thiscall*)(void*);
+    auto getPlayer = reinterpret_cast<GetPlayerNumber>(vtable[7]);
+    if (getPlayer(target) != 7) return false;
+    using FindRelation = void* (__thiscall*)(void*, std::uint32_t, int);
+    auto findRelation = reinterpret_cast<FindRelation>(
+        g_imageBase + g_buildProfile->findAttachedRelationRva);
+    return findRelation(
+        static_cast<unsigned char*>(target) + 0xA4,
+        state->record->privateFlagId,
+        1) == nullptr;
+}
+
+int __cdecl PrivateRewardTargetValidator(void* modeObject) {
+    using StockValidator = int (__cdecl*)(void*);
+    auto stock = reinterpret_cast<StockValidator>(
+        g_imageBase + g_buildProfile->stockCaptureValidatorRva);
+    const int stockResult = stock(modeObject);
+    if (stockResult != 0) return stockResult;
+    auto* state = FindRewardStateByModeObject(modeObject);
+    if (!RewardAvailabilityIsOpen(state)) return 1;
+    void* target = *reinterpret_cast<void**>(
+        static_cast<unsigned char*>(modeObject) + 0x60);
+    return RewardTargetIsLegal(state, target) ? 0 : 1;
+}
+
+void* __cdecl PrivateRewardCompletionTargetCheck(
+    void* modeObject, void* picker) {
+    using StockTargetCheck = void* (__cdecl*)(void*, void*);
+    auto stock = reinterpret_cast<StockTargetCheck>(
+        g_imageBase + g_buildProfile->stockFlagTargetCheckRva);
+    void* target = stock(modeObject, picker);
+    if (target == nullptr) return nullptr;
+    auto* state = FindRewardStateByModeObject(modeObject);
+    if (!RewardAvailabilityIsOpen(state)) {
+        PostRewardUnavailableAlert(state);
+        return nullptr;
+    }
+    return RewardTargetIsLegal(state, target) ? target : nullptr;
+}
+
+std::uintptr_t __fastcall RewardPanelActivation(void* controller, void*) {
+    auto* state = g_activeRewardFlagState;
+    SwapPrivateRewardAmount(state);
+    const auto result = g_stockRewardPanelActivation(controller);
+    SwapPrivateRewardAmount(state);
+    return result;
+}
+
+std::uintptr_t __fastcall RewardPanelRefresh(
+    void* controller, void*, std::uint32_t a1, std::uint32_t a2,
+    std::uint32_t a3, std::uint32_t a4) {
+    auto* state = g_activeRewardFlagState;
+    SwapPrivateRewardAmount(state);
+    const auto result = g_stockRewardPanelRefresh(controller, a1, a2, a3, a4);
+    SwapPrivateRewardAmount(state);
+    return result;
+}
+
+void SetPrivateRewardMode(RewardFlagRuntimeState* state) {
+    if (state == nullptr || state->record == nullptr) return;
+    void* owner = *reinterpret_cast<void**>(
+        g_imageBase + g_buildProfile->flagModeOwnerRva);
+    using SetMode = void (__thiscall*)(void*, std::uint32_t, int);
+    auto setMode = reinterpret_cast<SetMode>(
+        g_imageBase + g_buildProfile->setFlagModeRva);
+    setMode(owner, state->record->privateMode, state->rewardAmount);
+}
+
+int __fastcall RewardPanelControl(
+    void* controller, void*, std::uint32_t controlId) {
+    auto* state = g_activeRewardFlagState;
+    if (state == nullptr || state->record == nullptr) {
+        return g_stockRewardPanelControl(controller, controlId);
+    }
+    if (controlId == 10 || controlId == 11) {
+        SwapPrivateRewardAmount(state);
+        const int result = g_stockRewardPanelControl(controller, controlId);
+        SwapPrivateRewardAmount(state);
+        void* owner = *reinterpret_cast<void**>(
+            g_imageBase + g_buildProfile->flagModeOwnerRva);
+        using GetManager = void* (__thiscall*)(void*);
+        using GetSelected = std::uint32_t (__thiscall*)(void*);
+        auto manager = reinterpret_cast<GetManager>(
+            g_imageBase + g_buildProfile->getFlagModeManagerRva)(owner);
+        const auto selected = reinterpret_cast<GetSelected>(
+            g_imageBase + g_buildProfile->getSelectedFlagModeRva)(manager);
+        if (selected == state->record->privateMode) SetPrivateRewardMode(state);
+        return result;
+    }
+    if (controlId != 5002) {
+        return g_stockRewardPanelControl(controller, controlId);
+    }
+    using GetSelectedAgent = void* (__thiscall*)(void*);
+    state->selectedBuilding = reinterpret_cast<GetSelectedAgent>(
+        g_imageBase + g_buildProfile->selectedAgentRva)(controller);
+    if (!RewardAvailabilityIsOpen(state)) {
+        PostRewardUnavailableAlert(state);
+        return 0;
+    }
+    SetPrivateRewardMode(state);
+    return 0;
+}
+
+int __fastcall RewardParentControl(
+    void* controller, void*, std::uint32_t controlId) {
+    const auto* panel = g_parentRewardPanelRecord;
+    if (panel == nullptr || controlId != panel->openCommandId) {
+        return g_stockRewardParentControl(controller, controlId);
+    }
+    using OpenDialog = void (__thiscall*)(void*, std::uint32_t, std::uint32_t);
+    auto open = reinterpret_cast<OpenDialog>(
+        g_imageBase + g_buildProfile->openDialogRva);
+    g_activeRewardPanelRecord = panel;
+    g_activeRewardFlagState = FindRewardStateByPanel(panel->panelKey);
+    open(controller, panel->childDialogId, 0);
+    return 0;
+}
+
+bool InstallRewardParentControllerVtable(std::uint32_t controller) {
+    auto*** objectVtable = reinterpret_cast<void***>(controller);
+    auto** stockVtable = *objectVtable;
+    if (g_stockRewardParentControl == nullptr) {
+        std::memcpy(g_rewardParentVtable, stockVtable, sizeof(g_rewardParentVtable));
+        if (!MajestyControllerLifecycle::RegisterManagedVtable(
+                g_rewardParentVtable,
+                stockVtable,
+                kAp10VtableEntries,
+                &g_parentController,
+                &ParentPanelControllerDestroyed,
+                nullptr)) {
+            WriteLog(
+                "Refused the private reward parent because its stock destructor could not be registered safely.");
+            return false;
+        }
+        g_stockRewardParentControl =
+            reinterpret_cast<RewardControllerControl>(stockVtable[3]);
+        g_rewardParentVtable[3] = reinterpret_cast<void*>(&RewardParentControl);
+    }
+    *objectVtable = g_rewardParentVtable;
+    return true;
+}
+
+bool InstallRewardPanelControllerVtable(std::uint32_t controller) {
+    auto*** objectVtable = reinterpret_cast<void***>(controller);
+    auto** stockVtable = *objectVtable;
+    if (g_stockRewardPanelActivation == nullptr) {
+        std::memcpy(g_rewardPanelVtable, stockVtable, sizeof(g_rewardPanelVtable));
+        if (!MajestyControllerLifecycle::RegisterManagedVtable(
+                g_rewardPanelVtable,
+                stockVtable,
+                kAp69VtableEntries,
+                &g_childController,
+                &SecondaryPanelControllerDestroyed,
+                nullptr)) {
+            WriteLog(
+                "Refused the private reward panel because its stock destructor could not be registered safely.");
+            return false;
+        }
+        g_stockRewardPanelActivation =
+            reinterpret_cast<RewardControllerActivation>(stockVtable[1]);
+        g_stockRewardPanelControl =
+            reinterpret_cast<RewardControllerControl>(stockVtable[3]);
+        g_stockRewardPanelRefresh =
+            reinterpret_cast<RewardControllerRefresh>(stockVtable[8]);
+        g_rewardPanelVtable[1] = reinterpret_cast<void*>(&RewardPanelActivation);
+        g_rewardPanelVtable[3] = reinterpret_cast<void*>(&RewardPanelControl);
+        g_rewardPanelVtable[8] = reinterpret_cast<void*>(&RewardPanelRefresh);
+    }
+    *objectVtable = g_rewardPanelVtable;
+    InterlockedExchange(&g_childController, static_cast<LONG>(controller));
+    return true;
+}
+
+bool PrepareRewardFlagRuntimeRecords() {
+    g_rewardFlagStates.clear();
+    g_rewardFlagStates.reserve(g_stockControllerRegistry.hostileMonsterFlags.size());
+    constexpr std::size_t kCallbackBytes = 0x1D2;
+    constexpr std::size_t kTargetCallOffset = 0xAC;
+    constexpr std::size_t kPrototypePointerOffset = 0xD1;
+    constexpr std::size_t kCallOffsets[] = {
+        0x12, 0x19, 0x4F, 0x66, 0x90, 0x9A, 0xAC, 0xBE,
+        0xCA, 0xD5, 0x117, 0x143, 0x163, 0x17C, 0x189, 0x196,
+    };
+    auto* source = reinterpret_cast<unsigned char*>(
+        g_imageBase + g_buildProfile->stockCaptureCallbackRva);
+    if (std::memcmp(
+            source + 0xCF,
+            g_buildProfile->expectedStockCallbackCreate,
+            sizeof(g_buildProfile->expectedStockCallbackCreate)) != 0) {
+        WriteLog("Private reward callback refused: stock Fl00 completion bytes changed.");
+        return false;
+    }
+    for (const auto& record : g_stockControllerRegistry.hostileMonsterFlags) {
+        auto* callback = reinterpret_cast<unsigned char*>(VirtualAlloc(
+            nullptr, kCallbackBytes, MEM_COMMIT | MEM_RESERVE,
+            PAGE_EXECUTE_READWRITE));
+        if (callback == nullptr) return false;
+        std::memcpy(callback, source, kCallbackBytes);
+        for (const auto offset : kCallOffsets) {
+            if (callback[offset] != 0xE8) return false;
+            std::int32_t originalRelative = 0;
+            std::memcpy(&originalRelative, source + offset + 1, sizeof(originalRelative));
+            const auto originalTarget = reinterpret_cast<std::uintptr_t>(source) +
+                offset + 5 + originalRelative;
+            const auto target = offset == kTargetCallOffset
+                ? reinterpret_cast<std::uintptr_t>(&PrivateRewardCompletionTargetCheck)
+                : originalTarget;
+            const auto relocated = static_cast<std::int32_t>(
+                target - (reinterpret_cast<std::uintptr_t>(callback) + offset + 5));
+            std::memcpy(callback + offset + 1, &relocated, sizeof(relocated));
+        }
+        const auto prototype = reinterpret_cast<std::uintptr_t>(
+            record.flagPrototypeName.c_str());
+        std::memcpy(
+            callback + kPrototypePointerOffset,
+            &prototype,
+            sizeof(std::uint32_t));
+        FlushInstructionCache(GetCurrentProcess(), callback, kCallbackBytes);
+        g_rewardFlagStates.push_back(
+            {&record, nullptr, callback, nullptr, -1});
+    }
+    return g_rewardFlagStates.size() ==
+        g_stockControllerRegistry.hostileMonsterFlags.size();
+}
+
+extern "C" void __stdcall RegisterPrivateRewardFlagModes() {
+    using OperatorNew = void* (__cdecl*)(std::size_t);
+    using FlagModeConstructor = void* (__thiscall*)(
+        void*, std::uint32_t, int, int, int, void*, void*, int, int);
+    using GetRegistry = void* (__cdecl*)();
+    using InsertMode = void (__thiscall*)(void*, void*);
+    auto allocate = reinterpret_cast<OperatorNew>(
+        g_imageBase + g_buildProfile->stockOperatorNewRva);
+    auto construct = reinterpret_cast<FlagModeConstructor>(
+        g_imageBase + g_buildProfile->flagModeConstructorRva);
+    auto getRegistry = reinterpret_cast<GetRegistry>(
+        g_imageBase + g_buildProfile->getFlagModeRegistryRva);
+    for (auto& state : g_rewardFlagStates) {
+        void* mode = allocate(0x22);
+        if (mode == nullptr) {
+            StopUnsafeManagerRuntimeLaunch(
+                "Private reward flag mode allocation failed at stock registry completion.");
+        }
+        state.modeObject = construct(
+            mode,
+            state.record->privateMode,
+            static_cast<int>(state.record->cursorOrdinal),
+            2,
+            1,
+            reinterpret_cast<void*>(&PrivateRewardTargetValidator),
+            state.completionCallback,
+            0,
+            0);
+        void* registry = getRegistry();
+        auto** vtable = *reinterpret_cast<void***>(registry);
+        auto insert = reinterpret_cast<InsertMode>(vtable[25]);
+        insert(registry, state.modeObject);
+    }
+}
+
+__declspec(naked) void RewardModeRegistryHook() {
+    __asm {
+        pushfd
+        pushad
+        call RegisterPrivateRewardFlagModes
+        popad
+        popfd
+        mov ecx, dword ptr [esp + 10h]
+        mov dword ptr fs:[0], ecx
+        jmp dword ptr [g_modeRegistryResume]
+    }
+}
+
+bool InstallPrivateRewardFlagModeRegistry() {
+    auto* site = reinterpret_cast<unsigned char*>(
+        g_imageBase + g_buildProfile->modeRegistryCompletionRva);
+    if (std::memcmp(
+            site,
+            g_buildProfile->expectedModeRegistryCompletion,
+            sizeof(g_buildProfile->expectedModeRegistryCompletion)) != 0) {
+        WriteLog("Private reward mode registry refused: stock completion bytes changed.");
+        return false;
+    }
+    g_modeRegistryResume = g_imageBase + g_buildProfile->modeRegistryResumeRva;
+    unsigned char patch[11] = {0xE9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+    const auto relative = static_cast<std::int32_t>(
+        reinterpret_cast<std::uintptr_t>(&RewardModeRegistryHook) -
+        (reinterpret_cast<std::uintptr_t>(site) + 5));
+    std::memcpy(patch + 1, &relative, sizeof(relative));
+    DWORD oldProtection = 0;
+    if (!VirtualProtect(site, sizeof(patch), PAGE_EXECUTE_READWRITE, &oldProtection)) {
+        return false;
+    }
+    std::memcpy(site, patch, sizeof(patch));
+    FlushInstructionCache(GetCurrentProcess(), site, sizeof(patch));
+    DWORD ignored = 0;
+    VirtualProtect(site, sizeof(patch), oldProtection, &ignored);
+    LogInstalledProfileSite(
+        "private stock Fl00 mode registry", g_buildProfile->modeRegistryCompletionRva);
     return true;
 }
 
@@ -3712,35 +4127,54 @@ extern "C" void __stdcall CaptureSecondaryController(
     std::uint32_t controller,
     std::uint32_t creationHandle) {
     if (controller == 0) {
+        if (InterlockedExchange(&g_captureParentController, 0) == 1) {
+            StopUnsafeManagerRuntimeLaunch(
+                "A resolved parent dialog returned no stock controller at its creation boundary.");
+        }
+        if (InterlockedExchange(&g_captureChildController, 0) == 1) {
+            ClearSecondaryPanelControllerOwnedState();
+            StopUnsafeManagerRuntimeLaunch(
+                "A resolved secondary dialog returned no stock controller at its creation boundary.");
+        }
         return;
     }
-    if (InterlockedExchange(&g_captureCgalController, 0) == 1) {
-        InterlockedExchange(&g_cgalController, static_cast<LONG>(controller));
-        if (!InstallLaboratoryControllerVtable(controller)) {
+    if (InterlockedExchange(&g_captureParentController, 0) == 1) {
+        InterlockedExchange(&g_parentController, static_cast<LONG>(controller));
+        const bool installed = g_parentRewardPanelRecord != nullptr
+            ? InstallRewardParentControllerVtable(controller)
+            : InstallParentPanelControllerVtable(controller);
+        if (!installed) {
             InterlockedCompareExchange(
-                &g_cgalController, 0, static_cast<LONG>(controller));
-            return;
+                &g_parentController, 0, static_cast<LONG>(controller));
+            StopUnsafeManagerRuntimeLaunch(
+                "A resolved parent controller could not install its stock-lifecycle vtable clone.");
         }
-        WriteLog("Captured the Laboratory and installed its scoped AP10 command guard.");
+        WriteLog("Captured a manager parent and installed its scoped AP10 command guard.");
         return;
     }
-    if (InterlockedExchange(&g_captureBrewingController, 0) == 1) {
+    if (InterlockedExchange(&g_captureChildController, 0) == 1) {
         InterlockedExchange(
-            &g_customBrewingHandle, static_cast<LONG>(creationHandle));
-        if (!InstallBrewingControllerVtable(controller)) {
-            ClearBrewingControllerOwnedState();
-            return;
+            &g_secondaryPanelHandle, static_cast<LONG>(creationHandle));
+        const bool installed = g_activeRewardPanelRecord != nullptr
+            ? InstallRewardPanelControllerVtable(controller)
+            : InstallSecondaryPanelControllerVtable(controller);
+        if (!installed) {
+            ClearSecondaryPanelControllerOwnedState();
+            StopUnsafeManagerRuntimeLaunch(
+                "A resolved secondary controller could not install its stock-lifecycle vtable clone.");
         }
-        WriteLog("Captured the custom Brewing controller and installed its scoped vtable.");
+        WriteLog("Captured a manager secondary controller and installed its scoped vtable.");
     }
 }
 
-void DismissCustomBrewing() {
+void DismissSecondaryPanel() {
     const auto handle = static_cast<std::uint32_t>(
-        InterlockedExchange(&g_customBrewingHandle, 0));
-    InterlockedExchange(&g_customBrewingController, 0);
-    InterlockedExchange(&g_cgalController, 0);
-    ClearBrewingControllerOwnedState();
+        InterlockedExchange(&g_secondaryPanelHandle, 0));
+    InterlockedExchange(&g_childController, 0);
+    InterlockedExchange(&g_parentController, 0);
+    ClearSecondaryPanelControllerOwnedState();
+    g_activeRewardPanelRecord = nullptr;
+    g_activeRewardFlagState = nullptr;
     if (handle == 0 || g_imageBase == 0) {
         return;
     }
@@ -3751,7 +4185,7 @@ void DismissCustomBrewing() {
     void* manager = getUiManager();
     if (manager != nullptr) {
         removeDialog(manager, reinterpret_cast<void*>(handle));
-        WriteLog("Dismissed custom Brewing with Majesty's native dialog-removal API.");
+        WriteLog("Dismissed the manager secondary panel through Majesty's native dialog-removal API.");
     }
 }
 
@@ -3760,9 +4194,9 @@ LRESULT CALLBACK RuntimeWindowProcedure(
     const LRESULT result = CallWindowProcA(
         g_originalWindowProcedure, window, message, wParam, lParam);
     if (message == WM_RBUTTONDOWN && static_cast<short>(LOWORD(lParam)) >= kSidebarWidth) {
-        InterlockedExchange(&g_pendingSovereignControl, 0);
-        InterlockedExchange(&g_pendingSovereignLaboratory, 0);
-        DismissCustomBrewing();
+        g_pendingSovereignAction = nullptr;
+        InterlockedExchange(&g_pendingSovereignBuilding, 0);
+        DismissSecondaryPanel();
     }
     return result;
 }
@@ -3834,47 +4268,70 @@ void LogDialogFactoryRequest(
 
 extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) {
     const std::uint32_t requested = *idAddress;
-    if (requested == kCgbrDialogId) {
+    const auto* requestedRewardParent =
+        g_stockControllerRegistry.FindRewardPanelByParentDialog(requested);
+    if (requestedRewardParent != nullptr) {
+        *idAddress = kMx09DialogId;
+        LogDialogFactoryRequest(
+            idAddress,
+            requested,
+            " Mapped a resolved reward parent dialog to stock MX09.");
+        return;
+    }
+    const auto* requestedRewardChild =
+        g_stockControllerRegistry.FindRewardPanelByChildDialog(requested);
+    if (requestedRewardChild != nullptr) {
+        *idAddress = kAp41DialogId;
+        LogDialogFactoryRequest(
+            idAddress,
+            requested,
+            " Mapped a resolved reward child dialog to stock AP41.");
+        return;
+    }
+    const auto* requestedChild =
+        g_stockControllerRegistry.FindPanelByChildDialog(requested);
+    if (requestedChild != nullptr) {
         *idAddress = kAp69DialogId;
         LogDialogFactoryRequest(
             idAddress,
             requested,
-            " Mapped CGBR resources to the stock AP69 controller class.");
+            " Mapped a resolved child dialog to the stock AP69 controller class.");
         return;
     }
     if (requested == kAp10DialogId && idAddress[2] != 0) {
         InterlockedExchange(
             &g_ap10ControllerContext, static_cast<LONG>(idAddress[2]));
-        InterlockedExchange(&g_cgalSecondaryArmed, 0);
+        InterlockedExchange(&g_secondaryPanelArmed, 0);
         LogDialogFactoryRequest(
             idAddress, requested, " Captured AP10 controller context.");
         return;
     }
-    if (requested == kCgalDialogId) {
+    if (g_stockControllerRegistry.FindPanelByParentDialog(requested) != nullptr ||
+        g_stockControllerRegistry.FindRewardPanelByParentDialog(requested) != nullptr) {
         LogDialogFactoryRequest(idAddress, requested);
         return;
     }
-    if (requested == 0 && InterlockedCompareExchange(&g_cgalSecondaryArmed, 0, 1) == 1) {
-        const auto cgalContext = idAddress[2] != 0
+    if (requested == 0 && InterlockedCompareExchange(&g_secondaryPanelArmed, 0, 1) == 1) {
+        const auto parentContext = idAddress[2] != 0
             ? idAddress[2]
             : static_cast<std::uint32_t>(InterlockedCompareExchange(
-                  &g_cgalControllerContext, 0, 0));
-        if (cgalContext == 0) {
+                  &g_parentControllerContext, 0, 0));
+        if (parentContext == 0 || g_parentPanelRecord == nullptr) {
             LogDialogFactoryRequest(
                 idAddress, requested,
-                " Laboratory controller context unavailable; left request unmapped.");
+                " Resolved parent context unavailable; left request unmapped.");
             return;
         }
         *idAddress = kAp69DialogId;
-        idAddress[2] = cgalContext;
+        idAddress[2] = parentContext;
         LogDialogFactoryRequest(
             idAddress, requested,
-            " Translated armed CGAL secondary request to AP69 with its Laboratory context.");
+            " Translated the armed secondary request to AP69 with its parent context.");
         return;
     }
-    if (InterlockedExchange(&g_cgalSecondaryArmed, 0) == 1) {
+    if (InterlockedExchange(&g_secondaryPanelArmed, 0) == 1) {
         LogDialogFactoryRequest(
-            idAddress, requested, " Disarmed CGAL mapping on a nonzero intervening request.");
+            idAddress, requested, " Disarmed the secondary mapping on an intervening request.");
         return;
     }
     LogDialogFactoryRequest(idAddress, requested);
@@ -3888,66 +4345,101 @@ extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments)
         "Dialog creation entry: id=0x%08X context=0x%08X owner=0x%08X arg4=0x%08X.",
         arguments[0], arguments[1], arguments[2], arguments[3]);
     WriteLog(trace);
-    const bool brewingActive =
-        InterlockedCompareExchange(&g_customBrewingActive, 0, 0) == 1;
-    const auto cgalContext = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&g_cgalControllerContext, 0, 0));
-    if (brewingActive && requested == kAp10DialogId &&
-        InterlockedCompareExchange(&g_customBrewingActive, 0, 1) == 1) {
-        InterlockedExchange(&g_customBrewingHandle, 0);
-        InterlockedExchange(&g_customBrewingController, 0);
-        if (cgalContext != 0) {
-            arguments[0] = kCgalDialogId;
-            arguments[1] = cgalContext;
-            InterlockedExchange(&g_captureCgalController, 1);
-            WriteLog("Redirected custom Brewing Back request from AP10 to CGAL.");
+    const bool secondaryActive =
+        InterlockedCompareExchange(&g_secondaryPanelActive, 0, 0) == 1;
+    const auto parentContext = static_cast<std::uint32_t>(
+        InterlockedCompareExchange(&g_parentControllerContext, 0, 0));
+    if (secondaryActive && g_activeRewardPanelRecord == nullptr &&
+        requested == kAp10DialogId &&
+        InterlockedCompareExchange(&g_secondaryPanelActive, 0, 1) == 1) {
+        const auto* active = g_activePanelRecord;
+        InterlockedExchange(&g_childController, 0);
+        ClearSecondaryPanelControllerOwnedState();
+        if (parentContext != 0 && active != nullptr) {
+            arguments[0] = active->parentDialogId;
+            arguments[1] = parentContext;
+            g_parentPanelRecord = active;
+            InterlockedExchange(&g_captureParentController, 1);
+            WriteLog("Redirected an AP69 Back request to its resolved parent dialog.");
             return;
         }
-        WriteLog("Brewing Back request had no captured CGAL context; left AP10 unchanged.");
-    } else if (brewingActive && arguments[1] != 0 &&
-        InterlockedCompareExchange(&g_customBrewingActive, 0, 1) == 1) {
+        WriteLog("Secondary Back request had no captured parent context; left AP10 unchanged.");
+    } else if (secondaryActive && arguments[1] != 0 &&
+        InterlockedCompareExchange(&g_secondaryPanelActive, 0, 1) == 1) {
         // Majesty's controller-backed sidebar dialogs carry a nonzero context.
         // Auxiliary notifications such as AP36 carry context zero and do not
-        // replace or destroy the still-live Brewing controller.
-        InterlockedExchange(&g_customBrewingHandle, 0);
-        InterlockedExchange(&g_customBrewingController, 0);
-        WriteLog("Cleared custom Brewing state on a controller-backed dialog replacement.");
+        // replace or destroy the still-live secondary controller.
+        InterlockedExchange(&g_childController, 0);
+        ClearSecondaryPanelControllerOwnedState();
+        WriteLog("Cleared secondary state on a controller-backed dialog replacement.");
     }
     if (requested == kAp10DialogId && arguments[1] != 0) {
         InterlockedExchange(
             &g_ap10ControllerContext, static_cast<LONG>(arguments[1]));
-        InterlockedExchange(&g_cgalSecondaryArmed, 0);
+        InterlockedExchange(&g_secondaryPanelArmed, 0);
         WriteLog("Creation entry captured AP10 context before setup-object construction.");
         return;
     }
-    if (requested == kCgalDialogId) {
+    const auto* requestedParent =
+        g_stockControllerRegistry.FindPanelByParentDialog(requested);
+    if (requestedParent != nullptr) {
+        g_parentRewardPanelRecord = nullptr;
+        g_activeRewardPanelRecord = nullptr;
+        g_activeRewardFlagState = nullptr;
+        g_parentPanelRecord = requestedParent;
         if (arguments[1] != 0) {
             InterlockedExchange(
-                &g_cgalControllerContext, static_cast<LONG>(arguments[1]));
+                &g_parentControllerContext, static_cast<LONG>(arguments[1]));
         }
-        InterlockedExchange(&g_captureCgalController, 1);
-        WriteLog("Creation entry captured CGAL without arming a secondary request.");
+        InterlockedExchange(&g_captureParentController, 1);
+        WriteLog("Creation entry captured a resolved parent dialog.");
         return;
     }
-    if (requested == 0 && InterlockedCompareExchange(&g_cgalSecondaryArmed, 0, 1) == 1) {
+    const auto* requestedRewardParent =
+        g_stockControllerRegistry.FindRewardPanelByParentDialog(requested);
+    if (requestedRewardParent != nullptr) {
+        g_parentPanelRecord = nullptr;
+        g_parentRewardPanelRecord = requestedRewardParent;
+        g_activeRewardPanelRecord = nullptr;
+        g_activeRewardFlagState = nullptr;
+        if (arguments[1] != 0) {
+            InterlockedExchange(
+                &g_parentControllerContext, static_cast<LONG>(arguments[1]));
+        }
+        InterlockedExchange(&g_captureParentController, 1);
+        WriteLog("Creation entry captured a resolved reward parent dialog.");
+        return;
+    }
+    const auto* requestedRewardChild =
+        g_stockControllerRegistry.FindRewardPanelByChildDialog(requested);
+    if (requestedRewardChild != nullptr) {
+        g_activeRewardPanelRecord = requestedRewardChild;
+        g_activeRewardFlagState = FindRewardStateByPanel(requestedRewardChild->panelKey);
+        InterlockedExchange(&g_secondaryPanelActive, 1);
+        InterlockedExchange(&g_captureChildController, 1);
+        WriteLog("Creation entry captured a resolved AP41 reward child dialog.");
+        return;
+    }
+    if (requested == 0 && InterlockedCompareExchange(&g_secondaryPanelArmed, 0, 1) == 1) {
         const auto requestContext = arguments[1] != 0
             ? arguments[1]
             : static_cast<std::uint32_t>(InterlockedCompareExchange(
-                  &g_cgalControllerContext, 0, 0));
-        if (requestContext == 0) {
+                  &g_parentControllerContext, 0, 0));
+        if (requestContext == 0 || g_parentPanelRecord == nullptr) {
             WriteLog(
-                "Creation entry found no Laboratory context; left CGAL secondary request unmapped.");
+                "Creation entry found no resolved parent context; left the secondary request unmapped.");
             return;
         }
-        arguments[0] = kCgbrDialogId;
+        arguments[0] = g_parentPanelRecord->childDialogId;
         arguments[1] = requestContext;
-        InterlockedExchange(&g_customBrewingActive, 1);
-        InterlockedExchange(&g_captureBrewingController, 1);
+        g_activePanelRecord = g_parentPanelRecord;
+        InterlockedExchange(&g_secondaryPanelActive, 1);
+        InterlockedExchange(&g_captureChildController, 1);
         WriteLog(
-            "Creation entry translated CGAL secondary request to CGBR with its Laboratory context.");
+            "Creation entry translated a parent command to its resolved child dialog.");
         return;
     }
-    InterlockedExchange(&g_cgalSecondaryArmed, 0);
+    InterlockedExchange(&g_secondaryPanelArmed, 0);
 }
 
 __declspec(naked) void DialogCreationHook() {
@@ -4011,57 +4503,49 @@ __declspec(naked) void SecondaryControllerResultHook() {
 
 // AP78 has no generic data-driven Enchantments presenter. Its stock refresh
 // reads each active effector's overlay FourCC and switches over a fixed list.
-// Preserve that entire switch and row builder: only alias the three private
-// persistent coating presenters to the existing XR01 row, then substitute the
-// row text at XR01's unchanged stock string-assignment call.
+// Preserve that entire switch and row builder: manager-validated private
+// overlays alias the existing XR01 row, then substitute their validated text
+// at XR01's unchanged stock string-assignment call.
+extern "C" void __stdcall SelectPrivateEnchantmentRow(
+    std::uint32_t overlayId) {
+    g_privateEnchantmentRowString = nullptr;
+    const auto* row =
+        g_runtimeFeatureRegistry.FindEnchantmentRow(overlayId);
+    if (row == nullptr || g_runtimeFeatureRegistry.enchantmentRows.empty()) {
+        return;
+    }
+    const std::size_t index = static_cast<std::size_t>(
+        row - g_runtimeFeatureRegistry.enchantmentRows.data());
+    if (index < g_runtimeEnchantmentViews.size()) {
+        g_privateEnchantmentRowString = &g_runtimeEnchantmentViews[index];
+    }
+}
+
 __declspec(naked) void HeroEnchantmentsSwitchHook() {
     __asm {
-        mov dword ptr [g_privateEnchantmentRowKind], 0
-        cmp eax, 316F4C41h
-        je paralytic_oil
-        cmp eax, 326F4C41h
-        je transmutation_oil
-        cmp eax, 336F4C41h
-        je poisoned_weapon
+        mov dword ptr [g_privateEnchantmentRowString], 0
+        pushfd
+        pushad
+        push eax
+        call SelectPrivateEnchantmentRow
+        popad
+        popfd
+        cmp dword ptr [g_privateEnchantmentRowString], 0
+        je replay_stock_compare
+        mov eax, 31305258h
     replay_stock_compare:
         cmp eax, 32425243h
         jmp dword ptr [g_heroEnchantmentsSwitchResume]
-    paralytic_oil:
-        mov dword ptr [g_privateEnchantmentRowKind], 1
-        mov eax, 31305258h
-        jmp replay_stock_compare
-    transmutation_oil:
-        mov dword ptr [g_privateEnchantmentRowKind], 2
-        mov eax, 31305258h
-        jmp replay_stock_compare
-    poisoned_weapon:
-        mov dword ptr [g_privateEnchantmentRowKind], 3
-        mov eax, 31305258h
-        jmp replay_stock_compare
     }
 }
 
 __declspec(naked) void PrivateEnchantmentRowStringHook() {
     __asm {
-        mov eax, dword ptr [g_privateEnchantmentRowKind]
-        cmp eax, 1
-        je paralytic_oil
-        cmp eax, 2
-        je transmutation_oil
-        cmp eax, 3
-        je poisoned_weapon
-        jmp dword ptr [g_stockStringAssign]
-    paralytic_oil:
-        mov eax, offset g_paralyticOilEnchantmentString
+        mov eax, dword ptr [g_privateEnchantmentRowString]
+        test eax, eax
+        jz stock_string
         mov dword ptr [esp + 4], eax
-        jmp dword ptr [g_stockStringAssign]
-    transmutation_oil:
-        mov eax, offset g_transmutationOilEnchantmentString
-        mov dword ptr [esp + 4], eax
-        jmp dword ptr [g_stockStringAssign]
-    poisoned_weapon:
-        mov eax, offset g_poisonedWeaponEnchantmentString
-        mov dword ptr [esp + 4], eax
+    stock_string:
         jmp dword ptr [g_stockStringAssign]
     }
 }
@@ -4139,7 +4623,13 @@ bool InstallPrivateEnchantmentRows() {
         sizeof(stringPatch),
         stringProtection,
         &ignored);
-    WriteLog("Installed scoped AP78 rows for Paralytic Oil, Transmutation Oil, and Poisoned Weapon.");
+    char message[192] = {};
+    sprintf_s(
+        message,
+        "Installed scoped AP78 presenter for %u manager-validated enchantment rows.",
+        static_cast<unsigned int>(
+            g_runtimeFeatureRegistry.enchantmentRows.size()));
+    WriteLog(message);
     return true;
 }
 
@@ -4156,7 +4646,7 @@ void WritePrivateNameGeneratorLog(
     WriteLog(message);
 }
 
-void RegisterPrivateStockNameGenerator(
+bool RegisterPrivateStockNameGenerator(
     void* registry,
     void* resourceManager,
     std::uint32_t generatorId,
@@ -4169,7 +4659,7 @@ void RegisterPrivateStockNameGenerator(
         WritePrivateNameGeneratorLog(
             generatorLabel,
             "skipped: the stock registry context was incomplete.");
-        return;
+        return false;
     }
 
     using FindOrInsert = void** (__thiscall*)(void*, const std::uint32_t*);
@@ -4187,7 +4677,7 @@ void RegisterPrivateStockNameGenerator(
         WritePrivateNameGeneratorLog(
             generatorLabel,
             "failed: stock NM17 was not present at registry completion.");
-        return;
+        return false;
     }
 
     std::uint32_t privateKey = generatorId;
@@ -4196,13 +4686,13 @@ void RegisterPrivateStockNameGenerator(
         WritePrivateNameGeneratorLog(
             generatorLabel,
             "failed: the stock map returned no value slot.");
-        return;
+        return false;
     }
     if (*privateSlot != nullptr) {
         WritePrivateNameGeneratorLog(
             generatorLabel,
             "refused: another generator already owns that ID.");
-        return;
+        return false;
     }
 
     using StockOperatorNew = void* (__cdecl*)(std::size_t);
@@ -4213,7 +4703,7 @@ void RegisterPrivateStockNameGenerator(
         WritePrivateNameGeneratorLog(
             generatorLabel,
             "failed: the stock allocator returned null.");
-        return;
+        return false;
     }
 
     // This is the literal stock NMxx construction sequence. The factory owns
@@ -4242,7 +4732,7 @@ void RegisterPrivateStockNameGenerator(
         WritePrivateNameGeneratorLog(
             generatorLabel,
             "failed: the stock name generator constructor returned null.");
-        return;
+        return false;
     }
 
     wrapper[0] = *static_cast<void***>(*stockSlot);
@@ -4255,34 +4745,31 @@ void RegisterPrivateStockNameGenerator(
         "Registered private %s through Majesty's stock name-generator registry lifecycle.",
         generatorLabel);
     WriteLog(message);
+    return true;
 }
 
 extern "C" void __stdcall RegisterRequestedPrivateNameGenerators(
     void* registry,
     void* resourceManager) {
-    if (HasRuntimeCapability(
-            MajestyRuntimeCapabilities::kAlchemistNameGenerator)) {
-        RegisterPrivateStockNameGenerator(
+    for (const auto& record : g_runtimeFeatureRegistry.nameGenerators) {
+        char generatorLabel[5] = {
+            static_cast<char>(record.generatorId & 0xFFu),
+            static_cast<char>((record.generatorId >> 8) & 0xFFu),
+            static_cast<char>((record.generatorId >> 16) & 0xFFu),
+            static_cast<char>((record.generatorId >> 24) & 0xFFu),
+            '\0'};
+        if (!RegisterPrivateStockNameGenerator(
             registry,
             resourceManager,
-            kAlchemistNameGeneratorId,
-            kAlchemistGivenNamesId,
-            kAlchemistEndingsId,
-            kAlchemistThirdNamePartId,
-            kAlchemistFourthNamePartId,
-            "NM18");
-    }
-    if (HasRuntimeCapability(
-            MajestyRuntimeCapabilities::kPhantomNameGenerator)) {
-        RegisterPrivateStockNameGenerator(
-            registry,
-            resourceManager,
-            kPhantomNameGeneratorId,
-            kPhantomGivenNamesId,
-            kPhantomEndingsId,
-            kPhantomThirdNamePartId,
-            kPhantomFourthNamePartId,
-            "NM19");
+            record.generatorId,
+            record.namePartIds[0],
+            record.namePartIds[1],
+            record.namePartIds[2],
+            record.namePartIds[3],
+            generatorLabel)) {
+            StopUnsafeManagerRuntimeLaunch(
+                "A requested private name generator could not be registered at the stock registry-completion boundary.");
+        }
     }
 }
 
@@ -4456,7 +4943,7 @@ bool InstallSecondaryControllerHook() {
     DWORD ignored = 0;
     VirtualProtect(resultSite, sizeof(patch), oldProtection, &ignored);
     LogInstalledProfileSite(
-        "pre-insertion CGAL secondary-controller hook",
+        "pre-insertion manager secondary-controller hook",
         g_buildProfile->secondaryControllerResultRva);
     return true;
 }
@@ -4474,6 +4961,18 @@ DWORD WINAPI InitializeRuntime(void*) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: the supplied capability manifest is invalid.");
     }
+    const RuntimeFeatureRegistryState runtimeFeatures =
+        LoadRuntimeFeatureRegistry();
+    if (runtimeFeatures != RuntimeFeatureRegistryState::Loaded) {
+        StopUnsafeManagerRuntimeLaunch(
+            "Terminating manager launch before Majesty resumes: the manager-owned runtime feature registry is missing or invalid.");
+    }
+    const StockControllerRegistryState controllerRecipes =
+        LoadStockControllerRegistry();
+    if (controllerRecipes != StockControllerRegistryState::Loaded) {
+        StopUnsafeManagerRuntimeLaunch(
+            "Terminating manager launch before Majesty resumes: the manager-owned stock-controller registry is missing or invalid.");
+    }
     const bool managerLaunch = true;
     const bool privateActivityText = HasRuntimeCapability(
         MajestyRuntimeCapabilities::kPrivateActivityText);
@@ -4481,18 +4980,43 @@ DWORD WINAPI InitializeRuntime(void*) {
         MajestyRuntimeCapabilities::kFreestyleCamRebind);
     const bool expandedBuildingSlots = HasRuntimeCapability(
         MajestyRuntimeCapabilities::kExpandedBuildingSlots);
-    const bool alchemistNames = HasRuntimeCapability(
-        MajestyRuntimeCapabilities::kAlchemistNameGenerator);
-    const bool phantomNames = HasRuntimeCapability(
-        MajestyRuntimeCapabilities::kPhantomNameGenerator);
-    const bool alchemistSecondary = HasRuntimeCapability(
-        MajestyRuntimeCapabilities::kAlchemistSecondaryController);
-    const bool alchemistOilRows = HasRuntimeCapability(
-        MajestyRuntimeCapabilities::kAlchemistPrivateOilRows);
+    const bool privateNameGenerators =
+        !g_runtimeFeatureRegistry.nameGenerators.empty();
+    const bool stockControllerRecipes =
+        !g_stockControllerRegistry.panels.empty() ||
+        !g_stockControllerRegistry.rewardPanels.empty();
+    const bool ap10Ap69ControllerRecipes =
+        !g_stockControllerRegistry.panels.empty();
+    const bool privateRewardFlagRecipes =
+        !g_stockControllerRegistry.rewardPanels.empty();
+    if (!PrepareStockControllerRuntimeRecords()) {
+        StopUnsafeManagerRuntimeLaunch(
+            "Terminating manager launch before Majesty resumes: controller runtime records could not be prepared.");
+    }
+    const bool requestedStockControllerRecipes = HasRuntimeCapability(
+        MajestyRuntimeCapabilities::kGenericControllerRecipes);
+    const bool privateEnchantmentRows =
+        !g_runtimeFeatureRegistry.enchantmentRows.empty();
+    const bool requestedNameGeneratorHook =
+        HasRuntimeCapability(
+            MajestyRuntimeCapabilities::kGenericNameGenerator);
+    const bool requestedEnchantmentRowHook =
+        HasRuntimeCapability(
+            MajestyRuntimeCapabilities::kGenericEnchantmentRow);
+    if (requestedNameGeneratorHook != privateNameGenerators ||
+        requestedEnchantmentRowHook != privateEnchantmentRows ||
+        requestedStockControllerRecipes != stockControllerRecipes) {
+        StopUnsafeManagerRuntimeLaunch(
+            "Terminating manager launch before Majesty resumes: MMCP hook selection and manager-owned runtime registries disagree.");
+    }
 
     if (!SelectMajestyBuildProfile() || !ValidateMajestyBuildProfile()) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: the executable does not match every declared runtime capability profile.");
+    }
+    if (privateRewardFlagRecipes && !PrepareRewardFlagRuntimeRecords()) {
+        StopUnsafeManagerRuntimeLaunch(
+            "Terminating manager launch before Majesty resumes: private reward flag callbacks could not be prepared from stock Fl00.");
     }
 
     if (privateActivityText) {
@@ -4534,22 +5058,22 @@ DWORD WINAPI InitializeRuntime(void*) {
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the custom-guild factory fallback could not be installed.");
     }
-    if (alchemistNames || phantomNames) {
+    if (privateNameGenerators) {
         RequireManagerRuntimeInstall(
             InstallPrivateNameGenerators(),
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the private name registry could not be installed.");
     }
 
-    if (alchemistSecondary) {
+    if (ap10Ap69ControllerRecipes) {
         g_stockResearchRouteReady = RequireManagerRuntimeInstall(
             ValidateStockResearchRoute(),
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the stock research route did not match the selected executable profile.");
         g_stockResearchRouteReady = RequireManagerRuntimeInstall(
-            InstallPrivateWeaponOilResearchDescriptor(),
+            InstallPrivateResearchDescriptorRegistry(),
             managerLaunch,
-            "Terminating manager launch before Majesty resumes: the private Weapon Oil research descriptor could not be installed.");
+            "Terminating manager launch before Majesty resumes: private research descriptor registration could not be installed.");
         g_stockResearchRouteReady = RequireManagerRuntimeInstall(
             InstallResearchCompletionBridge(),
             managerLaunch,
@@ -4559,17 +5083,23 @@ DWORD WINAPI InitializeRuntime(void*) {
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the private research-completion name clone could not be installed.");
         RequireManagerRuntimeInstall(
-            InstallPrivateInvigoratingSpellDescriptor(),
+            InstallPrivateSpellDescriptorResolver(),
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the private spell descriptor resolver could not be installed.");
         RequireManagerRuntimeInstall(
             InstallPrivateSovereignSpellRoute(),
             managerLaunch,
-            "Terminating manager launch before Majesty resumes: the private reagent spell route could not be installed.");
+            "Terminating manager launch before Majesty resumes: the private sovereign route could not be installed.");
         RequireManagerRuntimeInstall(
             InstallPrivateRageRoute(),
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the private Rage command route could not be installed.");
+        RequireManagerRuntimeInstall(
+            InstallGameUpdateRefreshBridge(),
+            managerLaunch,
+            "Terminating manager launch before Majesty resumes: the game-update refresh bridge could not be installed.");
+    }
+    if (stockControllerRecipes) {
         RequireManagerRuntimeInstall(
             InstallDialogCreationHook(),
             managerLaunch,
@@ -4582,12 +5112,14 @@ DWORD WINAPI InitializeRuntime(void*) {
             InstallSecondaryControllerHook(),
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the secondary-controller hook could not be installed.");
-        RequireManagerRuntimeInstall(
-            InstallGameUpdateRefreshBridge(),
-            managerLaunch,
-            "Terminating manager launch before Majesty resumes: the game-update refresh bridge could not be installed.");
     }
-    if (alchemistOilRows) {
+    if (privateRewardFlagRecipes) {
+        RequireManagerRuntimeInstall(
+            InstallPrivateRewardFlagModeRegistry(),
+            managerLaunch,
+            "Terminating manager launch before Majesty resumes: private Fl00 modes could not be registered.");
+    }
+    if (privateEnchantmentRows) {
         RequireManagerRuntimeInstall(
             InstallPrivateEnchantmentRows(),
             managerLaunch,
@@ -4601,7 +5133,7 @@ DWORD WINAPI InitializeRuntime(void*) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: the complete pre-window runtime could not release the launcher barrier.");
     }
-    if (alchemistSecondary) {
+    if (stockControllerRecipes) {
         RequireManagerRuntimeInstall(
             InstallWindowProcedureHook(),
             managerLaunch,

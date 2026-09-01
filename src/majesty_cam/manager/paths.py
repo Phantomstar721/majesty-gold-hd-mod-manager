@@ -48,6 +48,14 @@ class ManagerPaths:
         return self.profile_path.parent / "empty-runtime-capabilities.mmcp"
 
     @property
+    def empty_runtime_feature_registry(self) -> Path:
+        return self.profile_path.parent / "empty-runtime-features.mmfr"
+
+    @property
+    def empty_controller_registry(self) -> Path:
+        return self.profile_path.parent / "empty-stock-controllers.mmcr"
+
+    @property
     def startup_cache_path(self) -> Path:
         return self.profile_path.parent / "startup-cache.json"
 

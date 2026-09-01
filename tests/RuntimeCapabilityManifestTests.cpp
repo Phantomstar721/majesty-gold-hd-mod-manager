@@ -81,10 +81,9 @@ bool ExpectCapabilityProfiles() {
         standard.Has(kExpandedBuildingSlots) ||
         standard.Has(kFreestyleCamRebind) ||
         standard.Has(kPrivateActivityText) ||
-        standard.Has(kAlchemistSecondaryController) ||
-        standard.Has(kAlchemistPrivateOilRows) ||
-        standard.Has(kAlchemistNameGenerator) ||
-        standard.Has(kPhantomNameGenerator)) {
+        standard.Has(kGenericControllerRecipes) ||
+        standard.Has(kGenericEnchantmentRow) ||
+        standard.Has(kGenericNameGenerator)) {
         std::fprintf(
             stderr,
             "Standard-only empty MMCP did not remain capability-free: %s\n",
@@ -96,8 +95,8 @@ bool ExpectCapabilityProfiles() {
         kExpandedBuildingSlots,
         kFreestyleCamRebind,
         kGenericVisitorLists,
-        kPhantomNameGenerator,
         kPrivateActivityText,
+        kGenericNameGenerator,
     };
     const auto hauntBytes = Encode(hauntOnly);
     Manifest haunt;
@@ -108,24 +107,22 @@ bool ExpectCapabilityProfiles() {
     }
     if (!haunt.Has(kExpandedBuildingSlots) ||
         !haunt.Has(kFreestyleCamRebind) ||
-        !haunt.Has(kPhantomNameGenerator) ||
+        !haunt.Has(kGenericNameGenerator) ||
         !haunt.Has(kPrivateActivityText) ||
-        haunt.Has(kAlchemistSecondaryController) ||
-        haunt.Has(kAlchemistPrivateOilRows) ||
-        haunt.Has(kAlchemistNameGenerator)) {
+        haunt.Has(kGenericControllerRecipes) ||
+        haunt.Has(kGenericEnchantmentRow)) {
         std::fprintf(stderr, "Haunt-only MMCP enabled an incorrect hook group.\n");
         return false;
     }
 
     const std::vector<std::string> combined = {
-        kAlchemistPrivateOilRows,
-        kAlchemistSecondaryController,
-        kAlchemistNameGenerator,
         kExpandedBuildingSlots,
         kFreestyleCamRebind,
         kGenericVisitorLists,
-        kPhantomNameGenerator,
         kPrivateActivityText,
+        kGenericEnchantmentRow,
+        kGenericControllerRecipes,
+        kGenericNameGenerator,
     };
     const auto combinedBytes = Encode(combined);
     Manifest all;
@@ -134,10 +131,9 @@ bool ExpectCapabilityProfiles() {
         std::fprintf(stderr, "Combined MMCP was rejected: %s\n", error.c_str());
         return false;
     }
-    if (!all.Has(kAlchemistSecondaryController) ||
-        !all.Has(kAlchemistPrivateOilRows) ||
-        !all.Has(kAlchemistNameGenerator) ||
-        !all.Has(kPhantomNameGenerator)) {
+    if (!all.Has(kGenericEnchantmentRow) ||
+        !all.Has(kGenericNameGenerator) ||
+        !all.Has(kGenericControllerRecipes)) {
         std::fprintf(stderr, "Combined MMCP omitted a private hook group.\n");
         return false;
     }
@@ -150,8 +146,8 @@ int main() {
     using namespace MajestyRuntimeCapabilities;
     if (!ExpectValid({}) ||
         !ExpectValid(
-            {kAlchemistSecondaryController, kExpandedBuildingSlots},
-            kAlchemistSecondaryController) ||
+            {kExpandedBuildingSlots, kGenericControllerRecipes},
+            kGenericControllerRecipes) ||
         !ExpectCapabilityProfiles()) {
         return 1;
     }
@@ -162,7 +158,7 @@ int main() {
         !ExpectInvalid(Encode({"example.future-hook.v1"}),
             "capability is not supported by this runtime") ||
         !ExpectInvalid(
-            Encode({kExpandedBuildingSlots, kAlchemistSecondaryController}),
+            Encode({kGenericControllerRecipes, kExpandedBuildingSlots}),
             "capability names are not strictly increasing") ||
         !ExpectInvalid(
             Encode({kExpandedBuildingSlots, kExpandedBuildingSlots}),

@@ -25,14 +25,28 @@ last stock entry is `NM17`, which belongs to Inns and uses `BN01` through
 
 After inserting `NM17`, the constructor sets the manager-ready word at offset
 `+0x24` to one. The private hook runs immediately before that assignment, when
-the same registry pointer and resource-manager pointer are still live. It adds
-only the literal stock-composed entries requested by the manager capability
-manifest:
+the same registry pointer and resource-manager pointer are still live. It loops
+over every manager-validated name-generator record in the immutable MMFR file
+and repeats the literal stock construction sequence for each record. The hook
+then replays the displaced ready assignment exactly.
 
-| Generator | Part 1 | Part 2 | Part 3 | Part 4 |
-|---|---|---|---|---|
-| `NM18` | `HN69` | `HN70` | `HN71` | `HN72` |
-| `NM19` | `HN73` | `HN74` | `HN75` | `HN76` |
+An MMFR name record contains one private printable `NM` FourCC and four ordered,
+distinct printable `HN` FourCCs. Records are deterministic and strictly sorted.
+The manager rejects stock `NM01` through `NM17`, conflicting ownership, missing
+package-owned `HN` resources, and a Description that does not select the
+declared generator. The native parser independently enforces the wire bounds
+before the hook is eligible for installation. See
+[runtime-capability-manifest.md](runtime-capability-manifest.md) for the MMFR
+format and limits.
+
+There is no package-name or generator-specific runtime branch. Any validated
+private `NM` record within the registry bounds follows the same stock lifecycle.
+The current packages are useful compatibility examples:
+
+| Package input | Generated MMFR record |
+|---|---|
+| Legacy Alchemist alias | `NM18` with `HN69`, `HN70`, `HN71`, `HN72` |
+| Legacy expanded-Haunt alias | `NM19` with `HN73`, `HN74`, `HN75`, `HN76` |
 
 The Alchemist package supplies 43 approved given names in `HN69`, 43 approved
 space-prefixed surnames or epithets in `HN70`, and empty `HN71` and `HN72`
@@ -43,6 +57,12 @@ The expanded Phantoms Haunt package supplies its approved given names in
 and `HN76` tables. Its Phantom description selects `NM19`, leaving the stock
 Priestess `NM11` generator and its Original/Expansion `HN41`-`HN44` resources
 unchanged.
+
+Those fixed IDs are translations for existing schema-v1/v2 packages only. New
+schema-v3 packages declare their own typed `stock.name-generator.v1` record;
+the manager proves and composes it into MMFR, then derives the generic
+`stock.name-generator.v1` MMCP hook selection. Legacy alias strings never select
+a separate Alchemist or Phantom implementation inside the runtime.
 
 ## Dual executable trace
 
@@ -70,7 +90,9 @@ failure is logged and never overwrites another generator.
 - The extension must remain inside the stock registry lifecycle. Do not replace
   it with a custom randomizer, post-birth renamer, polling thread, or per-hero
   watcher.
-- `NM18` is reserved for the Alchemist package and `NM19` for the expanded
-  Phantoms Haunt package; neither may be reused by another custom hero.
-- Each selected generator's four private `HN` resources must be present before
-  its custom hero is born.
+- `NM01` through `NM17` remain stock-owned. Every other selected `NM` key must
+  be unique and have one non-conflicting four-table definition.
+- Each selected generator's four package-owned `HN` resources must be present
+  before its custom hero is born.
+- The generated MMFR and canonical generic MMCP capability must agree exactly;
+  either side without the other stops the manager launch before Majesty resumes.

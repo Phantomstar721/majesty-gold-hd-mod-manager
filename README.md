@@ -16,6 +16,8 @@ overwriting one another.
 - Organizes content into **Merge**, **Standard**, **Quests**, and
   **Quality of Life** tabs.
 - Enables detected mods by default and remembers your later choices.
+- Groups multi-option Workshop packages and prevents incompatible variants
+  from being enabled together.
 - Clearly marks content that cannot be combined safely.
 - Prepares one playable package when selected mods need to be combined.
 - Leaves subscribed mods and downloaded quests unchanged.
@@ -59,8 +61,8 @@ building an unsafe package.
 
 A compatible Merge mod does not need to be hardcoded into the Mod Manager. If
 the distributed package follows this format and passes validation, the manager
-can detect and combine it automatically. The current public format covers
-custom-building packages that contain CAM and GPL content.
+can detect and combine it automatically. The current public format covers CAM
+and GPL packages both with and without custom buildings.
 
 ### Package layout
 
@@ -90,7 +92,7 @@ distributed package.
 The `.mmxml` must:
 
 - Have a stable, unique Mod UUID and a player-facing display name.
-- Contain one `Dataset base="Any"`.
+- Contain one or more `Dataset` elements, each with `base="Any"`.
 - Use only `CAM`, `Descriptions`, and `GPL` load directives.
 - Include at least one CAM load and one GPL load.
 - List the compiled GPL target and every `.gpl` or `.dat` source needed to
@@ -100,58 +102,119 @@ The `.mmxml` must:
 
 ### Mod definition
 
-The top-level `mod-definition.json` must use schema version 2:
+The top-level `mod-definition.json` should use schema version 3:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "mod_id": "{the-same-uuid-used-by-your-mmxml}",
   "internal_name": "YourNamespacedModName",
   "display_name": "Your Player-Facing Mod Name",
   "custom_buildings": [
     {
       "local_name": "YourNamespacedBuildingID",
-      "dialog_id": "CGXX",
       "controller_base": "AP10",
       "panel_resource_template": "AP10"
     }
   ],
-  "runtime_capabilities": []
+  "runtime_features": []
 }
 ```
 
 `schema_version` identifies the Mod Manager compatibility-file format, not the
-version of the mod. Keep it at `2` unless a future Mod Manager specification
-introduces another supported format.
+version of the mod. Version 2 remains supported under its original rules.
+Version 1 remains readable for existing trusted compatibility adapters, but an
+unadapted version-1 Merge package is not selectable. New packages should use
+version 3.
 
-Replace `CGXX` with a unique four-character ID beginning with `CG` and ending
-with two uppercase letters or digits. `controller_base` and
-`panel_resource_template` identify the stock Majesty building behavior and
-panel layout that the custom building follows.
+**Do not add `dialog_id`, a building panel FourCC, or a reserved `CGxx` name to
+a version-3 definition.** The manager finds the source panel ID already used by
+the building's XML Description and `SMNU`/`STRT` resources, assigns a
+collision-free internal ID for the generated profile, and rewrites those
+references together. Set `custom_buildings` to an empty array when the mod has
+no custom building. `controller_base` and `panel_resource_template` identify
+the stock Majesty building behavior and panel layout that a declared building
+follows; the supported pairs are `AP07`/`AP10`, `AP10`/`AP10`, and
+`MX09`/`MX09`. The MX09 pair is used with the typed AP41 reward-panel recipe
+described in the complete contract.
 
-Leave `runtime_capabilities` empty unless the mod uses one of the optional,
-reusable features documented by the Mod Manager. Normal custom guilds and
-stock-based building panels do not require a package-specific capability. The
-manager automatically supplies shared building-slot, Freestyle, visitor-list,
-and compatible custom-text support. Unsupported capability names are rejected
-rather than guessed.
+Leave `runtime_features` empty unless the mod uses one of the optional,
+reusable stock-behavior recipes documented below. Normal custom buildings and
+supported primary building panels do not require a package-specific feature. The manager
+automatically supplies shared building-slot, Freestyle, visitor-list, and
+compatible custom-text support. Unknown feature types and malformed or
+conflicting records are rejected rather than guessed.
+
+The currently supported author-declared recipes are:
+
+```json
+"runtime_features": [
+  {
+    "type": "stock.name-generator.v1",
+    "generator_id": "NM42",
+    "name_tables": ["HN81", "HN82", "HN83", "HN84"]
+  },
+  {
+    "type": "stock.ap78-enchantment-row.v1",
+    "overlay_id": "OV42",
+    "display_text": "Example enchantment description"
+  }
+]
+```
+
+The name-generator recipe uses Majesty's stock name-registry construction and
+requires four private tables outside stock `HN01`–`HN68` plus a package
+Description that selects the
+declared `NM` generator. The enchantment-row recipe presents a package-owned
+Overlay addition through Majesty's stock AP78 enchantment row. Multiple
+non-conflicting declarations can be combined within the documented bounds.
+
+The manager also supports data-only recipes for AP10/AP69 secondary panels,
+AP22 resource meters, AP99 research rows, AP17 upgrade gates, AP24 Rage-backed
+actions, AP69 sovereign-target actions, and MX09/AP41 reward panels with
+private Fl00-shaped hostile-monster reward flags. Their linked logical keys are local
+to the package. Visible controls are reserved within their own authored panel;
+global engine identities such as private descriptor commands, packed
+attributes, callback symbols, private modes, and private units are checked
+across the complete selection. See the
+[complete merge-mod contract](docs/manager-merge-contract.md#stock-controller-recipes)
+for the exact JSON fields, required resources, and stock lifecycle limits. A
+complete parser-checked file showing every supported recipe is available as
+[mod-definition-v3-all-features.json](docs/examples/mod-definition-v3-all-features.json).
+Copy only the recipes your package needs. Its package-owned controls and IDs
+are illustrative and must match the resources the package ships. Fields named
+`*_template_control_id` are different: they select one of the bounded stock
+Majesty templates proved for that recipe version, and cannot be replaced with
+an arbitrary private control. The complete contract lists the currently
+accepted stock templates and their required metadata.
+
+If a mod needs native or DLL behavior that is not yet supported, do not bundle
+a private DLL or patch instructions. Propose the behavior as a reusable Mod
+Manager feature in a
+[pull request to this repository](https://github.com/Phantomstar721/majesty-gold-hd-mod-manager/pulls),
+following the
+[runtime feature contribution guide](docs/adding-runtime-features.md).
 
 ### Content requirements
 
 - Namespace all custom Description IDs, CAM resource keys, GPL functions and
-  expressions, DAT blocks, dialog IDs, artwork, and sound filenames.
+  expressions, DAT blocks, authored panel resources, artwork, and sound
+  filenames.
 - Ship complete effective tables when changing resources Majesty treats as
   positional or whole-table data.
 - Preserve unchanged stock entries, ordering, flags, padding, and references.
-- Include a complete BDEP table and exactly one main and one interface
-  TILE/IMAG provider.
+- If the mod changes BDEP, main art, or interface art, include the complete
+  effective stock-relative resource. A version-3 package may omit any of those
+  domains it does not change and may provide at most one art provider per
+  changed domain.
 - Use named inventory items for new carried items rather than adding private
   numeric QITM rows.
 - Do not depend on files from an authoring repository or another Workshop
   folder.
 
 The manager currently supports CAM sections `SMNU`, `STRT`, `DATA`, `IMAG`,
-`TILE`, `SPLT`, `DSND`, and `WAVE`, with `BDEP` supported inside `DATA`.
+`TILE`, `SPLT`, `PALT`, `DSND`, and `WAVE`, with `BDEP` supported inside
+`DATA`. Main art uses `SPLT`; Majesty's interface art may use `PALT`.
 Packages using other resource structures require additional typed support
 before they can be merged safely.
 
@@ -197,7 +260,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Build-ModManagerExe.ps1
 The finished application is written to `dist\Majesty Mod Manager`.
 
 Mod authors interested in making compatible content can read the
-[Merge mod authoring guide](docs/manager-merge-contract.md).
+[Merge mod authoring guide](docs/manager-merge-contract.md). Developers adding
+new native support should also read the
+[runtime feature contribution guide](docs/adding-runtime-features.md).
 
 ## Community
 

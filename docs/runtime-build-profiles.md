@@ -18,11 +18,19 @@ fixture test are documented in
 means this resolver is neither validated nor modified.
 
 Every optional runtime group is selected by the validated MMCP v1 manifest,
-not by a package ID or by the mere presence of MMTX. Generic and Alchemist
-capabilities have disjoint install gates, while the selected public/beta2 byte
-guards are still checked before the corresponding group writes a hook. See
+not by a package ID or by the mere presence of a data file. The manager derives
+the canonical `stock.name-generator.v1`,
+`stock.ap78-enchantment-row.v1`, and `stock.controller-recipes.v1` selections
+from its generated MMFR/MMCR contents. The selected public/beta2 byte guards are
+still checked before the corresponding generic group writes a hook. See
 [runtime-capability-manifest.md](runtime-capability-manifest.md) for the wire
-format, failure behavior, and exact capability-to-hook map.
+formats, failure behavior, exact capability-to-hook map, and bounded registry
+ownership rules.
+
+Legacy Alchemist and expanded-Haunt capability strings are accepted only while
+reading schema-v1/v2 package definitions. The manager translates them into
+generic feature records before composition; generated MMCP does not select a
+package-specific native branch.
 
 Executable patch utilities may change the installed file's hash while retaining
 the stock timestamp. This is allowed only when every runtime code fingerprint
@@ -82,33 +90,74 @@ delta, overflow-reset, published, and passed into the same downstream update
 calls in identical order.
 
 Steam replaces the executable when switching branches, which removes the
-on-disk custom-guild fallback even though the CAM and DLL remain
-installed. The injected runtime therefore verifies the selected build's exact
-stock unknown-dialog epilogue and reapplies the already-proven `CG`-prefix
-branch in memory. It preserves the requested FourCC and constructor arguments,
-then enters that build's unchanged AP07/AP10 allocation block. An executable
-that already contains the exact file-based patch is accepted unchanged; any
-other bytes fail closed before dependent hooks are installed.
+on-disk custom-building fallback even though the CAM and DLL remain installed.
+Authors do not reserve a `CG` dialog ID: schema-v3 composition infers each
+package-local dialog and allocates a collision-free internal ID. The current
+internal allocation uses the manager's `CG` namespace. The injected runtime
+therefore verifies the selected build's exact stock unknown-dialog epilogue and
+reapplies the already-proven `CG`-prefix branch in memory. It preserves the
+manager-resolved FourCC and constructor arguments, then enters that build's
+unchanged AP07/AP10 allocation block. An executable that already contains the
+exact file-based patch is accepted unchanged; any other bytes fail closed
+before dependent hooks are installed.
 
 ## AP78 private Enchantments rows
 
 The hero Enchantments list is AP78's hard-coded overlay-FourCC switch, not a
-generic `Menu=11` presenter. The scoped Alchemist extension fingerprints and
-patches only the first comparison in that stock switch and XR01's existing
-string-assignment call. Private `ALo1`, `ALo2`, and `ALo3` are synchronously
-aliased to XR01 for one row build; their row text is substituted immediately
-before the unchanged stock string assignment. That call consumes Majesty's
-12-byte narrow-string object, not a raw `char*`; the runtime supplies a
-read-only object with the stock data/capacity/length layout. Passing a raw
-C string here is invalid and was proven to crash AP78. Every ordinary effect
-clears the private kind and executes the original comparison unchanged.
+generic `Menu=11` presenter. The manager writes every proved package-owned
+overlay/text pair to MMFR and derives one shared
+`stock.ap78-enchantment-row.v1` hook selection. The runtime fingerprints and
+patches only the first comparison in AP78's stock switch and XR01's existing
+string-assignment call. When the current overlay matches any validated MMFR
+record, it is synchronously aliased to XR01 for one row build and that record's
+text is substituted immediately before the unchanged stock string assignment.
+All other overlays execute the original comparison unchanged.
+
+The string-assignment call consumes Majesty's 12-byte narrow-string object,
+not a raw `char*`; the runtime builds immutable views over the validated
+Windows-1252 strings with the stock data/capacity/length layout. A raw C string
+violates this call contract and can crash AP78.
 
 The hook adds no list, timer, watcher, effect ownership, or replacement
 controller. AP78 continues to own active-effect iteration, formatting, row
 append, refresh, and teardown. Both executable profiles fingerprint the switch,
 call site, and stock assignment function before either AP78 site is modified.
+The legacy Alchemist alias is translated by the manager into the `ALo1`,
+`ALo2`, and `ALo3` MMFR examples; those IDs and texts are not hard-coded as a
+separate runtime path.
 
-## Private reagent spell targeting
+## Manager-generated stock controller recipes
+
+Controller-backed package features are composed into the immutable MMCR file
+at `DataMX/majesty_mod_manager_controllers.bin`, whose absolute path is supplied
+through `MAJESTY_MOD_MANAGER_CONTROLLERS`. The manager resolves all package-
+local parent/child dialogs and owner-qualifies logical panel keys before writing
+MMCR. The native runtime never reads package JSON and never chooses behavior by
+mod UUID, display name, or authored dialog prefix.
+
+One generic `stock.controller-recipes.v1` MMCP selection installs the already-
+traced stock hook set for every validated MMCR alternative. The supported
+records reuse AP10/AP69 secondary-panel ownership, AP22 packed-resource
+presentation, AP99 research, AP17 upgrade gating, AP24 Rage command/timed
+action, and AP69 sovereign targeting. Resource keys, recipe/action keys,
+controls, templates, prices, requirements, FourCCs, and GPL callback symbols
+come from the validated registry rather than an Alchemist-specific branch.
+
+These records do not create a parallel controller engine. They route one active
+alternative through the corresponding serialized stock state: one AP10/AP69
+parent-child panel chain, one AP99 research owner, one pending Rage handoff, one
+active timed-Rage UI owner, and one sovereign-target session. A registry can
+hold multiple packages and alternatives, but simultaneous ownership beyond
+those stock boundaries is not supported or claimed. Exact controller
+destruction, dialog replacement, command completion/cancellation, GPL effector
+cleanup, and quest/resource teardown remain authoritative.
+
+The following reagent-focused trace records why the first compatibility recipe
+is safe. It documents the legacy Alchemist values now translated by the manager
+into generic MMCR records; it is an example, not the identity or limit of the
+runtime mechanism.
+
+## Legacy Alchemist recipe: private reagent spell targeting
 
 Alchemical Tempest clones Lunord Wind Storm's `Sp29` descriptor and complete
 global ground-target lifecycle. Philosopher's Stone clones Fervus Vines'
@@ -153,13 +202,18 @@ private Reagent binding. AP78's dynamic enchantment-list owners `0x221A` and
 ## Private hero name generators
 
 Majesty constructs the complete `NM01` through `NM17` registry before setting
-its ready flag. The runtime inserts only the capability-requested `NM18` and/or
-`NM19` entries at that exact completion boundary, using the stock allocator,
-factory, generator constructor, map insertion, and wrapper vtable. `NM18` binds
-to private `HN69` through `HN72`; `NM19` binds to private `HN73` through `HN76`.
-Stock selection, fragment concatenation, ownership, and destruction remain
-unchanged. See [private-name-generator.md](private-name-generator.md) for the
-full lifecycle trace and byte guards.
+its ready flag. The manager emits every proved private generator and its four
+ordered `HN` tables to MMFR, then derives the generic
+`stock.name-generator.v1` MMCP selection. At the exact stock completion
+boundary the runtime iterates those validated records using the stock allocator,
+factory, generator constructor, map insertion, and wrapper vtable. Stock
+selection, fragment concatenation, ownership, and destruction remain unchanged.
+
+The legacy Alchemist (`NM18`/`HN69`-`HN72`) and expanded-Haunt
+(`NM19`/`HN73`-`HN76`) declarations are manager-side compatibility examples,
+not fixed runtime branches. See
+[private-name-generator.md](private-name-generator.md) for the complete generic
+lifecycle trace and byte guards.
 
 ## Manager-owned controller teardown
 
@@ -178,15 +232,16 @@ from each constructed controller instead of adding another build-specific
 address. It installs one shared dispatcher in the manager-owned vtable,
 invalidates state only when the destroyed object still matches that owner's
 exact live controller pointer, then calls the captured stock destructor with
-its original flags. Multiple controller types can register independently, and
-a delayed destructor for an older instance cannot clear a replacement.
+its original flags. Parent and secondary controller types register
+independently, and a delayed destructor for an older instance cannot clear a
+replacement.
 
-The Alchemist parent and secondary panels are the first registrations. Their
-callbacks clear only controller/context routing state; simulation-owned
-research and active effects remain under Majesty's existing command and GPL
-lifecycles. Future merge capabilities that clone a stock controller must use
-this same registration boundary rather than adding quest-name resets, polling,
-or feature-specific unload hooks.
+The active MMCR record, rather than an Alchemist package identity, supplies the
+parent and child routing ownership. Destructor callbacks clear only the exact
+controller/context state still owned by that record; simulation-owned research
+and active effects remain under Majesty's existing command and GPL lifecycles.
+Any future stock-controller recipe must use this same registration boundary
+rather than adding quest-name resets, polling, or feature-specific unload hooks.
 
 ## Required validation
 

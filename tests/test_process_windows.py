@@ -29,6 +29,15 @@ from majesty_cam.runtime_capabilities import (
     RUNTIME_CAPABILITY_MANIFEST_ENV_VAR,
     encode_runtime_capability_manifest,
 )
+from majesty_cam.runtime_features import (
+    RUNTIME_FEATURE_REGISTRY_ENV_VAR,
+    encode_runtime_feature_registry,
+)
+from majesty_cam.stock_controller_registry import (
+    CONTROLLER_REGISTRY_ENVIRONMENT,
+    encode_stock_controller_registry,
+    resolve_stock_controller_registry,
+)
 from majesty_cam.manager.paths import ManagerPaths
 from majesty_cam.manager.qol import inspect_qol_patch
 
@@ -158,6 +167,8 @@ class ManagerProcessWiringTests(unittest.TestCase):
                     game_arguments=("-debugout",),
                     ensure_qol=False,
                     capability_manifest=_capability_manifest(root),
+                    runtime_feature_registry=_feature_registry(root),
+                    controller_registry=_controller_registry(root),
                 )
 
         options.assert_called_once_with()
@@ -176,6 +187,8 @@ class ManagerProcessWiringTests(unittest.TestCase):
         self.assertTrue(kwargs["close_fds"])
         self.assertNotIn(INTENT_REGISTRY_ENV_VAR, kwargs["env"])
         self.assertIn(RUNTIME_CAPABILITY_MANIFEST_ENV_VAR, kwargs["env"])
+        self.assertIn(RUNTIME_FEATURE_REGISTRY_ENV_VAR, kwargs["env"])
+        self.assertIn(CONTROLLER_REGISTRY_ENVIRONMENT, kwargs["env"])
         self.assertNotIn(PROFILE_LOCK_HANDLE_ENV_VAR, kwargs["env"])
         self.assertIs(kwargs["startupinfo"], window_options["startupinfo"])
         self.assertEqual(kwargs["creationflags"], window_options["creationflags"])
@@ -210,6 +223,8 @@ class ManagerProcessWiringTests(unittest.TestCase):
                     [MOD_ID],
                     ensure_qol=False,
                     capability_manifest=_capability_manifest(root),
+                    runtime_feature_registry=_feature_registry(root),
+                    controller_registry=_controller_registry(root),
                     merged_profile_root=paths.merged_output_root,
                 )
 
@@ -251,6 +266,8 @@ class ManagerProcessWiringTests(unittest.TestCase):
                     ensure_qol=False,
                     intent_registry=registry,
                     capability_manifest=_capability_manifest(root),
+                    runtime_feature_registry=_feature_registry(root),
+                    controller_registry=_controller_registry(root),
                 )
 
             self.assertEqual(
@@ -270,6 +287,8 @@ class ManagerProcessWiringTests(unittest.TestCase):
                     ensure_qol=False,
                     intent_registry=registry,
                     capability_manifest=_capability_manifest(root),
+                    runtime_feature_registry=_feature_registry(root),
+                    controller_registry=_controller_registry(root),
                 )
             capability.write_bytes(b"not an MMCP manifest")
             with self.assertRaisesRegex(RuntimeError, "capability manifest"):
@@ -279,6 +298,32 @@ class ManagerProcessWiringTests(unittest.TestCase):
                     ensure_qol=False,
                     intent_registry=None,
                     capability_manifest=capability,
+                    runtime_feature_registry=_feature_registry(root),
+                    controller_registry=_controller_registry(root),
+                )
+            feature = _feature_registry(root)
+            feature.write_bytes(b"not an MMFR registry")
+            with self.assertRaisesRegex(RuntimeError, "runtime feature registry"):
+                launch_majesty(
+                    paths,
+                    [MOD_ID],
+                    ensure_qol=False,
+                    intent_registry=None,
+                    capability_manifest=_capability_manifest(root),
+                    runtime_feature_registry=feature,
+                    controller_registry=_controller_registry(root),
+                )
+            controller = _controller_registry(root)
+            controller.write_bytes(b"not an MMCR registry")
+            with self.assertRaisesRegex(RuntimeError, "controller registry"):
+                launch_majesty(
+                    paths,
+                    [MOD_ID],
+                    ensure_qol=False,
+                    intent_registry=None,
+                    capability_manifest=_capability_manifest(root),
+                    runtime_feature_registry=_feature_registry(root),
+                    controller_registry=controller,
                 )
 
     def test_source_launcher_starts_powershell_hidden_and_keeps_gui_errors(self):
@@ -320,6 +365,22 @@ def _capability_manifest(root: Path) -> Path:
     path = root / "prepared" / "capabilities.mmcp"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(encode_runtime_capability_manifest(()))
+    return path
+
+
+def _feature_registry(root: Path) -> Path:
+    path = root / "prepared" / "features.mmfr"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(encode_runtime_feature_registry(()))
+    return path
+
+
+def _controller_registry(root: Path) -> Path:
+    path = root / "prepared" / "controllers.mmcr"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(
+        encode_stock_controller_registry(resolve_stock_controller_registry((), {}))
+    )
     return path
 
 

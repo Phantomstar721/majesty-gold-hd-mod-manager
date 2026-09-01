@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import re
 import sys
 import unittest
@@ -7,8 +8,40 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from majesty_cam.package import parse_mod_definition
+
 
 class ReleaseDocumentationTests(unittest.TestCase):
+    def test_public_schema_v3_all_features_example_matches_the_parser(self):
+        path = REPO_ROOT / "docs/examples/mod-definition-v3-all-features.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        definition = parse_mod_definition(value)
+        self.assertEqual(definition.schema_version, 3)
+        self.assertNotIn("dialog_id", value["custom_buildings"][0])
+        feature_types = {item["type"] for item in value["runtime_features"]}
+        self.assertEqual(
+            feature_types,
+            {
+                "stock.name-generator.v1",
+                "stock.ap78-enchantment-row.v1",
+                "stock.ap10-ap69-secondary-panel.v1",
+                "stock.mx09-ap41-reward-panel.v1",
+                "stock.ap41-fl00-hostile-monster-flag.v1",
+                "stock.ap22-resource-meter.v1",
+                "stock.ap99-research-row.v1",
+                "stock.ap17-upgrade-research-gate.v1",
+                "stock.ap24-timed-rage-action.v1",
+                "stock.ap24-rage-command-action.v1",
+                "stock.ap69-sovereign-target-action.v1",
+            },
+        )
+        sovereign = next(
+            item
+            for item in value["runtime_features"]
+            if item["type"] == "stock.ap69-sovereign-target-action.v1"
+        )
+        self.assertEqual(sovereign["stock_executor_mode"], "Sp14")
+
     def test_public_readme_is_player_facing_and_links_release_documents(self):
         text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         for required in (

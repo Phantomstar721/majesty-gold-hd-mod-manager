@@ -57,7 +57,9 @@ $runtimeSources = @(
     (Join-Path $sourceRoot "ControllerLifecycleRegistry.cpp"),
     (Join-Path $sourceRoot "FreestyleCamRuntime.cpp"),
     (Join-Path $sourceRoot "IntentTextRegistry.cpp"),
-    (Join-Path $sourceRoot "RuntimeCapabilityManifest.cpp")
+    (Join-Path $sourceRoot "RuntimeCapabilityManifest.cpp"),
+    (Join-Path $sourceRoot "RuntimeFeatureRegistry.cpp"),
+    (Join-Path $sourceRoot "StockControllerRegistry.cpp")
 )
 $runtimeLibraries = @("user32.lib")
 if ($SiegeCrashDiagnostic) {

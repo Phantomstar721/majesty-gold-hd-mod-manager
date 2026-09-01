@@ -40,7 +40,7 @@ The trampoline recreates the relocated provider call, then resumes at the first
 unchanged stock instruction. It retains stock lookup, fallback logging, stack
 ownership, and return behavior for all non-manager IDs.
 
-The one resolver covers all uses needed by the current mods:
+The one resolver covers all currently supported stock consumers:
 
 | Consumer | Public call | beta2 call | Lifecycle |
 |---|---:|---:|---|
@@ -68,12 +68,15 @@ does the DLL signal that event. A failure in the registry, profile, resolver, or
 any required pre-window runtime install shows a clear error and terminates the
 new process instead of resuming a partially patched game.
 
-The Alchemist window-procedure lifecycle hook is the one deliberate post-signal
-exception: Majesty's suspended stock main thread must run before its top-level
-window exists. When the Alchemist secondary-controller capability is declared,
-the DLL waits for that stock-created window immediately after releasing the
-barrier and installs the subclass. If it cannot do so, it reports the failure
-and terminates the process.
+The stock-controller window-procedure lifecycle hook is the one deliberate
+post-signal exception: Majesty's suspended stock main thread must run before
+its top-level window exists. When the canonical
+`stock.controller-recipes.v1` capability is derived from a non-empty MMCR
+registry, the DLL waits for that stock-created window immediately after
+releasing the barrier and installs the subclass. If it cannot do so, it reports
+the failure and terminates the process. A legacy Alchemist package reaches the
+same path only after the manager translates its v1/v2 alias into generic MMCR
+records.
 
 The deterministic little-endian `MMTX` version 1 format is:
 

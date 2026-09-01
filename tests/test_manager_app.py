@@ -102,7 +102,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
 
     def test_game_icon_stays_in_header_while_window_uses_manager_icon(self) -> None:
         from PySide6.QtGui import QColor, QPixmap
-        from PySide6.QtWidgets import QLabel
+        from PySide6.QtWidgets import QLabel, QPushButton
 
         class _Paths:
             game_path = Path("Z:/missing-majesty")
@@ -410,6 +410,77 @@ class ManagerAppLayoutTests(unittest.TestCase):
             unselected_card.findChild(QLabel, "compatibilityBadge").text(),
             "COMPATIBLE",
         )
+
+    def test_multi_mod_options_are_collapsible_and_update_in_place(self) -> None:
+        from PySide6.QtWidgets import QLabel, QPushButton
+
+        ids = (
+            "10000000-0000-4000-8000-000000000001",
+            "10000000-0000-4000-8000-000000000002",
+        )
+        root = Path("C:/Steam/workshop/content/73230/123")
+        entries = tuple(
+            CatalogEntry(
+                content_id=content_id,
+                raw_content_id=content_id,
+                display_name=f"Example - Version {index + 1}",
+                kind=CatalogKind.STANDARD,
+                source=CatalogSource.WORKSHOP,
+                package_root=root,
+                manifest_path=root / "Example.mmxml",
+                has_cam=False,
+                merge_ready=False,
+                description=f"Uses ruleset {index + 1}.",
+                collection_id="example-collection",
+                collection_name="Example",
+                collection_index=index,
+                collection_size=2,
+                variant_label=f"Version {index + 1}",
+                incompatible_ids=(ids[1 - index],),
+                incompatible_names=(f"Example - Version {2 - index}",),
+            )
+            for index, content_id in enumerate(ids)
+        )
+        snapshot = replace(
+            _snapshot_with_required_qol("installed", "installed"),
+            catalog=Catalog(entries=entries),
+            selections={ids[0]: True, ids[1]: False},
+        )
+        page = manager_app._CatalogPage(CatalogKind.STANDARD)
+        page.populate(entries, snapshot, {}, {})
+
+        self.assertEqual(len(page.groups), 1)
+        group = page.groups[0]
+        self.assertTrue(group.children.isHidden())
+        self.assertEqual(group.findChild(QLabel, "variantGroupBadge").text(), "CHOOSE ONE")
+        details = " ".join(
+            label.text() for label in group.findChildren(QLabel, "cardDetail")
+        )
+        self.assertNotIn("Uses ruleset 1", details)
+        self.assertIn("selecting it turns those off", details)
+        author_details = group.findChildren(QLabel, "authorDescription")
+        self.assertEqual(len(author_details), 2)
+        self.assertTrue(all(label.isHidden() for label in author_details))
+        detail_buttons = group.findChildren(QPushButton, "contentDetailsButton")
+        self.assertEqual(len(detail_buttons), 2)
+        detail_buttons[0].click()
+        self.assertFalse(author_details[0].isHidden())
+        self.assertIn("Uses ruleset 1", author_details[0].text())
+        all_details = group.findChild(QPushButton, "collectionDetailsButton")
+        self.assertIsNotNone(all_details)
+        all_details.click()
+        self.assertTrue(all(not label.isHidden() for label in author_details))
+        self.assertFalse(group.children.isHidden())
+        self.assertEqual(all_details.text(), "Hide all details")
+        all_details.click()
+        self.assertTrue(all(label.isHidden() for label in author_details))
+        self.assertEqual(len(group.findChildren(QPushButton, "steamLinkButton")), 1)
+
+        original_cards = tuple(page.cards)
+        page.update_selections({ids[0]: False, ids[1]: True})
+        self.assertEqual(tuple(page.cards), original_cards)
+        self.assertEqual(group.summary.text(), "SELECTED · Version 2")
+        page.close()
 
     def test_qol_card_shows_only_basic_description_and_aligned_actions(self) -> None:
         from PySide6.QtWidgets import QLabel, QPushButton

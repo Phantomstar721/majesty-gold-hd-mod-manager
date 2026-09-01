@@ -35,15 +35,80 @@ from majesty_cam.runtime_capabilities import (
     RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH,
     encode_runtime_capability_manifest,
 )
+from majesty_cam.runtime_features import (
+    RuntimeFeatureRegistry,
+    decode_runtime_feature_registry,
+)
+from majesty_cam.stock_controller_registry import (
+    decode_stock_controller_registry,
+    resolve_stock_controller_registry,
+)
 
 
 HAUNT_ID = "8C48289E-7C70-4426-8913-133F3544A182"
 ALCHEMIST_ID = "42BA4603-2B13-446D-A2A4-6CF3A55DDAC3"
 STANDARD_ID = "48CDD934-B338-4373-A4A4-A99A8E7F917F"
 GENERATED_ID = "A80596DA-60D7-5DF1-9D01-4D69F40D5D95"
+VARIANT_A_ID = "10000000-0000-4000-8000-000000000001"
+VARIANT_B_ID = "10000000-0000-4000-8000-000000000002"
 
 
 class ManagerControllerTests(unittest.TestCase):
+    def test_standard_variant_selection_is_exclusive_without_replanning_merge(self):
+        with TemporaryDirectory() as tmp:
+            paths = _manager_paths(Path(tmp))
+            controller = ManagerController(
+                paths=paths, registry=CompatibilityRegistry(specs={})
+            )
+            root = paths.local_mods_root / "Variants"
+            common = dict(
+                raw_content_id=None,
+                kind=CatalogKind.STANDARD,
+                source=CatalogSource.LOCAL_MODS,
+                package_root=root,
+                manifest_path=root / "Variants.mmxml",
+                has_cam=False,
+                merge_ready=False,
+                collection_id="collection",
+                collection_name="Example",
+                collection_size=2,
+            )
+            first = CatalogEntry(
+                content_id=VARIANT_A_ID,
+                display_name="Example V1",
+                collection_index=0,
+                incompatible_ids=(VARIANT_B_ID,),
+                incompatible_names=("Example V2",),
+                **common,
+            )
+            second = CatalogEntry(
+                content_id=VARIANT_B_ID,
+                display_name="Example V2",
+                collection_index=1,
+                incompatible_ids=(VARIANT_A_ID,),
+                incompatible_names=("Example V1",),
+                **common,
+            )
+            controller.catalog = Catalog(entries=(first, second))
+            controller.selections = {VARIANT_A_ID: True, VARIANT_B_ID: False}
+            controller.order = (VARIANT_A_ID, VARIANT_B_ID)
+
+            with patch(
+                "majesty_cam.manager.controller.create_build_plan",
+                side_effect=AssertionError("standard toggle reparsed Merge inputs"),
+            ):
+                snapshot = controller.set_selected(VARIANT_B_ID, True)
+
+                self.assertFalse(snapshot.selections[VARIANT_A_ID])
+                self.assertTrue(snapshot.selections[VARIANT_B_ID])
+                self.assertEqual(snapshot.plan.selected_standard_ids, (VARIANT_B_ID,))
+
+                snapshot = controller.select_all(CatalogKind.STANDARD, True)
+
+            self.assertTrue(snapshot.selections[VARIANT_A_ID])
+            self.assertFalse(snapshot.selections[VARIANT_B_ID])
+            self.assertEqual(snapshot.plan.selected_standard_ids, (VARIANT_A_ID,))
+
     def test_standard_only_launch_explicitly_omits_activity_registry(self):
         with TemporaryDirectory() as tmp:
             paths = _manager_paths(Path(tmp), runtime_ready=True)
@@ -76,6 +141,18 @@ class ManagerControllerTests(unittest.TestCase):
             capability_path = launch.call_args.kwargs["capability_manifest"]
             self.assertEqual(capability_path, paths.empty_runtime_capability_manifest)
             self.assertEqual(capability_path.read_bytes(), encode_runtime_capability_manifest(()))
+            controller_path = launch.call_args.kwargs["controller_registry"]
+            self.assertEqual(controller_path, paths.empty_controller_registry)
+            self.assertEqual(
+                decode_stock_controller_registry(controller_path.read_bytes()),
+                resolve_stock_controller_registry((), {}),
+            )
+            feature_path = launch.call_args.kwargs["runtime_feature_registry"]
+            self.assertEqual(feature_path, paths.empty_runtime_feature_registry)
+            self.assertEqual(
+                decode_runtime_feature_registry(feature_path.read_bytes()),
+                RuntimeFeatureRegistry(),
+            )
 
     def test_scan_silently_restores_a_generated_profile_to_source_mods(self):
         with TemporaryDirectory() as tmp:

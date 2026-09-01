@@ -13,7 +13,12 @@ from ..compose import (
     ScopedSemanticResolution,
     compose_package,
     discover_selected_private_activity_texts,
+    inventory_package,
+    resolve_building_dialogs,
+    resolve_controller_registry,
+    resolve_runtime_feature_registry,
     snapshot_stock_compose_inputs,
+    validate_controller_stock_evidence,
     validate_composed_package,
 )
 from ..gpl import (
@@ -28,11 +33,36 @@ from ..intent_text import (
     PrivateActivityTextBinding,
     decode_intent_registry,
 )
-from ..package import PackageFormatError, load_package
+from ..package import (
+    ModPackage,
+    NameGeneratorFeature,
+    PackageFormatError,
+    load_package,
+)
 from ..runtime_capabilities import (
     PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY,
     RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH,
     decode_runtime_capability_manifest,
+)
+from ..runtime_features import (
+    RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH,
+    RuntimeFeatureRegistry,
+    decode_runtime_feature_registry,
+    derive_feature_runtime_capabilities,
+    encode_runtime_feature_registry,
+)
+from ..stock_controller_features import (
+    ControllerFeatureError,
+    LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY,
+    controller_feature_mapping,
+)
+from ..stock_controller_registry import (
+    CONTROLLER_REGISTRY_RELATIVE_PATH,
+    STOCK_CONTROLLER_RUNTIME_CAPABILITY,
+    ResolvedControllerRegistry,
+    decode_stock_controller_registry,
+    encode_stock_controller_registry,
+    resolve_stock_controller_registry,
 )
 from .catalog import Catalog, CatalogEntry, CatalogKind
 from .compatibility import CompatibilityRegistry
@@ -43,7 +73,27 @@ from .profile_lock import ProfileLockError, acquire_merged_profile_lock
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
-PLAN_SCHEMA_VERSION = 3
+PLAN_SCHEMA_VERSION = 5
+
+
+_EMPTY_CONTROLLER_REGISTRY = resolve_stock_controller_registry((), {})
+
+
+def _controller_record_count(registry: ResolvedControllerRegistry) -> int:
+    return sum(
+        len(section)
+        for section in (
+            registry.panels,
+            registry.meters,
+            registry.research_rows,
+            registry.upgrade_gates,
+            registry.timed_rage_actions,
+            registry.rage_command_actions,
+            registry.sovereign_target_actions,
+            registry.reward_panels,
+            registry.hostile_monster_flags,
+        )
+    )
 
 
 class ManagerBuildError(RuntimeError):
@@ -72,6 +122,8 @@ class BuildPlan:
     private_activity_texts: tuple[PrivateActivityTextBinding, ...] = ()
     stock_compose_inputs: tuple[tuple[str, str], ...] = ()
     compatibility_file_inputs: tuple[tuple[str, str], ...] = ()
+    runtime_feature_registry: RuntimeFeatureRegistry = RuntimeFeatureRegistry()
+    controller_registry: ResolvedControllerRegistry = _EMPTY_CONTROLLER_REGISTRY
 
     @property
     def stock_activity_text_inputs(self) -> tuple[tuple[str, str], ...]:
@@ -101,6 +153,14 @@ class ManagerBuildResult:
     mod_id: str
     fingerprint: str
     selected_source_ids: tuple[str, ...]
+
+    @property
+    def runtime_feature_registry(self) -> Path:
+        return self.output_root / Path(RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH)
+
+    @property
+    def controller_registry(self) -> Path:
+        return self.output_root / CONTROLLER_REGISTRY_RELATIVE_PATH
 
 
 def _prepare_selected_merge_entries(
@@ -145,9 +205,31 @@ def create_build_plan(
     issues: list[BuildIssue] = []
     standards: list[CatalogEntry] = []
     merge_entries: list[CatalogEntry] = []
+    selected_ids = {
+        content_id for content_id, enabled in normalized_selections.items() if enabled
+    }
+    reported_conflicts: set[tuple[str, str]] = set()
     for entry in catalog.entries:
         if entry.content_id is None or not normalized_selections.get(entry.content_id, False):
             continue
+        for incompatible_id in entry.incompatible_ids:
+            if incompatible_id not in selected_ids:
+                continue
+            pair = tuple(sorted((entry.content_id, incompatible_id)))
+            if pair in reported_conflicts:
+                continue
+            reported_conflicts.add(pair)
+            issues.append(
+                BuildIssue(
+                    "mutually_exclusive_mods",
+                    (
+                        f"{entry.display_name} conflicts with another selected "
+                        "option from the same mod collection. Choose only one."
+                    ),
+                    entry.content_id,
+                    entry.manifest_path,
+                )
+            )
         if entry.kind is CatalogKind.QUEST:
             continue
         if not entry.selectable:
@@ -342,6 +424,51 @@ def create_build_plan(
     for item in prepared:
         capabilities.update(item.runtime_capabilities)
 
+    runtime_feature_registry = RuntimeFeatureRegistry()
+    controller_registry = _EMPTY_CONTROLLER_REGISTRY
+    if prepared and all(
+        item.ready and isinstance(item.package, ModPackage) for item in prepared
+    ):
+        try:
+            inventories = tuple(
+                inventory_package(item.selected_mod) for item in prepared
+            )
+            runtime_feature_registry = resolve_runtime_feature_registry(
+                inventories,
+                tuple(sorted(capabilities)),
+            )
+            building_dialogs = resolve_building_dialogs(inventories)
+            controller_result = resolve_controller_registry(
+                inventories,
+                tuple(sorted(capabilities)),
+                building_dialogs=building_dialogs,
+            )
+            controller_registry = controller_result.registry
+            if game_path is not None:
+                validate_controller_stock_evidence(
+                    game_path,
+                    inventories,
+                    controller_registry,
+                    controller_panels=controller_result.panels,
+                    runtime_feature_registry=runtime_feature_registry,
+                )
+            capabilities = set(
+                derive_feature_runtime_capabilities(
+                    capabilities, runtime_feature_registry
+                )
+            )
+            capabilities.discard(LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY)
+            capabilities.discard(STOCK_CONTROLLER_RUNTIME_CAPABILITY)
+            if _controller_record_count(controller_registry):
+                capabilities.add(STOCK_CONTROLLER_RUNTIME_CAPABILITY)
+        except (ComposeError, OSError, ValueError) as exc:
+            issues.append(
+                BuildIssue(
+                    "unsafe_runtime_features",
+                    str(exc),
+                )
+            )
+
     private_activity_texts: tuple[PrivateActivityTextBinding, ...] = ()
     stock_compose_inputs: tuple[tuple[str, str], ...] = ()
     if game_path is not None and prepared and all(item.ready for item in prepared):
@@ -370,6 +497,8 @@ def create_build_plan(
         owner_resolutions=owner_resolutions,
         semantic_resolutions=semantic_resolutions,
         runtime_capabilities=capabilities,
+        runtime_feature_registry=runtime_feature_registry,
+        controller_registry=controller_registry,
         private_activity_texts=private_activity_texts,
         stock_compose_inputs=stock_compose_inputs,
         compatibility_file_inputs=compatibility_file_inputs,
@@ -397,6 +526,8 @@ def create_build_plan(
             owner_resolutions=owner_resolutions,
             semantic_resolutions=semantic_resolutions,
             runtime_capabilities=capabilities,
+            runtime_feature_registry=runtime_feature_registry,
+            controller_registry=controller_registry,
             private_activity_texts=private_activity_texts,
             stock_compose_inputs=current_stock_inputs,
             compatibility_file_inputs=current_compatibility_inputs,
@@ -423,9 +554,9 @@ def create_build_plan(
                 ),
             )
         )
-    standard_order = sorted(
-        (entry.content_id for entry in standards if entry.content_id is not None),
-        key=lambda item: (order_index.get(item, 1_000_000), item),
+    standard_order = _order_standard_ids(
+        standards,
+        order_index,
     )
     return BuildPlan(
         selected_standard_ids=tuple(standard_order),
@@ -436,9 +567,53 @@ def create_build_plan(
         private_activity_texts=private_activity_texts,
         stock_compose_inputs=stock_compose_inputs,
         compatibility_file_inputs=compatibility_file_inputs,
+        runtime_feature_registry=runtime_feature_registry,
+        controller_registry=controller_registry,
         fingerprint=fingerprint,
         issues=tuple(issues),
     )
+
+
+def _order_standard_ids(
+    entries: Sequence[CatalogEntry],
+    order_index: Mapping[str, int],
+) -> tuple[str, ...]:
+    """Apply detected before/after edges with stable saved-order tie breaking."""
+
+    by_id = {
+        entry.content_id: entry
+        for entry in entries
+        if entry.content_id is not None
+    }
+    base_key = lambda item: (order_index.get(item, 1_000_000), item)
+    outgoing: dict[str, set[str]] = {item: set() for item in by_id}
+    incoming: dict[str, int] = {item: 0 for item in by_id}
+    for item, entry in by_id.items():
+        for prerequisite in entry.load_after_ids:
+            if prerequisite not in by_id or item in outgoing[prerequisite]:
+                continue
+            outgoing[prerequisite].add(item)
+            incoming[item] += 1
+
+    ready = sorted(
+        (item for item, count in incoming.items() if count == 0),
+        key=base_key,
+    )
+    result: list[str] = []
+    while ready:
+        item = ready.pop(0)
+        result.append(item)
+        for dependent in sorted(outgoing[item], key=base_key):
+            incoming[dependent] -= 1
+            if incoming[dependent] == 0:
+                ready.append(dependent)
+                ready.sort(key=base_key)
+
+    # Cyclic prose is inherently ambiguous. Preserve the player's existing
+    # order for that subset rather than inventing a winner.
+    seen = set(result)
+    result.extend(sorted((item for item in by_id if item not in seen), key=base_key))
+    return tuple(result)
 
 
 def build_merged_package(
@@ -524,8 +699,24 @@ def build_merged_package(
                 "Generated runtime capability manifest does not match the "
                 "validated build plan."
             )
+        feature_path = staging / Path(RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH)
+        feature_data = feature_path.read_bytes()
+        emitted_features = decode_runtime_feature_registry(feature_data)
+        if emitted_features != plan.runtime_feature_registry:
+            raise ManagerBuildError(
+                "Generated runtime feature registry does not match the "
+                "validated build plan."
+            )
+        controller_path = staging / CONTROLLER_REGISTRY_RELATIVE_PATH
+        controller_data = controller_path.read_bytes()
+        emitted_controllers = decode_stock_controller_registry(controller_data)
+        if emitted_controllers != plan.controller_registry:
+            raise ManagerBuildError(
+                "Generated controller registry does not match the validated "
+                "build plan."
+            )
         sentinel = {
-            "schema_version": 2,
+            "schema_version": 4,
             "fingerprint": plan.fingerprint,
             "mod_id": normalize_guid(result.mod_id),
             "selected_source_ids": list(plan.selected_merge_source_ids),
@@ -538,6 +729,17 @@ def build_merged_package(
                 "path": RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH,
                 "sha256": hashlib.sha256(capability_data).hexdigest(),
                 "record_count": len(emitted_capabilities),
+            },
+            "runtime_feature_registry": {
+                "path": RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH,
+                "sha256": hashlib.sha256(feature_data).hexdigest(),
+                "name_generator_count": len(emitted_features.name_generators),
+                "enchantment_row_count": len(emitted_features.enchantment_rows),
+            },
+            "controller_registry": {
+                "path": CONTROLLER_REGISTRY_RELATIVE_PATH.as_posix(),
+                "sha256": hashlib.sha256(controller_data).hexdigest(),
+                "record_count": _controller_record_count(emitted_controllers),
             },
             "generated_files": _generated_file_inventory(staging),
         }
@@ -586,10 +788,12 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
             "selected_source_ids",
             "intent_registry",
             "capability_manifest",
+            "runtime_feature_registry",
+            "controller_registry",
             "generated_files",
         }:
             return None
-        if value.get("schema_version") != 2:
+        if value.get("schema_version") != 4:
             return None
         expected_files = _parse_generated_file_inventory(value["generated_files"])
         actual_files = {
@@ -620,6 +824,24 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
             or len(records) != registry["record_count"]
         ):
             return None
+        controller = value.get("controller_registry")
+        if not isinstance(controller, dict) or set(controller) != {
+            "path",
+            "sha256",
+            "record_count",
+        }:
+            return None
+        if controller["path"] != CONTROLLER_REGISTRY_RELATIVE_PATH.as_posix():
+            return None
+        controller_path = path / CONTROLLER_REGISTRY_RELATIVE_PATH
+        controller_data = controller_path.read_bytes()
+        controllers = decode_stock_controller_registry(controller_data)
+        if (
+            hashlib.sha256(controller_data).hexdigest() != controller["sha256"]
+            or type(controller["record_count"]) is not int
+            or _controller_record_count(controllers) != controller["record_count"]
+        ):
+            return None
         capability = value.get("capability_manifest")
         if not isinstance(capability, dict) or set(capability) != {
             "path",
@@ -638,6 +860,29 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
             or len(capabilities) != capability["record_count"]
         ):
             return None
+        feature = value.get("runtime_feature_registry")
+        if not isinstance(feature, dict) or set(feature) != {
+            "path",
+            "sha256",
+            "name_generator_count",
+            "enchantment_row_count",
+        }:
+            return None
+        if feature["path"] != RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH:
+            return None
+        feature_path = path / Path(RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH)
+        feature_data = feature_path.read_bytes()
+        runtime_features = decode_runtime_feature_registry(feature_data)
+        if (
+            hashlib.sha256(feature_data).hexdigest() != feature["sha256"]
+            or type(feature["name_generator_count"]) is not int
+            or feature["name_generator_count"]
+            != len(runtime_features.name_generators)
+            or type(feature["enchantment_row_count"]) is not int
+            or feature["enchantment_row_count"]
+            != len(runtime_features.enchantment_rows)
+        ):
+            return None
         report_path = path / "CAM-MERGE-REPORT.json"
         report = json.loads(report_path.read_text(encoding="utf-8"))
         report_runtime = report.get("runtime")
@@ -647,6 +892,10 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
             return None
         report_capability = report_runtime.get("capability_manifest")
         if report_capability != capability:
+            return None
+        if report_runtime.get("feature_registry") != feature:
+            return None
+        if report_runtime.get("controller_registry") != controller:
             return None
         validation = validate_composed_package(path)
         if validation.get("manifest") != manifests[0].name:
@@ -768,6 +1017,8 @@ def _plan_fingerprint(
         tuple[DefinitionKind, str], ScopedSemanticResolution
     ],
     runtime_capabilities: set[str],
+    runtime_feature_registry: RuntimeFeatureRegistry,
+    controller_registry: ResolvedControllerRegistry,
     private_activity_texts: Sequence[PrivateActivityTextBinding],
     stock_compose_inputs: Sequence[tuple[str, str]],
     compatibility_file_inputs: Sequence[tuple[str, str]],
@@ -821,6 +1072,12 @@ def _plan_fingerprint(
             for (kind, name), resolution in semantic_resolutions.items()
         ),
         "runtime_capabilities": sorted(runtime_capabilities),
+        "runtime_feature_registry_sha256": hashlib.sha256(
+            encode_runtime_feature_registry(runtime_feature_registry)
+        ).hexdigest(),
+        "controller_registry_sha256": hashlib.sha256(
+            encode_stock_controller_registry(controller_registry)
+        ).hexdigest(),
         "stock_compose_inputs": sorted(stock_compose_inputs),
         "compatibility_file_inputs": sorted(compatibility_file_inputs),
         "private_activity_texts": [
@@ -856,18 +1113,47 @@ def _canonical_mod_definition(definition: object | None) -> object | None:
         "internal_name": definition.internal_name,
         "display_name": definition.display_name,
         "custom_buildings": [
-            {
+            dict(
+                {
                 "local_name": building.local_name,
-                "dialog_id": building.dialog_id,
                 "controller_base": building.controller_base,
                 "panel_resource_template": building.panel_resource_template,
-            }
+                },
+                **(
+                    {"dialog_id": building.dialog_id}
+                    if definition.schema_version < 3
+                    else {}
+                ),
+            )
             for building in definition.custom_buildings
         ],
     }
     if definition.schema_version == 2:
         value["runtime_capabilities"] = list(definition.runtime_capabilities)
+    elif definition.schema_version == 3:
+        value["runtime_features"] = [
+            _canonical_runtime_feature(feature)
+            for feature in definition.runtime_features
+        ]
     return value
+
+
+def _canonical_runtime_feature(feature: object) -> dict:
+    if isinstance(feature, NameGeneratorFeature):
+        return {
+            "type": "stock.name-generator.v1",
+            "generator_id": feature.generator_id,
+            "name_tables": list(feature.name_part_ids),
+        }
+    try:
+        return controller_feature_mapping(feature)
+    except ControllerFeatureError:
+        pass
+    return {
+        "type": "stock.ap78-enchantment-row.v1",
+        "overlay_id": feature.overlay_id,
+        "display_text": feature.display_text,
+    }
 
 
 def _require_current_plan_sources(
@@ -880,6 +1166,8 @@ def _require_current_plan_sources(
             owner_resolutions=plan.resolution_owners,
             semantic_resolutions=plan.semantic_resolutions,
             runtime_capabilities=set(plan.runtime_capabilities),
+            runtime_feature_registry=plan.runtime_feature_registry,
+            controller_registry=plan.controller_registry,
             private_activity_texts=plan.private_activity_texts,
             stock_compose_inputs=stock_compose_inputs,
             compatibility_file_inputs=tuple(
@@ -908,7 +1196,10 @@ def _fingerprint_stock_compose_inputs(
     game_path: Path,
 ) -> tuple[tuple[str, str], ...]:
     return tuple(
-        (item.relative_path.as_posix(), item.sha256)
+        (
+            item.relative_path.as_posix(),
+            item.sha256 if item.present else "absent",
+        )
         for item in snapshot_stock_compose_inputs(game_path)
     )
 

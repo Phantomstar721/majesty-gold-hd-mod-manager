@@ -2,6 +2,7 @@ from pathlib import Path
 import struct
 import sys
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,9 @@ from majesty_cam.art import (
     analyze_art_archive,
     compute_stock_relative_delta,
     find_positional_collisions,
+    ImagTileReference,
+    ParsedImag,
+    parse_best_imag_tile_references,
     parse_imag_tile_references,
     parse_tile_palette_reference,
     rewrite_imag_entries,
@@ -26,6 +30,40 @@ from majesty_cam.cam import CamArchive, CamEntry, CamSection, pad_extension, pad
 
 
 class PositionalArtTests(unittest.TestCase):
+    def test_best_imag_layout_prefers_the_parser_covering_changed_tiles(self):
+        historical = ParsedImag(
+            entry_name=b"TEST",
+            references=(
+                ImagTileReference(b"TEST", 1, 0, 0, 12, 4, "compact"),
+            ),
+            layouts=("compact",),
+            set_count=1,
+        )
+        stock_derived = ParsedImag(
+            entry_name=b"TEST",
+            references=(
+                ImagTileReference(
+                    b"TEST", 1, 0, 0, 20, 9, "stock-end-anchored"
+                ),
+            ),
+            layouts=("stock-end-anchored",),
+            set_count=1,
+        )
+        with patch(
+            "majesty_cam.art.parse_imag_tile_references",
+            return_value=historical,
+        ), patch(
+            "majesty_cam.art.parse_stock_imag_tile_references",
+            return_value=stock_derived,
+        ):
+            parsed = parse_best_imag_tile_references(
+                b"fixture",
+                tile_count=10,
+                preferred_tile_indices=(9,),
+            )
+
+        self.assertEqual(parsed.layouts, ("stock-end-anchored",))
+
     def test_stock_relative_delta_ignores_fallthrough_and_identical_payloads(self):
         stock = _section(
             "TILE",
@@ -313,6 +351,20 @@ class PaletteReferenceTests(unittest.TestCase):
             [(0, 1)],
         )
 
+    def test_external_palette_closure_accepts_interface_palt_section(self):
+        tiles = _section("TILE", [_entry("custom", _tile(1, marker=9))])
+        palettes = _section(
+            "PALT",
+            [_entry("palette-0", b"stock"), _entry("palette-1", b"resolved")],
+        )
+
+        references = validate_external_palette_closure(tiles, palettes)
+
+        self.assertEqual(
+            [(item.tile_index, item.palette_index) for item in references],
+            [(0, 1)],
+        )
+
     def test_external_palette_header_is_parsed_and_rewritten(self):
         entries = (
             _entry("custom-0", _tile(560)),
@@ -364,6 +416,51 @@ class PaletteReferenceTests(unittest.TestCase):
 
 
 class ArtArchiveAnalysisTests(unittest.TestCase):
+    def test_inherited_stock_imag_claims_its_positional_tile_dependencies(self):
+        inherited = _entry(
+            "ABn1stock building",
+            _imag([_SetSpec(208, "compact", (1,))]),
+        )
+        tiles = [_entry("unused", _tile(0)), _entry("building", _tile(0, marker=1))]
+        stock = CamArchive(
+            sections=(
+                _section("IMAG", [inherited]),
+                _section("TILE", tiles),
+            )
+        )
+        mod = CamArchive(
+            sections=(
+                _section("IMAG", [inherited]),
+                _section("TILE", tiles),
+            )
+        )
+
+        analysis = analyze_art_archive(stock, mod, mod_id="inherited")
+
+        self.assertEqual(analysis.retained_tile_dependencies, (1,))
+        self.assertEqual(analysis.tile_delta.changed_indices, (1,))
+        self.assertEqual(analysis.unreferenced_tile_changes, ())
+        self.assertEqual(analysis.supported_imag_layouts, ("stock-end-anchored",))
+
+    def test_analysis_preserves_interface_palt_type(self):
+        stock = CamArchive(
+            sections=(
+                _section("TILE", [_entry("stock", _tile(0))]),
+                _section("PALT", [_entry("stock-palette", b"stock")]),
+            )
+        )
+        mod = CamArchive(
+            sections=(
+                _section("IMAG", []),
+                _section("TILE", [_entry("changed", _tile(0, marker=9))]),
+                _section("PALT", [_entry("changed-palette", b"private")]),
+            )
+        )
+
+        analysis = analyze_art_archive(stock, mod, mod_id="interface-fixture")
+
+        self.assertEqual(analysis.palette_delta.extension, pad_extension("PALT"))
+
     def test_analysis_combines_stock_delta_and_typed_reference_proofs(self):
         stock = CamArchive(
             sections=(

@@ -7,12 +7,18 @@ from typing import Mapping
 
 from ..intent_text import INTENT_REGISTRY_RELATIVE_PATH
 from ..runtime_capabilities import write_runtime_capability_manifest
+from ..runtime_features import write_runtime_feature_registry
+from ..stock_controller_registry import (
+    resolve_stock_controller_registry,
+    write_stock_controller_registry,
+)
 from .build import (
     BuildPlan,
     ManagerBuildError,
     ManagerBuildResult,
     build_merged_package,
     create_build_plan,
+    _order_standard_ids,
     read_managed_build,
     _require_current_plan_sources,
 )
@@ -201,6 +207,7 @@ class ManagerController:
         self.selections = selections
         self.order = order
         self.selection_source = source
+        self._enforce_catalog_exclusivity()
         self.profile = saved or ManagerProfile()
         self._replan()
         self._qol_checked = inspect_qol
@@ -281,18 +288,48 @@ class ManagerController:
         )
         if entry is None or not entry.selectable:
             raise ValueError(f"Content is not selectable: {content_id}")
+        if enabled:
+            for incompatible_id in entry.incompatible_ids:
+                self.selections[incompatible_id] = False
         self.selections[normalized] = bool(enabled)
-        self._replan()
+        if entry.kind is CatalogKind.STANDARD:
+            self._refresh_standard_plan()
+        else:
+            self._replan()
         self._save_selection_state()
         return self.snapshot()
 
     def select_all(self, kind: CatalogKind, enabled: bool) -> ControllerSnapshot:
         if kind is CatalogKind.QUEST:
             return self.snapshot()
-        for entry in self.catalog.entries:
-            if entry.kind is kind and entry.selectable and entry.content_id is not None:
-                self.selections[entry.content_id] = bool(enabled)
-        self._replan()
+        candidates = tuple(
+            entry
+            for entry in self.catalog.entries
+            if entry.kind is kind and entry.selectable and entry.content_id is not None
+        )
+        if enabled:
+            for entry in candidates:
+                self.selections[entry.content_id] = False
+            selected_ids: set[str] = set()
+            for entry in sorted(
+                candidates,
+                key=lambda item: (
+                    item.collection_id or "",
+                    item.collection_index,
+                    item.display_name.casefold(),
+                ),
+            ):
+                if selected_ids.intersection(entry.incompatible_ids):
+                    continue
+                self.selections[entry.content_id] = True
+                selected_ids.add(entry.content_id)
+        else:
+            for entry in candidates:
+                self.selections[entry.content_id] = False
+        if kind is CatalogKind.STANDARD:
+            self._refresh_standard_plan()
+        else:
+            self._replan()
         self._save_selection_state()
         return self.snapshot()
 
@@ -344,6 +381,8 @@ class ManagerController:
             active_ids = list(self.plan.selected_standard_ids)
             intent_registry: Path | None = None
             capability_manifest = self.paths.empty_runtime_capability_manifest
+            runtime_feature_registry = self.paths.empty_runtime_feature_registry
+            controller_registry = self.paths.empty_controller_registry
             if self.plan.has_merge:
                 try:
                     _require_current_plan_sources(
@@ -361,13 +400,24 @@ class ManagerController:
                     / Path(INTENT_REGISTRY_RELATIVE_PATH)
                 )
                 capability_manifest = snapshot.managed_build.capability_manifest
+                runtime_feature_registry = (
+                    snapshot.managed_build.runtime_feature_registry
+                )
+                controller_registry = snapshot.managed_build.controller_registry
             else:
                 write_runtime_capability_manifest(capability_manifest, ())
+                write_runtime_feature_registry(runtime_feature_registry, ())
+                write_stock_controller_registry(
+                    controller_registry,
+                    resolve_stock_controller_registry((), {}),
+                )
             result = launch_majesty(
                 self.paths,
                 active_ids,
                 intent_registry=intent_registry,
                 capability_manifest=capability_manifest,
+                runtime_feature_registry=runtime_feature_registry,
+                controller_registry=controller_registry,
                 acquired_profile_lock=profile_lock,
             )
             self.profile = self._profile_with_current_selections()
@@ -473,6 +523,56 @@ class ManagerController:
             order=self.order,
             game_path=self.paths.game_path,
         )
+
+    def _refresh_standard_plan(self) -> None:
+        """Update ordinary Mod IDs without re-inventorying selected CAM mods."""
+
+        order_index = {
+            normalize_guid(content_id): index
+            for index, content_id in enumerate(self.order)
+        }
+        selected_entries = tuple(
+            entry.content_id
+            for entry in self.catalog.entries
+            if entry.kind is CatalogKind.STANDARD
+            and entry.selectable
+            and entry.content_id is not None
+            and self.selections.get(entry.content_id, False)
+        )
+        selected_ids = set(selected_entries)
+        selected = tuple(
+            entry
+            for entry in self.catalog.entries
+            if entry.content_id in selected_ids
+        )
+        self.plan = replace(
+            self.plan,
+            selected_standard_ids=_order_standard_ids(selected, order_index),
+        )
+
+    def _enforce_catalog_exclusivity(self) -> None:
+        """Make stale/default choices deterministic when variants conflict."""
+
+        selected_ids: set[str] = set()
+        candidates = sorted(
+            (
+                entry
+                for entry in self.catalog.entries
+                if entry.selectable
+                and entry.content_id is not None
+                and self.selections.get(entry.content_id, False)
+            ),
+            key=lambda item: (
+                item.collection_id or "",
+                item.collection_index,
+                item.display_name.casefold(),
+            ),
+        )
+        for entry in candidates:
+            if selected_ids.intersection(entry.incompatible_ids):
+                self.selections[entry.content_id] = False
+            else:
+                selected_ids.add(entry.content_id)
 
     def _save_selection_state(self) -> None:
         self.profile = self._profile_with_current_selections()

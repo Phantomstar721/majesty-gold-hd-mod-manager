@@ -12,13 +12,12 @@ constexpr std::size_t kHeaderBytes = 12;
 constexpr std::size_t kRecordHeaderBytes = 4;
 
 constexpr const char* kSupportedCapabilities[] = {
-    kAlchemistPrivateOilRows,
-    kAlchemistSecondaryController,
-    kAlchemistNameGenerator,
     kExpandedBuildingSlots,
     kFreestyleCamRebind,
+    kGenericEnchantmentRow,
+    kGenericControllerRecipes,
+    kGenericNameGenerator,
     kGenericVisitorLists,
-    kPhantomNameGenerator,
     kPrivateActivityText,
 };
 

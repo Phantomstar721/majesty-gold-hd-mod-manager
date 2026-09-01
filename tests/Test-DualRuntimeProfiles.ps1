@@ -182,12 +182,11 @@ Assert-True ($runtimeSource.Contains("InstallCustomGuildFactoryFallback")) "Runt
 Assert-True ($runtimeSource.Contains("g_buildProfile->sharedGuildControllerRva - jumpFrom")) "Runtime does not derive the branch-local stock guild allocation target."
 Assert-True ($runtimeSource.Contains("InstallPrivateNameGenerators")) "Runtime does not install requested private name generators."
 Assert-True ($runtimeSource.Contains("Registered private %s through Majesty's stock name-generator registry lifecycle.")) "Runtime does not preserve the traced stock name-generator lifecycle."
-Assert-True ($runtimeSource.Contains("kAlchemistNameGeneratorId = 0x38314D4E")) "Runtime does not reserve private NM18."
-Assert-True ($runtimeSource.Contains("kAlchemistGivenNamesId = 0x39364E48")) "Runtime does not bind NM18 to HN69."
-Assert-True ($runtimeSource.Contains("kAlchemistEndingsId = 0x30374E48")) "Runtime does not bind NM18 to HN70."
-Assert-True ($runtimeSource.Contains("kPhantomNameGeneratorId = 0x39314D4E")) "Runtime does not reserve private NM19."
-Assert-True ($runtimeSource.Contains("kPhantomGivenNamesId = 0x33374E48")) "Runtime does not bind NM19 to HN73."
-Assert-True ($runtimeSource.Contains("kPhantomEndingsId = 0x34374E48")) "Runtime does not bind NM19 to HN74."
+Assert-True ($runtimeSource.Contains("g_runtimeFeatureRegistry.nameGenerators")) "Runtime does not enumerate manager-validated private name generators."
+Assert-True ($runtimeSource.Contains("record.namePartIds[0]")) "Runtime does not bind generic generators to their first HN table."
+Assert-True ($runtimeSource.Contains("record.namePartIds[3]")) "Runtime does not bind generic generators to all four HN tables."
+Assert-True (-not $runtimeSource.Contains("kAlchemistNameGeneratorId")) "Runtime still hardcodes the Alchemist name generator."
+Assert-True (-not $runtimeSource.Contains("kPhantomNameGeneratorId")) "Runtime still hardcodes the Phantom name generator."
 
 if ($PatchedBeta2Exe) {
     $patched = Read-Pe $PatchedBeta2Exe

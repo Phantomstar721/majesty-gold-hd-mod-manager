@@ -18,14 +18,11 @@ constexpr char kFreestyleCamRebind[] = "freestyle-cam-rebind.v1";
 constexpr char kPrivateActivityText[] =
     "private-activity-text-registry.v1";
 constexpr char kGenericVisitorLists[] = "generic-visitor-lists.v1";
-constexpr char kAlchemistSecondaryController[] =
-    "alchemist.cgbrewing-secondary-controller";
-constexpr char kAlchemistPrivateOilRows[] =
-    "alchemist.ap78-private-oil-rows";
-constexpr char kAlchemistNameGenerator[] =
-    "alchemist.nm18-name-generator";
-constexpr char kPhantomNameGenerator[] =
-    "phantom.nm19-name-generator";
+constexpr char kGenericNameGenerator[] = "stock.name-generator.v1";
+constexpr char kGenericEnchantmentRow[] =
+    "stock.ap78-enchantment-row.v1";
+constexpr char kGenericControllerRecipes[] =
+    "stock.controller-recipes.v1";
 
 struct Manifest {
     std::vector<std::string> capabilities;

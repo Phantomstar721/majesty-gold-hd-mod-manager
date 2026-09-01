@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import sys
 import traceback
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Mapping, Optional
 
 from .catalog import CatalogEntry, CatalogKind, CatalogSource, IssueSeverity
 from .brand_assets import BrandAssets, ensure_brand_assets
@@ -226,11 +226,14 @@ if _PYSIDE_IMPORT_ERROR is None:
             selected: bool,
             prepared: Optional[PreparedMergeMod],
             blocked_preflight: Optional[PreparedMergeMod],
+            show_steam: bool = True,
             parent: Optional[QWidget] = None,
         ) -> None:
             super().__init__(parent)
             self.entry = entry
             self.prepared = prepared or blocked_preflight
+            self.checkbox: Optional[QCheckBox] = None
+            self._selection_allowed = False
             self.setObjectName("modCard")
             self.setProperty("kind", entry.kind.value)
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
@@ -274,10 +277,12 @@ if _PYSIDE_IMPORT_ERROR is None:
                 outer.addWidget(marker, 0, Qt.AlignmentFlag.AlignTop)
             else:
                 check = QCheckBox()
+                self.checkbox = check
                 check.setAccessibleName(f"Enable {entry.display_name}")
                 check.setCursor(Qt.CursorShape.PointingHandCursor)
                 check.setChecked(bool(selected and entry.selectable and not deep_invalid))
                 check.setEnabled(entry.selectable and not deep_invalid)
+                self._selection_allowed = entry.selectable and not deep_invalid
                 check.setToolTip(
                     "Included in your launch setup"
                     if check.isEnabled()
@@ -341,7 +346,7 @@ if _PYSIDE_IMPORT_ERROR is None:
             workshop_item_id = str(
                 getattr(entry, "workshop_item_id", "") or ""
             ).strip()
-            if workshop_item_id:
+            if workshop_item_id and show_steam:
                 steam_button = _SteamButton(entry.display_name)
                 steam_button.clicked.connect(
                     lambda _checked=False, item_id=workshop_item_id: (
@@ -361,6 +366,30 @@ if _PYSIDE_IMPORT_ERROR is None:
             kind.setObjectName("kindBadge")
             kind.setProperty("catalogKind", entry.kind.value)
             metadata.addWidget(kind)
+            if entry.in_collection and entry.variant_label:
+                variant = QLabel(entry.variant_label.upper())
+                variant.setObjectName("variantBadge")
+                variant_tip = (
+                    f"One option in the {entry.collection_name or 'mod'} collection"
+                )
+                if entry.incompatible_names:
+                    variant_tip += "\n\nCannot be used with:\n" + "\n".join(
+                        entry.incompatible_names
+                    )
+                variant.setToolTip(variant_tip)
+                metadata.addWidget(variant)
+            author_text = entry.details or entry.description
+            self.author_detail: Optional[QLabel] = None
+            self.details_button: Optional[QPushButton] = None
+            if author_text:
+                details_button = QPushButton("Details")
+                self.details_button = details_button
+                details_button.setObjectName("contentDetailsButton")
+                details_button.setProperty("role", "quiet")
+                details_button.setCursor(Qt.CursorShape.PointingHandCursor)
+                details_button.setToolTip(entry.description or author_text)
+                details_button.clicked.connect(self._toggle_author_details)
+                metadata.addWidget(details_button)
             source.setToolTip(str(entry.manifest_path))
             metadata.addStretch(1)
             body.addLayout(metadata)
@@ -377,6 +406,25 @@ if _PYSIDE_IMPORT_ERROR is None:
                     "If included, Phantom's Haunt uses the manager's improved version "
                     "so Majesty's original Elf Guild remains unchanged.",
                 )
+            if entry.incompatible_names:
+                count = len(entry.incompatible_names)
+                messages.append(
+                    f"Mutually exclusive with {count} other "
+                    f"{'option' if count == 1 else 'options'} in this collection; "
+                    "selecting it turns those off."
+                )
+            if entry.load_after_names:
+                messages.append(
+                    "Automatically loaded after "
+                    + ", ".join(entry.load_after_names)
+                    + " when both are selected."
+                )
+            if entry.load_before_names:
+                messages.append(
+                    "Automatically loaded before "
+                    + ", ".join(entry.load_before_names)
+                    + " when both are selected."
+                )
             if entry.kind is CatalogKind.QUEST and not messages:
                 messages.append(
                     "Choose this adventure from Majesty's quest screen after launch."
@@ -388,12 +436,28 @@ if _PYSIDE_IMPORT_ERROR is None:
                 detail.setWordWrap(True)
                 body.addWidget(detail)
 
+            if author_text:
+                author_detail = QLabel(author_text)
+                self.author_detail = author_detail
+                author_detail.setObjectName("authorDescription")
+                author_detail.setWordWrap(True)
+                author_detail.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                author_detail.setVisible(False)
+                body.addWidget(author_detail)
+
             self.search_text = " ".join(
                 (
                     entry.display_name,
                     entry.content_id or entry.raw_content_id or "",
                     entry.source.value,
                     entry.kind.value,
+                    entry.description or "",
+                    entry.details or "",
+                    entry.collection_name or "",
+                    entry.variant_label or "",
+                    " ".join(entry.incompatible_names),
                     " ".join(messages),
                     self.prepared.badge if self.prepared and self.prepared.badge else "",
                 )
@@ -402,6 +466,218 @@ if _PYSIDE_IMPORT_ERROR is None:
         def _emit_selection(self, content_id: Optional[str], enabled: bool) -> None:
             if content_id:
                 self.selection_changed.emit(content_id, enabled)
+
+        def _toggle_author_details(self) -> None:
+            if self.author_detail is None or self.details_button is None:
+                return
+            visible = self.author_detail.isHidden()
+            self.author_detail.setVisible(visible)
+            self.details_button.setText("Hide details" if visible else "Details")
+
+        def set_author_details_visible(self, visible: bool) -> None:
+            if self.author_detail is None or self.details_button is None:
+                return
+            self.author_detail.setVisible(bool(visible))
+            self.details_button.setText("Hide details" if visible else "Details")
+
+        def update_selected(self, selected: bool) -> None:
+            if self.checkbox is not None:
+                blocked = self.checkbox.blockSignals(True)
+                self.checkbox.setChecked(bool(selected and self.checkbox.isEnabled()))
+                self.checkbox.blockSignals(blocked)
+            if self.entry.selectable:
+                self.setProperty("state", "active" if selected else "ready")
+                self.style().unpolish(self)
+                self.style().polish(self)
+                self.update()
+
+        def set_selection_enabled(self, enabled: bool) -> None:
+            if self.checkbox is not None:
+                self.checkbox.setEnabled(enabled and self._selection_allowed)
+
+
+    class _ModCollection(QFrame):
+        """Compact expandable view of the options published in one manifest."""
+
+        selection_changed = Signal(str, bool)
+        steam_requested = Signal(str)
+        expansion_changed = Signal(str, bool)
+
+        def __init__(
+            self,
+            entries: tuple[CatalogEntry, ...],
+            snapshot: ControllerSnapshot,
+            prepared: dict[str, PreparedMergeMod],
+            blocked: dict[str, PreparedMergeMod],
+            *,
+            expanded: bool,
+            parent: Optional[QWidget] = None,
+        ) -> None:
+            super().__init__(parent)
+            self.entries = entries
+            self.collection_id = entries[0].collection_id or ""
+            self.collection_name = entries[0].collection_name or entries[0].display_name
+            self._expanded = expanded
+            self.cards: list[_ModCard] = []
+            self.setObjectName("modCollection")
+
+            outer = QVBoxLayout(self)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(0)
+            header = QFrame()
+            header.setObjectName("collectionHeader")
+            row = QHBoxLayout(header)
+            row.setContentsMargins(13, 11, 14, 11)
+            row.setSpacing(9)
+
+            self.toggle = QPushButton()
+            self.toggle.setObjectName("collectionToggle")
+            self.toggle.setFixedSize(26, 26)
+            self.toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.toggle.setAccessibleName(f"Show options for {self.collection_name}")
+            self.toggle.clicked.connect(self._toggle_expanded)
+            row.addWidget(self.toggle)
+
+            name = QLabel(self.collection_name)
+            name.setObjectName("collectionName")
+            row.addWidget(name)
+
+            conflict_pairs = sum(len(entry.incompatible_ids) for entry in entries) // 2
+            conflict_badge = QLabel(
+                "CHOOSE ONE"
+                if conflict_pairs and all(
+                    len(entry.incompatible_ids) == len(entries) - 1 for entry in entries
+                )
+                else "SOME CHOICES CONFLICT"
+                if conflict_pairs
+                else "OPTIONS CAN BE COMBINED"
+            )
+            conflict_badge.setObjectName("variantGroupBadge")
+            conflict_badge.setProperty("conflicts", bool(conflict_pairs))
+            row.addWidget(conflict_badge)
+            self.details_toggle: Optional[QPushButton] = None
+            if any(entry.details or entry.description for entry in entries):
+                self.details_toggle = QPushButton("Show all details")
+                self.details_toggle.setObjectName("collectionDetailsButton")
+                self.details_toggle.setProperty("role", "quiet")
+                self.details_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+                self.details_toggle.clicked.connect(self._toggle_all_details)
+                row.addWidget(self.details_toggle)
+            row.addStretch(1)
+
+            self.summary = QLabel()
+            self.summary.setObjectName("collectionSummary")
+            row.addWidget(self.summary)
+            workshop_item_id = entries[0].workshop_item_id or ""
+            if workshop_item_id:
+                steam_button = _SteamButton(self.collection_name)
+                steam_button.clicked.connect(
+                    lambda _checked=False, item_id=workshop_item_id: (
+                        self.steam_requested.emit(item_id)
+                    )
+                )
+                row.addWidget(steam_button, 0, Qt.AlignmentFlag.AlignVCenter)
+            outer.addWidget(header)
+
+            self.children = QWidget()
+            self.children.setObjectName("collectionChildren")
+            child_layout = QVBoxLayout(self.children)
+            child_layout.setContentsMargins(12, 3, 12, 12)
+            child_layout.setSpacing(7)
+            for entry in entries:
+                card = _ModCard(
+                    entry,
+                    selected=bool(
+                        entry.content_id
+                        and snapshot.selections.get(entry.content_id, False)
+                    ),
+                    prepared=prepared.get(entry.content_id or ""),
+                    blocked_preflight=blocked.get(entry.content_id or ""),
+                    show_steam=False,
+                )
+                card.selection_changed.connect(self.selection_changed.emit)
+                card.steam_requested.connect(self.steam_requested.emit)
+                child_layout.addWidget(card)
+                self.cards.append(card)
+            outer.addWidget(self.children)
+            self.search_text = " ".join(
+                [self.collection_name]
+                + [card.search_text for card in self.cards]
+            ).casefold()
+            self.update_selections(snapshot.selections)
+            self.set_expanded(expanded)
+
+        def _toggle_all_details(self) -> None:
+            if self.details_toggle is None:
+                return
+            show = any(
+                card.author_detail is not None and card.author_detail.isHidden()
+                for card in self.cards
+            )
+            for card in self.cards:
+                card.set_author_details_visible(show)
+            if show and not self._expanded:
+                self.set_expanded(True)
+                self.expansion_changed.emit(self.collection_id, True)
+            self.details_toggle.setText(
+                "Hide all details" if show else "Show all details"
+            )
+
+        def _toggle_expanded(self) -> None:
+            self.set_expanded(not self._expanded)
+            self.expansion_changed.emit(self.collection_id, self._expanded)
+
+        def set_expanded(self, expanded: bool) -> None:
+            self._expanded = bool(expanded)
+            self.children.setVisible(self._expanded)
+            self.toggle.setText("▾" if self._expanded else "▸")
+            self.toggle.setToolTip(
+                "Hide these options" if self._expanded else "Show these options"
+            )
+
+        def update_selections(self, selections: Mapping[str, bool]) -> None:
+            selected_names = []
+            for card in self.cards:
+                selected = bool(
+                    card.entry.content_id
+                    and selections.get(card.entry.content_id, False)
+                )
+                card.update_selected(selected)
+                if selected:
+                    selected_names.append(card.entry.variant_label or card.entry.display_name)
+            if not selected_names:
+                text = "NOTHING SELECTED"
+                state = "empty"
+            elif len(selected_names) == 1:
+                text = "SELECTED · " + selected_names[0]
+                state = "active"
+            else:
+                text = f"{len(selected_names)} SELECTED"
+                state = "active"
+            self.summary.setText(text)
+            self.summary.setToolTip("\n".join(selected_names))
+            self.summary.setProperty("state", state)
+            self.setProperty("selectionState", state)
+            for widget in (self.summary, self):
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+                widget.update()
+
+        def filter(self, query: str) -> bool:
+            group_match = bool(query and query in self.collection_name.casefold())
+            any_match = False
+            for card in self.cards:
+                match = not query or group_match or query in card.search_text
+                card.setVisible(match)
+                any_match = any_match or match
+            self.setVisible(any_match)
+            self.children.setVisible(bool(query and any_match) or self._expanded)
+            return any_match
+
+        def set_selection_enabled(self, enabled: bool) -> None:
+            self.toggle.setEnabled(enabled)
+            for card in self.cards:
+                card.set_selection_enabled(enabled)
 
 
     class _CatalogPage(QWidget):
@@ -413,6 +689,9 @@ if _PYSIDE_IMPORT_ERROR is None:
             super().__init__(parent)
             self.kind = kind
             self.cards: list[_ModCard] = []
+            self.groups: list[_ModCollection] = []
+            self.standalone_cards: list[_ModCard] = []
+            self.expanded_collections: set[str] = set()
 
             layout = QVBoxLayout(self)
             layout.setContentsMargins(0, 0, 0, 0)
@@ -487,8 +766,40 @@ if _PYSIDE_IMPORT_ERROR is None:
                 if widget is not None:
                     widget.deleteLater()
             self.cards = []
+            self.groups = []
+            self.standalone_cards = []
+            entry_list = tuple(entries)
+            collection_entries: dict[str, tuple[CatalogEntry, ...]] = {}
+            for entry in entry_list:
+                if entry.in_collection and entry.collection_id:
+                    collection_entries.setdefault(entry.collection_id, ())
+                    collection_entries[entry.collection_id] += (entry,)
+            rendered_collections: set[str] = set()
 
-            for entry in entries:
+            for entry in entry_list:
+                collection_id = entry.collection_id or ""
+                siblings = collection_entries.get(collection_id, ())
+                if len(siblings) > 1:
+                    if collection_id in rendered_collections:
+                        continue
+                    rendered_collections.add(collection_id)
+                    ordered_siblings = tuple(
+                        sorted(siblings, key=lambda item: item.collection_index)
+                    )
+                    group = _ModCollection(
+                        ordered_siblings,
+                        snapshot,
+                        prepared,
+                        blocked,
+                        expanded=collection_id in self.expanded_collections,
+                    )
+                    group.selection_changed.connect(self.selection_changed.emit)
+                    group.steam_requested.connect(self.steam_requested.emit)
+                    group.expansion_changed.connect(self._collection_expanded)
+                    self.card_layout.addWidget(group)
+                    self.groups.append(group)
+                    self.cards.extend(group.cards)
+                    continue
                 item = prepared.get(entry.content_id or "")
                 blocked_item = blocked.get(entry.content_id or "")
                 card = _ModCard(
@@ -504,6 +815,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                 card.steam_requested.connect(self.steam_requested.emit)
                 self.card_layout.addWidget(card)
                 self.cards.append(card)
+                self.standalone_cards.append(card)
 
             self.empty = QLabel(
                 "No content detected in this section."
@@ -519,10 +831,12 @@ if _PYSIDE_IMPORT_ERROR is None:
         def filter(self, text: str) -> None:
             query = text.strip().casefold()
             visible = 0
-            for card in self.cards:
+            for card in self.standalone_cards:
                 match = not query or query in card.search_text
                 card.setVisible(match)
                 visible += int(match)
+            for group in self.groups:
+                visible += int(group.filter(query))
             self.empty.setText(
                 "No matching content."
                 if self.cards and query
@@ -535,6 +849,27 @@ if _PYSIDE_IMPORT_ERROR is None:
                 self.select_all_button.setEnabled(enabled)
             if self.clear_button is not None:
                 self.clear_button.setEnabled(enabled)
+            for group in self.groups:
+                group.set_selection_enabled(enabled)
+            for card in self.standalone_cards:
+                card.set_selection_enabled(enabled)
+
+        def update_selections(self, selections: Mapping[str, bool]) -> None:
+            for group in self.groups:
+                group.update_selections(selections)
+            for card in self.standalone_cards:
+                card.update_selected(
+                    bool(
+                        card.entry.content_id
+                        and selections.get(card.entry.content_id, False)
+                    )
+                )
+
+        def _collection_expanded(self, collection_id: str, expanded: bool) -> None:
+            if expanded:
+                self.expanded_collections.add(collection_id)
+            else:
+                self.expanded_collections.discard(collection_id)
 
 
     class _QolCard(QFrame):
@@ -1261,6 +1596,15 @@ if _PYSIDE_IMPORT_ERROR is None:
         def _selection_changed(self, content_id: str, enabled: bool) -> None:
             if self._busy:
                 return
+            previous = self.snapshot
+            changed_entry = next(
+                (
+                    entry
+                    for entry in previous.catalog.entries
+                    if entry.content_id == content_id
+                ),
+                None,
+            ) if previous is not None else None
             try:
                 snapshot = self.controller.set_selected(content_id, enabled)
                 snapshot = self._capture_and_exclude_blocked(snapshot)
@@ -1268,11 +1612,15 @@ if _PYSIDE_IMPORT_ERROR is None:
                 self._show_interaction_error("Could not update selection", exc)
                 return
             self.snapshot = snapshot
-            self._render_snapshot(snapshot)
+            if changed_entry is not None and changed_entry.kind is CatalogKind.STANDARD:
+                self._render_selection_update(snapshot)
+            else:
+                self._render_snapshot(snapshot)
 
         def _bulk_selection(self, raw_kind: object, enabled: bool) -> None:
             if self._busy:
                 return
+            kind: Optional[CatalogKind] = None
             try:
                 kind = raw_kind if isinstance(raw_kind, CatalogKind) else CatalogKind(raw_kind)
                 snapshot = self.controller.select_all(kind, enabled)
@@ -1281,7 +1629,10 @@ if _PYSIDE_IMPORT_ERROR is None:
                 self._show_interaction_error("Could not update selections", exc)
                 return
             self.snapshot = snapshot
-            self._render_snapshot(snapshot)
+            if kind is CatalogKind.STANDARD:
+                self._render_selection_update(snapshot)
+            else:
+                self._render_snapshot(snapshot)
 
         def _show_interaction_error(self, title: str, exc: Exception) -> None:
             QMessageBox.critical(self, title, str(exc) or type(exc).__name__)
@@ -1352,6 +1703,28 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.selection_note.setToolTip("")
             self._render_notices(snapshot)
             self._render_game_build(snapshot)
+            self._render_build_state(snapshot)
+            self._set_interactions_enabled(not self._busy)
+
+        def _render_selection_update(self, snapshot: ControllerSnapshot) -> None:
+            """Refresh checkbox state without reconstructing the entire catalog."""
+
+            for page in self.pages.values():
+                page.update_selections(snapshot.selections)
+            selected_standard = sum(
+                1
+                for entry in snapshot.catalog.standard
+                if entry.content_id and snapshot.selections.get(entry.content_id, False)
+            )
+            selected_merge = sum(
+                1
+                for entry in snapshot.catalog.merge
+                if entry.content_id and snapshot.selections.get(entry.content_id, False)
+            )
+            self.counts.setText(
+                f"{selected_standard} Standard  ·  {selected_merge} Merge  ·  "
+                f"{len(snapshot.catalog.quests)} Quests found"
+            )
             self._render_build_state(snapshot)
             self._set_interactions_enabled(not self._busy)
 

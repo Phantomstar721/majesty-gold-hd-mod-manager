@@ -9,15 +9,22 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from majesty_cam.package import (
+    Ap78EnchantmentRowFeature,
     CamLoad,
     CustomBuildingDefinition,
     DescriptionsLoad,
     GplLoad,
     ModDefinition,
+    NameGeneratorFeature,
     PackageFormatError,
     load_mod_definition,
     load_package,
     parse_mod_definition,
+)
+from majesty_cam.stock_controller_features import (
+    StockAp69SovereignTargetAction,
+    controller_feature_mapping,
+    legacy_alchemist_controller_features,
 )
 
 
@@ -140,6 +147,51 @@ class PackageTests(unittest.TestCase):
                 ("example.stock-clone.v1",),
             )
 
+            supplied_v3 = ModDefinition(
+                schema_version=3,
+                mod_id=MOD_ID.strip("{}").upper(),
+                internal_name="DeclarativeFeatures",
+                display_name="Declarative Features",
+                custom_buildings=(),
+                runtime_features=(
+                    NameGeneratorFeature(
+                        generator_id="NM42",
+                        name_part_ids=("HN81", "HN82", "HN83", "HN84"),
+                    ),
+                ),
+            )
+            with_v3_definition = load_package(package, definition=supplied_v3)
+            self.assertEqual(
+                with_v3_definition.definition.runtime_features,
+                supplied_v3.runtime_features,
+            )
+
+            controller_features = legacy_alchemist_controller_features(
+                "FixtureGuild"
+            )
+            supplied_v3_controllers = ModDefinition(
+                schema_version=3,
+                mod_id=MOD_ID.strip("{}").upper(),
+                internal_name="DeclarativeControllers",
+                display_name="Declarative Controllers",
+                custom_buildings=(
+                    CustomBuildingDefinition(
+                        local_name="FixtureGuild",
+                        dialog_id=None,
+                        controller_base="AP10",
+                        panel_resource_template="AP10",
+                    ),
+                ),
+                runtime_features=controller_features,
+            )
+            with_controllers = load_package(
+                package, definition=supplied_v3_controllers
+            )
+            self.assertEqual(
+                with_controllers.definition.runtime_features,
+                controller_features,
+            )
+
     def test_definition_can_be_supplied_from_an_explicit_external_path(self):
         with TemporaryDirectory() as tmp:
             temp_root = Path(tmp)
@@ -254,7 +306,7 @@ class PackageTests(unittest.TestCase):
             parse_mod_definition(extra)
 
         bad_version = dict(valid)
-        bad_version["schema_version"] = 3
+        bad_version["schema_version"] = 4
         with self.assertRaisesRegex(PackageFormatError, "unsupported"):
             parse_mod_definition(bad_version)
 
@@ -318,6 +370,209 @@ class PackageTests(unittest.TestCase):
         invalid["runtime_capabilities"] = []
         with self.assertRaisesRegex(PackageFormatError, "unknown runtime_capabilities"):
             parse_mod_definition(invalid)
+
+    def test_definition_v3_uses_typed_features_and_manager_owned_dialog_ids(self):
+        value = {
+            "schema_version": 3,
+            "mod_id": MOD_ID,
+            "internal_name": "DeclarativeFixture",
+            "display_name": "Declarative Fixture",
+            "custom_buildings": [
+                {
+                    "local_name": "FixtureGuild",
+                    "controller_base": "AP10",
+                    "panel_resource_template": "AP10",
+                }
+            ],
+            "runtime_features": [
+                {
+                    "type": "stock.name-generator.v1",
+                    "generator_id": "NM42",
+                    "name_tables": ["HN81", "HN82", "HN83", "HN84"],
+                },
+                {
+                    "type": "stock.ap78-enchantment-row.v1",
+                    "overlay_id": "OV42",
+                    "display_text": "Vigorous heroes",
+                },
+            ],
+        }
+
+        parsed = parse_mod_definition(value)
+
+        self.assertEqual(parsed.schema_version, 3)
+        self.assertIsNone(parsed.custom_buildings[0].dialog_id)
+        self.assertIsInstance(parsed.runtime_features[0], NameGeneratorFeature)
+        self.assertEqual(
+            parsed.runtime_features[0].name_part_ids,
+            ("HN81", "HN82", "HN83", "HN84"),
+        )
+        self.assertIsInstance(
+            parsed.runtime_features[1], Ap78EnchantmentRowFeature
+        )
+        self.assertEqual(parsed.runtime_capabilities, ())
+
+    def test_definition_v3_feature_shapes_fail_closed(self):
+        base = {
+            "schema_version": 3,
+            "mod_id": MOD_ID,
+            "internal_name": "DeclarativeFixture",
+            "display_name": "Declarative Fixture",
+            "custom_buildings": [],
+            "runtime_features": [],
+        }
+        invalid_features = (
+            (
+                {"type": "future.native-hook.v1"},
+                "type is unsupported",
+            ),
+            (
+                {
+                    "type": "stock.name-generator.v1",
+                    "generator_id": "NM42",
+                    "name_tables": ["HN81", "HN82", "HN83"],
+                },
+                "exactly four",
+            ),
+            (
+                {
+                    "type": "stock.name-generator.v1",
+                    "generator_id": "TOO-LONG",
+                    "name_tables": ["HN81", "HN82", "HN83", "HN84"],
+                },
+                "exactly four printable ASCII",
+            ),
+            (
+                {
+                    "type": "stock.ap78-enchantment-row.v1",
+                    "overlay_id": "OV42",
+                    "display_text": "not cp1252: \U0001f9ea",
+                },
+                "Windows-1252",
+            ),
+            (
+                {
+                    "type": "stock.ap78-enchantment-row.v1",
+                    "overlay_id": "OV42",
+                    "display_text": "x" * 513,
+                },
+                "1..512",
+            ),
+            (
+                {
+                    "type": "stock.ap78-enchantment-row.v1",
+                    "overlay_id": "OV42",
+                    "display_text": "valid",
+                    "future": True,
+                },
+                "unknown future",
+            ),
+        )
+        for feature, message in invalid_features:
+            with self.subTest(feature=feature):
+                value = dict(base)
+                value["runtime_features"] = [feature]
+                with self.assertRaisesRegex(PackageFormatError, message):
+                    parse_mod_definition(value)
+
+        with_legacy_field = dict(base)
+        with_legacy_field["runtime_capabilities"] = []
+        with self.assertRaisesRegex(PackageFormatError, "unknown runtime_capabilities"):
+            parse_mod_definition(with_legacy_field)
+
+        building_with_dialog = dict(base)
+        building_with_dialog["custom_buildings"] = [
+            {
+                "local_name": "FixtureGuild",
+                "dialog_id": "CGFX",
+                "controller_base": "AP10",
+                "panel_resource_template": "AP10",
+            }
+        ]
+        with self.assertRaisesRegex(PackageFormatError, "unknown dialog_id"):
+            parse_mod_definition(building_with_dialog)
+
+    def test_definition_v3_parses_every_stock_controller_recipe(self):
+        controller_features = legacy_alchemist_controller_features("FixtureGuild")
+        value = {
+            "schema_version": 3,
+            "mod_id": MOD_ID,
+            "internal_name": "DeclarativeFixture",
+            "display_name": "Declarative Fixture",
+            "custom_buildings": [
+                {
+                    "local_name": "FixtureGuild",
+                    "controller_base": "AP10",
+                    "panel_resource_template": "AP10",
+                }
+            ],
+            "runtime_features": [
+                controller_feature_mapping(feature)
+                for feature in controller_features
+            ],
+        }
+
+        parsed = parse_mod_definition(value)
+
+        self.assertEqual(parsed.runtime_features, controller_features)
+        sovereign = next(
+            feature
+            for feature in parsed.runtime_features
+            if isinstance(feature, StockAp69SovereignTargetAction)
+        )
+        self.assertEqual(sovereign.stock_target_mode, "Sp23")
+        self.assertEqual(sovereign.stock_executor_mode, "Sp14")
+
+        second_timed = next(
+            dict(feature)
+            for feature in value["runtime_features"]
+            if feature["type"] == "stock.ap24-timed-rage-action.v1"
+        )
+        second_timed.update(
+            {
+                "action_key": "second-timed-action",
+                "action_control_id": 0x6A01,
+                "callback_symbol": "Example_SecondTimedAction",
+                "icon_control_id": 0x6A02,
+                "price_control_id": 0x6A03,
+                "progress_control_id": 0x6A04,
+                "active_display_control_id": 0x6A05,
+            }
+        )
+        multiple_actions = json.loads(json.dumps(value))
+        multiple_actions["runtime_features"].append(second_timed)
+        self.assertEqual(
+            len(parse_mod_definition(multiple_actions).runtime_features),
+            len(controller_features) + 1,
+        )
+
+        missing_executor = json.loads(json.dumps(value))
+        target = next(
+            feature
+            for feature in missing_executor["runtime_features"]
+            if feature["type"] == "stock.ap69-sovereign-target-action.v1"
+        )
+        del target["stock_executor_mode"]
+        with self.assertRaisesRegex(PackageFormatError, "stock_executor_mode"):
+            parse_mod_definition(missing_executor)
+
+    def test_definition_v3_rejects_unproven_building_controller_combinations(self):
+        value = {
+            "schema_version": 3,
+            "mod_id": MOD_ID,
+            "internal_name": "DeclarativeFixture",
+            "display_name": "Declarative Fixture",
+            "custom_buildings": [
+                {
+                    "local_name": "FixtureGuild",
+                    "controller_base": "AP69",
+                    "panel_resource_template": "AP10",
+                }
+            ],
+            "runtime_features": [],
+        }
+        with self.assertRaisesRegex(PackageFormatError, "unsupported stock"):
+            parse_mod_definition(value)
 
     def test_rejects_duplicate_json_keys_and_definition_id_mismatch(self):
         with TemporaryDirectory() as tmp:
