@@ -92,7 +92,7 @@ def detect_manager_paths(
     game_path = game_path.resolve(strict=False)
 
     if documents_root is None:
-        documents_root = Path.home() / "Documents"
+        documents_root = default_documents_root()
     majesty_documents = documents_root / "My Games" / "MajestyHD"
     local_mods = majesty_documents / "Mods"
     local_quests = majesty_documents / "Quests"
@@ -181,6 +181,39 @@ def application_root() -> Path:
         bundled = getattr(sys, "_MEIPASS", None)
         return Path(bundled).resolve(strict=True)
     return Path(__file__).resolve().parents[3]
+
+
+def default_documents_root() -> Path:
+    """Return the Documents folder Windows exposes as ``shell:Personal``.
+
+    ``Path.home() / "Documents"`` is not necessarily Majesty's Documents
+    folder.  Windows Known Folder Move and similar redirection can place it
+    under OneDrive or another location while leaving that legacy directory in
+    place.  Majesty follows the shell folder, so the manager must do the same.
+    """
+
+    redirected = _windows_documents_root()
+    if redirected is not None:
+        return redirected
+    return Path.home() / "Documents"
+
+
+def _windows_documents_root() -> Path | None:
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
+        ) as key:
+            value = winreg.QueryValueEx(key, "Personal")[0]
+    except (ImportError, OSError, TypeError):
+        return None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return Path(os.path.expandvars(value)).resolve(strict=False)
 
 
 def is_frozen_application() -> bool:
@@ -297,6 +330,7 @@ __all__ = [
     "ManagerPaths",
     "GAME_EXECUTABLE_NAME",
     "application_root",
+    "default_documents_root",
     "detect_manager_paths",
     "game_executable_selection_path",
     "is_frozen_application",

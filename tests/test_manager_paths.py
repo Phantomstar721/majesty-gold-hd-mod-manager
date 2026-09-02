@@ -21,6 +21,40 @@ MOD_ID = "42BA4603-2B13-446D-A2A4-6CF3A55DDAC3"
 
 
 class FrozenManagerPathTests(unittest.TestCase):
+    def test_default_detection_uses_redirected_windows_documents_folder(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            resources = root / "repo"
+            resources.mkdir()
+            redirected = root / "OneDrive" / "Documents"
+
+            with patch.object(
+                manager_paths, "default_documents_root", return_value=redirected
+            ), patch.object(manager_paths, "_steam_library_roots", return_value=()):
+                detected = manager_paths.detect_manager_paths(
+                    repo_root=resources,
+                    game_path=root / "game",
+                    local_appdata=root / "localappdata",
+                )
+
+            self.assertEqual(
+                detected.local_mods_root,
+                redirected / "My Games/MajestyHD/Mods",
+            )
+            self.assertEqual(
+                detected.merged_output_root,
+                redirected / "My Games/MajestyHD/Mods/Majesty Mod Manager - Merged",
+            )
+
+    def test_documents_fallback_is_used_when_shell_folder_is_unavailable(self):
+        with patch.object(
+            manager_paths, "_windows_documents_root", return_value=None
+        ), patch.object(manager_paths.Path, "home", return_value=Path("C:/fixture")):
+            self.assertEqual(
+                manager_paths.default_documents_root(),
+                Path("C:/fixture/Documents"),
+            )
+
     def test_player_selected_executable_is_remembered_and_preferred(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

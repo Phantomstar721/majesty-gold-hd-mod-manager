@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-import os
 from pathlib import Path
 import struct
 import subprocess
@@ -19,6 +18,7 @@ from typing import Callable, Sequence
 import xml.etree.ElementTree as ET
 
 from .._subprocess import no_console_window_options
+from .paths import default_documents_root
 
 
 class QolServiceError(RuntimeError):
@@ -669,23 +669,7 @@ def detect_majesty_branch(path: Path) -> MajestyBranch | None:
 
 
 def default_prefs_path() -> Path:
-    documents: Path | None = None
-    if os.name == "nt":
-        try:
-            import winreg
-
-            with winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
-            ) as key:
-                value = winreg.QueryValueEx(key, "Personal")[0]
-                if value:
-                    documents = Path(os.path.expandvars(value))
-        except (ImportError, OSError):
-            pass
-    if documents is None:
-        documents = Path.home() / "Documents"
-    return documents / "My Games" / "MajestyHD" / "MajXPrefs"
+    return default_documents_root() / "My Games" / "MajestyHD" / "MajXPrefs"
 
 
 def intro_videos_disabled(prefs_path: Path) -> bool:
