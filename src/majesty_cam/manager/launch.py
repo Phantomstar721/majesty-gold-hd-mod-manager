@@ -155,6 +155,7 @@ def launch_majesty(
             prepared_controllers.rage_command_actions,
             prepared_controllers.sovereign_target_actions,
             prepared_controllers.reward_panels,
+            prepared_controllers.occupant_action_panels,
             prepared_controllers.hostile_monster_flags,
         )
     )

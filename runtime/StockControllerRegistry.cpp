@@ -513,12 +513,31 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
     if (rewardActionPanels != rewardPanelKeys) {
         return Fail(error, "MMCR reward panels require exactly one hostile-monster action");
     }
+    std::set<std::string> occupantKeys;
+    std::set<std::uint32_t> parentDialogs;
+    for (const auto& item : registry.panels) parentDialogs.insert(item.parentDialogId);
+    for (const auto& item : registry.rewardPanels) parentDialogs.insert(item.parentDialogId);
+    for (const auto& item : registry.occupantActionPanels) parentDialogs.insert(item.parentDialogId);
+    for (const auto& item : registry.occupantActionPanels) {
+        if (panels.count(item.panelKey) || rewardPanelKeys.count(item.panelKey) ||
+            !occupantKeys.insert(item.panelKey).second ||
+            !childDialogs.insert(item.childDialogId).second ||
+            !parentCommands.insert({item.parentDialogId, item.openCommandId}).second ||
+            !callbacks.insert(FoldAsciiCase(item.costCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.actionCallbackSymbol)).second) {
+            return Fail(error, "MMCR occupant panel identity/callback is duplicated");
+        }
+    }
+    for (const auto child : childDialogs) {
+        if (parentDialogs.count(child)) return Fail(error, "MMCR child dialog collides with a parent dialog");
+    }
     return true;
 }
 
 }  // namespace
 
 void Registry::Clear() {
+    occupantActionPanels.clear();
     panels.clear();
     meters.clear();
     researchRows.clear();
@@ -654,6 +673,21 @@ const HostileMonsterFlagRecord* Registry::FindHostileMonsterFlagByMode(
     return nullptr;
 }
 
+const OccupantActionPanelRecord* Registry::FindOccupantPanelByChild(std::uint32_t id) const {
+    for (const auto& item : occupantActionPanels) if (item.childDialogId == id) return &item;
+    return nullptr;
+}
+
+const OccupantActionPanelRecord* Registry::FindOccupantPanelByParent(std::uint32_t id) const {
+    for (const auto& item : occupantActionPanels) if (item.parentDialogId == id) return &item;
+    return nullptr;
+}
+
+const OccupantActionPanelRecord* Registry::FindOccupantPanelByCommand(std::uint32_t id) const {
+    for (const auto& item : occupantActionPanels) if (item.actionCommandId == id) return &item;
+    return nullptr;
+}
+
 bool ParseRegistry(
     const unsigned char* bytes,
     std::size_t size,
@@ -673,16 +707,17 @@ bool ParseRegistry(
         return Fail(error, "MMCR registry magic is invalid");
     }
     std::uint32_t version = 0;
-    std::uint32_t counts[9] = {};
+    std::uint32_t counts[10] = {};
     if (!reader.ReadU32(&version)) return Fail(error, "MMCR header is truncated");
-    for (std::size_t index = 0; index < 9; ++index) {
+    if (version != 2 && version != kRegistryVersion) return Fail(error, "MMCR version is unsupported");
+    for (std::size_t index = 0; index < (version == 3 ? 10u : 9u); ++index) {
         if (!reader.ReadU32(&counts[index])) return Fail(error, "MMCR header is truncated");
     }
-    if (version != kRegistryVersion) return Fail(error, "MMCR version is unsupported");
+    if (version == 3 && counts[9] == 0) return Fail(error, "MMCR v3 without occupant panels is noncanonical");
     std::uint64_t total = 0;
-    for (std::size_t index = 0; index < 9; ++index) total += counts[index];
+    for (std::size_t index = 0; index < 10; ++index) total += counts[index];
     if (total > kMaximumRecordCount ||
-        static_cast<std::uint64_t>(counts[0]) + counts[7] > kMaximumPanelCount) {
+        static_cast<std::uint64_t>(counts[0]) + counts[7] + counts[9] > kMaximumPanelCount) {
         return Fail(error, "MMCR record count is outside supported bounds");
     }
 
@@ -964,6 +999,28 @@ bool ParseRegistry(
         parsed.hostileMonsterFlags.push_back(std::move(item));
     }
 
+    for (std::uint32_t index = 0; index < counts[9]; ++index) {
+        OccupantActionPanelRecord item = {};
+        if (!reader.ReadLogical(&item.panelKey) ||
+            !reader.ReadU32(&item.parentDialogId) ||
+            !reader.ReadU32(&item.childDialogId) ||
+            !reader.ReadU32(&item.openCommandId) ||
+            !reader.ReadU32(&item.actionCommandId) ||
+            !reader.ReadSymbol(&item.costCallbackSymbol) ||
+            !reader.ReadSymbol(&item.actionCallbackSymbol) ||
+            !reader.ReadU32(&item.parentControllerBase) ||
+            (item.parentControllerBase != 0x37305041u &&
+             item.parentControllerBase != 0x30315041u &&
+             item.parentControllerBase != 0x3930584Du) ||
+            !IsPrintableFourCC(item.parentDialogId) ||
+            !IsPrintableFourCC(item.childDialogId) || item.openCommandId == 0 ||
+            item.actionCommandId != 0x10000u + index ||
+            (!parsed.occupantActionPanels.empty() &&
+             parsed.occupantActionPanels.back().panelKey >= item.panelKey)) {
+            return Fail(error, "MMCR occupant panel is invalid or noncanonical");
+        }
+        parsed.occupantActionPanels.push_back(std::move(item));
+    }
     if (reader.cursor() != size) return Fail(error, "MMCR registry contains trailing bytes");
     if (!ValidateComposition(parsed, error)) return false;
     *registry = std::move(parsed);

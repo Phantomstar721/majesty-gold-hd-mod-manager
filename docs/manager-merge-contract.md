@@ -233,6 +233,61 @@ selected reward actions. The optional availability fields must either both be
 completion, and cleanup, adding only the declared hostile-current-monster,
 duplicate-private-flag, and optional availability gates.
 
+An occupant-action panel uses Majesty's Mausoleum list, selection, cost, and
+queued payment/action lifecycle. Add this record to `runtime_features`:
+
+```json
+{
+  "type": "stock.mx04-mx05-occupant-action-panel.v1",
+  "panel_key": "visitor-actions",
+  "parent_building": "YourNamespacedBuilding",
+  "source_dialog_id": "VP01",
+  "open_command_id": 16641,
+  "cost_callback_symbol": "YourMod_Visitor_Cost",
+  "action_callback_symbol": "YourMod_Visitor_Action"
+}
+```
+
+The parent must be a declared custom building with an `AP07`, `AP10`, or `MX09`
+controller and the corresponding supported panel template. Its private opener
+must emit `open_command_id`. Multiple panels can share a building, including
+an existing research or reward panel, with distinct keys, child resources,
+and opener commands.
+
+Supply package-owned `SMNU/VP01` and `STRT/VP01` cloned from stock `MX05`.
+Change text, art, and layout but keep its local control IDs: `0x1388` list,
+`0x138B` action, `0x1F46` selected cost, `0x1F45` title, `0x1F4D` Back,
+`0x1392` scrollbar, and `0x1F40`/`0x1F41` navigation. These are local control
+numbers, not globally shared dialog IDs. The manager assigns the final private
+dialog and queued-action IDs; do not ship manager registry files.
+
+Both callbacks must exist exactly once in the package's included GPL sources:
+
+```text
+Function YourMod_Visitor_Cost (agent selected) is integer
+declare
+begin
+    return 500;
+end
+
+Function YourMod_Visitor_Action (agent selected)
+declare
+begin
+    // Your package's stock-derived action for this occupant.
+end
+```
+
+The cost function is a side-effect-free quote in gold (nonnegative signed
+32-bit integer). The action receives the selected agent after stock checks
+and deducts that quote. Do not deduct gold again in GPL. The callback owns
+any stock-derived changes to the occupant, including removing it from the
+building's `Occupants` list when the action releases it. The manager neither
+changes unit allegiance nor invents release behavior. The list supports all
+occupant agent types through the required Generic Visitor Lists patch.
+
+See [the stock lifecycle and test guide](stock-occupant-action-panel.md) for
+native routing, ownership, and validation details.
+
 A complete parser-checked schema-v3 example containing the AP10/AP69 recipe
 family is available as
 [mod-definition-v3-all-features.json](examples/mod-definition-v3-all-features.json).

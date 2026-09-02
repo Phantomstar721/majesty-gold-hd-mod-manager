@@ -560,6 +560,27 @@ int main() {
         &badSovereignMetadata, 0x1133, 0x1132, "Sp24", 2);
     if (!ExpectInvalid(badSovereignMetadata, "sovereign action")) return 35;
 
+    auto occupants = Header(0, 0, 0, 0, 0, 0, 0);
+    occupants[4] = 3;
+    AppendU32(&occupants, 1);
+    AppendString(&occupants, "stable");
+    AppendU32(&occupants, FourCC("B001"));
+    AppendU32(&occupants, FourCC("P001"));
+    AppendU32(&occupants, 0x4101);
+    const auto commandOffset = occupants.size();
+    AppendU32(&occupants, 0x10000);
+    AppendString(&occupants, "Stable_Cost");
+    AppendString(&occupants, "Stable_Action");
+    AppendU32(&occupants, FourCC("AP10"));
+    if (!MajestyStockControllers::ParseRegistry(occupants.data(), occupants.size(), &registry, &error) ||
+        registry.occupantActionPanels.size() != 1 ||
+        registry.FindOccupantPanelByCommand(0x10000) == nullptr ||
+        registry.FindOccupantPanelByCommand(21) != nullptr) return 36;
+    for (std::size_t size = 0; size < occupants.size(); ++size) {
+        if (MajestyStockControllers::ParseRegistry(occupants.data(), size, &registry, &error)) return 37;
+    }
+    occupants[commandOffset] = 21;
+    if (!ExpectInvalid(occupants, "occupant panel")) return 38;
     std::puts("Stock controller registry parser tests passed.");
     return 0;
 }

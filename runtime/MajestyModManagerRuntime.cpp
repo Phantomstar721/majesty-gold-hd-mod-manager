@@ -241,6 +241,16 @@ constexpr MajestyBuildProfile kBeta2BuildProfile = {
 };
 
 const MajestyBuildProfile* g_buildProfile = nullptr;
+using OccupantPanel = MajestyStockControllers::OccupantActionPanelRecord;
+const OccupantPanel* g_parentOccupantPanel = nullptr;
+const OccupantPanel* g_activeOccupantPanel = nullptr;
+const OccupantPanel* g_executingOccupantPanel = nullptr;
+constexpr std::uint32_t kMx05DialogId = 0x3530584D;
+bool ValidateOccupantPanelProfile();
+bool InstallOccupantPanelRoute();
+bool InstallOccupantChildVtable(std::uint32_t controller);
+bool InstallOccupantParentVtable(std::uint32_t controller);
+bool OpenOccupantPanel(void* controller, std::uint32_t command);
 constexpr std::uint32_t kAp10DialogId = 0x30315041;
 constexpr std::uint32_t kAp69DialogId = 0x39365041;
 constexpr std::uint32_t kAp41DialogId = 0x31345041;
@@ -855,7 +865,9 @@ StockControllerRegistryState LoadStockControllerRegistry() {
     sprintf_s(
         message,
         "Loaded validated MMCR registry with %u stock-controller panels and %u total recipes.",
-        static_cast<unsigned int>(g_stockControllerRegistry.panels.size()),
+        static_cast<unsigned int>(g_stockControllerRegistry.panels.size() +
+            g_stockControllerRegistry.rewardPanels.size() +
+            g_stockControllerRegistry.occupantActionPanels.size()),
         static_cast<unsigned int>(
             g_stockControllerRegistry.meters.size() +
             g_stockControllerRegistry.researchRows.size() +
@@ -864,6 +876,7 @@ StockControllerRegistryState LoadStockControllerRegistry() {
             g_stockControllerRegistry.rageCommandActions.size() +
             g_stockControllerRegistry.sovereignTargetActions.size() +
             g_stockControllerRegistry.rewardPanels.size() +
+            g_stockControllerRegistry.occupantActionPanels.size() +
             g_stockControllerRegistry.hostileMonsterFlags.size()));
     WriteLog(message);
     return StockControllerRegistryState::Loaded;
@@ -1378,6 +1391,8 @@ bool ValidatePrivateNameGeneratorProfile() {
 }
 
 bool ValidateMajestyBuildProfile() {
+    if (!g_stockControllerRegistry.occupantActionPanels.empty() &&
+        !ValidateOccupantPanelProfile()) return false;
     // Preflight every site selected by MMCP before installing any hook from
     // those groups. Unselected specialized sites are deliberately untouched
     // and cannot reject an otherwise generic manager launch.
@@ -3526,6 +3541,7 @@ void __fastcall SecondaryPanelControllerEvent(
 }
 
 void ClearSecondaryPanelControllerOwnedState() {
+    g_activeOccupantPanel = nullptr;
     InterlockedExchange(&g_secondaryPanelHandle, 0);
     InterlockedExchange(&g_secondaryPanelActive, 0);
     InterlockedExchange(&g_captureChildController, 0);
@@ -3581,6 +3597,7 @@ bool InstallSecondaryPanelControllerVtable(std::uint32_t controller) {
 
 int __fastcall ParentPanelControllerControl(
     void* controller, void*, std::uint32_t controlId) {
+    if (OpenOccupantPanel(controller, controlId)) return 0;
     const auto* gate = ActiveUpgradeGate();
     if (gate != nullptr && controlId == gate->upgradeControlId) {
         using GetPanelContext = void* (__thiscall*)(void*);
@@ -3705,6 +3722,7 @@ void __fastcall ParentPanelControllerEvent(
 }
 
 void __cdecl ParentPanelControllerDestroyed(void*, void*) {
+    g_parentOccupantPanel = nullptr;
     // The parent controller owns every borrowed context used by its private
     // secondary panel. Once stock destroys that exact parent, invalidate the
     // complete dependent UI chain. Gameplay state and active effects remain
@@ -4058,6 +4076,7 @@ int __fastcall RewardPanelControl(
 
 int __fastcall RewardParentControl(
     void* controller, void*, std::uint32_t controlId) {
+    if (OpenOccupantPanel(controller, controlId)) return 0;
     const auto* panel = g_parentRewardPanelRecord;
     if (panel == nullptr || controlId != panel->openCommandId) {
         return g_stockRewardParentControl(controller, controlId);
@@ -4092,6 +4111,166 @@ bool InstallRewardParentControllerVtable(std::uint32_t controller) {
         g_rewardParentVtable[3] = reinterpret_cast<void*>(&RewardParentControl);
     }
     *objectVtable = g_rewardParentVtable;
+    return true;
+}
+
+// MX04 -> MX05: only private routing and callback symbols differ from stock.
+// The native 0x15 command retains its building ID, selected-agent ID, quoted
+// price, simulation queue, affordability check, debit, and GPL invocation.
+// Its private command ID survives UI teardown; no pending UI owner is borrowed
+// by the later simulation dispatch.
+struct OccupantBuildProfile {
+    std::uintptr_t costStringCall;
+    std::uintptr_t submitCall;
+    std::uintptr_t actionStringCall;
+    std::uintptr_t commandDispatch;
+    std::uintptr_t stringConstructor;
+    std::uintptr_t childVtable;
+};
+constexpr OccupantBuildProfile kPublicOccupants = {
+    0x000BBDDD, 0x000BC14F, 0x000C55F1, 0x000C4DA0, 0x00227A80, 0x0033EAC4,
+};
+constexpr OccupantBuildProfile kBeta2Occupants = {
+    0x000BC81D, 0x000BCB8F, 0x000C6031, 0x000C57E0, 0x0023A220, 0x003577AC,
+};
+const OccupantBuildProfile& OccupantProfile() {
+    return g_buildProfile == &kPublicBuildProfile ? kPublicOccupants : kBeta2Occupants;
+}
+using BuildingCommandDispatch = void (__cdecl*)(std::uint32_t, std::uint32_t,
+                                               std::uint32_t, std::uint32_t);
+BuildingCommandDispatch g_stockOccupantDispatch = nullptr;
+
+bool OccupantCallMatches(std::uintptr_t callRva, std::uintptr_t targetRva) {
+    const auto* code = reinterpret_cast<const unsigned char*>(g_imageBase + callRva);
+    std::int32_t relative = 0;
+    std::memcpy(&relative, code + 1, 4);
+    return code[0] == 0xE8 && callRva + 5 + relative == targetRva;
+}
+bool ValidateOccupantPanelProfile() {
+    const auto& profile = OccupantProfile();
+    const unsigned char entry[] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8};
+    return MatchesProfileBytes(profile.commandDispatch, entry, sizeof(entry), "MX05 command dispatch") &&
+        OccupantCallMatches(profile.costStringCall, profile.stringConstructor) &&
+        OccupantCallMatches(profile.actionStringCall, profile.stringConstructor) &&
+        OccupantCallMatches(profile.submitCall, g_buildProfile->submitBuildingCommandRva) &&
+        MatchesProfileBytes(g_buildProfile->secondaryControllerResultRva,
+            g_buildProfile->expectedResultSite, sizeof(g_buildProfile->expectedResultSite), "MX05 controller result") &&
+        MatchesProfileBytes(g_buildProfile->dialogCreationRva,
+            g_buildProfile->expectedCreationEntry, sizeof(g_buildProfile->expectedCreationEntry), "MX05 dialog creation") &&
+        MatchesProfileBytes(g_buildProfile->dialogFactoryRva,
+            g_buildProfile->expectedFactoryEntry, sizeof(g_buildProfile->expectedFactoryEntry), "MX05 dialog factory");
+}
+void* OccupantString(void* destination, const char* symbol) {
+    using Construct = void* (__thiscall*)(void*, const char*);
+    return reinterpret_cast<Construct>(g_imageBase + OccupantProfile().stringConstructor)(destination, symbol);
+}
+void* __fastcall OccupantCostString(void* destination, void*, const char* stockSymbol) {
+    return OccupantString(destination, g_activeOccupantPanel == nullptr
+        ? stockSymbol : g_activeOccupantPanel->costCallbackSymbol.c_str());
+}
+void* __fastcall OccupantActionString(void* destination, void*, const char* stockSymbol) {
+    return OccupantString(destination, g_executingOccupantPanel == nullptr
+        ? stockSymbol : g_executingOccupantPanel->actionCallbackSymbol.c_str());
+}
+void __cdecl SubmitOccupantAction(std::uint32_t command, std::uint32_t building,
+                                 std::uint32_t agent, std::uint32_t price) {
+    if (command == 0x15 && g_activeOccupantPanel != nullptr)
+        command = g_activeOccupantPanel->actionCommandId;
+    reinterpret_cast<BuildingCommandDispatch>(
+        g_imageBase + g_buildProfile->submitBuildingCommandRva)(command, building, agent, price);
+}
+void __cdecl DispatchOccupantAction(std::uint32_t command, std::uint32_t building,
+                                   std::uint32_t agent, std::uint32_t price) {
+    const auto* record = g_stockControllerRegistry.FindOccupantPanelByCommand(command);
+    const auto* previous = g_executingOccupantPanel;
+    g_executingOccupantPanel = record;
+    g_stockOccupantDispatch(record == nullptr ? command : 0x15, building, agent, price);
+    g_executingOccupantPanel = previous;
+}
+bool WriteOccupantBranch(std::uintptr_t address, void* target, unsigned char opcode,
+                         std::size_t size = 5) {
+    unsigned char patch[6] = {opcode, 0, 0, 0, 0, 0x90};
+    const auto relative = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(target) - address - 5);
+    std::memcpy(patch + 1, &relative, 4);
+    DWORD previous = 0, ignored = 0;
+    auto* destination = reinterpret_cast<void*>(address);
+    if (!VirtualProtect(destination, size, PAGE_EXECUTE_READWRITE, &previous)) return false;
+    std::memcpy(destination, patch, size);
+    FlushInstructionCache(GetCurrentProcess(), destination, size);
+    return VirtualProtect(destination, size, previous, &ignored) != 0;
+}
+bool InstallOccupantPanelRoute() {
+    if (!ValidateOccupantPanelProfile()) return false;
+    const auto& profile = OccupantProfile();
+    auto* trampoline = static_cast<unsigned char*>(VirtualAlloc(
+        nullptr, 11, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (trampoline == nullptr) return false;
+    std::memcpy(trampoline, reinterpret_cast<void*>(g_imageBase + profile.commandDispatch), 6);
+    if (!WriteOccupantBranch(reinterpret_cast<std::uintptr_t>(trampoline + 6),
+            reinterpret_cast<void*>(g_imageBase + profile.commandDispatch + 6), 0xE9)) return false;
+    FlushInstructionCache(GetCurrentProcess(), trampoline, 11);
+    g_stockOccupantDispatch = reinterpret_cast<BuildingCommandDispatch>(trampoline);
+    return WriteOccupantBranch(g_imageBase + profile.costStringCall, reinterpret_cast<void*>(&OccupantCostString), 0xE8) &&
+        WriteOccupantBranch(g_imageBase + profile.actionStringCall, reinterpret_cast<void*>(&OccupantActionString), 0xE8) &&
+        WriteOccupantBranch(g_imageBase + profile.submitCall, reinterpret_cast<void*>(&SubmitOccupantAction), 0xE8) &&
+        WriteOccupantBranch(g_imageBase + profile.commandDispatch, reinterpret_cast<void*>(&DispatchOccupantAction), 0xE9, 6);
+}
+bool OpenOccupantPanel(void* controller, std::uint32_t command) {
+    if (g_parentOccupantPanel == nullptr) return false;
+    for (const auto& panel : g_stockControllerRegistry.occupantActionPanels) {
+        if (panel.parentDialogId != g_parentOccupantPanel->parentDialogId || panel.openCommandId != command) continue;
+        using Open = void (__thiscall*)(void*, std::uint32_t, std::uint32_t);
+        reinterpret_cast<Open>(g_imageBase + g_buildProfile->openDialogRva)(controller, panel.childDialogId, 0);
+        return true;
+    }
+    return false;
+}
+struct OccupantParentClass {
+    void* table[kAp10VtableEntries];
+    void** stock;
+};
+std::vector<OccupantParentClass*> g_occupantParentClasses;
+int __fastcall OccupantParentControl(void* controller, void*, std::uint32_t command) {
+    if (OpenOccupantPanel(controller, command)) return 0;
+    auto** table = *static_cast<void***>(controller);
+    for (const auto* entry : g_occupantParentClasses) {
+        if (entry->table == table) return reinterpret_cast<ControllerControl>(entry->stock[3])(controller, command);
+    }
+    StopUnsafeManagerRuntimeLaunch("Private occupant parent lost its stock controller class.");
+    return 0;
+}
+bool InstallOccupantParentVtable(std::uint32_t controller) {
+    auto*** object = reinterpret_cast<void***>(controller);
+    for (const auto* entry : g_occupantParentClasses) {
+        if (entry->stock == *object) { *object = const_cast<void**>(entry->table); return true; }
+    }
+    auto* entry = new OccupantParentClass();
+    entry->stock = *object;
+    std::memcpy(entry->table, entry->stock, sizeof(entry->table));
+    if (!MajestyControllerLifecycle::RegisterManagedVtable(entry->table, entry->stock,
+            kAp10VtableEntries, &g_parentController, &ParentPanelControllerDestroyed, nullptr)) {
+        delete entry;
+        return false;
+    }
+    entry->table[3] = reinterpret_cast<void*>(&OccupantParentControl);
+    g_occupantParentClasses.push_back(entry);
+    *object = entry->table;
+    return true;
+}
+bool InstallOccupantChildVtable(std::uint32_t controller) {
+    // Exactly 15 entries, ending at MX05's shared list refresh slot +0x38.
+    // All setup, selection, drawing, events, Back, and vector cleanup are native.
+    static void* table[15] = {};
+    auto*** object = reinterpret_cast<void***>(controller);
+    auto** stock = reinterpret_cast<void**>(g_imageBase + OccupantProfile().childVtable);
+    if (*object != stock) return false;
+    if (table[0] == nullptr) {
+        std::memcpy(table, stock, sizeof(table));
+        if (!MajestyControllerLifecycle::RegisterManagedVtable(table, stock, 15,
+                &g_childController, &SecondaryPanelControllerDestroyed, nullptr)) return false;
+    }
+    *object = table;
+    InterlockedExchange(&g_childController, static_cast<LONG>(controller));
     return true;
 }
 
@@ -4304,7 +4483,9 @@ extern "C" void __stdcall CaptureSecondaryController(
         InterlockedExchange(&g_parentController, static_cast<LONG>(controller));
         const bool installed = g_parentRewardPanelRecord != nullptr
             ? InstallRewardParentControllerVtable(controller)
-            : InstallParentPanelControllerVtable(controller);
+            : g_parentPanelRecord != nullptr
+                ? InstallParentPanelControllerVtable(controller)
+                : InstallOccupantParentVtable(controller);
         if (!installed) {
             InterlockedCompareExchange(
                 &g_parentController, 0, static_cast<LONG>(controller));
@@ -4317,7 +4498,9 @@ extern "C" void __stdcall CaptureSecondaryController(
     if (InterlockedExchange(&g_captureChildController, 0) == 1) {
         InterlockedExchange(
             &g_secondaryPanelHandle, static_cast<LONG>(creationHandle));
-        const bool installed = g_activeRewardPanelRecord != nullptr
+        const bool installed = g_activeOccupantPanel != nullptr
+            ? InstallOccupantChildVtable(controller)
+            : g_activeRewardPanelRecord != nullptr
             ? InstallRewardPanelControllerVtable(controller)
             : InstallSecondaryPanelControllerVtable(controller);
         if (!installed) {
@@ -4430,6 +4613,17 @@ void LogDialogFactoryRequest(
 
 extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) {
     const std::uint32_t requested = *idAddress;
+    if (g_stockControllerRegistry.FindOccupantPanelByChild(requested) != nullptr) {
+        *idAddress = kMx05DialogId;
+        LogDialogFactoryRequest(idAddress, requested, " Mapped private occupant panel to stock MX05.");
+        return;
+    }
+    const auto* occupantParent = g_stockControllerRegistry.FindOccupantPanelByParent(requested);
+    if (occupantParent != nullptr) {
+        *idAddress = occupantParent->parentControllerBase;
+        LogDialogFactoryRequest(idAddress, requested, " Preserved declared stock occupant-parent controller.");
+        return;
+    }
     const auto* requestedRewardParent =
         g_stockControllerRegistry.FindRewardPanelByParentDialog(requested);
     if (requestedRewardParent != nullptr) {
@@ -4512,6 +4706,7 @@ extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments)
     const auto parentContext = static_cast<std::uint32_t>(
         InterlockedCompareExchange(&g_parentControllerContext, 0, 0));
     if (secondaryActive && g_activeRewardPanelRecord == nullptr &&
+        g_activeOccupantPanel == nullptr &&
         requested == kAp10DialogId &&
         InterlockedCompareExchange(&g_secondaryPanelActive, 0, 1) == 1) {
         const auto* active = g_activePanelRecord;
@@ -4521,6 +4716,7 @@ extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments)
             arguments[0] = active->parentDialogId;
             arguments[1] = parentContext;
             g_parentPanelRecord = active;
+            g_parentOccupantPanel = g_stockControllerRegistry.FindOccupantPanelByParent(active->parentDialogId);
             InterlockedExchange(&g_captureParentController, 1);
             WriteLog("Redirected an AP69 Back request to its resolved parent dialog.");
             return;
@@ -4535,6 +4731,15 @@ extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments)
         ClearSecondaryPanelControllerOwnedState();
         WriteLog("Cleared secondary state on a controller-backed dialog replacement.");
     }
+    const auto* occupantParent = g_stockControllerRegistry.FindOccupantPanelByParent(requested);
+    const auto* occupantChild = g_stockControllerRegistry.FindOccupantPanelByChild(requested);
+    if (occupantChild != nullptr) {
+        g_activeOccupantPanel = occupantChild;
+        InterlockedExchange(&g_secondaryPanelActive, 1);
+        InterlockedExchange(&g_captureChildController, 1);
+        return;
+    }
+    if (arguments[1] != 0) g_parentOccupantPanel = occupantParent;
     if (requested == kAp10DialogId && arguments[1] != 0) {
         InterlockedExchange(
             &g_ap10ControllerContext, static_cast<LONG>(arguments[1]));
@@ -4580,6 +4785,13 @@ extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments)
         InterlockedExchange(&g_secondaryPanelActive, 1);
         InterlockedExchange(&g_captureChildController, 1);
         WriteLog("Creation entry captured a resolved AP41 reward child dialog.");
+        return;
+    }
+    if (occupantParent != nullptr) {
+        g_parentPanelRecord = nullptr;
+        g_parentRewardPanelRecord = nullptr;
+        InterlockedExchange(&g_parentControllerContext, static_cast<LONG>(arguments[1]));
+        InterlockedExchange(&g_captureParentController, 1);
         return;
     }
     if (requested == 0 && InterlockedCompareExchange(&g_secondaryPanelArmed, 0, 1) == 1) {
@@ -5146,6 +5358,7 @@ DWORD WINAPI InitializeRuntime(void*) {
         !g_runtimeFeatureRegistry.nameGenerators.empty();
     const bool stockControllerRecipes =
         !g_stockControllerRegistry.panels.empty() ||
+        !g_stockControllerRegistry.occupantActionPanels.empty() ||
         !g_stockControllerRegistry.rewardPanels.empty();
     const bool ap10Ap69ControllerRecipes =
         !g_stockControllerRegistry.panels.empty();
@@ -5262,6 +5475,10 @@ DWORD WINAPI InitializeRuntime(void*) {
             "Terminating manager launch before Majesty resumes: the game-update refresh bridge could not be installed.");
     }
     if (stockControllerRecipes) {
+        if (!g_stockControllerRegistry.occupantActionPanels.empty()) {
+            RequireManagerRuntimeInstall(InstallOccupantPanelRoute(), managerLaunch,
+                "Terminating manager launch: stock occupant action route could not be installed.");
+        }
         RequireManagerRuntimeInstall(
             InstallDialogCreationHook(),
             managerLaunch,

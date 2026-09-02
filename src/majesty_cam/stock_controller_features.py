@@ -128,6 +128,19 @@ class StockMx09Ap41RewardPanel:
 
 
 @dataclass(frozen=True)
+class StockMx04Mx05OccupantActionPanel:
+    """MX05's native occupant selection, queued payment, and GPL action."""
+
+    panel_key: str
+    parent_building: str
+    source_dialog_id: str
+    open_command_id: int
+    cost_callback_symbol: str
+    action_callback_symbol: str
+    type: str = "stock.mx04-mx05-occupant-action-panel.v1"
+
+
+@dataclass(frozen=True)
 class StockAp41Fl00HostileMonsterFlag:
     """AP41/Fl00 reward placement restricted to hostile stock monsters."""
 
@@ -255,6 +268,7 @@ class StockAp69SovereignTargetAction:
 
 
 ControllerFeature = Union[
+    StockMx04Mx05OccupantActionPanel,
     StockAp10Ap69SecondaryPanel,
     StockMx09Ap41RewardPanel,
     StockAp41Fl00HostileMonsterFlag,
@@ -268,6 +282,7 @@ ControllerFeature = Union[
 
 
 _FEATURE_TYPES = {
+    "stock.mx04-mx05-occupant-action-panel.v1": StockMx04Mx05OccupantActionPanel,
     "stock.ap10-ap69-secondary-panel.v1": StockAp10Ap69SecondaryPanel,
     "stock.mx09-ap41-reward-panel.v1": StockMx09Ap41RewardPanel,
     "stock.ap41-fl00-hostile-monster-flag.v1": StockAp41Fl00HostileMonsterFlag,
@@ -586,10 +601,15 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
         _fourcc(feature.source_dialog_id, "source_dialog_id")
         _family_id(feature.building_family_id, "building_family_id")
         _control(feature.open_command_id, "open_command_id")
-    elif isinstance(feature, StockMx09Ap41RewardPanel):
+    elif isinstance(feature, (StockMx09Ap41RewardPanel, StockMx04Mx05OccupantActionPanel)):
         _logical(feature.parent_building, "parent_building")
         _fourcc(feature.source_dialog_id, "source_dialog_id")
         _control(feature.open_command_id, "open_command_id")
+        if isinstance(feature, StockMx04Mx05OccupantActionPanel):
+            _gpl_symbol(feature.cost_callback_symbol)
+            _gpl_symbol(feature.action_callback_symbol)
+            if feature.cost_callback_symbol.casefold() == feature.action_callback_symbol.casefold():
+                raise ControllerFeatureError("occupant cost and action callbacks must be distinct")
     elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
         _logical(feature.action_key, "action_key")
         _fourcc(feature.private_mode, "private_mode")
@@ -822,7 +842,8 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
 
 
 def _validate_composition(features: Sequence[ControllerFeature]) -> None:
-    panel_types = (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel)
+    panel_types = (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
+                   StockMx04Mx05OccupantActionPanel)
     panels = {
         item.panel_key: item
         for item in features
@@ -861,6 +882,9 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
             raise ControllerFeatureError(
                 f"controller feature refers to unknown panel_key {feature.panel_key!r}"
             )
+        if (not isinstance(feature, (*panel_types, StockAp41Fl00HostileMonsterFlag))
+                and not isinstance(panels[feature.panel_key], StockAp10Ap69SecondaryPanel)):
+            raise ControllerFeatureError("this controller recipe requires an AP10/AP69 panel")
 
     meters: dict[tuple[str, str], StockAp22ResourceMeter] = {}
     meter_attributes: dict[str, StockAp22ResourceMeter] = {}
@@ -883,6 +907,11 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
     controls: dict[str, dict[int, str]] = {key: {} for key in panels}
 
     for feature in features:
+        if isinstance(feature, StockMx04Mx05OccupantActionPanel):
+            for symbol in (feature.cost_callback_symbol, feature.action_callback_symbol):
+                if symbol.casefold() in callbacks:
+                    raise ControllerFeatureError("duplicate private GPL callback symbol")
+                callbacks.add(symbol.casefold())
         if isinstance(feature, StockAp22ResourceMeter):
             key = (feature.panel_key, feature.resource_key)
             if key in meters:

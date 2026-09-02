@@ -21,6 +21,7 @@ exactly these feature types:
 - `stock.ap78-enchantment-row.v1`;
 - `stock.ap10-ap69-secondary-panel.v1`;
 - `stock.mx09-ap41-reward-panel.v1`;
+- `stock.mx04-mx05-occupant-action-panel.v1`;
 - `stock.ap41-fl00-hostile-monster-flag.v1`;
 - `stock.ap22-resource-meter.v1`;
 - `stock.ap99-research-row.v1`;

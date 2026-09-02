@@ -107,6 +107,7 @@ from .stock_controller_features import (
     StockAp10Ap69SecondaryPanel,
     StockAp41Fl00HostileMonsterFlag,
     StockMx09Ap41RewardPanel,
+    StockMx04Mx05OccupantActionPanel,
     StockAp17UpgradeResearchGate,
     StockAp22ResourceMeter,
     StockAp24RageCommandAction,
@@ -2160,7 +2161,8 @@ def validate_controller_stock_evidence(
             )
         panel_owners[item.qualified_panel_key] = item.owner
     registry_panel_keys = {
-        item.panel_key for item in (*registry.panels, *registry.reward_panels)
+        item.panel_key for item in (*registry.panels, *registry.reward_panels,
+                                    *registry.occupant_action_panels)
     }
     if registry_panel_keys != set(panel_owners):
         raise ComposeError(
@@ -2363,7 +2365,8 @@ def _validate_controller_panel_controls(
     parent_values = _smnu_dword_values(parent_payload, owner, parent_label)
     child_values = _smnu_dword_values(child_payload, owner, child_label)
     panel = next((
-        item for item in (*registry.panels, *registry.reward_panels)
+        item for item in (*registry.panels, *registry.reward_panels,
+                          *registry.occupant_action_panels)
         if item.panel_key == panel_key
     ), None)
     if panel is None:  # pragma: no cover - registry/panel ownership equality guards it
@@ -2373,6 +2376,10 @@ def _validate_controller_panel_controls(
         ("secondary-panel open_command_id", panel.open_command_id),
     ]
     child_requirements: list[tuple[str, int]] = []
+    if panel in registry.occupant_action_panels:
+        child_requirements.extend((f"MX05 stock control {value:#x}", value)
+                                  for value in (0x1388, 0x138B, 0x1F46, 0x1F45,
+                                                0x1F4D, 0x1392, 0x1F41, 0x1F40))
     for meter in registry.meters:
         if meter.panel_key == panel_key:
             child_requirements.extend((
@@ -3127,7 +3134,8 @@ def resolve_controller_registry(
     qualified: list[ControllerFeature] = []
     mappings: dict[tuple[str, str, str], ControllerKeyMapping] = {}
     qualified_origins: dict[str, tuple[str, str]] = {}
-    panel_types = (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel)
+    panel_types = (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
+                   StockMx04Mx05OccupantActionPanel)
     raw_panels: dict[str, tuple[PackageInventory, ControllerFeature]] = {}
     flag_prototypes: dict[str, str] = {}
     for inventory, feature in claims:
@@ -3221,6 +3229,7 @@ def resolve_controller_registry(
     )
     free = (candidate for candidate in available if candidate not in reserved_dialogs)
     panel_dialog_ids: dict[str, tuple[int, int]] = {}
+    occupant_parent_bases: dict[str, str] = {}
     panels: list[ResolvedControllerPanel] = []
     panel_features = [
         feature
@@ -3229,6 +3238,12 @@ def resolve_controller_registry(
     ]
     for feature in panel_features:
         inventory, raw = raw_panels[feature.panel_key]
+        if isinstance(feature, StockMx04Mx05OccupantActionPanel):
+            definition = inventory.selected.package.definition
+            occupant_parent_bases[feature.panel_key] = next(
+                b.controller_base for b in definition.custom_buildings
+                if b.local_name == raw.parent_building
+            )
         parent = building_by_owner.get(
             (inventory.selected.alias, raw.parent_building)
         )
@@ -3273,7 +3288,8 @@ def resolve_controller_registry(
         )
     try:
         registry = resolve_stock_controller_registry(
-            normalized, panel_dialog_ids, flag_prototypes=flag_prototypes
+            normalized, panel_dialog_ids, flag_prototypes=flag_prototypes,
+            occupant_parent_bases=occupant_parent_bases,
         )
     except ControllerRegistryError as exc:
         raise ComposeError(f"resolved controller registry is unsafe: {exc}") from exc
@@ -3295,6 +3311,7 @@ def resolve_controller_registry(
 
 
 _CONTROLLER_FEATURE_CLASSES = (
+    StockMx04Mx05OccupantActionPanel,
     StockAp10Ap69SecondaryPanel,
     StockMx09Ap41RewardPanel,
     StockAp41Fl00HostileMonsterFlag,
@@ -3340,7 +3357,7 @@ def _qualify_controller_feature(feature: ControllerFeature, qualify) -> Controll
             panel_key=panel,
             parent_building=qualify("parent_building", feature.parent_building),
         )
-    if isinstance(feature, StockMx09Ap41RewardPanel):
+    if isinstance(feature, (StockMx09Ap41RewardPanel, StockMx04Mx05OccupantActionPanel)):
         return replace(
             feature,
             panel_key=panel,
@@ -3410,7 +3427,8 @@ def _require_controller_feature_evidence(
         document = parse_descriptions(path.read_bytes(), source=str(path))
         descriptions.extend(record.to_element() for record in document.records)
     gpl_functions: dict[str, list[str]] = {}
-    for source in _parse_inventory_gpl_sources(inventory):
+    callback_sources = _parse_inventory_gpl_sources(inventory)
+    for source in callback_sources:
         for item in source.items:
             if item.kind is DefinitionKind.FUNCTION:
                 gpl_functions.setdefault(item.name.casefold(), []).append(
@@ -3474,14 +3492,14 @@ def _require_controller_feature_evidence(
                     f"building_family_id {feature.building_family_id!r} is not "
                     "owned exclusively by matching parent Building Descriptions"
                 )
-        elif isinstance(feature, StockMx09Ap41RewardPanel):
+        elif isinstance(feature, (StockMx09Ap41RewardPanel, StockMx04Mx05OccupantActionPanel)):
             parent = declared_buildings.get(feature.parent_building)
             if parent is None:
                 raise ComposeError(
                     f"{inventory.selected.alias}: panel {feature.panel_key!r} "
                     f"parent_building {feature.parent_building!r} is not declared"
                 )
-            if (parent.controller_base, parent.panel_resource_template) != ("MX09", "MX09"):
+            if isinstance(feature, StockMx09Ap41RewardPanel) and (parent.controller_base, parent.panel_resource_template) != ("MX09", "MX09"):
                 raise ComposeError(
                     f"{inventory.selected.alias}: panel {feature.panel_key!r} "
                     "uses the stock MX09/AP41 reward lifecycle and therefore "
@@ -3498,6 +3516,21 @@ def _require_controller_feature_evidence(
                         f"{inventory.selected.alias}: reward panel {feature.panel_key!r} "
                         f"requires exactly one package-owned {section.decode('ascii')}/"
                         f"{feature.source_dialog_id}; found {len(matches)}"
+                    )
+            if isinstance(feature, StockMx04Mx05OccupantActionPanel):
+                if parent.controller_base not in ("AP07", "AP10", "MX09"):
+                    raise ComposeError("occupant panels require an AP07, AP10, or MX09 building controller")
+                for symbol in (feature.cost_callback_symbol, feature.action_callback_symbol):
+                    matches = gpl_functions.get(symbol.casefold(), ())
+                    if len(matches) != 1:
+                        raise ComposeError(
+                            f"{inventory.selected.alias}: occupant callback {symbol!r} "
+                            "requires exactly one package-owned GPL function"
+                        )
+                    item = next(item for source in callback_sources for item in source.items
+                                if item.kind is DefinitionKind.FUNCTION and item.name.casefold() == symbol.casefold())
+                    _require_occupant_callback_signature(
+                        item.text, symbol, symbol == feature.cost_callback_symbol
                     )
         elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
             matches = [
@@ -3552,6 +3585,18 @@ def _require_controller_feature_evidence(
                 )
 
 
+def _require_occupant_callback_signature(text: str, symbol: str, cost: bool) -> None:
+    from .gpl import _mask_non_code
+
+    returns = r"\s+is\s+integer" if cost else ""
+    pattern = (r"\s*function\s+" + re.escape(symbol) +
+               r"\s*\(\s*agent\s+[A-Za-z_][A-Za-z0-9_]*\s*\)" +
+               returns + r"\s*(?:declare|begin)\b")
+    if re.match(pattern, _mask_non_code(text), re.IGNORECASE) is None:
+        expected = "(agent) is integer" if cost else "(agent) with no return type"
+        raise ComposeError(f"occupant callback {symbol!r} must use the stock signature {expected}")
+
+
 def _require_v3_panel_declaration_completeness(
     inventory: PackageInventory,
     controller_features: Sequence[ControllerFeature],
@@ -3582,7 +3627,8 @@ def _require_v3_panel_declaration_completeness(
                 f"building {building.local_name!r}",
             )
     for feature in controller_features:
-        if isinstance(feature, (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel)):
+        if isinstance(feature, (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
+                                StockMx04Mx05OccupantActionPanel)):
             declare(
                 feature.source_dialog_id.encode("ascii"),
                 f"secondary panel {feature.panel_key!r}",
@@ -3834,6 +3880,7 @@ def _controller_record_count(registry: ResolvedControllerRegistry) -> int:
             registry.rage_command_actions,
             registry.sovereign_target_actions,
             registry.reward_panels,
+            registry.occupant_action_panels,
             registry.hostile_monster_flags,
         )
     )
@@ -4151,11 +4198,13 @@ def _validate_generated_runtime_evidence(
         descriptions.extend(record.to_element() for record in document.records)
 
     gpl_functions: dict[str, int] = {}
+    gpl_function_texts: dict[str, str] = {}
     for source in _parse_inventory_gpl_sources(inventory):
         for item in source.items:
             if item.kind is DefinitionKind.FUNCTION:
                 key = item.name.casefold()
                 gpl_functions[key] = gpl_functions.get(key, 0) + 1
+                gpl_function_texts[key] = item.text
 
     for panel in controller_registry.panels:
         parent = panel.parent_dialog_id.to_bytes(4, "little")
@@ -4219,7 +4268,7 @@ def _validate_generated_runtime_evidence(
             child_label=_display_key(child),
         )
 
-    for panel in controller_registry.reward_panels:
+    for panel in (*controller_registry.reward_panels, *controller_registry.occupant_action_panels):
         parent = panel.parent_dialog_id.to_bytes(4, "little")
         child = panel.child_dialog_id.to_bytes(4, "little")
         if parent not in building_dialogs or child in building_dialogs or child == parent:
@@ -4239,6 +4288,14 @@ def _validate_generated_runtime_evidence(
             child_label=_display_key(child),
         )
 
+    for panel in controller_registry.occupant_action_panels:
+        for symbol in (panel.cost_callback_symbol, panel.action_callback_symbol):
+            if gpl_functions.get(symbol.casefold(), 0) != 1:
+                raise ComposeError(f"generated occupant callback {symbol!r} must exist exactly once")
+            _require_occupant_callback_signature(
+                gpl_function_texts[symbol.casefold()], symbol,
+                symbol == panel.cost_callback_symbol,
+            )
     callbacks = (
         *controller_registry.timed_rage_actions,
         *controller_registry.rage_command_actions,

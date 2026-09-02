@@ -5,7 +5,7 @@ validated by :mod:`majesty_cam.stock_controller_features`; it cannot carry
 paths, DLL names, RVAs, machine code, or arbitrary instructions.  The native
 runtime parser mirrors these limits before any record is eligible for lookup.
 
-The nine record sections below represent reusable stock lifecycle recipes.
+The record sections below represent reusable stock lifecycle recipes.
 Runtime integration must continue to use the proven single active AP10/AP69
 panel, single AP99 owner, single pending Rage command, and single
 sovereign-target session.  Multiple registry records are alternatives selected
@@ -31,6 +31,7 @@ from .stock_controller_features import (
     StockAp10Ap69SecondaryPanel,
     StockAp41Fl00HostileMonsterFlag,
     StockMx09Ap41RewardPanel,
+    StockMx04Mx05OccupantActionPanel,
     StockAp17UpgradeResearchGate,
     StockAp22ResourceMeter,
     StockAp24RageCommandAction,
@@ -43,7 +44,7 @@ from .stock_controller_features import (
 
 
 CONTROLLER_REGISTRY_MAGIC = b"MMCR"
-CONTROLLER_REGISTRY_VERSION = 2
+CONTROLLER_REGISTRY_VERSION = 3
 STOCK_CONTROLLER_RUNTIME_CAPABILITY = "stock.controller-recipes.v1"
 CONTROLLER_REGISTRY_ENVIRONMENT = "MAJESTY_MOD_MANAGER_CONTROLLERS"
 CONTROLLER_REGISTRY_RELATIVE_PATH = Path(
@@ -52,6 +53,7 @@ CONTROLLER_REGISTRY_RELATIVE_PATH = Path(
 MAX_CONTROLLER_REGISTRY_BYTES = 512 * 1024
 
 _HEADER = struct.Struct("<4s10I")
+_OCCUPANT_HEADER = struct.Struct("<4s11I")
 _U32 = struct.Struct("<I")
 _SECTIONS: Tuple[Type[ControllerFeature], ...] = (
     StockAp10Ap69SecondaryPanel,
@@ -63,6 +65,7 @@ _SECTIONS: Tuple[Type[ControllerFeature], ...] = (
     StockAp69SovereignTargetAction,
     StockMx09Ap41RewardPanel,
     StockAp41Fl00HostileMonsterFlag,
+    StockMx04Mx05OccupantActionPanel,
 )
 
 
@@ -87,6 +90,18 @@ class ResolvedRewardPanelRecord:
     parent_dialog_id: int
     child_dialog_id: int
     open_command_id: int
+
+
+@dataclass(frozen=True)
+class ResolvedOccupantActionPanelRecord:
+    panel_key: str
+    parent_dialog_id: int
+    child_dialog_id: int
+    open_command_id: int
+    action_command_id: int
+    cost_callback_symbol: str
+    action_callback_symbol: str
+    parent_controller_base: str = "AP10"
 
 
 @dataclass(frozen=True)
@@ -124,6 +139,7 @@ class ResolvedControllerRegistry:
     sovereign_target_actions: Tuple[StockAp69SovereignTargetAction, ...]
     reward_panels: Tuple[ResolvedRewardPanelRecord, ...] = ()
     hostile_monster_flags: Tuple[ResolvedHostileMonsterFlagRecord, ...] = ()
+    occupant_action_panels: Tuple[ResolvedOccupantActionPanelRecord, ...] = ()
 
 
 def resolve_stock_controller_registry(
@@ -131,6 +147,7 @@ def resolve_stock_controller_registry(
     panel_dialog_ids: Mapping[str, Tuple[int, int]],
     *,
     flag_prototypes: Mapping[str, str] | None = None,
+    occupant_parent_bases: Mapping[str, str] | None = None,
 ) -> ResolvedControllerRegistry:
     """Resolve author records to explicit parent/child dialog IDs.
 
@@ -145,7 +162,8 @@ def resolve_stock_controller_registry(
     except ControllerFeatureError as exc:
         raise ControllerRegistryError(str(exc)) from exc
     panel_features = tuple(item for item in features if isinstance(
-        item, (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel)
+        item, (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
+               StockMx04Mx05OccupantActionPanel)
     ))
     expected = {item.panel_key for item in panel_features}
     if set(panel_dialog_ids) != expected:
@@ -154,6 +172,7 @@ def resolve_stock_controller_registry(
         )
     panels = []
     reward_panels = []
+    occupant_panels = []
     for item in panel_features:
         value = panel_dialog_ids[item.panel_key]
         if not isinstance(value, tuple) or len(value) != 2:
@@ -167,6 +186,13 @@ def resolve_stock_controller_registry(
             panels.append(ResolvedSecondaryPanelRecord(
                 item.panel_key, parent, child, item.building_family_id,
                 item.open_command_id,
+            ))
+        elif isinstance(item, StockMx04Mx05OccupantActionPanel):
+            occupant_panels.append(ResolvedOccupantActionPanelRecord(
+                item.panel_key, parent, child, item.open_command_id,
+                0x10000 + len(occupant_panels), item.cost_callback_symbol,
+                item.action_callback_symbol,
+                (occupant_parent_bases or {}).get(item.panel_key, "AP10"),
             ))
         else:
             reward_panels.append(ResolvedRewardPanelRecord(
@@ -213,6 +239,7 @@ def resolve_stock_controller_registry(
         ),
         reward_panels=tuple(reward_panels),
         hostile_monster_flags=flags,
+        occupant_action_panels=tuple(occupant_panels),
     ))
 
 
@@ -300,7 +327,7 @@ class _Reader:
 
 
 def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> bytes:
-    """Encode canonical validated recipes into bounded MMCR v2 bytes."""
+    """Encode canonical recipes as MMCR v2, or v3 when occupant panels exist."""
 
     try:
         registry = _validate_resolved_registry(registry)
@@ -321,11 +348,13 @@ def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> by
     )
     counts = tuple(len(section) for section in sections)
     writer = _Writer()
-    writer.data += _HEADER.pack(
-        CONTROLLER_REGISTRY_MAGIC,
-        CONTROLLER_REGISTRY_VERSION,
-        *counts,
-    )
+    if registry.occupant_action_panels:
+        sections += (registry.occupant_action_panels,)
+        writer.data += _OCCUPANT_HEADER.pack(
+            CONTROLLER_REGISTRY_MAGIC, 3, *counts, len(registry.occupant_action_panels)
+        )
+    else:
+        writer.data += _HEADER.pack(CONTROLLER_REGISTRY_MAGIC, 2, *counts)
     for section in sections:
         for record in section:
             _encode_feature(writer, record)
@@ -338,7 +367,7 @@ def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> by
 
 
 def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegistry:
-    """Decode MMCR v2, rejecting malformed and non-canonical registries."""
+    """Decode MMCR v2/v3, rejecting malformed and non-canonical registries."""
 
     if not isinstance(payload, bytes):
         raise ControllerRegistryError("MMCR registry must be bytes")
@@ -347,7 +376,11 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
     magic, version, *counts = _HEADER.unpack_from(payload)
     if magic != CONTROLLER_REGISTRY_MAGIC:
         raise ControllerRegistryError("controller registry magic is not MMCR")
-    if version != CONTROLLER_REGISTRY_VERSION:
+    if version == 3:
+        if len(payload) < _OCCUPANT_HEADER.size:
+            raise ControllerRegistryError("MMCR v3 header is truncated")
+        magic, version, *counts = _OCCUPANT_HEADER.unpack_from(payload)
+    elif version != 2:
         raise ControllerRegistryError(
             f"unsupported MMCR registry version: {version}"
         )
@@ -357,6 +390,8 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
         raise ControllerRegistryError("MMCR panel count is outside bounds")
 
     reader = _Reader(payload)
+    if version == 3:
+        reader.cursor = _OCCUPANT_HEADER.size
     sections = []
     try:
         for kind, count in zip(_SECTIONS, counts):
@@ -493,6 +528,14 @@ def _encode_feature(writer: _Writer, feature: object) -> None:
         writer.u32(feature.parent_dialog_id)
         writer.u32(feature.child_dialog_id)
         writer.u32(feature.open_command_id)
+    elif isinstance(feature, ResolvedOccupantActionPanelRecord):
+        writer.u32(feature.parent_dialog_id)
+        writer.u32(feature.child_dialog_id)
+        writer.u32(feature.open_command_id)
+        writer.u32(feature.action_command_id)
+        writer.symbol(feature.cost_callback_symbol)
+        writer.symbol(feature.action_callback_symbol)
+        writer.fourcc(feature.parent_controller_base)
     elif isinstance(feature, ResolvedHostileMonsterFlagRecord):
         writer.logical(feature.action_key)
         writer.fourcc(feature.private_mode)
@@ -509,6 +552,13 @@ def _encode_feature(writer: _Writer, feature: object) -> None:
 
 def _decode_feature(reader: _Reader, kind: Type[ControllerFeature]) -> object:
     panel = reader.logical("panel_key")
+    if kind is StockMx04Mx05OccupantActionPanel:
+        return ResolvedOccupantActionPanelRecord(
+            panel, reader.u32("parent_dialog_id"), reader.u32("child_dialog_id"),
+            reader.u32("open_command_id"), reader.u32("action_command_id"),
+            reader.symbol("cost_callback_symbol"), reader.symbol("action_callback_symbol"),
+            reader.fourcc("parent_controller_base"),
+        )
     if kind is StockAp10Ap69SecondaryPanel:
         return ResolvedSecondaryPanelRecord(
             panel, reader.u32("parent_dialog_id"), reader.u32("child_dialog_id"),
@@ -602,12 +652,14 @@ def _validate_resolved_registry(
         registry.upgrade_gates, registry.timed_rage_actions,
         registry.rage_command_actions, registry.sovereign_target_actions,
         registry.reward_panels, registry.hostile_monster_flags,
+        registry.occupant_action_panels,
     )
     if any(not isinstance(section, tuple) for section in sections):
         raise ControllerRegistryError("MMCR resolved registry sections must be tuples")
     if sum(len(section) for section in sections) > MAX_CONTROLLER_FEATURES:
         raise ControllerRegistryError("MMCR record count is outside bounds")
-    if len(registry.panels) + len(registry.reward_panels) > MAX_SECONDARY_PANELS:
+    if (len(registry.panels) + len(registry.reward_panels) +
+            len(registry.occupant_action_panels)) > MAX_SECONDARY_PANELS:
         raise ControllerRegistryError("MMCR panel count is outside bounds")
 
     panels = {}
@@ -678,6 +730,32 @@ def _validate_resolved_registry(
             item.panel_key, _resolved_parent_key(item.parent_dialog_id),
             _unpack_fourcc(item.child_dialog_id), item.open_command_id,
         ))
+    occupant_by_key = {}
+    if any(not isinstance(item, ResolvedOccupantActionPanelRecord) or
+           not isinstance(item.panel_key, str) for item in registry.occupant_action_panels):
+        raise ControllerRegistryError("MMCR occupant panel record type is invalid")
+    for index, item in enumerate(sorted(registry.occupant_action_panels, key=lambda p: p.panel_key)):
+        if not isinstance(item, ResolvedOccupantActionPanelRecord):
+            raise ControllerRegistryError("MMCR occupant panel record type is invalid")
+        if item.panel_key in panels or item.panel_key in reward_panel_by_key or item.panel_key in occupant_by_key:
+            raise ControllerRegistryError("MMCR panel_key is duplicated")
+        _resolved_dialog_id(item.parent_dialog_id, "parent_dialog_id")
+        _resolved_dialog_id(item.child_dialog_id, "child_dialog_id")
+        parent_command = (item.parent_dialog_id, item.open_command_id)
+        if item.child_dialog_id in child_dialogs or parent_command in parent_commands:
+            raise ControllerRegistryError("MMCR occupant panel identity is duplicated")
+        if item.action_command_id != 0x10000 + index:
+            raise ControllerRegistryError("MMCR occupant action command is not manager-allocated")
+        if item.parent_controller_base not in ("AP07", "AP10", "MX09"):
+            raise ControllerRegistryError("MMCR occupant parent controller base is unsupported")
+        child_dialogs.add(item.child_dialog_id)
+        parent_commands.add(parent_command)
+        occupant_by_key[item.panel_key] = item
+        author_features.append(StockMx04Mx05OccupantActionPanel(
+            item.panel_key, _resolved_parent_key(item.parent_dialog_id),
+            _unpack_fourcc(item.child_dialog_id), item.open_command_id,
+            item.cost_callback_symbol, item.action_callback_symbol,
+        ))
     flag_by_action = {}
     for item in registry.hostile_monster_flags:
         if not isinstance(item, ResolvedHostileMonsterFlagRecord):
@@ -694,6 +772,11 @@ def _validate_resolved_registry(
             item.availability_attribute_id, item.unavailable_alert_text,
         ))
     normalized = normalize_controller_features(author_features)
+    parent_ids = {item.parent_dialog_id for item in (
+        *registry.panels, *registry.reward_panels, *registry.occupant_action_panels
+    )}
+    if parent_ids & child_dialogs:
+        raise ControllerRegistryError("MMCR child dialog collides with a parent dialog")
 
     panel_by_key = {item.panel_key: item for item in registry.panels}
     gate_by_key = {item.panel_key: item for item in registry.upgrade_gates}
@@ -724,6 +807,10 @@ def _validate_resolved_registry(
         hostile_monster_flags=tuple(
             flag_by_action[item.action_key] for item in normalized
             if isinstance(item, StockAp41Fl00HostileMonsterFlag)
+        ),
+        occupant_action_panels=tuple(
+            occupant_by_key[item.panel_key] for item in normalized
+            if isinstance(item, StockMx04Mx05OccupantActionPanel)
         ),
     )
 

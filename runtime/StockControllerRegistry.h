@@ -7,7 +7,7 @@
 
 namespace MajestyStockControllers {
 
-constexpr std::uint32_t kRegistryVersion = 2;
+constexpr std::uint32_t kRegistryVersion = 3;
 constexpr std::uint32_t kMaximumRecordCount = 256;
 constexpr std::uint32_t kMaximumPanelCount = 32;
 constexpr std::size_t kMaximumRegistryBytes = 512u * 1024u;
@@ -133,6 +133,17 @@ struct HostileMonsterFlagRecord {
     std::string unavailableAlertText;
 };
 
+struct OccupantActionPanelRecord {
+    std::string panelKey;
+    std::uint32_t parentDialogId;
+    std::uint32_t childDialogId;
+    std::uint32_t openCommandId;
+    std::uint32_t actionCommandId;
+    std::string costCallbackSymbol;
+    std::string actionCallbackSymbol;
+    std::uint32_t parentControllerBase;
+};
+
 struct Registry {
     std::vector<SecondaryPanelRecord> panels;
     std::vector<ResourceMeterRecord> meters;
@@ -143,8 +154,12 @@ struct Registry {
     std::vector<SovereignTargetActionRecord> sovereignTargetActions;
     std::vector<RewardPanelRecord> rewardPanels;
     std::vector<HostileMonsterFlagRecord> hostileMonsterFlags;
+    std::vector<OccupantActionPanelRecord> occupantActionPanels;
 
     void Clear();
+    const OccupantActionPanelRecord* FindOccupantPanelByChild(std::uint32_t id) const;
+    const OccupantActionPanelRecord* FindOccupantPanelByParent(std::uint32_t id) const;
+    const OccupantActionPanelRecord* FindOccupantPanelByCommand(std::uint32_t id) const;
     const SecondaryPanelRecord* FindPanelByKey(const std::string& panelKey) const;
     const SecondaryPanelRecord* FindPanelByChildDialog(
         std::uint32_t childDialogId) const;
@@ -178,7 +193,7 @@ struct Registry {
         std::uint32_t privateMode) const;
 };
 
-// Parses the manager-owned MMCR v2 registry without Win32 or executable
+// Parses manager-owned MMCR v2/v3 registries without Win32 or executable
 // dependencies.  Records are immutable alternatives for the existing stock-
 // shaped singleton sessions; the registry does not create per-mod controllers,
 // parallel AP99 owners, queued Rage commands, or parallel target sessions.
