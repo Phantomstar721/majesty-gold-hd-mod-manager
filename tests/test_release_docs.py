@@ -114,6 +114,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
             encoding="utf-8-sig"
         )
         for required in (
+            "START HERE.txt",
             "LICENSE.txt",
             "THIRD-PARTY-NOTICES.md",
             "PYTHON-3.9.txt",

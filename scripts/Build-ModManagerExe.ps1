@@ -38,6 +38,7 @@ if (-not (Test-Path -LiteralPath $managerIcon -PathType Leaf)) {
 $releaseFiles = @(
     (Join-Path $repoRoot "LICENSE"),
     (Join-Path $repoRoot "THIRD-PARTY-NOTICES.md"),
+    (Join-Path $repoRoot "release\START HERE.txt"),
     (Join-Path $repoRoot "licenses\PYTHON-3.9.txt"),
     (Join-Path $repoRoot "licenses\LGPL-3.0.txt"),
     (Join-Path $repoRoot "licenses\GPL-3.0.txt"),
@@ -102,6 +103,7 @@ $applicationLicenses = Join-Path $applicationOutput "licenses"
 New-Item -ItemType Directory -Path $applicationLicenses -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $applicationOutput "LICENSE.txt") -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "THIRD-PARTY-NOTICES.md") -Destination $applicationOutput -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot "release\START HERE.txt") -Destination $applicationOutput -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\PYTHON-3.9.txt") -Destination $applicationLicenses -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\LGPL-3.0.txt") -Destination $applicationLicenses -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\GPL-3.0.txt") -Destination $applicationLicenses -Force
