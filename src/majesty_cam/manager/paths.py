@@ -198,7 +198,20 @@ def default_documents_root() -> Path:
     return Path.home() / "Documents"
 
 
+def default_desktop_root() -> Path:
+    """Return the player's redirected Windows Desktop when available."""
+
+    redirected = _windows_user_shell_folder("Desktop")
+    if redirected is not None:
+        return redirected
+    return Path.home() / "Desktop"
+
+
 def _windows_documents_root() -> Path | None:
+    return _windows_user_shell_folder("Personal")
+
+
+def _windows_user_shell_folder(value_name: str) -> Path | None:
     if os.name != "nt":
         return None
     try:
@@ -208,7 +221,7 @@ def _windows_documents_root() -> Path | None:
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
         ) as key:
-            value = winreg.QueryValueEx(key, "Personal")[0]
+            value = winreg.QueryValueEx(key, value_name)[0]
     except (ImportError, OSError, TypeError):
         return None
     if not isinstance(value, str) or not value.strip():
@@ -330,6 +343,7 @@ __all__ = [
     "ManagerPaths",
     "GAME_EXECUTABLE_NAME",
     "application_root",
+    "default_desktop_root",
     "default_documents_root",
     "detect_manager_paths",
     "game_executable_selection_path",

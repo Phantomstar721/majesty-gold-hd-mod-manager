@@ -28,12 +28,13 @@ overwriting one another.
 
 ## Install and use
 
-The Steam Workshop download contains the complete application. Keep
-`Majesty Mod Manager.exe` beside its `_internal` folder.
+The Steam Workshop download and each GitHub Release contain the complete
+application. Keep `Majesty Mod Manager.exe` beside its `_internal` folder.
 
 1. Subscribe to the Mod Manager and the Majesty mods or quests you want to use.
 2. Open the Mod Manager's Workshop folder and run
-   `Majesty Mod Manager.exe`.
+   `Majesty Mod Manager.exe`. From Majesty's installation folder, go up to
+   `steamapps`, then open `workshop/content/73230/3793024054`.
 3. Follow the first-time prompt to install the two required game helpers.
 4. Review the detected content and choose what you want enabled.
 5. Select **Prepare Selected Mods** if the Merge tab contains selected mods.
@@ -42,6 +43,11 @@ The Steam Workshop download contains the complete application. Keep
 Continue launching through the manager whenever prepared Merge content is
 enabled. Ordinary Standard mods and downloaded quests remain usable through
 Majesty normally.
+
+If finding Steam's Workshop folder is inconvenient, download the latest
+complete ZIP from [GitHub Releases](https://github.com/Phantomstar721/majesty-gold-hd-mod-manager/releases/latest).
+After the first launch, **Desktop Shortcut** creates an optional shortcut to
+the manager without moving it away from its required support files.
 
 ## Content tabs
 

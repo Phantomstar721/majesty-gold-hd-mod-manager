@@ -55,6 +55,17 @@ class FrozenManagerPathTests(unittest.TestCase):
                 Path("C:/fixture/Documents"),
             )
 
+    def test_desktop_uses_redirected_windows_shell_folder(self):
+        redirected = Path("C:/fixture/OneDrive/Desktop")
+        with patch.object(
+            manager_paths,
+            "_windows_user_shell_folder",
+            return_value=redirected,
+        ) as shell_folder:
+            self.assertEqual(manager_paths.default_desktop_root(), redirected)
+
+        shell_folder.assert_called_once_with("Desktop")
+
     def test_player_selected_executable_is_remembered_and_preferred(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

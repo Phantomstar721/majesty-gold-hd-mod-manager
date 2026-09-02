@@ -6,10 +6,11 @@ nearby "_internal" folder and will not work if the EXE is moved by itself.
 1. Close Majesty Gold HD.
 2. Double-click "Majesty Mod Manager.exe" and approve the administrator prompt.
 3. Confirm the app detects Default Public 1.5.2.24 or beta2 1.5.2.28.
-4. Install the two required helpers on the Quality of Life tab when prompted.
-5. Review the automatically selected mods.
-6. If Merge mods are selected, choose "Prepare Selected Mods".
-7. Choose "Launch Majesty".
+4. Optionally choose "Desktop Shortcut" so this folder is easy to launch again.
+5. Install the two required helpers on the Quality of Life tab when prompted.
+6. Review the automatically selected mods.
+7. If Merge mods are selected, choose "Prepare Selected Mods".
+8. Choose "Launch Majesty".
 
 Always launch through the manager while using prepared Merge content. Your
 subscribed source mods and downloaded quests are left untouched.

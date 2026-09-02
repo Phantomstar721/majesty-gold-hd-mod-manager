@@ -211,6 +211,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
         self.assertIn("Rescan Content", buttons)
         self.assertIn("Choose…", buttons)
         self.assertIn("Folder", buttons)
+        self.assertIn("Desktop Shortcut", buttons)
         self.assertIn("mods and quests", buttons["Rescan Content"].toolTip())
         self.assertIn("MajestyHD.exe", buttons["Choose…"].toolTip())
         install_path = window.findChild(QLabel, "installPath")
@@ -227,6 +228,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
         )
         self.assertEqual(buttons["Choose…"].property("role"), "headerAction")
         self.assertEqual(buttons["Folder"].property("role"), "headerAction")
+        self.assertEqual(buttons["Desktop Shortcut"].property("role"), "quiet")
         self.assertEqual(
             buttons["Rescan Content"].property("role"), "headerAction"
         )
@@ -247,6 +249,32 @@ class ManagerAppLayoutTests(unittest.TestCase):
             },
             {True},
         )
+        window.close()
+
+    def test_desktop_shortcut_button_creates_shortcut_without_moving_app(self) -> None:
+        from PySide6.QtWidgets import QMessageBox, QPushButton
+
+        class _Paths:
+            game_path = Path("Z:/missing-majesty")
+            profile_path = Path(tempfile.gettempdir()) / "manager-ui-profile.json"
+
+        class _Controller:
+            paths = _Paths()
+
+        shortcut = Path("C:/Users/Player/Desktop/Majesty Mod Manager.lnk")
+        with patch.object(manager_app.QTimer, "singleShot"), patch.object(
+            manager_app, "create_manager_desktop_shortcut", return_value=shortcut
+        ) as create, patch.object(QMessageBox, "information") as information:
+            window = manager_app.ManagerWindow(_Controller())  # type: ignore[arg-type]
+            button = next(
+                item
+                for item in window.findChildren(QPushButton)
+                if item.text() == "Desktop Shortcut"
+            )
+            button.click()
+
+        create.assert_called_once_with()
+        self.assertIn(str(shortcut), information.call_args.args[2])
         window.close()
 
     def test_footer_does_not_repeat_required_qol_status(self) -> None:

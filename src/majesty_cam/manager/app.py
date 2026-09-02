@@ -20,6 +20,7 @@ from .brand_assets import BrandAssets, ensure_brand_assets
 from .controller import ControllerSnapshot, ManagerController
 from .build import standard_content_conflicts
 from .preflight import PreparedMergeMod
+from .shortcuts import ShortcutError, create_manager_desktop_shortcut
 from .workshop import open_workshop_item
 
 
@@ -1290,6 +1291,19 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.search.textChanged.connect(self._filter_pages)
             nav.addWidget(self.search)
             nav.addStretch(1)
+            self.desktop_shortcut_button = QPushButton("Desktop Shortcut")
+            self.desktop_shortcut_button.setProperty("role", "quiet")
+            self.desktop_shortcut_button.setToolTip(
+                "Create or replace a Desktop shortcut to this Mod Manager"
+            )
+            self.desktop_shortcut_button.setCursor(
+                Qt.CursorShape.PointingHandCursor
+            )
+            self.desktop_shortcut_button.setFixedSize(132, 32)
+            self.desktop_shortcut_button.clicked.connect(
+                self._create_desktop_shortcut
+            )
+            nav.addWidget(self.desktop_shortcut_button)
             self.selection_note = QLabel("Scanning installed content…")
             self.selection_note.setObjectName("selectionNote")
             nav.addWidget(self.selection_note)
@@ -1435,6 +1449,22 @@ if _PYSIDE_IMPORT_ERROR is None:
                     "Could not open the game folder",
                     OSError(f"Windows could not open: {folder}"),
                 )
+
+        @Slot()
+        def _create_desktop_shortcut(self) -> None:
+            try:
+                shortcut = create_manager_desktop_shortcut()
+            except (OSError, ShortcutError) as exc:
+                self._show_interaction_error(
+                    "Could not create the Desktop shortcut",
+                    exc,
+                )
+                return
+            QMessageBox.information(
+                self,
+                "Desktop shortcut created",
+                f"Majesty Mod Manager can now be launched from:\n{shortcut}",
+            )
 
         def _start_scan(self, *, force_refresh: bool) -> None:
             if self._busy:
