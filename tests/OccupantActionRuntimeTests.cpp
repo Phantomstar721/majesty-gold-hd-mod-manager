@@ -84,8 +84,8 @@ int main() {
     args[1] = stable->childDialogId;
     ResolveDialogFactoryRequest(args + 1);
     assert(args[1] == kMx05DialogId);
-    // Auxiliary notifications do not invalidate a still-live child; ordinary
-    // stock controller replacements and explicit cleanup do.
+    // Creation requests alone do not prove destruction. Both notices and
+    // stock Visitors/list requests preserve live mappings until stock teardown.
     std::uint32_t creation[] = {0x36335041, 0, 0, 0}; // AP36 notice
     g_activeOccupantPanel = stable;
     g_secondaryPanelActive = 1;
@@ -94,7 +94,7 @@ int main() {
     creation[0] = kMx05DialogId;
     creation[1] = 123;
     ResolveDialogCreationRequest(creation);
-    assert(g_activeOccupantPanel == nullptr && g_secondaryPanelActive == 0);
+    assert(g_activeOccupantPanel == stable && g_secondaryPanelActive == 1);
     creation[0] = clinic->childDialogId;
     ResolveDialogCreationRequest(creation);
     assert(g_activeOccupantPanel == clinic && g_captureChildController == 1);

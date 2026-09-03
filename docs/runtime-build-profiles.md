@@ -236,12 +236,19 @@ its original flags. Parent and secondary controller types register
 independently, and a delayed destructor for an older instance cannot clear a
 replacement.
 
-The active MMCR record, rather than an Alchemist package identity, supplies the
-parent and child routing ownership. Destructor callbacks clear only the exact
-controller/context state still owned by that record; simulation-owned research
-and active effects remain under Majesty's existing command and GPL lifecycles.
+The active MMCR record, rather than a package identity, supplies the parent and
+child routing ownership. Parent and child controllers have independent native
+lifetimes. A parent destructor must not clear a surviving child's routing;
+the child resolves its own building through Majesty's native controller handle.
+Destructor callbacks clear only the exact controller state still owned by that
+record; simulation-owned research and active effects remain under Majesty's
+existing command and GPL lifecycles.
 Any future stock-controller recipe must use this same registration boundary
 rather than adding quest-name resets, polling, or feature-specific unload hooks.
+
+Both stacked and single-panel layouts are supported without resolution-specific
+branches or package metadata. See [panel lifecycle](panel-lifecycle.md) for the
+stock placement, command-result, Back, and stock-list navigation contracts.
 
 ## Required validation
 

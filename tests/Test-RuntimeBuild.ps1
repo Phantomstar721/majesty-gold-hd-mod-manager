@@ -159,7 +159,7 @@ try {
         "runtime feature registry contains trailing bytes", "FindEnchantmentRow"
     ) "Runtime feature registry contract"
     Assert-ContainsAny @($controllerSource, $controllerHeader) @(
-        "kRegistryVersion = 2", "kMaximumRecordCount = 256",
+        "kRegistryVersion = 3", "kMaximumRecordCount = 256",
         "kMaximumPanelCount = 32", "kMaximumRegistryBytes = 512u * 1024u",
         "ParseRegistry", "FindPanelByParentDialog", "FindPanelByChildDialog",
         "FindRewardPanelByParentDialog", "FindHostileMonsterFlagByMode",
@@ -454,10 +454,14 @@ try {
         "bool InstallParentPanelControllerVtable("
     Assert-ContainsAny @($parentClear) @(
         "g_captureParentController", "g_secondaryPanelArmed",
-        "g_ap10ControllerContext", "g_parentControllerContext",
-        "g_childController", "g_parentPanelRecord = nullptr",
-        "ClearSecondaryPanelControllerOwnedState();"
+        "g_ap10ControllerContext", "g_parentPanelRecord = nullptr",
+        "g_parentOccupantPanel = nullptr", "g_parentRewardPanelRecord = nullptr"
     ) "AP10 parent teardown ownership"
+    foreach ($childOwned in @("g_childController", "g_activePanelRecord = nullptr", "ClearSecondaryPanelControllerOwnedState();")) {
+        if ($parentClear.Contains($childOwned)) {
+            throw "Parent teardown must not invalidate a surviving child: $childOwned"
+        }
+    }
     $captureController = Get-SourceSpan $runtimeSource `
         'extern "C" void __stdcall CaptureSecondaryController(' `
         "void DismissSecondaryPanel()"
@@ -472,10 +476,11 @@ try {
         'extern "C" void __stdcall ResolveDialogCreationRequest(' `
         "__declspec(naked) void DialogCreationHook()"
     Assert-ContainsAny @($dialogCreation) @(
-        "const auto* active = g_activePanelRecord;",
+        "const auto* requestedChild =",
         "InterlockedExchange(&g_childController, 0);",
         "ClearSecondaryPanelControllerOwnedState();",
-        "g_parentPanelRecord = active;"
+        "g_parentPanelRecord = requestedParent;",
+        "g_parentOccupantPanel = occupantParent;"
     ) "Dialog replacement ownership boundary"
 
     $researchBegin = Get-SourceSpan $runtimeSource `

@@ -250,7 +250,7 @@ bool ValidateOccupantPanelProfile();
 bool InstallOccupantPanelRoute();
 bool InstallOccupantChildVtable(std::uint32_t controller);
 bool InstallOccupantParentVtable(std::uint32_t controller);
-bool OpenOccupantPanel(void* controller, std::uint32_t command);
+bool OpenOccupantPanel(void* controller, std::uint32_t command, int* result);
 constexpr std::uint32_t kAp10DialogId = 0x30315041;
 constexpr std::uint32_t kAp69DialogId = 0x39365041;
 constexpr std::uint32_t kAp41DialogId = 0x31345041;
@@ -367,7 +367,6 @@ std::uintptr_t g_imageBase = 0;
 WNDPROC g_originalWindowProcedure = nullptr;
 LONG g_secondaryPanelArmed = 0;
 LONG g_ap10ControllerContext = 0;
-LONG g_parentControllerContext = 0;
 LONG g_secondaryPanelActive = 0;
 LONG g_secondaryPanelHandle = 0;
 LONG g_captureParentController = 0;
@@ -1614,17 +1613,26 @@ DWORD SimulationClock() {
     return *reinterpret_cast<volatile DWORD*>(g_imageBase + g_buildProfile->simulationClockRva);
 }
 
-unsigned char* ActiveParentPanelContext() {
+unsigned char* NativePanelContext(std::uint32_t controller) {
     using GetPanelContext = void* (__thiscall*)(void*);
-    const auto parentController = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&g_parentController, 0, 0));
-    if (parentController == 0) {
+    if (controller == 0) {
         return nullptr;
     }
     auto getPanelContext = reinterpret_cast<GetPanelContext>(
         g_imageBase + g_buildProfile->getPanelContextRva);
     return static_cast<unsigned char*>(
-        getPanelContext(reinterpret_cast<void*>(parentController)));
+        getPanelContext(reinterpret_cast<void*>(controller)));
+}
+
+unsigned char* ActivePanelContext() {
+    // AP69/MX05 resolve their own native +0x28/+0x2C handle pair. Stock
+    // OpenDialog may remove the parent after setting up a child in the same
+    // sidebar slot. Never borrow the deleted parent or fall back to a different
+    // building when the child's native handle no longer resolves.
+    const auto child = static_cast<std::uint32_t>(
+        InterlockedCompareExchange(&g_childController, 0, 0));
+    return NativePanelContext(child != 0 ? child : static_cast<std::uint32_t>(
+        InterlockedCompareExchange(&g_parentController, 0, 0)));
 }
 
 int ReadPackedAttributeValue(
@@ -1781,7 +1789,7 @@ void RefreshPrivateResearchRows(std::uint32_t controller) {
         return;
     }
     void* panel = *reinterpret_cast<void**>(controller + 0x24);
-    unsigned char* context = ActiveParentPanelContext();
+    unsigned char* context = ActivePanelContext();
     if (panel == nullptr || context == nullptr) {
         return;
     }
@@ -1826,7 +1834,7 @@ void RefreshTimedRageRows(std::uint32_t controller) {
 }
 
 int ResourceStock(const MajestyStockControllers::ResourceMeterRecord* meter) {
-    unsigned char* context = ActiveParentPanelContext();
+    unsigned char* context = ActivePanelContext();
     if (context == nullptr || meter == nullptr) {
         return 0;
     }
@@ -1869,7 +1877,7 @@ void RefreshPrivateActionRows(
         return;
     }
     void* panel = *reinterpret_cast<void**>(controller + 0x24);
-    unsigned char* context = ActiveParentPanelContext();
+    unsigned char* context = ActivePanelContext();
     using GetUiManager = void* (__cdecl*)();
     using GetCurrentPlayer = void* (__thiscall*)(void*);
     using RefreshSingleSpellRow = void (__cdecl*)(
@@ -1931,7 +1939,7 @@ void UpdateResearchPresentations(std::uint32_t controller) {
     if (!g_stockResearchRouteReady || controller == 0) {
         return;
     }
-    unsigned char* context = ActiveParentPanelContext();
+    unsigned char* context = ActivePanelContext();
     if (context == nullptr) {
         return;
     }
@@ -1970,18 +1978,9 @@ void* StockCurrentPlayerAgent() {
     // context's +0x80 player slot, and refresh 0x004B1340 reads packed
     // attribute APB\x07 through 0x005B9FD0. Reproduce that exact read so timed actions
     // and Rage share Majesty's native Palace-owned exclusion state.
-    using GetPanelContext = void* (__thiscall*)(void*);
     using GetUiManager = void* (__cdecl*)();
     using GetPlayerAgent = void* (__thiscall*)(void*, std::uint32_t);
-    const auto parentController = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&g_parentController, 0, 0));
-    if (parentController == 0) {
-        return nullptr;
-    }
-    auto getPanelContext = reinterpret_cast<GetPanelContext>(
-        g_imageBase + g_buildProfile->getPanelContextRva);
-    auto* context = static_cast<unsigned char*>(
-        getPanelContext(reinterpret_cast<void*>(parentController)));
+    auto* context = ActivePanelContext();
     if (context == nullptr) {
         return nullptr;
     }
@@ -2059,7 +2058,7 @@ void UpdateSecondaryPanelPresentation(std::uint32_t controller) {
             InterlockedCompareExchange(&g_childController, 0, 0))) {
         return;
     }
-    unsigned char* context = ActiveParentPanelContext();
+    unsigned char* context = ActivePanelContext();
     if (context == nullptr) {
         return;
     }
@@ -2307,13 +2306,13 @@ bool InstallGameUpdateRefreshBridge() {
 }
 
 std::uint32_t SelectedBuildingAgent() {
-    unsigned char* context = ActiveParentPanelContext();
+    unsigned char* context = ActivePanelContext();
     return context == nullptr
         ? 0u : *reinterpret_cast<std::uint32_t*>(context + 0x70);
 }
 
 bool SubmitPrivateRageCommand(const char* callbackSymbol) {
-    unsigned char* context = ActiveParentPanelContext();
+    unsigned char* context = ActivePanelContext();
     const std::uint32_t building = SelectedBuildingAgent();
     if (context == nullptr || building == 0 || callbackSymbol == nullptr) {
         WriteLog(
@@ -2383,7 +2382,7 @@ int BeginPrivateResearch(
         WriteLog("Private research refused: the stock AP99 route was not validated.");
         return 0;
     }
-    unsigned char* context = ActiveParentPanelContext();
+    unsigned char* context = ActivePanelContext();
     if (context == nullptr) {
         WriteLog("Private research had no selected parent context.");
         return 0;
@@ -2454,7 +2453,7 @@ int BeginPrivateResearch(
 int HandleRageCommandAction(
     std::uint32_t controller,
     const MajestyStockControllers::RageCommandActionRecord& action) {
-    unsigned char* context = ActiveParentPanelContext();
+    unsigned char* context = ActivePanelContext();
     if (context == nullptr ||
         SelectedBuildingLevel(context) < static_cast<int>(action.requiredLevel) ||
         ResourceStock(FindActiveMeter(action.resourceKey)) <
@@ -2481,7 +2480,7 @@ int HandleRageCommandAction(
 int HandleSovereignTargetAction(
     std::uint32_t controller,
     const MajestyStockControllers::SovereignTargetActionRecord& action) {
-    unsigned char* context = ActiveParentPanelContext();
+    unsigned char* context = ActivePanelContext();
     if (context == nullptr ||
         SelectedBuildingLevel(context) < static_cast<int>(action.requiredLevel) ||
         ResourceStock(FindActiveMeter(action.resourceKey)) <
@@ -2874,7 +2873,7 @@ extern "C" const std::uint32_t* __stdcall ResolvePrivateSpellDescriptor(
             const auto& action =
                 *static_cast<const MajestyStockControllers::SovereignTargetActionRecord*>(
                     state.record);
-            unsigned char* context = ActiveParentPanelContext();
+            unsigned char* context = ActivePanelContext();
             const bool levelMet = context != nullptr &&
                 SelectedBuildingLevel(context) >=
                     static_cast<int>(action.requiredLevel);
@@ -3472,10 +3471,34 @@ void __fastcall SecondaryPanelControllerSetup(void* controller, void*) {
     UpdateSecondaryPanelPresentation(value);
 }
 
+int ReturnToPrivateParent(void* controller, std::uint32_t parentDialogId) {
+    // Literal AP69 Back branch: obtain this child's building, hide its stream,
+    // create the parent (id, context, 0, 0), return 1 for stock removal of the
+    // initiating child. Only the parent dialog ID is private. No cached parent
+    // pointer or creation-wide AP10 redirection is involved.
+    using GetUiManager = void* (__cdecl*)();
+    using HidePanel = void (__thiscall*)(void*);
+    using CreateDialog = std::uint32_t (__thiscall*)(
+        void*, std::uint32_t, void*, std::uint32_t, std::uint32_t);
+    void* manager = reinterpret_cast<GetUiManager>(
+        g_imageBase + g_buildProfile->uiManagerRva)();
+    void* context = NativePanelContext(reinterpret_cast<std::uint32_t>(controller));
+    if (context == nullptr) return 0;
+    void* panel = *reinterpret_cast<void**>(static_cast<unsigned char*>(controller) + 0x24);
+    auto** table = *reinterpret_cast<void***>(panel);
+    reinterpret_cast<HidePanel>(table[0x14 / sizeof(void*)])(panel);
+    reinterpret_cast<CreateDialog>(g_imageBase + g_buildProfile->dialogCreationRva)(
+        manager, parentDialogId, context, 0, 0);
+    return 1;
+}
+
 int __fastcall SecondaryPanelControllerControl(
     void* controller, void*, std::uint32_t controlId) {
     const auto value = reinterpret_cast<std::uint32_t>(controller);
     if (g_activePanelRecord != nullptr) {
+        if (controlId == 0x1F4D) {
+            return ReturnToPrivateParent(controller, g_activePanelRecord->parentDialogId);
+        }
         for (const auto& action : g_stockControllerRegistry.timedRageActions) {
             if (action.panelKey == g_activePanelRecord->panelKey &&
                 action.actionControlId == controlId) {
@@ -3597,7 +3620,8 @@ bool InstallSecondaryPanelControllerVtable(std::uint32_t controller) {
 
 int __fastcall ParentPanelControllerControl(
     void* controller, void*, std::uint32_t controlId) {
-    if (OpenOccupantPanel(controller, controlId)) return 0;
+    int openResult = 0;
+    if (OpenOccupantPanel(controller, controlId, &openResult)) return openResult;
     const auto* gate = ActiveUpgradeGate();
     if (gate != nullptr && controlId == gate->upgradeControlId) {
         using GetPanelContext = void* (__thiscall*)(void*);
@@ -3723,21 +3747,14 @@ void __fastcall ParentPanelControllerEvent(
 
 void __cdecl ParentPanelControllerDestroyed(void*, void*) {
     g_parentOccupantPanel = nullptr;
-    // The parent controller owns every borrowed context used by its private
-    // secondary panel. Once stock destroys that exact parent, invalidate the
-    // complete dependent UI chain. Gameplay state and active effects remain
-    // under their native simulation lifecycles.
+    // Stock may destroy only this parent after opening a child in the primary
+    // slot. The child owns its own native building handle and private mapping;
+    // only its exact-instance destructor may invalidate that live UI state.
     InterlockedExchange(&g_captureParentController, 0);
     InterlockedExchange(&g_secondaryPanelArmed, 0);
     InterlockedExchange(&g_ap10ControllerContext, 0);
-    InterlockedExchange(&g_parentControllerContext, 0);
-    InterlockedExchange(&g_childController, 0);
     g_parentPanelRecord = nullptr;
-    g_activePanelRecord = nullptr;
     g_parentRewardPanelRecord = nullptr;
-    g_activeRewardPanelRecord = nullptr;
-    g_activeRewardFlagState = nullptr;
-    ClearSecondaryPanelControllerOwnedState();
     WriteLog(
         "Invalidated manager-owned parent-controller state at Majesty's stock teardown boundary.");
 }
@@ -4076,18 +4093,16 @@ int __fastcall RewardPanelControl(
 
 int __fastcall RewardParentControl(
     void* controller, void*, std::uint32_t controlId) {
-    if (OpenOccupantPanel(controller, controlId)) return 0;
+    int openResult = 0;
+    if (OpenOccupantPanel(controller, controlId, &openResult)) return openResult;
     const auto* panel = g_parentRewardPanelRecord;
     if (panel == nullptr || controlId != panel->openCommandId) {
         return g_stockRewardParentControl(controller, controlId);
     }
-    using OpenDialog = void (__thiscall*)(void*, std::uint32_t, std::uint32_t);
+    using OpenDialog = int (__thiscall*)(void*, std::uint32_t, std::uint32_t);
     auto open = reinterpret_cast<OpenDialog>(
         g_imageBase + g_buildProfile->openDialogRva);
-    g_activeRewardPanelRecord = panel;
-    g_activeRewardFlagState = FindRewardStateByPanel(panel->panelKey);
-    open(controller, panel->childDialogId, 0);
-    return 0;
+    return open(controller, panel->childDialogId, 0);
 }
 
 bool InstallRewardParentControllerVtable(std::uint32_t controller) {
@@ -4215,12 +4230,12 @@ bool InstallOccupantPanelRoute() {
         WriteOccupantBranch(g_imageBase + profile.submitCall, reinterpret_cast<void*>(&SubmitOccupantAction), 0xE8) &&
         WriteOccupantBranch(g_imageBase + profile.commandDispatch, reinterpret_cast<void*>(&DispatchOccupantAction), 0xE9, 6);
 }
-bool OpenOccupantPanel(void* controller, std::uint32_t command) {
+bool OpenOccupantPanel(void* controller, std::uint32_t command, int* result) {
     if (g_parentOccupantPanel == nullptr) return false;
     for (const auto& panel : g_stockControllerRegistry.occupantActionPanels) {
         if (panel.parentDialogId != g_parentOccupantPanel->parentDialogId || panel.openCommandId != command) continue;
-        using Open = void (__thiscall*)(void*, std::uint32_t, std::uint32_t);
-        reinterpret_cast<Open>(g_imageBase + g_buildProfile->openDialogRva)(controller, panel.childDialogId, 0);
+        using Open = int (__thiscall*)(void*, std::uint32_t, std::uint32_t);
+        *result = reinterpret_cast<Open>(g_imageBase + g_buildProfile->openDialogRva)(controller, panel.childDialogId, 0);
         return true;
     }
     return false;
@@ -4231,7 +4246,8 @@ struct OccupantParentClass {
 };
 std::vector<OccupantParentClass*> g_occupantParentClasses;
 int __fastcall OccupantParentControl(void* controller, void*, std::uint32_t command) {
-    if (OpenOccupantPanel(controller, command)) return 0;
+    int openResult = 0;
+    if (OpenOccupantPanel(controller, command, &openResult)) return openResult;
     auto** table = *static_cast<void***>(controller);
     for (const auto* entry : g_occupantParentClasses) {
         if (entry->table == table) return reinterpret_cast<ControllerControl>(entry->stock[3])(controller, command);
@@ -4516,7 +4532,6 @@ void DismissSecondaryPanel() {
     const auto handle = static_cast<std::uint32_t>(
         InterlockedExchange(&g_secondaryPanelHandle, 0));
     InterlockedExchange(&g_childController, 0);
-    InterlockedExchange(&g_parentController, 0);
     ClearSecondaryPanelControllerOwnedState();
     g_activeRewardPanelRecord = nullptr;
     g_activeRewardFlagState = nullptr;
@@ -4670,8 +4685,9 @@ extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) 
     if (requested == 0 && InterlockedCompareExchange(&g_secondaryPanelArmed, 0, 1) == 1) {
         const auto parentContext = idAddress[2] != 0
             ? idAddress[2]
-            : static_cast<std::uint32_t>(InterlockedCompareExchange(
-                  &g_parentControllerContext, 0, 0));
+            : reinterpret_cast<std::uint32_t>(NativePanelContext(
+                  static_cast<std::uint32_t>(InterlockedCompareExchange(
+                      &g_parentController, 0, 0))));
         if (parentContext == 0 || g_parentPanelRecord == nullptr) {
             LogDialogFactoryRequest(
                 idAddress, requested,
@@ -4694,126 +4710,71 @@ extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) 
 }
 
 extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments) {
-    const std::uint32_t requested = arguments[0];
+    std::uint32_t requested = arguments[0];
     char trace[224] = {};
     sprintf_s(
         trace,
         "Dialog creation entry: id=0x%08X context=0x%08X owner=0x%08X arg4=0x%08X.",
         arguments[0], arguments[1], arguments[2], arguments[3]);
     WriteLog(trace);
-    const bool secondaryActive =
-        InterlockedCompareExchange(&g_secondaryPanelActive, 0, 0) == 1;
-    const auto parentContext = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&g_parentControllerContext, 0, 0));
-    if (secondaryActive && g_activeRewardPanelRecord == nullptr &&
-        g_activeOccupantPanel == nullptr &&
-        requested == kAp10DialogId &&
-        InterlockedCompareExchange(&g_secondaryPanelActive, 0, 1) == 1) {
-        const auto* active = g_activePanelRecord;
-        InterlockedExchange(&g_childController, 0);
-        ClearSecondaryPanelControllerOwnedState();
-        if (parentContext != 0 && active != nullptr) {
-            arguments[0] = active->parentDialogId;
-            arguments[1] = parentContext;
-            g_parentPanelRecord = active;
-            g_parentOccupantPanel = g_stockControllerRegistry.FindOccupantPanelByParent(active->parentDialogId);
-            InterlockedExchange(&g_captureParentController, 1);
-            WriteLog("Redirected an AP69 Back request to its resolved parent dialog.");
-            return;
+
+    // Privatize only the armed AP10 opener's request. The stock opener already
+    // owns the correct building context and the keep/remove-parent decision.
+    const bool armed = InterlockedExchange(&g_secondaryPanelArmed, 0) == 1;
+    if (requested == 0 && armed && g_parentPanelRecord != nullptr) {
+        void* context = arguments[1] != 0
+            ? reinterpret_cast<void*>(arguments[1])
+            : NativePanelContext(static_cast<std::uint32_t>(
+                  InterlockedCompareExchange(&g_parentController, 0, 0)));
+        if (context != nullptr) {
+            requested = arguments[0] = g_parentPanelRecord->childDialogId;
+            arguments[1] = reinterpret_cast<std::uint32_t>(context);
+            WriteLog("Creation entry translated a parent command to its resolved child dialog.");
         }
-        WriteLog("Secondary Back request had no captured parent context; left AP10 unchanged.");
-    } else if (secondaryActive && arguments[1] != 0 &&
-        InterlockedCompareExchange(&g_secondaryPanelActive, 0, 1) == 1) {
-        // Majesty's controller-backed sidebar dialogs carry a nonzero context.
-        // Auxiliary notifications such as AP36 carry context zero and do not
-        // replace or destroy the still-live secondary controller.
+    }
+
+    const auto* requestedChild = g_stockControllerRegistry.FindPanelByChildDialog(requested);
+    const auto* rewardChild = g_stockControllerRegistry.FindRewardPanelByChildDialog(requested);
+    const auto* occupantChild = g_stockControllerRegistry.FindOccupantPanelByChild(requested);
+    if (requestedChild != nullptr || rewardChild != nullptr || occupantChild != nullptr) {
+        // A new private child takes the tracked child slot. An older child's
+        // delayed destructor cannot clear this new mapping (exact-instance
+        // lifecycle guard). The parent slot is independent.
         InterlockedExchange(&g_childController, 0);
         ClearSecondaryPanelControllerOwnedState();
-        WriteLog("Cleared secondary state on a controller-backed dialog replacement.");
-    }
-    const auto* occupantParent = g_stockControllerRegistry.FindOccupantPanelByParent(requested);
-    const auto* occupantChild = g_stockControllerRegistry.FindOccupantPanelByChild(requested);
-    if (occupantChild != nullptr) {
+        g_activePanelRecord = requestedChild;
+        g_activeRewardPanelRecord = rewardChild;
+        g_activeRewardFlagState = rewardChild == nullptr
+            ? nullptr : FindRewardStateByPanel(rewardChild->panelKey);
         g_activeOccupantPanel = occupantChild;
         InterlockedExchange(&g_secondaryPanelActive, 1);
         InterlockedExchange(&g_captureChildController, 1);
         return;
     }
-    if (arguments[1] != 0) g_parentOccupantPanel = occupantParent;
-    if (requested == kAp10DialogId && arguments[1] != 0) {
-        InterlockedExchange(
-            &g_ap10ControllerContext, static_cast<LONG>(arguments[1]));
-        InterlockedExchange(&g_secondaryPanelArmed, 0);
-        WriteLog("Creation entry captured AP10 context before setup-object construction.");
-        return;
-    }
-    const auto* requestedParent =
-        g_stockControllerRegistry.FindPanelByParentDialog(requested);
-    if (requestedParent != nullptr) {
-        g_parentRewardPanelRecord = nullptr;
-        g_activeRewardPanelRecord = nullptr;
-        g_activeRewardFlagState = nullptr;
+
+    const auto* requestedParent = g_stockControllerRegistry.FindPanelByParentDialog(requested);
+    const auto* rewardParent = g_stockControllerRegistry.FindRewardPanelByParentDialog(requested);
+    const auto* occupantParent = g_stockControllerRegistry.FindOccupantPanelByParent(requested);
+    if (requestedParent != nullptr || rewardParent != nullptr || occupantParent != nullptr) {
+        // Only a parent creation changes parent recipes. AP91 Visitors, member
+        // lists, and auxiliary notices must not erase a surviving parent's
+        // occupant/reward/research openers.
         g_parentPanelRecord = requestedParent;
-        if (arguments[1] != 0) {
-            InterlockedExchange(
-                &g_parentControllerContext, static_cast<LONG>(arguments[1]));
-        }
+        g_parentRewardPanelRecord = rewardParent;
+        g_parentOccupantPanel = occupantParent;
         InterlockedExchange(&g_captureParentController, 1);
         WriteLog("Creation entry captured a resolved parent dialog.");
         return;
     }
-    const auto* requestedRewardParent =
-        g_stockControllerRegistry.FindRewardPanelByParentDialog(requested);
-    if (requestedRewardParent != nullptr) {
-        g_parentPanelRecord = nullptr;
-        g_parentRewardPanelRecord = requestedRewardParent;
-        g_activeRewardPanelRecord = nullptr;
-        g_activeRewardFlagState = nullptr;
-        if (arguments[1] != 0) {
-            InterlockedExchange(
-                &g_parentControllerContext, static_cast<LONG>(arguments[1]));
-        }
-        InterlockedExchange(&g_captureParentController, 1);
-        WriteLog("Creation entry captured a resolved reward parent dialog.");
-        return;
+
+    if (requested == kAp10DialogId && arguments[1] != 0) {
+        InterlockedExchange(&g_ap10ControllerContext, static_cast<LONG>(arguments[1]));
+        WriteLog("Creation entry captured AP10 context before setup-object construction.");
     }
-    const auto* requestedRewardChild =
-        g_stockControllerRegistry.FindRewardPanelByChildDialog(requested);
-    if (requestedRewardChild != nullptr) {
-        g_activeRewardPanelRecord = requestedRewardChild;
-        g_activeRewardFlagState = FindRewardStateByPanel(requestedRewardChild->panelKey);
-        InterlockedExchange(&g_secondaryPanelActive, 1);
-        InterlockedExchange(&g_captureChildController, 1);
-        WriteLog("Creation entry captured a resolved AP41 reward child dialog.");
-        return;
-    }
-    if (occupantParent != nullptr) {
-        g_parentPanelRecord = nullptr;
-        g_parentRewardPanelRecord = nullptr;
-        InterlockedExchange(&g_parentControllerContext, static_cast<LONG>(arguments[1]));
-        InterlockedExchange(&g_captureParentController, 1);
-        return;
-    }
-    if (requested == 0 && InterlockedCompareExchange(&g_secondaryPanelArmed, 0, 1) == 1) {
-        const auto requestContext = arguments[1] != 0
-            ? arguments[1]
-            : static_cast<std::uint32_t>(InterlockedCompareExchange(
-                  &g_parentControllerContext, 0, 0));
-        if (requestContext == 0 || g_parentPanelRecord == nullptr) {
-            WriteLog(
-                "Creation entry found no resolved parent context; left the secondary request unmapped.");
-            return;
-        }
-        arguments[0] = g_parentPanelRecord->childDialogId;
-        arguments[1] = requestContext;
-        g_activePanelRecord = g_parentPanelRecord;
-        InterlockedExchange(&g_secondaryPanelActive, 1);
-        InterlockedExchange(&g_captureChildController, 1);
-        WriteLog(
-            "Creation entry translated a parent command to its resolved child dialog.");
-        return;
-    }
-    InterlockedExchange(&g_secondaryPanelArmed, 0);
+    // A creation request is not destruction evidence: native layout may leave
+    // another panel alive. Stock removal callbacks retire its mapping only when
+    // that exact controller is actually removed. AP69 Back is handled at its
+    // own command boundary, never by rewriting unrelated AP10 requests.
 }
 
 __declspec(naked) void DialogCreationHook() {
