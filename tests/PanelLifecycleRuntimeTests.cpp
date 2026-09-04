@@ -286,5 +286,24 @@ int main() {
     assert(packedValue == 0 && lastVisibleControl == 0x5D02 && lastVisibleValue == 0);
     assert(lastMessageControl == 0x5D01 && lastMessage == 0x0A);
     assert(!HandleBuildingOpenToggle(&parent, 0x7777, &toggleResult));
-    std::puts("Panel lifecycle x86 tests passed: single/stacked, research, Back, visitors, reward, occupant, building toggle, stale teardown.");
+
+    // 12. The native creation-result hook installs the combined parent vtable
+    // after stock setup has already run.  Reward+occupant+toggle parents must
+    // receive their first MX22 presentation immediately at that boundary.
+    Reset();
+    parent.table = nativeTable;
+    g_stockRewardParentControl = nullptr;
+    g_stockRewardParentSetup = nullptr;
+    g_stockRewardParentEvent = nullptr;
+    g_parentRewardPanelRecord = reward;
+    g_parentOccupantPanel = occupant;
+    g_parentOpenToggleRecord = &g_stockControllerRegistry.buildingOpenToggles[0];
+    g_captureParentController = 1;
+    CaptureSecondaryController(reinterpret_cast<std::uint32_t>(&parent), 0);
+    assert(g_captureParentController == 0);
+    assert(g_parentController == reinterpret_cast<LONG>(&parent));
+    assert(g_parentRewardPanelRecord == reward && g_parentOccupantPanel == occupant);
+    assert(lastVisibleControl == 0x5D02 && lastVisibleValue == 0);
+    assert(lastMessageControl == 0x5D01 && lastMessage == 0x0A);
+    std::puts("Panel lifecycle x86 tests passed: single/stacked, research, Back, visitors, reward, occupant, first-open building toggle, stale teardown.");
 }

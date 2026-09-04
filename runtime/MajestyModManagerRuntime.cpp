@@ -4624,6 +4624,14 @@ extern "C" void __stdcall CaptureSecondaryController(
             StopUnsafeManagerRuntimeLaunch(
                 "A resolved parent controller could not install its stock-lifecycle vtable clone.");
         }
+        // The factory result hook runs after the stock controller's initial
+        // setup presenter.  Its setup slot therefore cannot initialize a
+        // newly installed manager-owned toggle on this first presentation.
+        // Apply the same MX22-derived presentation once immediately after the
+        // combined parent vtable is live; this is a safe no-op for parents
+        // without a declared toggle.  Later setup, event, and command refresh
+        // boundaries remain unchanged.
+        RefreshBuildingOpenToggle(controller);
         WriteLog("Captured a manager parent and installed its scoped AP10 command guard.");
         return;
     }
