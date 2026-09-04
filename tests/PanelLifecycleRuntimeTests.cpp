@@ -30,6 +30,9 @@ void* seenContext = nullptr;
 std::uint32_t seenCommand = 0, seenDialog = 0;
 int fallbackCount = 0, submitCount = 0, refreshCount = 0, openCount = 0;
 int openResult = 0, deleteCount = 0, hideCount = 0;
+int packedValue = 0;
+std::uint32_t lastMessageControl = 0, lastMessage = 0;
+std::uint32_t lastVisibleControl = 0, lastVisibleValue = 0;
 bool affordable = true;
 void* __fastcall Context(void* object, void*) {
     return static_cast<Controller*>(object)->context;
@@ -40,11 +43,19 @@ void* __fastcall PlayerAgent(void*, void*, std::uint32_t player) {
     assert(player == 7);
     return contextA;
 }
-int __fastcall ReadAttribute(void*, void*, std::uint32_t, std::uint32_t) { return 0; }
-void __fastcall WriteAttribute(void*, void*, std::uint32_t, int) {}
-std::uint32_t __fastcall Send(void*, void*, std::uint32_t, std::uint32_t,
-                             std::uint32_t, std::uint32_t) { return 0; }
-void __fastcall Visible(void*, void*, std::uint32_t, std::uint32_t) {}
+int __fastcall ReadAttribute(void*, void*, std::uint32_t attribute, std::uint32_t) {
+    assert(attribute == kEmbassyActiveFlagAttributeId); return packedValue;
+}
+void __fastcall WriteAttribute(void*, void*, std::uint32_t attribute, int value) {
+    assert(attribute == kEmbassyActiveFlagAttributeId); packedValue = value;
+}
+std::uint32_t __fastcall Send(void*, void*, std::uint32_t control, std::uint32_t message,
+                             std::uint32_t, std::uint32_t) {
+    lastMessageControl = control; lastMessage = message; return 0;
+}
+void __fastcall Visible(void*, void*, std::uint32_t control, std::uint32_t value) {
+    lastVisibleControl = control; lastVisibleValue = value;
+}
 void __fastcall Hide(void*, void*) { ++hideCount; }
 void __cdecl Refresh(void*, void* context, std::uint32_t command) {
     ++refreshCount; seenContext = context; seenCommand = command;
@@ -85,6 +96,7 @@ void Reset() {
     g_captureParentController = g_secondaryPanelArmed = 0;
     g_parentPanelRecord = nullptr;
     g_parentRewardPanelRecord = nullptr;
+    g_parentOpenToggleRecord = nullptr;
     g_parentOccupantPanel = nullptr;
     g_researchOwner = {};
     parent.context = child.context = contextA;
@@ -92,6 +104,8 @@ void Reset() {
     fallbackCount = submitCount = refreshCount = openCount = hideCount = 0;
     seenContext = nullptr; seenDialog = seenCommand = 0;
     affordable = true;
+    packedValue = 0; lastMessageControl = lastMessage = 0;
+    lastVisibleControl = lastVisibleValue = 0;
 }
 void ResearchPair() {
     Reset();
@@ -138,6 +152,8 @@ void Initialize() {
     g_stockControllerRegistry.rewardPanels = {{"beacon", 0x31303042, 0x31303050, 0x4100}};
     g_stockControllerRegistry.occupantActionPanels = {
         {"clinic", 0x31303042, 0x32303050, 0x4101, 0x10000, "Clinic_Cost", "Clinic_Action", kMx09DialogId}};
+    g_stockControllerRegistry.buildingOpenToggles = {
+        {"rentals", 0x31303042, 0x5D01, 0x5D02, kMx09DialogId}};
 }
 }
 
@@ -257,5 +273,18 @@ int main() {
     args[1] = reinterpret_cast<std::uint32_t>(contextA);
     ResolveDialogCreationRequest(args);
     assert(g_activePanelRecord != nullptr && g_captureChildController == 1);
-    std::puts("Panel lifecycle x86 tests passed: single/stacked, research, Back, visitors, reward, occupant, stale teardown.");
+
+    // 11. MX22's paired-control state is cloned, but its Embassy order is not.
+    Reset();
+    g_parentOpenToggleRecord = &g_stockControllerRegistry.buildingOpenToggles[0];
+    int toggleResult = 99;
+    assert(HandleBuildingOpenToggle(&parent, 0x5D01, &toggleResult));
+    assert(toggleResult == 0 && packedValue == 1 && submitCount == 0);
+    assert(lastVisibleControl == 0x5D02 && lastVisibleValue == 1);
+    assert(lastMessageControl == 0x5D02 && lastMessage == 0x0A);
+    assert(HandleBuildingOpenToggle(&parent, 0x5D02, &toggleResult));
+    assert(packedValue == 0 && lastVisibleControl == 0x5D02 && lastVisibleValue == 0);
+    assert(lastMessageControl == 0x5D01 && lastMessage == 0x0A);
+    assert(!HandleBuildingOpenToggle(&parent, 0x7777, &toggleResult));
+    std::puts("Panel lifecycle x86 tests passed: single/stacked, research, Back, visitors, reward, occupant, building toggle, stale teardown.");
 }

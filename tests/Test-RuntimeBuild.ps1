@@ -159,7 +159,7 @@ try {
         "runtime feature registry contains trailing bytes", "FindEnchantmentRow"
     ) "Runtime feature registry contract"
     Assert-ContainsAny @($controllerSource, $controllerHeader) @(
-        "kRegistryVersion = 3", "kMaximumRecordCount = 256",
+        "kRegistryVersion = 4", "kMaximumRecordCount = 256",
         "kMaximumPanelCount = 32", "kMaximumRegistryBytes = 512u * 1024u",
         "ParseRegistry", "FindPanelByParentDialog", "FindPanelByChildDialog",
         "FindRewardPanelByParentDialog", "FindHostileMonsterFlagByMode",

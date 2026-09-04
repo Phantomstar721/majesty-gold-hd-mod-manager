@@ -7,6 +7,15 @@ from typing import Mapping, Optional, Sequence, Tuple, Union
 import xml.etree.ElementTree as ET
 
 from .runtime_capabilities import is_runtime_capability_name
+from .gpl_features import (
+    GplFeature,
+    GplFeatureError,
+    StockGplmxPurchaseEquipmentTail,
+    StockGplmxPurchaseBazaarTail,
+    gpl_feature_mapping,
+    normalize_gpl_features,
+    parse_gpl_feature,
+)
 from .runtime_features import (
     EnchantmentRowFeature,
     NameGeneratorFeature,
@@ -145,7 +154,7 @@ class CustomBuildingDefinition:
 # Backward-compatible descriptive alias for the schema's AP78-specific record
 # name; the runtime module intentionally uses the reusable shorter class name.
 Ap78EnchantmentRowFeature = EnchantmentRowFeature
-PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature]
+PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature, GplFeature]
 
 
 @dataclass(frozen=True)
@@ -381,6 +390,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         raise PackageFormatError("mod definition runtime_features must be an array")
     features: list[PackageRuntimeFeature] = []
     controller_features: list[ControllerFeature] = []
+    gpl_features: list[GplFeature] = []
     seen_feature_keys: set[tuple[str, ...]] = set()
     for index, raw_feature in enumerate(raw_features):
         context = f"runtime_features[{index}]"
@@ -423,6 +433,19 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 display_text=display_text,
             )
             feature_key = (feature_type, overlay_id.casefold())
+        elif feature_type in {
+            "stock.gplmx-purchase-equipment-tail.v1",
+            "stock.gplmx-purchase-bazaar-tail.v1",
+        }:
+            try:
+                feature = parse_gpl_feature(raw_feature)
+            except GplFeatureError as exc:
+                raise PackageFormatError(f"{context} is invalid: {exc}") from exc
+            gpl_features.append(feature)
+            feature_key = (
+                feature_type,
+                feature.callback_key.casefold(),
+            )
         else:
             try:
                 controller = parse_controller_feature(raw_feature)
@@ -448,16 +471,26 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 local_identity = str(mapping["action_key"])
             elif feature_type in {
                 "stock.ap10-ap69-secondary-panel.v1",
+                "stock.mx04-mx05-occupant-action-panel.v1",
+                "stock.mx09-ap41-reward-panel.v1",
                 "stock.ap17-upgrade-research-gate.v1",
             }:
                 local_identity = str(mapping["parent_building"])
+            elif feature_type == "stock.mx22-building-open-toggle.v1":
+                feature_key = (
+                    feature_type,
+                    str(mapping["toggle_key"]).casefold(),
+                    str(mapping["parent_building"]).casefold(),
+                )
+                local_identity = ""
             else:  # pragma: no cover - the typed parser owns this closed union
                 local_identity = ""
-            feature_key = (
-                feature_type,
-                str(mapping["panel_key"]).casefold(),
-                local_identity.casefold(),
-            )
+            if feature_type != "stock.mx22-building-open-toggle.v1":
+                feature_key = (
+                    feature_type,
+                    str(mapping["panel_key"]).casefold(),
+                    local_identity.casefold(),
+                )
         if feature_key in seen_feature_keys:
             raise PackageFormatError(
                 f"duplicate runtime feature identity: {feature_key[1]!r}"
@@ -476,6 +509,13 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         except ControllerFeatureError as exc:
             raise PackageFormatError(
                 f"mod definition controller runtime_features are invalid: {exc}"
+            ) from exc
+    if gpl_features:
+        try:
+            normalize_gpl_features(gpl_features)
+        except GplFeatureError as exc:
+            raise PackageFormatError(
+                f"mod definition GPL runtime_features are invalid: {exc}"
             ) from exc
 
     return ModDefinition(
@@ -771,6 +811,8 @@ def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
             "overlay_id": feature.overlay_id,
             "display_text": feature.display_text,
         }
+    if isinstance(feature, (StockGplmxPurchaseEquipmentTail, StockGplmxPurchaseBazaarTail)):
+        return gpl_feature_mapping(feature)
     try:
         return controller_feature_mapping(feature)
     except ControllerFeatureError as exc:
@@ -891,6 +933,8 @@ __all__ = [
     "PackageRuntimeFeature",
     "PackagePath",
     "RuntimeFeature",
+    "StockGplmxPurchaseEquipmentTail",
+    "StockGplmxPurchaseBazaarTail",
     "load_mod_definition",
     "load_package",
     "parse_mod_definition",

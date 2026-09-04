@@ -55,6 +55,8 @@ offset conversion.
 | Player agent | `0x00029580` | `0x0002B150` |
 | Packed attribute read | `0x001B9FD0` | `0x001CEF70` |
 | Building command submission | `0x000C4CF0` | `0x000C5730` |
+| MX22 open/close command handler | `0x000B9540` | `0x000B9F80` |
+| MX22 open/close presenter | `0x000B95A0` | `0x000B9FE0` |
 | Rage command dispatch | `0x000C4FE1` | `0x000C5A21` |
 | Rage private GPL branch | `0x000B1269` | `0x000B1B59` |
 | Rage GPL construction continuation | `0x000B12C9` | `0x000B1BB9` |

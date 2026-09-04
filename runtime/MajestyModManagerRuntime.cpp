@@ -377,6 +377,7 @@ const MajestyStockControllers::SecondaryPanelRecord* g_parentPanelRecord = nullp
 const MajestyStockControllers::SecondaryPanelRecord* g_activePanelRecord = nullptr;
 const MajestyStockControllers::RewardPanelRecord* g_parentRewardPanelRecord = nullptr;
 const MajestyStockControllers::RewardPanelRecord* g_activeRewardPanelRecord = nullptr;
+const MajestyStockControllers::BuildingOpenToggleRecord* g_parentOpenToggleRecord = nullptr;
 const MajestyStockControllers::TimedRageActionRecord* g_activeTimedRageAction = nullptr;
 LONG g_timedRageActive = 0;
 const MajestyStockControllers::TimedRageActionRecord* g_pendingTimedRageAction = nullptr;
@@ -425,10 +426,15 @@ RewardFlagRuntimeState* g_activeRewardFlagState = nullptr;
 void* g_rewardParentVtable[kAp10VtableEntries] = {};
 void* g_rewardPanelVtable[kAp69VtableEntries] = {};
 using RewardControllerControl = int (__thiscall*)(void*, std::uint32_t);
+using RewardControllerSetup = void (__thiscall*)(void*);
+using RewardControllerEvent = void (__thiscall*)(
+    void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t);
 using RewardControllerActivation = std::uintptr_t (__thiscall*)(void*);
 using RewardControllerRefresh = std::uintptr_t (__thiscall*)(
     void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t);
 RewardControllerControl g_stockRewardParentControl = nullptr;
+RewardControllerSetup g_stockRewardParentSetup = nullptr;
+RewardControllerEvent g_stockRewardParentEvent = nullptr;
 RewardControllerControl g_stockRewardPanelControl = nullptr;
 RewardControllerActivation g_stockRewardPanelActivation = nullptr;
 RewardControllerRefresh g_stockRewardPanelRefresh = nullptr;
@@ -866,7 +872,8 @@ StockControllerRegistryState LoadStockControllerRegistry() {
         "Loaded validated MMCR registry with %u stock-controller panels and %u total recipes.",
         static_cast<unsigned int>(g_stockControllerRegistry.panels.size() +
             g_stockControllerRegistry.rewardPanels.size() +
-            g_stockControllerRegistry.occupantActionPanels.size()),
+            g_stockControllerRegistry.occupantActionPanels.size() +
+            g_stockControllerRegistry.buildingOpenToggles.size()),
         static_cast<unsigned int>(
             g_stockControllerRegistry.meters.size() +
             g_stockControllerRegistry.researchRows.size() +
@@ -876,7 +883,8 @@ StockControllerRegistryState LoadStockControllerRegistry() {
             g_stockControllerRegistry.sovereignTargetActions.size() +
             g_stockControllerRegistry.rewardPanels.size() +
             g_stockControllerRegistry.occupantActionPanels.size() +
-            g_stockControllerRegistry.hostileMonsterFlags.size()));
+            g_stockControllerRegistry.hostileMonsterFlags.size() +
+            g_stockControllerRegistry.buildingOpenToggles.size()));
     WriteLog(message);
     return StockControllerRegistryState::Loaded;
 }
@@ -1633,6 +1641,56 @@ unsigned char* ActivePanelContext() {
         InterlockedCompareExchange(&g_childController, 0, 0));
     return NativePanelContext(child != 0 ? child : static_cast<std::uint32_t>(
         InterlockedCompareExchange(&g_parentController, 0, 0)));
+}
+
+int ReadPackedAttributeValue(
+    void* context, std::uint32_t attributeId, std::uint32_t fallback);
+void WritePackedAttributeValue(
+    void* context, std::uint32_t attributeId, int value);
+
+constexpr std::uint32_t kEmbassyActiveFlagAttributeId = 0x044D4541u;
+
+void RefreshBuildingOpenToggle(std::uint32_t controller) {
+    const auto* toggle = g_parentOpenToggleRecord;
+    if (toggle == nullptr) return;
+    auto* context = NativePanelContext(controller);
+    if (context == nullptr) return;
+    const bool open = ReadPackedAttributeValue(
+        context, kEmbassyActiveFlagAttributeId, 0) != 0;
+    // Literal MX22 presenter order: hide the inactive action, show the action
+    // that changes the current state, then send its stock enable message 0xA.
+    SetControllerControlVisible(controller, toggle->openCommandId, !open);
+    SetControllerControlVisible(controller, toggle->closeCommandId, open);
+    SendControllerMessage(
+        controller,
+        open ? toggle->closeCommandId : toggle->openCommandId,
+        0x0Au,
+        0u,
+        0u);
+}
+
+bool HandleBuildingOpenToggle(
+    void* controller, std::uint32_t command, int* result) {
+    const auto* toggle = g_parentOpenToggleRecord;
+    if (toggle == nullptr ||
+        (command != toggle->openCommandId && command != toggle->closeCommandId)) {
+        return false;
+    }
+    auto* context = NativePanelContext(
+        reinterpret_cast<std::uint32_t>(controller));
+    if (context == nullptr) {
+        StopUnsafeManagerRuntimeLaunch(
+            "A building open-toggle command lost its stock panel context.");
+    }
+    // MX22 stores this durable state on the selected building. Do not submit
+    // order 0x16: its GS_EmbassyRecruitOrder side effect belongs to Embassy.
+    WritePackedAttributeValue(
+        context,
+        kEmbassyActiveFlagAttributeId,
+        command == toggle->openCommandId ? 1 : 0);
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
+    *result = 0;
+    return true;
 }
 
 int ReadPackedAttributeValue(
@@ -3621,6 +3679,7 @@ bool InstallSecondaryPanelControllerVtable(std::uint32_t controller) {
 int __fastcall ParentPanelControllerControl(
     void* controller, void*, std::uint32_t controlId) {
     int openResult = 0;
+    if (HandleBuildingOpenToggle(controller, controlId, &openResult)) return openResult;
     if (OpenOccupantPanel(controller, controlId, &openResult)) return openResult;
     const auto* gate = ActiveUpgradeGate();
     if (gate != nullptr && controlId == gate->upgradeControlId) {
@@ -3658,6 +3717,7 @@ int __fastcall ParentPanelControllerControl(
         g_imageBase + g_buildProfile->getPanelContextRva);
     ApplyUpgradeResearchGate(
         reinterpret_cast<std::uint32_t>(controller), getPanelContext(controller));
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
     return result;
 }
 
@@ -3680,6 +3740,7 @@ void __fastcall ParentPanelControllerSetup(void* controller, void*) {
     void* context = getPanelContext(controller);
     ApplyUpgradeResearchGate(
         reinterpret_cast<std::uint32_t>(controller), context);
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
 }
 
 void __fastcall ParentPanelControllerActivity(void* controller, void*) {
@@ -3743,6 +3804,7 @@ void __fastcall ParentPanelControllerEvent(
         g_imageBase + g_buildProfile->getPanelContextRva);
     ApplyUpgradeResearchGate(
         reinterpret_cast<std::uint32_t>(controller), getPanelContext(controller));
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
 }
 
 void __cdecl ParentPanelControllerDestroyed(void*, void*) {
@@ -3755,6 +3817,7 @@ void __cdecl ParentPanelControllerDestroyed(void*, void*) {
     InterlockedExchange(&g_ap10ControllerContext, 0);
     g_parentPanelRecord = nullptr;
     g_parentRewardPanelRecord = nullptr;
+    g_parentOpenToggleRecord = nullptr;
     WriteLog(
         "Invalidated manager-owned parent-controller state at Majesty's stock teardown boundary.");
 }
@@ -4094,6 +4157,7 @@ int __fastcall RewardPanelControl(
 int __fastcall RewardParentControl(
     void* controller, void*, std::uint32_t controlId) {
     int openResult = 0;
+    if (HandleBuildingOpenToggle(controller, controlId, &openResult)) return openResult;
     if (OpenOccupantPanel(controller, controlId, &openResult)) return openResult;
     const auto* panel = g_parentRewardPanelRecord;
     if (panel == nullptr || controlId != panel->openCommandId) {
@@ -4103,6 +4167,18 @@ int __fastcall RewardParentControl(
     auto open = reinterpret_cast<OpenDialog>(
         g_imageBase + g_buildProfile->openDialogRva);
     return open(controller, panel->childDialogId, 0);
+}
+
+void __fastcall RewardParentSetup(void* controller, void*) {
+    g_stockRewardParentSetup(controller);
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
+}
+
+void __fastcall RewardParentEvent(
+    void* controller, void*, std::uint32_t a1, std::uint32_t a2,
+    std::uint32_t a3, std::uint32_t a4) {
+    g_stockRewardParentEvent(controller, a1, a2, a3, a4);
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
 }
 
 bool InstallRewardParentControllerVtable(std::uint32_t controller) {
@@ -4123,7 +4199,13 @@ bool InstallRewardParentControllerVtable(std::uint32_t controller) {
         }
         g_stockRewardParentControl =
             reinterpret_cast<RewardControllerControl>(stockVtable[3]);
+        g_stockRewardParentSetup =
+            reinterpret_cast<RewardControllerSetup>(stockVtable[1]);
+        g_stockRewardParentEvent =
+            reinterpret_cast<RewardControllerEvent>(stockVtable[8]);
+        g_rewardParentVtable[1] = reinterpret_cast<void*>(&RewardParentSetup);
         g_rewardParentVtable[3] = reinterpret_cast<void*>(&RewardParentControl);
+        g_rewardParentVtable[8] = reinterpret_cast<void*>(&RewardParentEvent);
     }
     *objectVtable = g_rewardParentVtable;
     return true;
@@ -4245,15 +4327,47 @@ struct OccupantParentClass {
     void** stock;
 };
 std::vector<OccupantParentClass*> g_occupantParentClasses;
+OccupantParentClass* FindOccupantParentClass(void* controller) {
+    auto** table = *static_cast<void***>(controller);
+    for (auto* entry : g_occupantParentClasses) {
+        if (entry->table == table) return entry;
+    }
+    return nullptr;
+}
+void __fastcall OccupantParentSetup(void* controller, void*) {
+    auto* entry = FindOccupantParentClass(controller);
+    if (entry == nullptr) {
+        StopUnsafeManagerRuntimeLaunch(
+            "Private generic parent lost its stock setup class.");
+    }
+    reinterpret_cast<ControllerSetup>(entry->stock[1])(controller);
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
+}
 int __fastcall OccupantParentControl(void* controller, void*, std::uint32_t command) {
     int openResult = 0;
+    if (HandleBuildingOpenToggle(controller, command, &openResult)) return openResult;
     if (OpenOccupantPanel(controller, command, &openResult)) return openResult;
-    auto** table = *static_cast<void***>(controller);
-    for (const auto* entry : g_occupantParentClasses) {
-        if (entry->table == table) return reinterpret_cast<ControllerControl>(entry->stock[3])(controller, command);
+    auto* entry = FindOccupantParentClass(controller);
+    if (entry != nullptr) {
+        const int result = reinterpret_cast<ControllerControl>(
+            entry->stock[3])(controller, command);
+        RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
+        return result;
     }
     StopUnsafeManagerRuntimeLaunch("Private occupant parent lost its stock controller class.");
     return 0;
+}
+void __fastcall OccupantParentEvent(
+    void* controller, void*, std::uint32_t a1, std::uint32_t a2,
+    std::uint32_t a3, std::uint32_t a4) {
+    auto* entry = FindOccupantParentClass(controller);
+    if (entry == nullptr) {
+        StopUnsafeManagerRuntimeLaunch(
+            "Private generic parent lost its stock event class.");
+    }
+    reinterpret_cast<ControllerEvent>(entry->stock[8])(
+        controller, a1, a2, a3, a4);
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
 }
 bool InstallOccupantParentVtable(std::uint32_t controller) {
     auto*** object = reinterpret_cast<void***>(controller);
@@ -4268,7 +4382,9 @@ bool InstallOccupantParentVtable(std::uint32_t controller) {
         delete entry;
         return false;
     }
+    entry->table[1] = reinterpret_cast<void*>(&OccupantParentSetup);
     entry->table[3] = reinterpret_cast<void*>(&OccupantParentControl);
+    entry->table[8] = reinterpret_cast<void*>(&OccupantParentEvent);
     g_occupantParentClasses.push_back(entry);
     *object = entry->table;
     return true;
@@ -4639,6 +4755,15 @@ extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) 
         LogDialogFactoryRequest(idAddress, requested, " Preserved declared stock occupant-parent controller.");
         return;
     }
+    const auto* toggleParent =
+        g_stockControllerRegistry.FindBuildingOpenToggleByParent(requested);
+    if (toggleParent != nullptr) {
+        *idAddress = toggleParent->parentControllerBase;
+        LogDialogFactoryRequest(
+            idAddress, requested,
+            " Preserved declared stock building-toggle parent controller.");
+        return;
+    }
     const auto* requestedRewardParent =
         g_stockControllerRegistry.FindRewardPanelByParentDialog(requested);
     if (requestedRewardParent != nullptr) {
@@ -4678,7 +4803,8 @@ extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) 
         return;
     }
     if (g_stockControllerRegistry.FindPanelByParentDialog(requested) != nullptr ||
-        g_stockControllerRegistry.FindRewardPanelByParentDialog(requested) != nullptr) {
+        g_stockControllerRegistry.FindRewardPanelByParentDialog(requested) != nullptr ||
+        g_stockControllerRegistry.FindBuildingOpenToggleByParent(requested) != nullptr) {
         LogDialogFactoryRequest(idAddress, requested);
         return;
     }
@@ -4755,13 +4881,17 @@ extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments)
     const auto* requestedParent = g_stockControllerRegistry.FindPanelByParentDialog(requested);
     const auto* rewardParent = g_stockControllerRegistry.FindRewardPanelByParentDialog(requested);
     const auto* occupantParent = g_stockControllerRegistry.FindOccupantPanelByParent(requested);
-    if (requestedParent != nullptr || rewardParent != nullptr || occupantParent != nullptr) {
+    const auto* toggleParent =
+        g_stockControllerRegistry.FindBuildingOpenToggleByParent(requested);
+    if (requestedParent != nullptr || rewardParent != nullptr ||
+        occupantParent != nullptr || toggleParent != nullptr) {
         // Only a parent creation changes parent recipes. AP91 Visitors, member
         // lists, and auxiliary notices must not erase a surviving parent's
         // occupant/reward/research openers.
         g_parentPanelRecord = requestedParent;
         g_parentRewardPanelRecord = rewardParent;
         g_parentOccupantPanel = occupantParent;
+        g_parentOpenToggleRecord = toggleParent;
         InterlockedExchange(&g_captureParentController, 1);
         WriteLog("Creation entry captured a resolved parent dialog.");
         return;
@@ -5320,7 +5450,8 @@ DWORD WINAPI InitializeRuntime(void*) {
     const bool stockControllerRecipes =
         !g_stockControllerRegistry.panels.empty() ||
         !g_stockControllerRegistry.occupantActionPanels.empty() ||
-        !g_stockControllerRegistry.rewardPanels.empty();
+        !g_stockControllerRegistry.rewardPanels.empty() ||
+        !g_stockControllerRegistry.buildingOpenToggles.empty();
     const bool ap10Ap69ControllerRecipes =
         !g_stockControllerRegistry.panels.empty();
     const bool privateRewardFlagRecipes =

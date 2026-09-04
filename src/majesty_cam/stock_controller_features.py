@@ -19,6 +19,8 @@ manager runtime:
   cancellation, repeat-cast, command, and spell-unit lifecycle.
 * MX09 opens an AP41-shaped reward panel, and AP41/Fl00 own private hostile-
   monster reward placement, debit, cancellation, completion, and cleanup.
+* MX22 owns persistent building-open state and mutually exclusive paired
+  controls; the generic clone omits the Embassy's separate recruit order.
 
 These records are the bounded manager-side contract for the runtime's
 stock-controller registry. Package JSON must be validated into these records
@@ -138,6 +140,17 @@ class StockMx04Mx05OccupantActionPanel:
     cost_callback_symbol: str
     action_callback_symbol: str
     type: str = "stock.mx04-mx05-occupant-action-panel.v1"
+
+
+@dataclass(frozen=True)
+class StockMx22BuildingOpenToggle:
+    """MX22's persistent per-building open/closed state and paired controls."""
+
+    toggle_key: str
+    parent_building: str
+    open_command_id: int
+    close_command_id: int
+    type: str = "stock.mx22-building-open-toggle.v1"
 
 
 @dataclass(frozen=True)
@@ -268,6 +281,7 @@ class StockAp69SovereignTargetAction:
 
 
 ControllerFeature = Union[
+    StockMx22BuildingOpenToggle,
     StockMx04Mx05OccupantActionPanel,
     StockAp10Ap69SecondaryPanel,
     StockMx09Ap41RewardPanel,
@@ -282,6 +296,7 @@ ControllerFeature = Union[
 
 
 _FEATURE_TYPES = {
+    "stock.mx22-building-open-toggle.v1": StockMx22BuildingOpenToggle,
     "stock.mx04-mx05-occupant-action-panel.v1": StockMx04Mx05OccupantActionPanel,
     "stock.ap10-ap69-secondary-panel.v1": StockAp10Ap69SecondaryPanel,
     "stock.mx09-ap41-reward-panel.v1": StockMx09Ap41RewardPanel,
@@ -595,7 +610,21 @@ def decode_controller_features(payload: bytes) -> Tuple[ControllerFeature, ...]:
 def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
     if not isinstance(feature, tuple(_FEATURE_TYPES.values())):
         raise ControllerFeatureError("unsupported controller feature object")
-    _logical(feature.panel_key, "panel_key")
+    if isinstance(feature, StockMx22BuildingOpenToggle):
+        _logical(feature.toggle_key, "toggle_key")
+        _logical(feature.parent_building, "parent_building")
+        _distinct_controls(
+            "MX22 building open toggle",
+            feature.open_command_id,
+            feature.close_command_id,
+        )
+        if feature.open_command_id in (0x22AB, 0x22AC) or feature.close_command_id in (0x22AB, 0x22AC):
+            raise ControllerFeatureError(
+                "MX22 building toggle commands must be package-private and cannot "
+                "reuse stock Embassy commands 0x22AB/0x22AC"
+            )
+    else:
+        _logical(feature.panel_key, "panel_key")
     if isinstance(feature, StockAp10Ap69SecondaryPanel):
         _logical(feature.parent_building, "parent_building")
         _fourcc(feature.source_dialog_id, "source_dialog_id")
@@ -877,7 +906,19 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
                     "secondary-panel building family prefixes overlap"
                 )
 
+    toggles = [item for item in features if isinstance(item, StockMx22BuildingOpenToggle)]
+    _unique_field(toggles, "toggle_key", "building toggle_key")
+    _unique_field(toggles, "parent_building", "building toggle parent")
+    toggle_commands = set()
+    for toggle in toggles:
+        for command in (toggle.open_command_id, toggle.close_command_id):
+            if command in toggle_commands:
+                raise ControllerFeatureError("building toggle command IDs collide")
+            toggle_commands.add(command)
+
     for feature in features:
+        if isinstance(feature, StockMx22BuildingOpenToggle):
+            continue
         if not isinstance(feature, panel_types) and feature.panel_key not in panels:
             raise ControllerFeatureError(
                 f"controller feature refers to unknown panel_key {feature.panel_key!r}"
@@ -907,6 +948,8 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
     controls: dict[str, dict[int, str]] = {key: {} for key in panels}
 
     for feature in features:
+        if isinstance(feature, StockMx22BuildingOpenToggle):
+            continue
         if isinstance(feature, StockMx04Mx05OccupantActionPanel):
             for symbol in (feature.cost_callback_symbol, feature.action_callback_symbol):
                 if symbol.casefold() in callbacks:
@@ -1067,7 +1110,12 @@ def _feature_sort_key(feature: ControllerFeature) -> tuple:
         if hasattr(feature, field_name):
             identity = str(getattr(feature, field_name))
             break
-    return (_FEATURE_ORDER[feature.type], feature.panel_key, identity,
+    logical_key = (
+        feature.toggle_key
+        if isinstance(feature, StockMx22BuildingOpenToggle)
+        else feature.panel_key
+    )
+    return (_FEATURE_ORDER[feature.type], logical_key, identity,
             _canonical_record_bytes(feature))
 
 
@@ -1268,6 +1316,7 @@ __all__ = [
     "StockAp24TimedRageAction",
     "StockAp69SovereignTargetAction",
     "StockAp99ResearchRow",
+    "StockMx22BuildingOpenToggle",
     "UpgradeRequirement",
     "controller_feature_mapping",
     "decode_controller_features",

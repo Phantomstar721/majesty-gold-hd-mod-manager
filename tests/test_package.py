@@ -21,7 +21,12 @@ from majesty_cam.package import (
     load_package,
     parse_mod_definition,
 )
+from majesty_cam.gpl_features import (
+    StockGplmxPurchaseBazaarTail,
+    StockGplmxPurchaseEquipmentTail,
+)
 from majesty_cam.stock_controller_features import (
+    StockMx22BuildingOpenToggle,
     StockAp69SovereignTargetAction,
     controller_feature_mapping,
     legacy_alchemist_controller_features,
@@ -32,6 +37,47 @@ MOD_ID = "{42ba4603-2b13-446d-a2a4-6cf3a55ddac3}"
 
 
 class PackageTests(unittest.TestCase):
+    def test_definition_v3_parses_generic_toggle_and_purchase_tail(self):
+        value = {
+            "schema_version": 3,
+            "mod_id": MOD_ID,
+            "internal_name": "GenericStockFeatures",
+            "display_name": "Generic Stock Features",
+            "custom_buildings": [
+                {
+                    "local_name": "PrivateBuilding",
+                    "controller_base": "MX09",
+                    "panel_resource_template": "MX09",
+                }
+            ],
+            "runtime_features": [
+                {
+                    "type": "stock.mx22-building-open-toggle.v1",
+                    "toggle_key": "rentals",
+                    "parent_building": "PrivateBuilding",
+                    "open_command_id": 24001,
+                    "close_command_id": 24002,
+                },
+                {
+                    "type": "stock.gplmx-purchase-equipment-tail.v1",
+                    "callback_key": "rental-check",
+                    "callback_symbol": "Private_Rental_Check",
+                },
+                {
+                    "type": "stock.gplmx-purchase-bazaar-tail.v1",
+                    "callback_key": "late-rental-check",
+                    "callback_symbol": "Private_Late_Rental_Check",
+                },
+            ],
+        }
+
+        parsed = parse_mod_definition(value)
+
+        self.assertIsInstance(parsed.runtime_features[0], StockMx22BuildingOpenToggle)
+        self.assertIsInstance(parsed.runtime_features[1], StockGplmxPurchaseEquipmentTail)
+        self.assertEqual(parsed.runtime_features[1].callback_symbol, "Private_Rental_Check")
+        self.assertIsInstance(parsed.runtime_features[2], StockGplmxPurchaseBazaarTail)
+
     def test_loads_manifest_and_default_definition_in_declared_order(self):
         with TemporaryDirectory() as tmp:
             package = Path(tmp) / "package"

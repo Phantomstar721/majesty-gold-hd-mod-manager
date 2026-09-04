@@ -12,6 +12,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from majesty_cam.stock_controller_features import (
     StockAp41Fl00HostileMonsterFlag,
     StockMx09Ap41RewardPanel,
+    StockMx22BuildingOpenToggle,
     StockAp10Ap69SecondaryPanel,
     legacy_alchemist_controller_features,
 )
@@ -28,6 +29,30 @@ from majesty_cam.stock_controller_registry import (
 
 
 class StockControllerRegistryTests(unittest.TestCase):
+    def test_building_open_toggle_round_trips_in_v4_without_package_identity(self) -> None:
+        feature = StockMx22BuildingOpenToggle(
+            toggle_key="rentals",
+            parent_building="private-zoo",
+            open_command_id=0x5D01,
+            close_command_id=0x5D02,
+        )
+        parent = int.from_bytes(b"PZ01", "little")
+        registry = resolve_stock_controller_registry(
+            (feature,),
+            {},
+            toggle_parents={"rentals": (parent, "MX09")},
+        )
+
+        payload = encode_stock_controller_registry(registry)
+
+        self.assertEqual(decode_stock_controller_registry(payload), registry)
+        magic, version, *counts = struct.unpack_from("<4s12I", payload)
+        self.assertEqual(magic, CONTROLLER_REGISTRY_MAGIC)
+        self.assertEqual(version, 4)
+        self.assertEqual(counts[-2:], [0, 1])
+        self.assertEqual(registry.building_open_toggles[0].parent_dialog_id, parent)
+        self.assertNotIn(b"private-zoo", payload)
+
     def setUp(self) -> None:
         self.features = legacy_alchemist_controller_features(
             "AlchemistsLaboratory"

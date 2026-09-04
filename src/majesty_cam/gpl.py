@@ -593,6 +593,259 @@ _STOCK_DEATH_DROP_LAST_EXCLUSION_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+_PURCHASE_EQUIPMENT_FINAL_RE = re.compile(
+    r"(?P<indent>^[ \t]*)If\s*\(\s*Flag\s*\)\s*"
+    r"begin\s*"
+    r"ThisAgent's\s+\"ActiveScript\"\s*=\s*\$Use_Building\s*;\s*"
+    r"return\s+TRUE\s*;\s*"
+    r"end\s*"
+    r"return\s+False\s*;\s*End\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def add_purchase_equipment_tail_callbacks(
+    result: SemanticMergeResult,
+    callback_symbols: Iterable[str],
+    *,
+    stock_purchase_equipment: Optional[SemanticItem] = None,
+    source_name: str = "<Purchase_Equipment tail composition>",
+) -> SemanticMergeResult:
+    """Compose boolean callbacks at stock GPLMx Purchase_Equipment's tail.
+
+    The insertion point is after the complete shipped purchase chain, including
+    ``Stat_Boost_Check``, and before the stock final ``Flag`` handoff to
+    ``Use_Building``.  Each later callback is evaluated only when every stock,
+    package-owned, and earlier tail choice declined the hero.
+    """
+
+    requested: list[str] = []
+    seen: set[str] = set()
+    for symbol in callback_symbols:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", symbol):
+            raise ValueError(f"invalid Purchase_Equipment callback symbol: {symbol!r}")
+        key = symbol.casefold()
+        if key in seen:
+            raise ValueError(f"duplicate Purchase_Equipment callback symbol: {symbol!r}")
+        seen.add(key)
+        requested.append(symbol)
+    if not requested:
+        return result
+
+    result.require_clean()
+    items = list(result.items)
+    target_key = semantic_key(DefinitionKind.FUNCTION, "Purchase_Equipment")
+    targets = [item for item in items if item.key == target_key]
+    if not targets:
+        if stock_purchase_equipment is None or stock_purchase_equipment.key != target_key:
+            raise ValueError(
+                "Purchase_Equipment tail callbacks require the installed stock "
+                "GPLMx Purchase_Equipment source"
+            )
+        target = replace(stock_purchase_equipment, span=None)
+        items.append(target)
+    elif len(targets) == 1:
+        target = targets[0]
+    else:  # pragma: no cover - semantic merge prevents duplicate keys
+        raise ValueError("Purchase_Equipment is defined more than once")
+
+    function_names = {
+        item.normalized_name
+        for item in items
+        if item.kind == DefinitionKind.FUNCTION
+    }
+    missing = [symbol for symbol in requested if symbol.casefold() not in function_names]
+    if missing:
+        raise ValueError(
+            "Purchase_Equipment tail callbacks must name package-owned boolean "
+            f"functions; missing: {', '.join(missing)}"
+        )
+
+    masked = _mask_non_code(target.text)
+    required_calls = (
+        "$BlackSmith_Check",
+        "$WizGuild_Check",
+        "$Poison_Check",
+        "$Potion_Check",
+        "$Ring_Check",
+        "$Market3_Check",
+        "$Stat_Boost_Check",
+    )
+    positions: list[int] = []
+    for call in required_calls:
+        matches = list(re.finditer(re.escape(call), masked, re.IGNORECASE))
+        minimum = 2 if call in {"$BlackSmith_Check", "$WizGuild_Check"} else 1
+        if len(matches) < minimum:
+            raise ValueError(
+                "Purchase_Equipment does not contain the complete recognized "
+                f"stock GPLMx purchase chain ({call})"
+            )
+        positions.append(matches[-1].start())
+    if positions != sorted(positions):
+        raise ValueError(
+            "Purchase_Equipment stock GPLMx purchase checks are not in the "
+            "recognized order"
+        )
+
+    final_matches = list(_PURCHASE_EQUIPMENT_FINAL_RE.finditer(target.text))
+    if len(final_matches) != 1:
+        raise ValueError(
+            "Purchase_Equipment does not contain exactly one recognized stock "
+            "final Flag/Use_Building handoff"
+        )
+    final_match = final_matches[0]
+    if positions[-1] >= final_match.start():
+        raise ValueError(
+            "Purchase_Equipment Stat_Boost_Check is not before the stock final handoff"
+        )
+
+    indent = final_match.group("indent")
+    callback_lines = []
+    for symbol in requested:
+        callback_lines.extend(
+            (
+                f"{indent}If (Flag == FALSE)",
+                f"{indent}\tbegin",
+                f"{indent}\t\tIf (${symbol} (ThisAgent))",
+                f"{indent}\t\t\tFlag = TRUE;",
+                f"{indent}\tend",
+                "",
+            )
+        )
+    newline = "\r\n" if "\r\n" in target.text else "\n"
+    insertion = newline.join(callback_lines)
+    resolved = replace(
+        target,
+        text=target.text[: final_match.start()] + insertion + target.text[final_match.start() :],
+        source_name=source_name,
+        span=None,
+    )
+    return SemanticMergeResult(
+        tuple(resolved if item.key == target_key else item for item in items),
+        result.conflicts,
+    )
+
+
+def add_purchase_bazaar_tail_callbacks(
+    result: SemanticMergeResult,
+    callback_symbols: Iterable[str],
+    *,
+    stock_purchase_bazaar: Optional[SemanticItem] = None,
+    source_name: str = "<Purchase_Bazaar tail composition>",
+) -> SemanticMergeResult:
+    """Compose boolean callbacks after stock GPLMx Bazaar choices decline."""
+
+    requested: list[str] = []
+    seen: set[str] = set()
+    for symbol in callback_symbols:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", symbol):
+            raise ValueError(f"invalid Purchase_Bazaar callback symbol: {symbol!r}")
+        key = symbol.casefold()
+        if key in seen:
+            raise ValueError(f"duplicate Purchase_Bazaar callback symbol: {symbol!r}")
+        seen.add(key)
+        requested.append(symbol)
+    if not requested:
+        return result
+
+    result.require_clean()
+    items = list(result.items)
+    target_key = semantic_key(DefinitionKind.FUNCTION, "Purchase_Bazaar")
+    targets = [item for item in items if item.key == target_key]
+    if not targets:
+        if stock_purchase_bazaar is None or stock_purchase_bazaar.key != target_key:
+            raise ValueError(
+                "Purchase_Bazaar tail callbacks require the installed stock "
+                "GPLMx Purchase_Bazaar source"
+            )
+        target = replace(stock_purchase_bazaar, span=None)
+        items.append(target)
+    elif len(targets) == 1:
+        target = targets[0]
+    else:  # pragma: no cover - semantic merge prevents duplicate keys
+        raise ValueError("Purchase_Bazaar is defined more than once")
+
+    function_names = {
+        item.normalized_name
+        for item in items
+        if item.kind == DefinitionKind.FUNCTION
+    }
+    missing = [symbol for symbol in requested if symbol.casefold() not in function_names]
+    if missing:
+        raise ValueError(
+            "Purchase_Bazaar tail callbacks must name package-owned boolean "
+            f"functions; missing: {', '.join(missing)}"
+        )
+
+    masked = _mask_non_code(target.text)
+    required = (
+        "Flag = FALSE",
+        "$RandomNumber",
+        "$listobjects",
+        "#Bazaar_Item_One",
+        "#Bazaar_Item_Two",
+        "#Bazaar_Item_Three",
+        "#Bazaar_Item_Four",
+        "#Bazaar_Item_Five",
+        "#Bazaar_Item_Six",
+        "foreach Item in Item_list",
+        "$Researched_Item",
+        "$Get_Bazaar_Cost",
+        "$Bazaar_Item_Check",
+    )
+    positions = []
+    for token in required:
+        position = masked.casefold().find(token.casefold())
+        if position < 0:
+            raise ValueError(
+                "Purchase_Bazaar does not contain the complete recognized "
+                f"stock GPLMx purchase chain ({token})"
+            )
+        positions.append(position)
+    if positions != sorted(positions):
+        raise ValueError(
+            "Purchase_Bazaar stock GPLMx purchase checks are not in the "
+            "recognized order"
+        )
+
+    final_matches = list(_PURCHASE_EQUIPMENT_FINAL_RE.finditer(target.text))
+    if len(final_matches) != 1:
+        raise ValueError(
+            "Purchase_Bazaar does not contain exactly one recognized stock "
+            "final Flag/Use_Building handoff"
+        )
+    final_match = final_matches[0]
+    if positions[-1] >= final_match.start():
+        raise ValueError(
+            "Purchase_Bazaar item selection is not before the stock final handoff"
+        )
+
+    indent = final_match.group("indent")
+    callback_lines = []
+    for symbol in requested:
+        callback_lines.extend(
+            (
+                f"{indent}If (Flag == FALSE)",
+                f"{indent}\tbegin",
+                f"{indent}\t\tIf (${symbol} (ThisAgent))",
+                f"{indent}\t\t\tFlag = TRUE;",
+                f"{indent}\tend",
+                "",
+            )
+        )
+    newline = "\r\n" if "\r\n" in target.text else "\n"
+    insertion = newline.join(callback_lines)
+    resolved = replace(
+        target,
+        text=target.text[: final_match.start()] + insertion + target.text[final_match.start() :],
+        source_name=source_name,
+        span=None,
+    )
+    return SemanticMergeResult(
+        tuple(resolved if item.key == target_key else item for item in items),
+        result.conflicts,
+    )
+
 
 def add_inventory_death_drop_exclusions(
     result: SemanticMergeResult,
@@ -1041,6 +1294,8 @@ __all__ = [
     "merge_semantic_items",
     "merge_sources",
     "add_inventory_death_drop_exclusions",
+    "add_purchase_equipment_tail_callbacks",
+    "add_purchase_bazaar_tail_callbacks",
     "find_foreach_return_violations",
     "rewrite_integer_expression",
     "parse_dat",

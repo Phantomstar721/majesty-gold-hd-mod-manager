@@ -52,10 +52,16 @@ from .gpl import (
     SemanticConflict,
     SemanticItem,
     add_inventory_death_drop_exclusions,
+    add_purchase_bazaar_tail_callbacks,
+    add_purchase_equipment_tail_callbacks,
     merge_sources,
     parse_dat,
     parse_gpl,
     require_complete_semantic_coverage,
+)
+from .gpl_features import (
+    StockGplmxPurchaseBazaarTail,
+    StockGplmxPurchaseEquipmentTail,
 )
 from .intent_text import (
     ActivityTextDiscoveryPackage,
@@ -108,6 +114,7 @@ from .stock_controller_features import (
     StockAp41Fl00HostileMonsterFlag,
     StockMx09Ap41RewardPanel,
     StockMx04Mx05OccupantActionPanel,
+    StockMx22BuildingOpenToggle,
     StockAp17UpgradeResearchGate,
     StockAp22ResourceMeter,
     StockAp24RageCommandAction,
@@ -269,6 +276,8 @@ class GplComposeResult:
     resolution_owners: tuple[tuple[DefinitionKind, str, str], ...]
     resolution_sources: tuple[tuple[DefinitionKind, str, str], ...]
     inventory_death_drop_exclusions: tuple[str, ...]
+    purchase_equipment_tail_callbacks: tuple[tuple[str, str, str], ...] = ()
+    purchase_bazaar_tail_callbacks: tuple[tuple[str, str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -323,6 +332,17 @@ class ResolvedControllerPanel:
 
 
 @dataclass(frozen=True)
+class ResolvedControllerToggle:
+    """One package-local MX22 toggle resolved onto its custom building."""
+
+    owner: str
+    raw_toggle_key: str
+    qualified_toggle_key: str
+    raw_parent_building: str
+    resolved_parent_dialog_id: bytes
+
+
+@dataclass(frozen=True)
 class ControllerKeyMapping:
     """Auditable package-local to manager-global logical-key mapping."""
 
@@ -338,6 +358,7 @@ class ControllerComposeResult:
     registry: ResolvedControllerRegistry
     panels: tuple[ResolvedControllerPanel, ...]
     key_mappings: tuple[ControllerKeyMapping, ...]
+    toggles: tuple[ResolvedControllerToggle, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -711,6 +732,52 @@ def _load_stock_activity_text_expression_source(
             f"discovery: {path}"
         )
     return parse_gpl(_read_source_text(path), str(path))
+
+
+def _load_stock_purchase_equipment_source(
+    game_path: Path,
+) -> ParsedSemanticSource:
+    path = (
+        game_path
+        / "SDK"
+        / "OriginalQuests"
+        / "GPLMx"
+        / "DecisionTrees"
+        / "Modules"
+        / "mx_Purchase_Equipment.gpl"
+    )
+    if not path.is_file():
+        raise ComposeError(
+            "installed stock GPLMx Purchase_Equipment source is required for "
+            f"purchase-tail composition: {path}"
+        )
+    source = parse_gpl(_read_source_text(path), str(path))
+    require_complete_semantic_coverage(source)
+    source.require(DefinitionKind.FUNCTION, "Purchase_Equipment")
+    return source
+
+
+def _load_stock_purchase_bazaar_source(
+    game_path: Path,
+) -> ParsedSemanticSource:
+    path = (
+        game_path
+        / "SDK"
+        / "OriginalQuests"
+        / "GPLMx"
+        / "TaskModules"
+        / "Buildings"
+        / "Magic_Bazaar.gpl"
+    )
+    if not path.is_file():
+        raise ComposeError(
+            "installed stock GPLMx Purchase_Bazaar source is required for "
+            f"purchase-tail composition: {path}"
+        )
+    source = parse_gpl(_read_source_text(path), str(path))
+    require_complete_semantic_coverage(source)
+    source.require(DefinitionKind.FUNCTION, "Purchase_Bazaar")
+    return source
 
 
 def _detach_private_activity_texts(
@@ -2060,6 +2127,7 @@ def validate_controller_stock_evidence(
     registry: ResolvedControllerRegistry,
     *,
     controller_panels: Sequence[ResolvedControllerPanel] = (),
+    controller_toggles: Sequence[ResolvedControllerToggle] = (),
     runtime_feature_registry: RuntimeFeatureRegistry = RuntimeFeatureRegistry(),
     description_stock_deltas: Sequence[DescriptionStockDelta] | None = None,
 ) -> None:
@@ -2216,6 +2284,11 @@ def validate_controller_stock_evidence(
         registry,
         controller_panels,
     )
+    _validate_authored_building_toggle_controls(
+        inventories,
+        registry,
+        controller_toggles,
+    )
 
     for row in runtime_feature_registry.enchantment_rows:
         matches = [
@@ -2331,6 +2404,109 @@ def _validate_authored_controller_panel_controls(
             parent_label=parent_text,
             child_label=_display_key(resolved.source_dialog_id),
         )
+
+
+def _validate_authored_building_toggle_controls(
+    inventories: Sequence[PackageInventory],
+    registry: ResolvedControllerRegistry,
+    controller_toggles: Sequence[ResolvedControllerToggle],
+) -> None:
+    inventory_by_owner = {
+        inventory.selected.alias: inventory for inventory in inventories
+    }
+    resolved_by_key = {
+        item.toggle_key: item for item in registry.building_open_toggles
+    }
+    if set(resolved_by_key) != {
+        item.qualified_toggle_key for item in controller_toggles
+    }:
+        raise ComposeError(
+            "controller stock evidence requires exact manager-owned building "
+            "toggle ownership metadata"
+        )
+    for toggle in controller_toggles:
+        inventory = inventory_by_owner[toggle.owner]
+        sources = _description_dialog_sources(
+            inventory, toggle.raw_parent_building
+        )
+        if len(sources) != 1:
+            raise ComposeError(
+                f"{toggle.owner}: building toggle {toggle.raw_toggle_key!r} "
+                "cannot resolve exactly one parent DialogID"
+            )
+        source_text = next(iter(sources))
+        payload = _owned_smnu_payload(
+            inventory,
+            source_text.encode("ascii"),
+            f"building toggle parent {source_text}",
+        )
+        _validate_mx22_toggle_controls(
+            payload,
+            resolved_by_key[toggle.qualified_toggle_key],
+            owner=toggle.owner,
+            panel_label=source_text,
+        )
+
+
+def _validate_mx22_toggle_controls(
+    payload: bytes,
+    toggle,
+    *,
+    owner: str,
+    panel_label: str,
+) -> None:
+    """Require complete MX22 button clones with private presentation fields."""
+
+    _smnu_dword_values(payload, owner, panel_label)
+    values = struct.unpack(f"<{len(payload) // 4}I", payload)
+    # One MX22 record is 35 DWORDs. Rectangle, label STRT index, and tooltip
+    # STRT index are intentionally package-owned presentation. Every tag,
+    # control type, stock INBb resource, image selector, font/color value, and
+    # record boundary remains literal. The command alone becomes manager data.
+    common_prefix = (
+        0xFFFFFFFF, 0x00, 0x02,
+        None, None, None, None,  # package layout rectangle
+        0x07,
+        None,                   # package label STRT index
+        0x21,
+        None,                   # package tooltip STRT index
+        0x0A, 0x02, 0x0C, 0x62424E49, 0x0D, 0x3ED,
+        0x14, 0x04, 0x03, 0x02, 0x03, 0x400, 0x05,
+        None,                   # exact open/close image selector below
+        0x06,
+    )
+    suffix = (
+        0x12, 0x37746E66, 0x24, 0x03, 0x8000003F,
+        0x40000000, 0x40000000, 0xFFFFFFFF,
+    )
+    for label, command, image_selector in (
+        ("open", toggle.open_command_id, 79),
+        ("close", toggle.close_command_id, 67),
+    ):
+        matches = []
+        for index, value in enumerate(values):
+            if (
+                value != command
+                or index < len(common_prefix)
+                or index + len(suffix) > len(values)
+            ):
+                continue
+            prefix = values[index - len(common_prefix):index]
+            if (
+                all(
+                    expected is None or actual == expected
+                    for actual, expected in zip(prefix, common_prefix)
+                )
+                and prefix[24] == image_selector
+                and tuple(values[index + 1:index + 1 + len(suffix)]) == suffix
+            ):
+                matches.append(index)
+        if len(matches) != 1:
+            raise ComposeError(
+                f"{owner}: SMNU/{panel_label} must contain exactly one literal "
+                f"MX22 {label} button clone using private command "
+                f"0x{command:08X}; found {len(matches)}"
+            )
 
 
 def _owned_smnu_payload(
@@ -2494,6 +2670,8 @@ def merge_gpl_resources(
     inventory_death_drop_exclusions: Sequence[str] = (),
     private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
     stock_integer_expression_sources: Sequence[ParsedSemanticSource] = (),
+    stock_purchase_equipment_source: ParsedSemanticSource | None = None,
+    stock_purchase_bazaar_source: ParsedSemanticSource | None = None,
 ) -> GplComposeResult:
     parsed_by_owner: dict[str, list[ParsedSemanticSource]] = {}
     for inventory in inventories:
@@ -2624,6 +2802,40 @@ def merge_gpl_resources(
         inventory_death_drop_exclusions,
         source_name="<CAM Manager stock death-drop composition>",
     )
+    gpl_callback_evidence = validate_gpl_feature_evidence(inventories)
+    purchase_callbacks = [item[1:] for item in gpl_callback_evidence if item[0] == "equipment"]
+    bazaar_callbacks = [item[1:] for item in gpl_callback_evidence if item[0] == "bazaar"]
+    callback_symbols = [item[2] for item in purchase_callbacks]
+    if purchase_callbacks:
+        stock_item = None
+        if stock_purchase_equipment_source is not None:
+            stock_item = stock_purchase_equipment_source.get(
+                DefinitionKind.FUNCTION, "Purchase_Equipment"
+            )
+        try:
+            final = add_purchase_equipment_tail_callbacks(
+                final,
+                callback_symbols,
+                stock_purchase_equipment=stock_item,
+                source_name="<CAM Manager stock Purchase_Equipment tail composition>",
+            )
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+    if bazaar_callbacks:
+        stock_item = None
+        if stock_purchase_bazaar_source is not None:
+            stock_item = stock_purchase_bazaar_source.get(
+                DefinitionKind.FUNCTION, "Purchase_Bazaar"
+            )
+        try:
+            final = add_purchase_bazaar_tail_callbacks(
+                final,
+                [item[2] for item in bazaar_callbacks],
+                stock_purchase_bazaar=stock_item,
+                source_name="<CAM Manager stock Purchase_Bazaar tail composition>",
+            )
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
     if private_activity_texts:
         try:
             audit_private_activity_text_resolver_aliases(
@@ -2637,7 +2849,98 @@ def merge_gpl_resources(
         resolution_owners=tuple(used),
         resolution_sources=tuple(used_sources),
         inventory_death_drop_exclusions=tuple(inventory_death_drop_exclusions),
+        purchase_equipment_tail_callbacks=tuple(purchase_callbacks),
+        purchase_bazaar_tail_callbacks=tuple(bazaar_callbacks),
     )
+
+
+def _require_boolean_agent_callback_signature(
+    text: str, symbol: str, label: str
+) -> None:
+    from .gpl import _mask_non_code
+
+    pattern = (
+        r"\s*function\s+" + re.escape(symbol)
+        + r"\s*\(\s*agent\s+[A-Za-z_][A-Za-z0-9_]*\s*\)"
+        + r"\s+is\s+boolean\s*(?:declare|begin)\b"
+    )
+    if re.match(pattern, _mask_non_code(text), re.IGNORECASE) is None:
+        raise ComposeError(
+            f"{label} {symbol!r} must use the stock signature (agent) is boolean"
+        )
+
+
+def validate_gpl_feature_evidence(
+    inventories: Sequence[PackageInventory],
+) -> tuple[tuple[str, str, str, str], ...]:
+    """Validate and deterministically order source-composed GPL callbacks."""
+
+    callbacks: list[tuple[str, str, str, str]] = []
+    seen_symbols: dict[tuple[str, str], str] = {}
+    for inventory in inventories:
+        package = getattr(inventory.selected, "package", None)
+        if package is None:
+            continue
+        definition = package.definition
+        if definition is None:
+            raise ComposeError(
+                f"{inventory.selected.alias}: a mod definition is required"
+            )
+        parsed = _parse_inventory_gpl_sources(inventory)
+        functions = [
+            item
+            for source in parsed
+            for item in source.items
+            if item.kind is DefinitionKind.FUNCTION
+        ]
+        for feature in definition.runtime_features:
+            if not isinstance(
+                feature,
+                (StockGplmxPurchaseEquipmentTail, StockGplmxPurchaseBazaarTail),
+            ):
+                continue
+            lifecycle = (
+                "equipment"
+                if isinstance(feature, StockGplmxPurchaseEquipmentTail)
+                else "bazaar"
+            )
+            matches = [
+                item
+                for item in functions
+                if item.name.casefold() == feature.callback_symbol.casefold()
+            ]
+            if len(matches) != 1:
+                raise ComposeError(
+                    f"{inventory.selected.alias}: Purchase_{lifecycle.title()} tail callback "
+                    f"{feature.callback_symbol!r} requires exactly one package-owned "
+                    f"GPL function; found {len(matches)}"
+                )
+            _require_boolean_agent_callback_signature(
+                matches[0].text,
+                feature.callback_symbol,
+                f"Purchase_{lifecycle.title()} tail callback",
+            )
+            symbol_key = (lifecycle, feature.callback_symbol.casefold())
+            previous = seen_symbols.get(symbol_key)
+            if previous is not None:
+                raise ComposeError(
+                    f"Purchase_{lifecycle.title()} tail callback symbol "
+                    f"{feature.callback_symbol!r} is owned by both {previous} "
+                    f"and {inventory.selected.alias}"
+                )
+            seen_symbols[symbol_key] = inventory.selected.alias
+            callbacks.append(
+                (
+                    lifecycle,
+                    _normalized_mod_uuid(package.mod_id),
+                    feature.callback_key,
+                    feature.callback_symbol,
+                )
+            )
+    callbacks.sort(
+        key=lambda item: (item[0], item[1], item[2].casefold(), item[3].casefold())
+    )
+    return tuple(callbacks)
 
 
 def _parse_inventory_gpl_sources(
@@ -3129,7 +3432,7 @@ def resolve_controller_registry(
 
     if not claims:
         empty = resolve_stock_controller_registry((), {})
-        return ControllerComposeResult(empty, (), ())
+        return ControllerComposeResult(empty, (), (), ())
 
     qualified: list[ControllerFeature] = []
     mappings: dict[tuple[str, str, str], ControllerKeyMapping] = {}
@@ -3137,6 +3440,7 @@ def resolve_controller_registry(
     panel_types = (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
                    StockMx04Mx05OccupantActionPanel)
     raw_panels: dict[str, tuple[PackageInventory, ControllerFeature]] = {}
+    raw_toggles: dict[str, tuple[PackageInventory, StockMx22BuildingOpenToggle]] = {}
     flag_prototypes: dict[str, str] = {}
     for inventory, feature in claims:
         package_id = _normalized_mod_uuid(inventory.selected.package.mod_id)
@@ -3164,6 +3468,8 @@ def resolve_controller_registry(
         qualified.append(resolved_feature)
         if isinstance(feature, panel_types):
             raw_panels[resolved_feature.panel_key] = (inventory, feature)
+        elif isinstance(feature, StockMx22BuildingOpenToggle):
+            raw_toggles[resolved_feature.toggle_key] = (inventory, feature)
         elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
             descriptions = []
             for path in inventory.descriptions:
@@ -3230,6 +3536,8 @@ def resolve_controller_registry(
     free = (candidate for candidate in available if candidate not in reserved_dialogs)
     panel_dialog_ids: dict[str, tuple[int, int]] = {}
     occupant_parent_bases: dict[str, str] = {}
+    toggle_parents: dict[str, tuple[int, str]] = {}
+    toggles: list[ResolvedControllerToggle] = []
     panels: list[ResolvedControllerPanel] = []
     panel_features = [
         feature
@@ -3286,10 +3594,38 @@ def resolve_controller_registry(
                 resolved_child_dialog_id=child,
             )
         )
+    for feature in normalized:
+        if not isinstance(feature, StockMx22BuildingOpenToggle):
+            continue
+        inventory, raw = raw_toggles[feature.toggle_key]
+        parent = building_by_owner.get((inventory.selected.alias, raw.parent_building))
+        if parent is None:
+            raise ComposeError(
+                f"{inventory.selected.alias}: building toggle {raw.toggle_key!r} "
+                f"refers to undeclared parent building {raw.parent_building!r}"
+            )
+        definition = inventory.selected.package.definition
+        assert definition is not None
+        declaration = next(
+            item for item in definition.custom_buildings
+            if item.local_name == raw.parent_building
+        )
+        toggle_parents[feature.toggle_key] = (
+            int.from_bytes(parent.resolved_dialog_id, "little"),
+            declaration.controller_base,
+        )
+        toggles.append(ResolvedControllerToggle(
+            owner=inventory.selected.alias,
+            raw_toggle_key=raw.toggle_key,
+            qualified_toggle_key=feature.toggle_key,
+            raw_parent_building=raw.parent_building,
+            resolved_parent_dialog_id=parent.resolved_dialog_id,
+        ))
     try:
         registry = resolve_stock_controller_registry(
             normalized, panel_dialog_ids, flag_prototypes=flag_prototypes,
             occupant_parent_bases=occupant_parent_bases,
+            toggle_parents=toggle_parents,
         )
     except ControllerRegistryError as exc:
         raise ComposeError(f"resolved controller registry is unsafe: {exc}") from exc
@@ -3307,11 +3643,13 @@ def resolve_controller_registry(
                 ),
             )
         ),
+        toggles=tuple(toggles),
     )
 
 
 _CONTROLLER_FEATURE_CLASSES = (
     StockMx04Mx05OccupantActionPanel,
+    StockMx22BuildingOpenToggle,
     StockAp10Ap69SecondaryPanel,
     StockMx09Ap41RewardPanel,
     StockAp41Fl00HostileMonsterFlag,
@@ -3350,6 +3688,12 @@ def _qualified_controller_key(mod_uuid: str, raw_key: str) -> str:
 
 
 def _qualify_controller_feature(feature: ControllerFeature, qualify) -> ControllerFeature:
+    if isinstance(feature, StockMx22BuildingOpenToggle):
+        return replace(
+            feature,
+            toggle_key=qualify("toggle", feature.toggle_key),
+            parent_building=qualify("parent_building", feature.parent_building),
+        )
     panel = qualify("panel", feature.panel_key)
     if isinstance(feature, StockAp10Ap69SecondaryPanel):
         return replace(
@@ -3441,7 +3785,20 @@ def _require_controller_feature_evidence(
         item.local_name: item for item in definition.custom_buildings
     }
     for feature in normalized:
-        if isinstance(feature, StockAp10Ap69SecondaryPanel):
+        if isinstance(feature, StockMx22BuildingOpenToggle):
+            parent = declared_buildings.get(feature.parent_building)
+            if parent is None:
+                raise ComposeError(
+                    f"{inventory.selected.alias}: building toggle "
+                    f"{feature.toggle_key!r} parent_building "
+                    f"{feature.parent_building!r} is not declared"
+                )
+            if parent.controller_base not in ("AP07", "AP10", "MX09"):
+                raise ComposeError(
+                    "building open toggles require an AP07, AP10, or MX09 "
+                    "parent controller"
+                )
+        elif isinstance(feature, StockAp10Ap69SecondaryPanel):
             parent = declared_buildings.get(feature.parent_building)
             if parent is None:
                 raise ComposeError(
@@ -3733,8 +4090,19 @@ def compose_package(
         inventories,
         controller_result.registry,
         controller_panels=controller_result.panels,
+        controller_toggles=controller_result.toggles,
         runtime_feature_registry=runtime_feature_registry,
         description_stock_deltas=description_stock_deltas,
+    )
+    has_purchase_tail = any(
+        isinstance(feature, StockGplmxPurchaseEquipmentTail)
+        for inventory in inventories
+        for feature in inventory.selected.package.definition.runtime_features
+    )
+    has_bazaar_tail = any(
+        isinstance(feature, StockGplmxPurchaseBazaarTail)
+        for inventory in inventories
+        for feature in inventory.selected.package.definition.runtime_features
     )
     gpl = merge_gpl_resources(
         inventories,
@@ -3746,6 +4114,16 @@ def compose_package(
             (_load_stock_activity_text_expression_source(game_path),)
             if private_activity_texts
             else ()
+        ),
+        stock_purchase_equipment_source=(
+            _load_stock_purchase_equipment_source(game_path)
+            if has_purchase_tail
+            else None
+        ),
+        stock_purchase_bazaar_source=(
+            _load_stock_purchase_bazaar_source(game_path)
+            if has_bazaar_tail
+            else None
         ),
     )
 
@@ -3882,6 +4260,7 @@ def _controller_record_count(registry: ResolvedControllerRegistry) -> int:
             registry.reward_panels,
             registry.occupant_action_panels,
             registry.hostile_monster_flags,
+            registry.building_open_toggles,
         )
     )
 
@@ -4296,6 +4675,19 @@ def _validate_generated_runtime_evidence(
                 gpl_function_texts[symbol.casefold()], symbol,
                 symbol == panel.cost_callback_symbol,
             )
+    for toggle in controller_registry.building_open_toggles:
+        parent = toggle.parent_dialog_id.to_bytes(4, "little")
+        if parent not in building_dialogs:
+            raise ComposeError(
+                f"generated building toggle {toggle.toggle_key!r} parent is not "
+                "owned by a generated building declaration"
+            )
+        _validate_mx22_toggle_controls(
+            _owned_smnu_payload(inventory, parent, "generated toggle parent"),
+            toggle,
+            owner="generated",
+            panel_label=_display_key(parent),
+        )
     callbacks = (
         *controller_registry.timed_rage_actions,
         *controller_registry.rage_command_actions,
@@ -4616,6 +5008,18 @@ def _build_report(
                     }
                     for item in controller_result.panels
                 ],
+                "building_open_toggles": [
+                    {
+                        "owner": item.owner,
+                        "raw_toggle_key": item.raw_toggle_key,
+                        "qualified_toggle_key": item.qualified_toggle_key,
+                        "parent_building": item.raw_parent_building,
+                        "parent_dialog_id": item.resolved_parent_dialog_id.decode(
+                            "ascii"
+                        ),
+                    }
+                    for item in controller_result.toggles
+                ],
             },
             "private_activity_text": {
                 "registry_path": INTENT_REGISTRY_RELATIVE_PATH,
@@ -4725,6 +5129,26 @@ def _build_report(
                 "inventory_death_drop_exclusions": list(
                     gpl.inventory_death_drop_exclusions
                 ),
+                "purchase_equipment_tail_callbacks": [
+                    {
+                        "source_mod_id": mod_id,
+                        "callback_key": callback_key,
+                        "callback_symbol": callback_symbol,
+                    }
+                    for mod_id, callback_key, callback_symbol in (
+                        gpl.purchase_equipment_tail_callbacks
+                    )
+                ],
+                "purchase_bazaar_tail_callbacks": [
+                    {
+                        "source_mod_id": mod_id,
+                        "callback_key": callback_key,
+                        "callback_symbol": callback_symbol,
+                    }
+                    for mod_id, callback_key, callback_symbol in (
+                        gpl.purchase_bazaar_tail_callbacks
+                    )
+                ],
                 "compiled_bcd_size": compiled.size,
             },
             "art": {
@@ -5215,6 +5639,7 @@ __all__ = [
     "PackageInventory",
     "ResolvedBuildingDialog",
     "ResolvedControllerPanel",
+    "ResolvedControllerToggle",
     "SelectedMod",
     "ScopedSemanticResolution",
     "StockComposeInput",
@@ -5238,5 +5663,6 @@ __all__ = [
     "resolve_runtime_feature_registry",
     "snapshot_stock_compose_inputs",
     "validate_controller_stock_evidence",
+    "validate_gpl_feature_evidence",
     "validate_composed_package",
 ]

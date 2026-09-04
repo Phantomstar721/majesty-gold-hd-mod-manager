@@ -110,7 +110,7 @@ Arbitrary validated records within these bounds share the same two stock hook
 groups. The runtime does not contain an `NM18`, `NM19`, Alchemist, Phantom, or
 specific-overlay branch.
 
-## MMCR v2
+## MMCR v2-v4
 
 MMCR is likewise manager-owned and data-only. Its path is supplied through
 `MAJESTY_MOD_MANAGER_CONTROLLERS`; package JSON is never parsed inside Majesty.
@@ -129,7 +129,13 @@ section counts in this order:
 6. AP24 one-shot Rage command actions;
 7. AP69 sovereign-target actions;
 8. MX09-owned/AP41-shaped reward panels; and
-9. AP41/Fl00 hostile-monster reward actions.
+9. AP41/Fl00 hostile-monster reward actions;
+10. MX04/MX05 occupant-action panels (v3); and
+11. MX22 building open/closed toggles (v4).
+
+The writer retains canonical v2 when neither newer section is needed, uses v3
+when occupant panels are present, and uses v4 when building toggles are
+present. A newer-version header with an empty final section is noncanonical.
 
 Records are deterministically sorted within their section and refer to an
 existing panel through a manager-qualified `panel_key`. The parser validates

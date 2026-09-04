@@ -528,6 +528,40 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
             return Fail(error, "MMCR occupant panel identity/callback is duplicated");
         }
     }
+    std::set<std::string> toggleKeys;
+    std::set<std::uint32_t> toggleParents;
+    std::set<std::uint32_t> toggleCommands;
+    std::map<std::uint32_t, std::uint32_t> parentBases;
+    for (const auto& item : registry.panels) {
+        parentBases[item.parentDialogId] = 0x30315041u;
+    }
+    for (const auto& item : registry.rewardPanels) {
+        parentBases[item.parentDialogId] = 0x3930584Du;
+    }
+    for (const auto& item : registry.occupantActionPanels) {
+        const auto prior = parentBases.find(item.parentDialogId);
+        if (prior != parentBases.end() && prior->second != item.parentControllerBase) {
+            return Fail(error, "MMCR parent controller bases conflict");
+        }
+        parentBases[item.parentDialogId] = item.parentControllerBase;
+    }
+    for (const auto& item : registry.buildingOpenToggles) {
+        const auto prior = parentBases.find(item.parentDialogId);
+        if (!toggleKeys.insert(item.toggleKey).second ||
+            !toggleParents.insert(item.parentDialogId).second ||
+            !toggleCommands.insert(item.openCommandId).second ||
+            !toggleCommands.insert(item.closeCommandId).second ||
+            parentCommands.count({item.parentDialogId, item.openCommandId}) ||
+            parentCommands.count({item.parentDialogId, item.closeCommandId}) ||
+            (prior != parentBases.end() &&
+             prior->second != item.parentControllerBase)) {
+            return Fail(error, "MMCR building toggle identity/command is duplicated");
+        }
+        parentDialogs.insert(item.parentDialogId);
+        parentBases[item.parentDialogId] = item.parentControllerBase;
+        parentCommands.insert({item.parentDialogId, item.openCommandId});
+        parentCommands.insert({item.parentDialogId, item.closeCommandId});
+    }
     for (const auto child : childDialogs) {
         if (parentDialogs.count(child)) return Fail(error, "MMCR child dialog collides with a parent dialog");
     }
@@ -537,6 +571,7 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
 }  // namespace
 
 void Registry::Clear() {
+    buildingOpenToggles.clear();
     occupantActionPanels.clear();
     panels.clear();
     meters.clear();
@@ -688,6 +723,14 @@ const OccupantActionPanelRecord* Registry::FindOccupantPanelByCommand(std::uint3
     return nullptr;
 }
 
+const BuildingOpenToggleRecord* Registry::FindBuildingOpenToggleByParent(
+    std::uint32_t id) const {
+    for (const auto& item : buildingOpenToggles) {
+        if (item.parentDialogId == id) return &item;
+    }
+    return nullptr;
+}
+
 bool ParseRegistry(
     const unsigned char* bytes,
     std::size_t size,
@@ -707,15 +750,17 @@ bool ParseRegistry(
         return Fail(error, "MMCR registry magic is invalid");
     }
     std::uint32_t version = 0;
-    std::uint32_t counts[10] = {};
+    std::uint32_t counts[11] = {};
     if (!reader.ReadU32(&version)) return Fail(error, "MMCR header is truncated");
-    if (version != 2 && version != kRegistryVersion) return Fail(error, "MMCR version is unsupported");
-    for (std::size_t index = 0; index < (version == 3 ? 10u : 9u); ++index) {
+    if (version != 2 && version != 3 && version != kRegistryVersion) return Fail(error, "MMCR version is unsupported");
+    const std::size_t countSize = version == 4 ? 11u : version == 3 ? 10u : 9u;
+    for (std::size_t index = 0; index < countSize; ++index) {
         if (!reader.ReadU32(&counts[index])) return Fail(error, "MMCR header is truncated");
     }
     if (version == 3 && counts[9] == 0) return Fail(error, "MMCR v3 without occupant panels is noncanonical");
+    if (version == 4 && counts[10] == 0) return Fail(error, "MMCR v4 without building toggles is noncanonical");
     std::uint64_t total = 0;
-    for (std::size_t index = 0; index < 10; ++index) total += counts[index];
+    for (std::size_t index = 0; index < 11; ++index) total += counts[index];
     if (total > kMaximumRecordCount ||
         static_cast<std::uint64_t>(counts[0]) + counts[7] + counts[9] > kMaximumPanelCount) {
         return Fail(error, "MMCR record count is outside supported bounds");
@@ -731,6 +776,8 @@ bool ParseRegistry(
     parsed.sovereignTargetActions.reserve(counts[6]);
     parsed.rewardPanels.reserve(counts[7]);
     parsed.hostileMonsterFlags.reserve(counts[8]);
+    parsed.occupantActionPanels.reserve(counts[9]);
+    parsed.buildingOpenToggles.reserve(counts[10]);
 
     for (std::uint32_t index = 0; index < counts[0]; ++index) {
         SecondaryPanelRecord item = {};
@@ -1020,6 +1067,27 @@ bool ParseRegistry(
             return Fail(error, "MMCR occupant panel is invalid or noncanonical");
         }
         parsed.occupantActionPanels.push_back(std::move(item));
+    }
+    for (std::uint32_t index = 0; index < counts[10]; ++index) {
+        BuildingOpenToggleRecord item = {};
+        if (!reader.ReadLogical(&item.toggleKey) ||
+            !reader.ReadU32(&item.parentDialogId) ||
+            !reader.ReadU32(&item.openCommandId) ||
+            !reader.ReadU32(&item.closeCommandId) ||
+            !reader.ReadU32(&item.parentControllerBase) ||
+            !IsPrintableFourCC(item.parentDialogId) ||
+            item.openCommandId == 0 || item.closeCommandId == 0 ||
+            item.openCommandId == item.closeCommandId ||
+            item.openCommandId == 0x22ABu || item.openCommandId == 0x22ACu ||
+            item.closeCommandId == 0x22ABu || item.closeCommandId == 0x22ACu ||
+            (item.parentControllerBase != 0x37305041u &&
+             item.parentControllerBase != 0x30315041u &&
+             item.parentControllerBase != 0x3930584Du) ||
+            (!parsed.buildingOpenToggles.empty() &&
+             parsed.buildingOpenToggles.back().toggleKey >= item.toggleKey)) {
+            return Fail(error, "MMCR building open toggle is invalid or noncanonical");
+        }
+        parsed.buildingOpenToggles.push_back(std::move(item));
     }
     if (reader.cursor() != size) return Fail(error, "MMCR registry contains trailing bytes");
     if (!ValidateComposition(parsed, error)) return false;

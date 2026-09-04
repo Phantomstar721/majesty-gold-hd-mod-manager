@@ -16,6 +16,8 @@ from majesty_cam.gpl import (
     merge_semantic_items,
     merge_sources,
     add_inventory_death_drop_exclusions,
+    add_purchase_bazaar_tail_callbacks,
+    add_purchase_equipment_tail_callbacks,
     parse_dat,
     parse_gpl,
     require_complete_semantic_coverage,
@@ -254,6 +256,92 @@ class GplParsingTests(unittest.TestCase):
 
 
 class SemanticMergeTests(unittest.TestCase):
+    def test_purchase_bazaar_tail_runs_after_all_bazaar_items(self):
+        stock = parse_gpl(_purchase_bazaar(), "stock-bazaar.gpl")
+        callback = parse_gpl(_boolean_callback("Zoo_Rental_Check"), "zoo.gpl")
+        merged = merge_sources([], {"zoo": [callback]})
+
+        result = add_purchase_bazaar_tail_callbacks(
+            merged,
+            ("Zoo_Rental_Check",),
+            stock_purchase_bazaar=stock.require("function", "Purchase_Bazaar"),
+        )
+
+        text = result.emit_project_source_set().gpl_text
+        bazaar = text[text.index("Function Purchase_Bazaar"):]
+        self.assertLess(bazaar.index("#Bazaar_Item_Six"), bazaar.index("$Bazaar_Item_Check"))
+        self.assertLess(bazaar.index("$Bazaar_Item_Check"), bazaar.index("$Zoo_Rental_Check"))
+        self.assertLess(bazaar.index("$Zoo_Rental_Check"), bazaar.index('ActiveScript" = $Use_Building'))
+
+    def test_purchase_bazaar_tail_fails_closed_if_item_chain_changes(self):
+        malformed = parse_gpl(
+            _purchase_bazaar().replace("#Bazaar_Item_Six", "#Private_Item"),
+            "malformed-bazaar.gpl",
+        )
+        callback = parse_gpl(_boolean_callback("Zoo_Rental_Check"), "zoo.gpl")
+        with self.assertRaisesRegex(ValueError, "complete recognized stock"):
+            add_purchase_bazaar_tail_callbacks(
+                merge_sources([], {"zoo": [callback]}),
+                ("Zoo_Rental_Check",),
+                stock_purchase_bazaar=malformed.require("function", "Purchase_Bazaar"),
+            )
+
+    def test_purchase_equipment_tail_runs_after_stock_chain_and_uses_stock_final(self):
+        stock = parse_gpl(_purchase_equipment(), "stock-purchase.gpl")
+        callbacks = parse_gpl(
+            _boolean_callback("Zoo_Rental_Check")
+            + _boolean_callback("Another_Mod_Check"),
+            "callbacks.gpl",
+        )
+        merged = merge_sources([], {"custom": [callbacks]})
+
+        result = add_purchase_equipment_tail_callbacks(
+            merged,
+            ("Another_Mod_Check", "Zoo_Rental_Check"),
+            stock_purchase_equipment=stock.require("function", "Purchase_Equipment"),
+        )
+
+        emitted = result.emit_project_source_set().gpl_text
+        self.assertLess(emitted.index("$Stat_Boost_Check"), emitted.index("$Another_Mod_Check"))
+        self.assertLess(emitted.index("$Another_Mod_Check"), emitted.index("$Zoo_Rental_Check"))
+        self.assertLess(emitted.index("$Zoo_Rental_Check"), emitted.index('ThisAgent\'s "ActiveScript" = $Use_Building'))
+        self.assertEqual(emitted.count('ThisAgent\'s "ActiveScript" = $Use_Building'), 1)
+
+    def test_purchase_equipment_tail_preserves_existing_package_additions(self):
+        modified = _purchase_equipment().replace(
+            "If ($Poison_Check (ThisAgent))",
+            "If ($Alchemy_Oil_Check (ThisAgent,alchemyLabs))\n"
+            "            Flag = TRUE;\n"
+            "        Else\n"
+            "        If ($Poison_Check (ThisAgent))",
+        )
+        source = parse_gpl(modified + _boolean_callback("Zoo_Rental_Check"), "combined.gpl")
+        merged = merge_sources([], {"combined": [source]})
+
+        result = add_purchase_equipment_tail_callbacks(
+            merged, ("Zoo_Rental_Check",)
+        )
+
+        emitted = result.emit_project_source_set().gpl_text
+        self.assertIn("$Alchemy_Oil_Check", emitted)
+        self.assertLess(emitted.index("$Alchemy_Oil_Check"), emitted.index("$Stat_Boost_Check"))
+        self.assertLess(emitted.index("$Stat_Boost_Check"), emitted.index("$Zoo_Rental_Check"))
+
+    def test_purchase_equipment_tail_fails_closed_on_unknown_shape(self):
+        callback = parse_gpl(_boolean_callback("Zoo_Rental_Check"), "callback.gpl")
+        malformed = parse_gpl(
+            _purchase_equipment().replace("$Stat_Boost_Check", "$Different_Final_Check"),
+            "malformed.gpl",
+        )
+        merged = merge_sources([], {"callback": [callback]})
+
+        with self.assertRaisesRegex(ValueError, "complete recognized stock"):
+            add_purchase_equipment_tail_callbacks(
+                merged,
+                ("Zoo_Rental_Check",),
+                stock_purchase_equipment=malformed.require("function", "Purchase_Equipment"),
+            )
+
     def test_composes_private_numeric_item_into_stock_death_drop_exclusions(self):
         source = parse_gpl(
             textwrap.dedent(
@@ -454,6 +542,95 @@ class SemanticMergeTests(unittest.TestCase):
             merge_sources([], {"one-mod": [first, second]})
 
         self.assertEqual(raised.exception.side_name, "one-mod")
+
+
+def _purchase_equipment() -> str:
+    return textwrap.dedent(
+        """\
+        Function Purchase_Equipment (agent ThisAgent) is boolean
+        Declare
+            boolean Flag;
+        Begin
+            If ($BlackSmith_Check (ThisAgent))
+                Flag = TRUE;
+            Else If ($BlackSmith_Check (ThisAgent))
+                Flag = TRUE;
+            Else If ($WizGuild_Check (ThisAgent))
+                Flag = TRUE;
+            Else If ($WizGuild_Check (ThisAgent))
+                Flag = TRUE;
+            Else If ($Poison_Check (ThisAgent))
+                Flag = TRUE;
+            Else If ($Potion_Check (ThisAgent,shops))
+                Flag = TRUE;
+            Else If ($Ring_Check (ThisAgent,markets))
+                Flag = TRUE;
+            Else If ($Market3_Check (ThisAgent,markets))
+                Flag = TRUE;
+            Else If ($Stat_Boost_Check (ThisAgent,fairgrounds))
+                Flag = TRUE;
+
+            If (Flag)
+                begin
+                    ThisAgent's "ActiveScript" = $Use_Building;
+                    return TRUE;
+                end
+
+            return False;
+        End
+
+        """
+    )
+
+
+def _purchase_bazaar() -> str:
+    return textwrap.dedent(
+        """\
+        Function Purchase_Bazaar (agent ThisAgent, integer bazaar_chance) is boolean
+        Declare
+            boolean Flag;
+            list Item_list;
+            integer Item;
+        Begin
+            Flag = FALSE;
+            If (bazaar_chance > $RandomNumber (100) + 1)
+                Flag = FALSE;
+            $listobjects (ThisAgent, "building", 100, bazaars);
+            Item_list << #Bazaar_Item_One;
+            Item_list << #Bazaar_Item_Two;
+            Item_list << #Bazaar_Item_Three;
+            Item_list << #Bazaar_Item_Four;
+            Item_list << #Bazaar_Item_Five;
+            Item_list << #Bazaar_Item_Six;
+            foreach Item in Item_list do
+                begin
+                    Bazaars_Researched = $Researched_Item (bazaars, Item);
+                    Item_Cost = $Get_Bazaar_Cost (Item);
+                    If ($Bazaar_Item_Check (ThisAgent, Item, Bazaars_Researched, Item_Cost))
+                        Flag = TRUE;
+                end
+            If (Flag)
+                begin
+                    ThisAgent's "ActiveScript" = $Use_Building;
+                    return TRUE;
+                end
+            return False;
+        End
+
+        """
+    )
+
+
+def _boolean_callback(name: str) -> str:
+    return textwrap.dedent(
+        f"""\
+        Function {name} (agent ThisAgent) is boolean
+        Begin
+            return False;
+        End
+
+        """
+    )
 
 
 def _function(name: str, body: str) -> str:

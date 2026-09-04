@@ -288,6 +288,59 @@ occupant agent types through the required Generic Visitor Lists patch.
 See [the stock lifecycle and test guide](stock-occupant-action-panel.md) for
 native routing, ownership, and validation details.
 
+An `AP07`, `AP10`, or `MX09` building can use MX22's persistent open/closed
+state and paired-control presentation:
+
+```json
+{
+  "type": "stock.mx22-building-open-toggle.v1",
+  "toggle_key": "rentals",
+  "parent_building": "YourNamespacedBuilding",
+  "open_command_id": 24001,
+  "close_command_id": 24002
+}
+```
+
+The parent SMNU must contain literal stock-shaped clones of both MX22 action
+controls, changed only to the two declared private command IDs and the
+package's own visible text and layout. The manager stores the state in stock
+`ATTRIB_EmbassyActiveFlag`, shows exactly the action that changes the current
+state, and refreshes it after stock setup, events, and ordinary commands. It
+does not submit Embassy order `0x16` or create an Embassy recruit order; those
+side effects belong only to the Embassy. Toggle keys, parents, and commands
+must remain unambiguous across the complete merged selection. See
+[the building-toggle lifecycle](stock-building-open-toggle.md).
+
+A package can add a low-priority hero purchase choice without replacing the
+whole stock `Purchase_Equipment` function:
+
+```json
+{
+  "type": "stock.gplmx-purchase-equipment-tail.v1",
+  "callback_key": "rent-a-beast",
+  "callback_symbol": "YourMod_Rental_Check"
+}
+```
+
+The named GPL function must exist exactly once in that package and use
+`Function YourMod_Rental_Check (agent ThisAgent) is boolean`. It returns TRUE
+only after it has prepared the same Target, TaskName, and intent state expected
+by stock `Use_Building`. The manager inserts all declared callbacks in stable
+package/key order only after the complete effective purchase chain—including
+package-owned additions and stock `Stat_Boost_Check`—has declined. A TRUE
+result then passes through stock's single final `ActiveScript = Use_Building`
+and `return TRUE` block. Unrecognized or reordered stock anchors fail the
+build. See [the purchase-tail lifecycle](stock-purchase-equipment-tail.md).
+
+For a choice that must come after all Magic Bazaar items, use the parallel
+`stock.gplmx-purchase-bazaar-tail.v1` record with the same `callback_key` and
+`callback_symbol` fields. Its callback has the same `(agent) is boolean`
+signature. The manager inserts it after the complete effective Bazaar item
+scan and before `Purchase_Bazaar`'s final Flag/`Use_Building` handoff. Use the
+equipment-tail and Bazaar-tail types according to Majesty's actual hero
+decision order; they are distinct extension points and are sorted
+independently.
+
 A complete parser-checked schema-v3 example containing the AP10/AP69 recipe
 family is available as
 [mod-definition-v3-all-features.json](examples/mod-definition-v3-all-features.json).

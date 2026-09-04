@@ -19,6 +19,7 @@ from ..compose import (
     resolve_runtime_feature_registry,
     snapshot_stock_compose_inputs,
     validate_controller_stock_evidence,
+    validate_gpl_feature_evidence,
     validate_composed_package,
 )
 from ..gpl import (
@@ -32,6 +33,11 @@ from ..intent_text import (
     INTENT_REGISTRY_RELATIVE_PATH,
     PrivateActivityTextBinding,
     decode_intent_registry,
+)
+from ..gpl_features import (
+    StockGplmxPurchaseEquipmentTail,
+    StockGplmxPurchaseBazaarTail,
+    gpl_feature_mapping,
 )
 from ..package import (
     ModPackage,
@@ -186,6 +192,7 @@ def _controller_record_count(registry: ResolvedControllerRegistry) -> int:
             registry.reward_panels,
             registry.occupant_action_panels,
             registry.hostile_monster_flags,
+            registry.building_open_toggles,
         )
     )
 
@@ -510,6 +517,7 @@ def create_build_plan(
             inventories = tuple(
                 inventory_package(item.selected_mod) for item in prepared
             )
+            validate_gpl_feature_evidence(inventories)
             runtime_feature_registry = resolve_runtime_feature_registry(
                 inventories,
                 tuple(sorted(capabilities)),
@@ -1368,6 +1376,8 @@ def _canonical_runtime_feature(feature: object) -> dict:
             "generator_id": feature.generator_id,
             "name_tables": list(feature.name_part_ids),
         }
+    if isinstance(feature, (StockGplmxPurchaseEquipmentTail, StockGplmxPurchaseBazaarTail)):
+        return gpl_feature_mapping(feature)
     try:
         return controller_feature_mapping(feature)
     except ControllerFeatureError:

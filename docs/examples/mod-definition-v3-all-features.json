@@ -44,6 +44,23 @@
       "unavailable_alert_text": null
     },
     {
+      "type": "stock.mx22-building-open-toggle.v1",
+      "toggle_key": "reward-building-open",
+      "parent_building": "ExampleRewardBuilding",
+      "open_command_id": 24001,
+      "close_command_id": 24002
+    },
+    {
+      "type": "stock.gplmx-purchase-equipment-tail.v1",
+      "callback_key": "optional-visit",
+      "callback_symbol": "Example_Optional_Visit_Check"
+    },
+    {
+      "type": "stock.gplmx-purchase-bazaar-tail.v1",
+      "callback_key": "post-bazaar-visit",
+      "callback_symbol": "Example_Post_Bazaar_Visit_Check"
+    },
+    {
       "type": "stock.ap10-ap69-secondary-panel.v1",
       "panel_key": "crafting-panel",
       "parent_building": "ExampleCraftingGuild",

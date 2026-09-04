@@ -32,6 +32,7 @@ from .stock_controller_features import (
     StockAp41Fl00HostileMonsterFlag,
     StockMx09Ap41RewardPanel,
     StockMx04Mx05OccupantActionPanel,
+    StockMx22BuildingOpenToggle,
     StockAp17UpgradeResearchGate,
     StockAp22ResourceMeter,
     StockAp24RageCommandAction,
@@ -44,7 +45,7 @@ from .stock_controller_features import (
 
 
 CONTROLLER_REGISTRY_MAGIC = b"MMCR"
-CONTROLLER_REGISTRY_VERSION = 3
+CONTROLLER_REGISTRY_VERSION = 4
 STOCK_CONTROLLER_RUNTIME_CAPABILITY = "stock.controller-recipes.v1"
 CONTROLLER_REGISTRY_ENVIRONMENT = "MAJESTY_MOD_MANAGER_CONTROLLERS"
 CONTROLLER_REGISTRY_RELATIVE_PATH = Path(
@@ -54,6 +55,7 @@ MAX_CONTROLLER_REGISTRY_BYTES = 512 * 1024
 
 _HEADER = struct.Struct("<4s10I")
 _OCCUPANT_HEADER = struct.Struct("<4s11I")
+_TOGGLE_HEADER = struct.Struct("<4s12I")
 _U32 = struct.Struct("<I")
 _SECTIONS: Tuple[Type[ControllerFeature], ...] = (
     StockAp10Ap69SecondaryPanel,
@@ -66,6 +68,7 @@ _SECTIONS: Tuple[Type[ControllerFeature], ...] = (
     StockMx09Ap41RewardPanel,
     StockAp41Fl00HostileMonsterFlag,
     StockMx04Mx05OccupantActionPanel,
+    StockMx22BuildingOpenToggle,
 )
 
 
@@ -105,6 +108,15 @@ class ResolvedOccupantActionPanelRecord:
 
 
 @dataclass(frozen=True)
+class ResolvedBuildingOpenToggleRecord:
+    toggle_key: str
+    parent_dialog_id: int
+    open_command_id: int
+    close_command_id: int
+    parent_controller_base: str
+
+
+@dataclass(frozen=True)
 class ResolvedHostileMonsterFlagRecord:
     panel_key: str
     action_key: str
@@ -140,6 +152,7 @@ class ResolvedControllerRegistry:
     reward_panels: Tuple[ResolvedRewardPanelRecord, ...] = ()
     hostile_monster_flags: Tuple[ResolvedHostileMonsterFlagRecord, ...] = ()
     occupant_action_panels: Tuple[ResolvedOccupantActionPanelRecord, ...] = ()
+    building_open_toggles: Tuple[ResolvedBuildingOpenToggleRecord, ...] = ()
 
 
 def resolve_stock_controller_registry(
@@ -148,6 +161,7 @@ def resolve_stock_controller_registry(
     *,
     flag_prototypes: Mapping[str, str] | None = None,
     occupant_parent_bases: Mapping[str, str] | None = None,
+    toggle_parents: Mapping[str, Tuple[int, str]] | None = None,
 ) -> ResolvedControllerRegistry:
     """Resolve author records to explicit parent/child dialog IDs.
 
@@ -198,6 +212,26 @@ def resolve_stock_controller_registry(
             reward_panels.append(ResolvedRewardPanelRecord(
                 item.panel_key, parent, child, item.open_command_id,
             ))
+    toggle_features = tuple(
+        item for item in features if isinstance(item, StockMx22BuildingOpenToggle)
+    )
+    resolved_toggle_parents = {} if toggle_parents is None else dict(toggle_parents)
+    if set(resolved_toggle_parents) != {item.toggle_key for item in toggle_features}:
+        raise ControllerRegistryError(
+            "resolved toggle parent mapping must contain exactly every toggle_key"
+        )
+    toggles = []
+    for item in toggle_features:
+        parent, controller_base = resolved_toggle_parents[item.toggle_key]
+        _resolved_dialog_id(parent, "parent_dialog_id")
+        if controller_base not in ("AP07", "AP10", "MX09"):
+            raise ControllerRegistryError(
+                "building toggle parent controller base is unsupported"
+            )
+        toggles.append(ResolvedBuildingOpenToggleRecord(
+            item.toggle_key, parent, item.open_command_id,
+            item.close_command_id, controller_base,
+        ))
     prototypes = {} if flag_prototypes is None else dict(flag_prototypes)
     flag_features = tuple(
         item for item in features if isinstance(item, StockAp41Fl00HostileMonsterFlag)
@@ -240,6 +274,7 @@ def resolve_stock_controller_registry(
         reward_panels=tuple(reward_panels),
         hostile_monster_flags=flags,
         occupant_action_panels=tuple(occupant_panels),
+        building_open_toggles=tuple(toggles),
     ))
 
 
@@ -327,7 +362,7 @@ class _Reader:
 
 
 def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> bytes:
-    """Encode canonical recipes as MMCR v2, or v3 when occupant panels exist."""
+    """Encode canonical recipes as MMCR v2/v3/v4 as features require."""
 
     try:
         registry = _validate_resolved_registry(registry)
@@ -348,7 +383,14 @@ def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> by
     )
     counts = tuple(len(section) for section in sections)
     writer = _Writer()
-    if registry.occupant_action_panels:
+    if registry.building_open_toggles:
+        sections += (registry.occupant_action_panels, registry.building_open_toggles)
+        writer.data += _TOGGLE_HEADER.pack(
+            CONTROLLER_REGISTRY_MAGIC, 4, *counts,
+            len(registry.occupant_action_panels),
+            len(registry.building_open_toggles),
+        )
+    elif registry.occupant_action_panels:
         sections += (registry.occupant_action_panels,)
         writer.data += _OCCUPANT_HEADER.pack(
             CONTROLLER_REGISTRY_MAGIC, 3, *counts, len(registry.occupant_action_panels)
@@ -367,7 +409,7 @@ def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> by
 
 
 def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegistry:
-    """Decode MMCR v2/v3, rejecting malformed and non-canonical registries."""
+    """Decode MMCR v2/v3/v4, rejecting malformed and non-canonical registries."""
 
     if not isinstance(payload, bytes):
         raise ControllerRegistryError("MMCR registry must be bytes")
@@ -376,7 +418,15 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
     magic, version, *counts = _HEADER.unpack_from(payload)
     if magic != CONTROLLER_REGISTRY_MAGIC:
         raise ControllerRegistryError("controller registry magic is not MMCR")
-    if version == 3:
+    if version == 4:
+        if len(payload) < _TOGGLE_HEADER.size:
+            raise ControllerRegistryError("MMCR v4 header is truncated")
+        magic, version, *counts = _TOGGLE_HEADER.unpack_from(payload)
+        if counts[10] == 0:
+            raise ControllerRegistryError(
+                "MMCR v4 without building toggles is noncanonical"
+            )
+    elif version == 3:
         if len(payload) < _OCCUPANT_HEADER.size:
             raise ControllerRegistryError("MMCR v3 header is truncated")
         magic, version, *counts = _OCCUPANT_HEADER.unpack_from(payload)
@@ -390,7 +440,9 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
         raise ControllerRegistryError("MMCR panel count is outside bounds")
 
     reader = _Reader(payload)
-    if version == 3:
+    if version == 4:
+        reader.cursor = _TOGGLE_HEADER.size
+    elif version == 3:
         reader.cursor = _OCCUPANT_HEADER.size
     sections = []
     try:
@@ -442,7 +494,11 @@ def write_stock_controller_registry(
 
 
 def _encode_feature(writer: _Writer, feature: object) -> None:
-    writer.logical(feature.panel_key)
+    writer.logical(
+        feature.toggle_key
+        if isinstance(feature, ResolvedBuildingOpenToggleRecord)
+        else feature.panel_key
+    )
     if isinstance(feature, ResolvedSecondaryPanelRecord):
         writer.u32(feature.parent_dialog_id)
         writer.u32(feature.child_dialog_id)
@@ -536,6 +592,11 @@ def _encode_feature(writer: _Writer, feature: object) -> None:
         writer.symbol(feature.cost_callback_symbol)
         writer.symbol(feature.action_callback_symbol)
         writer.fourcc(feature.parent_controller_base)
+    elif isinstance(feature, ResolvedBuildingOpenToggleRecord):
+        writer.u32(feature.parent_dialog_id)
+        writer.u32(feature.open_command_id)
+        writer.u32(feature.close_command_id)
+        writer.fourcc(feature.parent_controller_base)
     elif isinstance(feature, ResolvedHostileMonsterFlagRecord):
         writer.logical(feature.action_key)
         writer.fourcc(feature.private_mode)
@@ -557,6 +618,12 @@ def _decode_feature(reader: _Reader, kind: Type[ControllerFeature]) -> object:
             panel, reader.u32("parent_dialog_id"), reader.u32("child_dialog_id"),
             reader.u32("open_command_id"), reader.u32("action_command_id"),
             reader.symbol("cost_callback_symbol"), reader.symbol("action_callback_symbol"),
+            reader.fourcc("parent_controller_base"),
+        )
+    if kind is StockMx22BuildingOpenToggle:
+        return ResolvedBuildingOpenToggleRecord(
+            panel, reader.u32("parent_dialog_id"),
+            reader.u32("open_command_id"), reader.u32("close_command_id"),
             reader.fourcc("parent_controller_base"),
         )
     if kind is StockAp10Ap69SecondaryPanel:
@@ -653,6 +720,7 @@ def _validate_resolved_registry(
         registry.rage_command_actions, registry.sovereign_target_actions,
         registry.reward_panels, registry.hostile_monster_flags,
         registry.occupant_action_panels,
+        registry.building_open_toggles,
     )
     if any(not isinstance(section, tuple) for section in sections):
         raise ControllerRegistryError("MMCR resolved registry sections must be tuples")
@@ -756,6 +824,49 @@ def _validate_resolved_registry(
             _unpack_fourcc(item.child_dialog_id), item.open_command_id,
             item.cost_callback_symbol, item.action_callback_symbol,
         ))
+    toggle_by_key = {}
+    toggle_commands = set()
+    toggle_parents = set()
+    parent_bases = {
+        **{item.parent_dialog_id: "AP10" for item in registry.panels},
+        **{item.parent_dialog_id: "MX09" for item in registry.reward_panels},
+        **{item.parent_dialog_id: item.parent_controller_base
+           for item in registry.occupant_action_panels},
+    }
+    for item in registry.building_open_toggles:
+        if not isinstance(item, ResolvedBuildingOpenToggleRecord):
+            raise ControllerRegistryError("MMCR building toggle record type is invalid")
+        if item.toggle_key in toggle_by_key:
+            raise ControllerRegistryError("MMCR building toggle_key is duplicated")
+        _resolved_dialog_id(item.parent_dialog_id, "parent_dialog_id")
+        if item.parent_dialog_id in toggle_parents:
+            raise ControllerRegistryError("MMCR building toggle parent is duplicated")
+        if item.open_command_id in toggle_commands or item.close_command_id in toggle_commands:
+            raise ControllerRegistryError("MMCR building toggle command is duplicated")
+        if ((item.parent_dialog_id, item.open_command_id) in parent_commands or
+                (item.parent_dialog_id, item.close_command_id) in parent_commands):
+            raise ControllerRegistryError(
+                "MMCR building toggle command collides with a parent command"
+            )
+        if item.parent_controller_base not in ("AP07", "AP10", "MX09"):
+            raise ControllerRegistryError("MMCR building toggle parent controller base is unsupported")
+        prior_base = parent_bases.get(item.parent_dialog_id)
+        if prior_base is not None and prior_base != item.parent_controller_base:
+            raise ControllerRegistryError(
+                "MMCR building toggle parent controller base conflicts with another recipe"
+            )
+        parent_bases[item.parent_dialog_id] = item.parent_controller_base
+        toggle_parents.add(item.parent_dialog_id)
+        toggle_commands.update((item.open_command_id, item.close_command_id))
+        parent_commands.update((
+            (item.parent_dialog_id, item.open_command_id),
+            (item.parent_dialog_id, item.close_command_id),
+        ))
+        toggle_by_key[item.toggle_key] = item
+        author_features.append(StockMx22BuildingOpenToggle(
+            item.toggle_key, _resolved_parent_key(item.parent_dialog_id),
+            item.open_command_id, item.close_command_id,
+        ))
     flag_by_action = {}
     for item in registry.hostile_monster_flags:
         if not isinstance(item, ResolvedHostileMonsterFlagRecord):
@@ -811,6 +922,10 @@ def _validate_resolved_registry(
         occupant_action_panels=tuple(
             occupant_by_key[item.panel_key] for item in normalized
             if isinstance(item, StockMx04Mx05OccupantActionPanel)
+        ),
+        building_open_toggles=tuple(
+            toggle_by_key[item.toggle_key] for item in normalized
+            if isinstance(item, StockMx22BuildingOpenToggle)
         ),
     )
 

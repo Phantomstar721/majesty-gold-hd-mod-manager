@@ -15,6 +15,7 @@ from ..compose import (
     resolve_controller_registry,
     resolve_runtime_feature_registry,
     validate_controller_stock_evidence,
+    validate_gpl_feature_evidence,
 )
 from ..package import (
     DEFINITION_FILE_NAME,
@@ -280,6 +281,7 @@ def catalog_merge_preflight(
 
     try:
         inventory = inventory_package(prepared.selected_mod)
+        validate_gpl_feature_evidence((inventory,))
         runtime_features = resolve_runtime_feature_registry(
             (inventory,),
             prepared.runtime_capabilities,

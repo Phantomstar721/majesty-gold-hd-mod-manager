@@ -255,7 +255,9 @@ bool ExpectInvalid(
         registry.timedRageActions.empty() &&
         registry.rageCommandActions.empty() &&
         registry.sovereignTargetActions.empty() &&
-        registry.rewardPanels.empty() && registry.hostileMonsterFlags.empty();
+        registry.rewardPanels.empty() && registry.hostileMonsterFlags.empty() &&
+        registry.occupantActionPanels.empty() &&
+        registry.buildingOpenToggles.empty();
 }
 
 }  // namespace
@@ -581,6 +583,27 @@ int main() {
     }
     occupants[commandOffset] = 21;
     if (!ExpectInvalid(occupants, "occupant panel")) return 38;
+
+    auto toggles = Header(0, 0, 0, 0, 0, 0, 0);
+    toggles[4] = 4;
+    AppendU32(&toggles, 0);
+    AppendU32(&toggles, 1);
+    AppendString(&toggles, "rentals");
+    AppendU32(&toggles, FourCC("Z001"));
+    AppendU32(&toggles, 0x5D01);
+    AppendU32(&toggles, 0x5D02);
+    AppendU32(&toggles, FourCC("MX09"));
+    if (!MajestyStockControllers::ParseRegistry(
+            toggles.data(), toggles.size(), &registry, &error) ||
+        registry.buildingOpenToggles.size() != 1 ||
+        registry.FindBuildingOpenToggleByParent(FourCC("Z001")) == nullptr) {
+        std::fprintf(stderr, "Generic building-toggle MMCR rejected: %s\n", error.c_str());
+        return 39;
+    }
+    for (std::size_t size = 0; size < toggles.size(); ++size) {
+        if (MajestyStockControllers::ParseRegistry(
+                toggles.data(), size, &registry, &error)) return 40;
+    }
     std::puts("Stock controller registry parser tests passed.");
     return 0;
 }
