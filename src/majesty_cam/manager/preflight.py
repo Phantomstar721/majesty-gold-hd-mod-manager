@@ -297,6 +297,7 @@ def catalog_merge_preflight(
             (inventory,),
             controller.registry,
             controller_panels=controller.panels,
+            controller_toggles=controller.toggles,
             runtime_feature_registry=runtime_features,
         )
     except (ComposeError, OSError, ValueError) as exc:

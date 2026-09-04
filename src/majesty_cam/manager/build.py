@@ -535,6 +535,7 @@ def create_build_plan(
                     inventories,
                     controller_registry,
                     controller_panels=controller_result.panels,
+                    controller_toggles=controller_result.toggles,
                     runtime_feature_registry=runtime_feature_registry,
                 )
             capabilities = set(

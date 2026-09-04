@@ -320,6 +320,61 @@ class ManagerCatalogTests(unittest.TestCase):
         self.assertIs(issues[0].severity, IssueSeverity.ERROR)
         self.assertIn("AITX[7]", issues[0].message)
 
+    def test_catalog_preflight_passes_toggle_ownership_to_stock_evidence(self):
+        package = Path("C:/fixture/toggle-mod")
+        prepared = PreparedMergeMod(
+            content_id=normalize_content_id(MERGE_ID),
+            display_name="Toggle Fixture",
+            source_root=package,
+            effective_root=package,
+            alias="toggle-fixture",
+            package=SimpleNamespace(mod_id=normalize_content_id(MERGE_ID)),
+            priority=1000,
+            runtime_capabilities=(),
+            badge=None,
+            substituted=False,
+            compatibility=None,
+            issues=(),
+        )
+        inventory = SimpleNamespace()
+        toggle = SimpleNamespace(qualified_toggle_key="toggle-fixture::toggle::rentals")
+        controller = SimpleNamespace(
+            registry=SimpleNamespace(),
+            panels=(),
+            toggles=(toggle,),
+        )
+        evidence = "majesty_cam.manager.preflight.validate_controller_stock_evidence"
+        with patch(
+            "majesty_cam.manager.preflight.prepare_merge_package",
+            return_value=prepared,
+        ), patch(
+            "majesty_cam.manager.preflight.discover_selected_private_activity_texts"
+        ), patch(
+            "majesty_cam.manager.preflight.inventory_package",
+            return_value=inventory,
+        ), patch(
+            "majesty_cam.manager.preflight.validate_gpl_feature_evidence"
+        ), patch(
+            "majesty_cam.manager.preflight.resolve_runtime_feature_registry",
+            return_value=SimpleNamespace(),
+        ), patch(
+            "majesty_cam.manager.preflight.resolve_building_dialogs",
+            return_value=(),
+        ), patch(
+            "majesty_cam.manager.preflight.resolve_controller_registry",
+            return_value=controller,
+        ), patch(evidence) as validate:
+            issues = catalog_merge_preflight(
+                normalize_content_id(MERGE_ID),
+                prepared.display_name,
+                package,
+                registry=CompatibilityRegistry(specs={}),
+                game_path=Path("C:/fixture/game"),
+            )
+
+        self.assertEqual(issues, ())
+        self.assertEqual(validate.call_args.kwargs["controller_toggles"], (toggle,))
+
     def test_invalid_xml_and_invalid_uuid_are_structured_errors(self):
         with TemporaryDirectory() as tmp:
             mods = Path(tmp) / "Mods"
