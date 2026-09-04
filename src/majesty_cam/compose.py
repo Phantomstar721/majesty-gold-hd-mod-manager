@@ -941,6 +941,8 @@ def merge_sound_resources(
 def merge_art_resources(
     game_path: Path,
     inventories: Sequence[PackageInventory],
+    *,
+    required_stock_interface_imag_ids: Sequence[bytes] = (),
 ) -> tuple[ArtDomainComposeResult, ArtDomainComposeResult]:
     """Compose main and interface art with typed, stock-relative relocation.
 
@@ -1038,6 +1040,11 @@ def merge_art_resources(
             tuple(prepared_providers),
             analyses,
             fallthrough_ancestors=fallthrough_ancestors,
+            required_stock_imag_ids=(
+                required_stock_interface_imag_ids
+                if domain == "interface"
+                else ()
+            ),
         )
         results.append(result)
     return results[0], results[1]
@@ -1133,6 +1140,7 @@ def _compose_art_domain(
     analyses: Sequence[ArtArchiveAnalysis],
     *,
     fallthrough_ancestors: Sequence[CamArchive] = (),
+    required_stock_imag_ids: Sequence[bytes] = (),
 ) -> ArtDomainComposeResult:
     order = {
         inventory.selected.alias: index
@@ -1385,6 +1393,13 @@ def _compose_art_domain(
             ),
         )
 
+    imag_entries = _materialize_required_stock_imag_entries(
+        imag_entries,
+        stock,
+        required_stock_imag_ids,
+        domain=domain,
+    )
+
     stock_tiles = _require_section(stock, b"TILE")
     output_tiles = _blank_positional_section(
         stock_tiles, tile_allocation.final_count
@@ -1465,6 +1480,56 @@ def _compose_art_domain(
             palette_reports=tuple(palette_reports),
         ),
     )
+
+
+def _materialize_required_stock_imag_entries(
+    entries: Sequence[CamEntry],
+    stock: CamArchive,
+    required_ids: Sequence[bytes],
+    *,
+    domain: str,
+) -> tuple[CamEntry, ...]:
+    """Carry exact stock IMAG records required by a runtime presenter.
+
+    Some stock controllers name an IMAG atlas directly instead of resolving it
+    through a package description.  A private runtime feature that reuses such
+    a controller therefore needs the controller's exact stock atlas in the
+    composed archive, together with the TILE closure materialized below.  A
+    package may carry the same stock record, but it cannot replace the fixed
+    layout expected by the stock controller.
+    """
+
+    output = list(entries)
+    by_id = {
+        entry.name.rstrip(b"\x00")[:4]: entry
+        for entry in output
+    }
+    stock_by_id = {
+        entry.name.rstrip(b"\x00")[:4]: entry
+        for entry in _require_section(stock, b"IMAG").entries
+    }
+    for required_id in dict.fromkeys(required_ids):
+        if len(required_id) != 4:
+            raise ComposeError(
+                f"required stock {domain} IMAG ID must contain four bytes: "
+                f"{required_id!r}"
+            )
+        stock_entry = stock_by_id.get(required_id)
+        if stock_entry is None:
+            raise ComposeError(
+                f"required stock {domain} IMAG {_display_key(required_id)} is missing"
+            )
+        existing = by_id.get(required_id)
+        if existing is not None:
+            if existing.data != stock_entry.data:
+                raise ComposeError(
+                    f"required stock {domain} IMAG {_display_key(required_id)} "
+                    "was replaced by a selected package"
+                )
+            continue
+        output.append(stock_entry)
+        by_id[required_id] = stock_entry
+    return tuple(output)
 
 
 def _effective_analysis_tile_entries(
@@ -2455,7 +2520,7 @@ def _validate_mx22_toggle_controls(
     owner: str,
     panel_label: str,
 ) -> None:
-    """Require complete MX22 button clones with private presentation fields."""
+    """Require one audited stock presentation for the MX22 toggle lifecycle."""
 
     _smnu_dword_values(payload, owner, panel_label)
     values = struct.unpack(f"<{len(payload) // 4}I", payload)
@@ -2479,34 +2544,90 @@ def _validate_mx22_toggle_controls(
         0x12, 0x37746E66, 0x24, 0x03, 0x8000003F,
         0x40000000, 0x40000000, 0xFFFFFFFF,
     )
-    for label, command, image_selector in (
-        ("open", toggle.open_command_id, 79),
-        ("close", toggle.close_command_id, 67),
-    ):
-        matches = []
-        for index, value in enumerate(values):
-            if (
-                value != command
-                or index < len(common_prefix)
-                or index + len(suffix) > len(values)
-            ):
-                continue
-            prefix = values[index - len(common_prefix):index]
-            if (
-                all(
-                    expected is None or actual == expected
-                    for actual, expected in zip(prefix, common_prefix)
-                )
-                and prefix[24] == image_selector
-                and tuple(values[index + 1:index + 1 + len(suffix)]) == suffix
-            ):
-                matches.append(index)
-        if len(matches) != 1:
-            raise ComposeError(
-                f"{owner}: SMNU/{panel_label} must contain exactly one literal "
-                f"MX22 {label} button clone using private command "
-                f"0x{command:08X}; found {len(matches)}"
-            )
+    mx22_counts = tuple(
+        _count_stock_control_clones(
+            values,
+            command=command,
+            prefix=common_prefix,
+            suffix=suffix,
+            required_prefix_values=((24, image_selector),),
+        )
+        for command, image_selector in (
+            (toggle.open_command_id, 79),
+            (toggle.close_command_id, 67),
+        )
+    )
+
+    # AP39's REWARDS action is Majesty's exact half-width building-panel
+    # presentation.  It is the stock visual analogue when the paired toggle
+    # must share a two-column row.  Rectangle and string indices remain
+    # package-owned, and the command becomes manager data; every other opcode,
+    # INBb set, selector, font, color, and record terminator stays literal.
+    ap39_prefix = (
+        0x00, 0x02,
+        None, None, None, None,  # package layout rectangle
+        0x07,
+        None,                   # package label STRT index
+        0x21,
+        None,                   # package tooltip STRT index
+        0x0A, 0x02, 0x0C, 0x62424E49, 0x0D, 0x3F8,
+        0x03, 0x02, 0x03, 0x400, 0x05, 0x52, 0x06,
+    )
+    ap39_suffix = (
+        0x12, 0x34746E66, 0x24, 0x03, 0x8000003F,
+        0x40000000, 0x40000000, 0x00000102, 0x45, 0x10A, 0x4E,
+        0xFFFFFFFF,
+    )
+    ap39_counts = tuple(
+        _count_stock_control_clones(
+            values,
+            command=command,
+            prefix=ap39_prefix,
+            suffix=ap39_suffix,
+        )
+        for command in (toggle.open_command_id, toggle.close_command_id)
+    )
+
+    if mx22_counts == (1, 1) or ap39_counts == (1, 1):
+        return
+    raise ComposeError(
+        f"{owner}: SMNU/{panel_label} must contain one coherent pair of "
+        "literal MX22 open/close button clones or audited AP39 half-width "
+        "open/close clones using private commands "
+        f"0x{toggle.open_command_id:08X}/0x{toggle.close_command_id:08X}; "
+        f"found MX22 {mx22_counts[0]}/{mx22_counts[1]} and "
+        f"AP39 {ap39_counts[0]}/{ap39_counts[1]}"
+    )
+
+
+def _count_stock_control_clones(
+    values: Sequence[int],
+    *,
+    command: int,
+    prefix: Sequence[int | None],
+    suffix: Sequence[int],
+    required_prefix_values: Sequence[tuple[int, int]] = (),
+) -> int:
+    matches = 0
+    for index, value in enumerate(values):
+        if (
+            value != command
+            or index < len(prefix)
+            or index + len(suffix) >= len(values)
+        ):
+            continue
+        candidate = values[index - len(prefix):index]
+        if not all(
+            expected is None or actual == expected
+            for actual, expected in zip(candidate, prefix)
+        ):
+            continue
+        if any(candidate[offset] != expected for offset, expected in required_prefix_values):
+            continue
+        if tuple(values[index + 1:index + 1 + len(suffix)]) != tuple(suffix):
+            continue
+        matches += 1
+    return matches
 
 
 def _owned_smnu_payload(
@@ -4077,7 +4198,15 @@ def compose_package(
         controller_panels=controller_result.panels,
     )
     bdep_result = merge_bdep_resource(game_path, inventories)
-    main_art, interface_art = merge_art_resources(game_path, inventories)
+    main_art, interface_art = merge_art_resources(
+        game_path,
+        inventories,
+        required_stock_interface_imag_ids=(
+            (b"IX93",)
+            if runtime_feature_registry.enchantment_rows
+            else ()
+        ),
+    )
     audio_archive, sound_archive, sound_selections = merge_sound_resources(inventories)
     descriptions = merge_description_resources(
         inventories, dialog_resolutions=dialog_resolutions

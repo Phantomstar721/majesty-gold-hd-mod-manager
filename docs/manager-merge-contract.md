@@ -148,7 +148,10 @@ The overlay ID is one printable four-byte ASCII ID. The declaring package must
 own exactly one package-added Overlay Description with that ID; a stock Overlay
 cannot be replaced or claimed. The display text must contain
 1–512 non-NUL Windows-1252 bytes. The runtime preserves AP78's existing XR01
-presenter and substitutes only the validated row identity and text. Multiple
+presenter and substitutes only the validated row identity and text. AP78 draws
+these rows from its fixed stock `IX93` interface atlas; the manager includes
+that exact atlas and its TILE dependencies automatically, so an overlay's
+`ImageIDBase` and `Static` flag do not select the panel-row icon. Multiple
 packages may declare either feature; exact duplicates from the same owner
 coalesce, while cross-package ownership or conflicting declarations fail.
 
@@ -301,9 +304,13 @@ state and paired-control presentation:
 }
 ```
 
-The parent SMNU must contain literal stock-shaped clones of both MX22 action
-controls, changed only to the two declared private command IDs and the
-package's own visible text and layout. The manager stores the state in stock
+The parent SMNU must contain a coherent pair of either literal stock-shaped
+MX22 action controls or stock AP39 half-width action controls. The AP39 variant
+is intended for two-column building panels where MX22's fixed 139-pixel art
+cannot fit. Either pair may change only to the two declared private command IDs
+and the package's own visible text and layout; the AP39 variant retains its
+exact stock `INBb` set `0x3F8`, image selector `0x52`, font, colors, opcodes,
+and record boundary. The manager stores the state in stock
 `ATTRIB_EmbassyActiveFlag`, shows exactly the action that changes the current
 state, and refreshes it after stock setup, events, and ordinary commands. It
 does not submit Embassy order `0x16` or create an Embassy recruit order; those

@@ -16,11 +16,16 @@ The Embassy command also submits order `0x16`, which creates or cancels
 toggle and is deliberately omitted. Package GPL may read the stock attribute
 when deciding whether its own service is available.
 
-The manager validates literal stock-shaped open and close controls in the
-package-owned parent SMNU, distinct non-stock commands, a supported
-`AP07`/`AP10`/`MX09` parent, and global parent/command ownership. MMCR v4 stores
-only the qualified key, resolved parent dialog, commands, and controller base.
-No package UUID or building name is hard-coded in the runtime.
+The manager validates a coherent pair of literal stock-shaped open and close
+controls in the package-owned parent SMNU. A package may use MX22's full-width
+presentation or AP39's exact half-width action presentation when a two-column
+building panel cannot fit MX22's fixed art. Only rectangle, label/tooltip
+indices, and private command differ; the AP39 `INBb` set `0x3F8`, selector
+`0x52`, font, colors, opcodes, and terminator remain stock. Validation also
+requires distinct non-stock commands, a supported `AP07`/`AP10`/`MX09` parent,
+and global parent/command ownership. MMCR v4 stores only the qualified key,
+resolved parent dialog, commands, and controller base. No package UUID or
+building name is hard-coded in the runtime.
 
 Public `1.5.2.24` uses command handler RVA `0x000B9540` and presenter RVA
 `0x000B95A0`; beta2 `1.5.2.28` uses `0x000B9F80` and `0x000B9FE0`.

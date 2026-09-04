@@ -124,6 +124,11 @@ The hook adds no list, timer, watcher, effect ownership, or replacement
 controller. AP78 continues to own active-effect iteration, formatting, row
 append, refresh, and teardown. Both executable profiles fingerprint the switch,
 call site, and stock assignment function before either AP78 site is modified.
+AP78's unchanged row builder paints every supported enchantment from the stock
+`IX93` interface atlas rather than the overlay Description's `ImageIDBase`.
+When any private AP78 row is present, composition therefore carries the exact
+effective-stock `IX93` IMAG record and its referenced TILEs; a selected package
+cannot replace that fixed stock layout.
 The legacy Alchemist alias is translated by the manager into the `ALo1`,
 `ALo2`, and `ALo3` MMFR examples; those IDs and texts are not hard-coded as a
 separate runtime path.

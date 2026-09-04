@@ -27,6 +27,23 @@ def _record(command: int, image: int, label: int, tooltip: int, rectangle) -> li
     ]
 
 
+def _ap39_record(command: int, label: int, tooltip: int, rectangle) -> list[int]:
+    return [
+        0, 2,
+        *rectangle,
+        7,
+        label,
+        0x21,
+        tooltip,
+        0x0A, 2, 0x0C, 0x62424E49, 0x0D, 0x3F8,
+        3, 2, 3, 0x400, 5, 0x52, 6,
+        command,
+        0x12, 0x34746E66, 0x24, 3, 0x8000003F,
+        0x40000000, 0x40000000, 0x102, 0x45, 0x10A, 0x4E,
+        0xFFFFFFFF,
+    ]
+
+
 class BuildingOpenToggleEvidenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.toggle = ResolvedBuildingOpenToggleRecord(
@@ -55,6 +72,48 @@ class BuildingOpenToggleEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ComposeError, "literal MX22 open"):
             _validate_mx22_toggle_controls(
                 bytes(payload), self.toggle, owner="fixture", panel_label="MX09"
+            )
+
+    def test_ap39_half_width_pair_is_accepted_in_combined_parent(self) -> None:
+        values = [0, 2, 7, 0xFFFFFFFF]
+        # The parent may already expose an ordinary reward action and an
+        # occupant-panel opener.  Those unrelated controls must not make the
+        # manager confuse their commands with the paired toggle presentation.
+        values += _ap39_record(0x1389, 22, 23, (7, 190, 89, 22))
+        values += [0, 2, 7, 217, 93, 26, 6, 0x2A30, 0xFFFFFFFF]
+        values += _ap39_record(10802, 28, 29, (106, 190, 89, 22))
+        values += _ap39_record(10801, 30, 31, (106, 190, 89, 22))
+        values += [0xFFFFFFFF]
+        payload = struct.pack(f"<{len(values)}I", *values)
+
+        _validate_mx22_toggle_controls(
+            payload, self.toggle, owner="fixture", panel_label="MX09"
+        )
+
+    def test_ap39_art_or_font_change_fails_closed(self) -> None:
+        values = [0, 2, 7, 0xFFFFFFFF]
+        values += _ap39_record(10802, 28, 29, (106, 190, 89, 22))
+        values += _ap39_record(10801, 30, 31, (106, 190, 89, 22))
+        values += [0xFFFFFFFF]
+        first_control = 4
+        values[first_control + 15] = 0x3F9
+        payload = struct.pack(f"<{len(values)}I", *values)
+
+        with self.assertRaisesRegex(ComposeError, "audited AP39"):
+            _validate_mx22_toggle_controls(
+                payload, self.toggle, owner="fixture", panel_label="MX09"
+            )
+
+    def test_mixed_mx22_and_ap39_pair_is_rejected(self) -> None:
+        values = [0, 2, 7]
+        values += _record(10802, 67, 28, 29, (7, 219, 139, 21))
+        values += _ap39_record(10801, 30, 31, (106, 190, 89, 22))
+        values += [0xFFFFFFFF]
+        payload = struct.pack(f"<{len(values)}I", *values)
+
+        with self.assertRaisesRegex(ComposeError, "coherent pair"):
+            _validate_mx22_toggle_controls(
+                payload, self.toggle, owner="fixture", panel_label="MX09"
             )
 
 

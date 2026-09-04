@@ -35,6 +35,7 @@ from majesty_cam.compose import (
     _validate_generated_runtime_evidence,
     _materialize_effective_stock_prefix,
     _materialize_imag_tile_dependencies,
+    _materialize_required_stock_imag_entries,
     _merge_tactical_cursor_entry,
     _imag_set_start,
     _split_imag_sets,
@@ -284,6 +285,42 @@ class TacticalCursorMergeTests(unittest.TestCase):
 
 
 class EffectiveArtDependencyTests(unittest.TestCase):
+    def test_runtime_presenter_materializes_its_exact_stock_imag(self):
+        stock_entry = CamEntry(
+            name=pad_name(b"IX93ic enchant"),
+            data=b"stock-enchantment-atlas",
+        )
+        stock = CamArchive(
+            sections=(CamSection(b"IMAG", (stock_entry,)),)
+        )
+
+        result = _materialize_required_stock_imag_entries(
+            (),
+            stock,
+            (b"IX93",),
+            domain="interface",
+        )
+
+        self.assertEqual(result, (stock_entry,))
+
+    def test_runtime_presenter_rejects_replaced_stock_imag(self):
+        stock_entry = CamEntry(
+            name=pad_name(b"IX93ic enchant"),
+            data=b"stock-enchantment-atlas",
+        )
+        replacement = replace(stock_entry, data=b"replacement")
+        stock = CamArchive(
+            sections=(CamSection(b"IMAG", (stock_entry,)),)
+        )
+
+        with self.assertRaisesRegex(ComposeError, "IX93.*replaced"):
+            _materialize_required_stock_imag_entries(
+                (replacement,),
+                stock,
+                (b"IX93",),
+                domain="interface",
+            )
+
     def test_promoted_fallthrough_tile_replaces_empty_package_placeholder(self):
         archive = CamArchive(
             sections=(positional(b"TILE", (b"",)),)
