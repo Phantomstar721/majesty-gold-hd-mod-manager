@@ -304,13 +304,17 @@ state and paired-control presentation:
 }
 ```
 
-The parent SMNU must contain a coherent pair of either literal stock-shaped
-MX22 action controls or stock AP39 half-width action controls. The AP39 variant
-is intended for two-column building panels where MX22's fixed 139-pixel art
-cannot fit. Either pair may change only to the two declared private command IDs
-and the package's own visible text and layout; the AP39 variant retains its
-exact stock `INBb` set `0x3F8`, image selector `0x52`, font, colors, opcodes,
-and record boundary. The manager stores the state in stock
+The parent SMNU must contain a coherent pair of literal stock-shaped MX22
+action controls, stock AP39 half-width action controls, or stock AP10 93x26
+action controls. The AP39 and AP10 variants are intended for building-panel
+layouts where MX22's fixed 139-pixel art cannot fit or is visually unsuitable.
+Every pair may change only to the two declared private command IDs and the
+package's own visible text and layout. The AP39 variant retains its exact stock
+`INBb` set `0x3F8`, image selector `0x52`, font, colors, opcodes, and record
+boundary. The AP10 variant retains the literal `INBb` art token and exact stock
+font, colors, opcodes, and record boundary while allowing a package-owned
+`INBb` image set with the stock 93x26 control geometry. Presentation families
+cannot be mixed within a pair. The manager stores the state in stock
 `ATTRIB_EmbassyActiveFlag`, shows exactly the action that changes the current
 state, and refreshes it after stock setup, events, and ordinary commands. It
 does not submit Embassy order `0x16` or create an Embassy recruit order; those

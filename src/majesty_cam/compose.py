@@ -2588,15 +2588,54 @@ def _validate_mx22_toggle_controls(
         for command in (toggle.open_command_id, toggle.close_command_id)
     )
 
-    if mx22_counts == (1, 1) or ap39_counts == (1, 1):
+    # AP10's secondary-panel action is Majesty's exact 93x26 gold-framed
+    # building-panel button.  It is the stock presentation analogue for a
+    # narrow parent-panel row where neither MX22's fixed-width art nor AP39's
+    # shorter action control is visually suitable.  Rectangle, string
+    # indices, and the INBb image set are package-owned presentation; the
+    # command becomes manager data.  The INBb token and every other stock
+    # opcode, font/color value, and record boundary remain literal.
+    ap10_prefix = (
+        0x00, 0x02,
+        None, None, None, None,  # package layout rectangle
+        0x2A, 0x16, 0x04, 0x44, 0x12, 0x07,
+        None,                   # package label STRT index
+        0x21,
+        None,                   # package tooltip STRT index
+        0x0A, 0x02, 0x0C, 0x62424E49, 0x0D,
+        None,                   # package-owned INBb image set
+        0x14, 0x01, 0x14, 0x08, 0x14, 0x04,
+        0x03, 0x02, 0x03, 0x400, 0x05, 0x53, 0x06,
+    )
+    ap10_suffix = (
+        0x2C, 0x02, 0x12, 0x34746E66, 0x24, 0x03,
+        0x8000003F, 0x40000000, 0x40000000,
+        0x00000102, 0x5A, 0x10A, 0x43, 0xFFFFFFFF,
+    )
+    ap10_counts = tuple(
+        _count_stock_control_clones(
+            values,
+            command=command,
+            prefix=ap10_prefix,
+            suffix=ap10_suffix,
+        )
+        for command in (toggle.open_command_id, toggle.close_command_id)
+    )
+
+    if (
+        mx22_counts == (1, 1)
+        or ap39_counts == (1, 1)
+        or ap10_counts == (1, 1)
+    ):
         return
     raise ComposeError(
         f"{owner}: SMNU/{panel_label} must contain one coherent pair of "
-        "literal MX22 open/close button clones or audited AP39 half-width "
-        "open/close clones using private commands "
+        "literal MX22 open/close button clones, audited AP39 half-width "
+        "open/close clones, or audited AP10 action-button clones using private commands "
         f"0x{toggle.open_command_id:08X}/0x{toggle.close_command_id:08X}; "
         f"found MX22 {mx22_counts[0]}/{mx22_counts[1]} and "
-        f"AP39 {ap39_counts[0]}/{ap39_counts[1]}"
+        f"AP39 {ap39_counts[0]}/{ap39_counts[1]} and "
+        f"AP10 {ap10_counts[0]}/{ap10_counts[1]}"
     )
 
 

@@ -44,6 +44,31 @@ def _ap39_record(command: int, label: int, tooltip: int, rectangle) -> list[int]
     ]
 
 
+def _ap10_record(
+    command: int,
+    label: int,
+    tooltip: int,
+    rectangle,
+    image_set: int = 1004,
+) -> list[int]:
+    return [
+        0, 2,
+        *rectangle,
+        0x2A, 0x16, 0x04, 0x44, 0x12, 0x07,
+        label,
+        0x21,
+        tooltip,
+        0x0A, 2, 0x0C, 0x62424E49, 0x0D, image_set,
+        0x14, 1, 0x14, 8, 0x14, 4,
+        3, 2, 3, 0x400, 5, 0x53, 6,
+        command,
+        0x2C, 2, 0x12, 0x34746E66, 0x24, 3,
+        0x8000003F, 0x40000000, 0x40000000,
+        0x102, 0x5A, 0x10A, 0x43,
+        0xFFFFFFFF,
+    ]
+
+
 class BuildingOpenToggleEvidenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.toggle = ResolvedBuildingOpenToggleRecord(
@@ -104,10 +129,49 @@ class BuildingOpenToggleEvidenceTests(unittest.TestCase):
                 payload, self.toggle, owner="fixture", panel_label="MX09"
             )
 
+    def test_ap10_action_pair_is_accepted_with_package_owned_image_set(self) -> None:
+        values = [0, 2, 7, 0xFFFFFFFF]
+        values += _ap10_record(10802, 28, 29, (103, 190, 93, 26), 1004)
+        values += _ap10_record(10801, 30, 31, (103, 190, 93, 26), 4097)
+        values += [0xFFFFFFFF]
+        payload = struct.pack(f"<{len(values)}I", *values)
+
+        _validate_mx22_toggle_controls(
+            payload, self.toggle, owner="fixture", panel_label="MX09"
+        )
+
+    def test_ap10_art_token_or_opcode_change_fails_closed(self) -> None:
+        values = [0, 2, 7, 0xFFFFFFFF]
+        first_control = len(values)
+        values += _ap10_record(10802, 28, 29, (103, 190, 93, 26))
+        values += _ap10_record(10801, 30, 31, (103, 190, 93, 26))
+        values += [0xFFFFFFFF]
+        # The image-set value is intentionally author-owned; the INBb token is
+        # not.  Replacing it must not pass as an AP10 stock presentation.
+        values[first_control + 18] = 0x4242435A
+        payload = struct.pack(f"<{len(values)}I", *values)
+
+        with self.assertRaisesRegex(ComposeError, "audited AP10"):
+            _validate_mx22_toggle_controls(
+                payload, self.toggle, owner="fixture", panel_label="MX09"
+            )
+
     def test_mixed_mx22_and_ap39_pair_is_rejected(self) -> None:
         values = [0, 2, 7]
         values += _record(10802, 67, 28, 29, (7, 219, 139, 21))
         values += _ap39_record(10801, 30, 31, (106, 190, 89, 22))
+        values += [0xFFFFFFFF]
+        payload = struct.pack(f"<{len(values)}I", *values)
+
+        with self.assertRaisesRegex(ComposeError, "coherent pair"):
+            _validate_mx22_toggle_controls(
+                payload, self.toggle, owner="fixture", panel_label="MX09"
+            )
+
+    def test_mixed_ap39_and_ap10_pair_is_rejected(self) -> None:
+        values = [0, 2, 7]
+        values += _ap39_record(10802, 28, 29, (106, 190, 89, 22))
+        values += _ap10_record(10801, 30, 31, (103, 190, 93, 26))
         values += [0xFFFFFFFF]
         payload = struct.pack(f"<{len(values)}I", *values)
 
