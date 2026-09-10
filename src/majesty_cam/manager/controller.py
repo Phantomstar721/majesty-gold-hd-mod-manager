@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Mapping
 
 from ..intent_text import INTENT_REGISTRY_RELATIVE_PATH
-from ..runtime_capabilities import write_runtime_capability_manifest
+from ..runtime_capabilities import (
+    RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH,
+    write_runtime_capability_manifest,
+)
 from ..runtime_features import write_runtime_feature_registry
 from ..stock_controller_registry import (
     resolve_stock_controller_registry,
@@ -56,6 +59,8 @@ from .qol_service import (
 )
 from .startup_cache import (
     StartupCache,
+    catalog_input_signature,
+    metadata_signature,
     merge_preflight_signature,
     qol_input_signature,
 )
@@ -96,6 +101,7 @@ class ManagerController:
         self.profile = ManagerProfile()
         self.standard_conflict_winners: dict[str, str] = {}
         self.selection_source = "defaults"
+        self._prepared_merge_cache = {}
         self.plan = create_build_plan(
             self.catalog,
             self.selections,
@@ -109,6 +115,7 @@ class ManagerController:
             game_executable=self.paths.game_executable,
         )
         self._qol_checked = False
+        self._qol_input_signature: str | None = None
         self._managed_build_cache: ManagerBuildResult | None = None
         self._managed_build_cache_loaded = False
         self.notices: list[str] = []
@@ -144,6 +151,8 @@ class ManagerController:
         self.qol_catalog = None
         self.qol_status = ()
         self._qol_checked = False
+        self._qol_input_signature = None
+        self._prepared_merge_cache.clear()
         self._replan()
         self._managed_build_cache_loaded = False
         return branch
@@ -155,6 +164,8 @@ class ManagerController:
         force_refresh: bool = False,
     ) -> ControllerSnapshot:
         self.notices = []
+        if force_refresh:
+            self._prepared_merge_cache.clear()
         cache = StartupCache.load(self.paths.startup_cache_path)
         preflight_ids: set[str] = set()
 
@@ -183,14 +194,27 @@ class ManagerController:
             cache.set_preflight(content_id, signature, issues)
             return issues
 
-        self.catalog = scan_catalog(
+        catalog_signature = catalog_input_signature(
             local_mods_root=self.paths.local_mods_root,
             local_quests_root=self.paths.local_quests_root,
             workshop_roots=self.paths.workshop_roots,
-            compatibility=self.registry.specs,
-            merge_preflight=inspect_merge,
+            registry=self.registry,
         )
-        cache.retain_preflight(preflight_ids)
+        cached_catalog = (
+            None if force_refresh else cache.get_catalog(catalog_signature)
+        )
+        if cached_catalog is not None:
+            self.catalog = cached_catalog
+        else:
+            self.catalog = scan_catalog(
+                local_mods_root=self.paths.local_mods_root,
+                local_quests_root=self.paths.local_quests_root,
+                workshop_roots=self.paths.workshop_roots,
+                compatibility=self.registry.specs,
+                merge_preflight=inspect_merge,
+            )
+            cache.retain_preflight(preflight_ids)
+            cache.set_catalog(catalog_signature, self.catalog)
         try:
             saved = load_profile(self.paths.profile_path)
         except ProfileFormatError as exc:
@@ -224,11 +248,8 @@ class ManagerController:
         if inspect_qol:
             try:
                 qol_signature = qol_input_signature(self.qol_service)
-                qol_catalog = (
-                    None
-                    if force_refresh
-                    else cache.get_qol(qol_signature, self.qol_service)
-                )
+                self._qol_input_signature = qol_signature
+                qol_catalog = cache.get_qol(qol_signature, self.qol_service)
                 if qol_catalog is None:
                     qol_catalog = self.qol_service.inspect()
                     cache.set_qol(qol_signature, qol_catalog)
@@ -240,8 +261,12 @@ class ManagerController:
         else:
             self.qol_catalog = None
             self.qol_status = ()
+            self._qol_input_signature = None
+        self._refresh_managed_build_cache(
+            startup_cache=cache,
+            allow_cached=True,
+        )
         cache.save()
-        self._refresh_managed_build_cache()
         return self.snapshot()
 
     def change_qol(self, key: str, install: bool) -> ControllerSnapshot:
@@ -287,7 +312,8 @@ class ManagerController:
             )
         self._set_qol_catalog(catalog)
         cache = StartupCache.load(self.paths.startup_cache_path)
-        cache.set_qol(qol_input_signature(self.qol_service), catalog)
+        self._qol_input_signature = qol_input_signature(self.qol_service)
+        cache.set_qol(self._qol_input_signature, catalog)
         cache.save()
         return self.snapshot()
 
@@ -373,6 +399,13 @@ class ManagerController:
         result = build_merged_package(self.plan, self.paths, progress=progress)
         self._managed_build_cache = result
         self._managed_build_cache_loaded = True
+        cache = StartupCache.load(self.paths.startup_cache_path)
+        signature = self._managed_build_input_signature()
+        cache.set_managed_build(
+            signature,
+            self._managed_build_cache_payload(result),
+        )
+        cache.save()
         self.profile = self._profile_with_current_selections().with_successful_build(
             fingerprint=result.fingerprint,
             mod_id=result.mod_id,
@@ -394,7 +427,8 @@ class ManagerController:
 
             # For Merge launches the lock is already held, so this snapshot and
             # every subsequent input check observe one stable generated profile.
-            self._refresh_managed_build_cache()
+            if not self._managed_build_cache_loaded:
+                self._refresh_managed_build_cache()
             snapshot = self.snapshot()
             if not snapshot.can_launch:
                 if not self._required_qol_ready():
@@ -450,6 +484,7 @@ class ManagerController:
                 runtime_feature_registry=runtime_feature_registry,
                 controller_registry=controller_registry,
                 acquired_profile_lock=profile_lock,
+                ensure_qol=not self._qol_cache_is_current(),
             )
             self.profile = self._profile_with_current_selections()
             save_profile(self.paths.profile_path, self.profile)
@@ -503,20 +538,123 @@ class ManagerController:
             notices=tuple(self.notices),
         )
 
-    def _refresh_managed_build_cache(self) -> ManagerBuildResult | None:
+    def _refresh_managed_build_cache(
+        self,
+        *,
+        startup_cache: StartupCache | None = None,
+        allow_cached: bool = False,
+    ) -> ManagerBuildResult | None:
         """Revalidate generated output only at lifecycle safety boundaries.
 
         Reading a managed build inventories and hashes the complete generated
-        package.  Doing that on every ordinary checkbox click made selection
-        latency proportional to package size.  Scans, successful builds, and
-        launches remain authoritative refresh boundaries.
+        package. Doing that on every scan or launch made unchanged startup
+        proportional to package size. A complete metadata signature reuses the
+        prior full validation only while every generated file is unchanged.
         """
 
-        self._managed_build_cache = read_managed_build(
-            self.paths.merged_output_root
+        signature = self._managed_build_input_signature()
+        cached = (
+            startup_cache.get_managed_build(signature)
+            if allow_cached and startup_cache is not None
+            else None
         )
+        self._managed_build_cache = self._managed_build_result_from_cache(cached)
+        if self._managed_build_cache is None:
+            self._managed_build_cache = read_managed_build(
+                self.paths.merged_output_root
+            )
+            signature = self._managed_build_input_signature()
+        if startup_cache is not None:
+            startup_cache.set_managed_build(
+                signature,
+                (
+                    self._managed_build_cache_payload(self._managed_build_cache)
+                    if self._managed_build_cache is not None
+                    else None
+                ),
+            )
         self._managed_build_cache_loaded = True
         return self._managed_build_cache
+
+    def _managed_build_input_signature(self) -> str:
+        return metadata_signature(
+            (self.paths.merged_output_root,),
+            context=("managed-build-v1",),
+            recursive_directories=True,
+        )
+
+    @staticmethod
+    def _managed_build_cache_payload(
+        result: ManagerBuildResult,
+    ) -> dict[str, object]:
+        return {
+            "manifest_name": result.manifest.name,
+            "report_name": result.report.name,
+            "mod_id": result.mod_id,
+            "fingerprint": result.fingerprint,
+            "selected_source_ids": list(result.selected_source_ids),
+        }
+
+    def _managed_build_result_from_cache(
+        self,
+        raw: Mapping[str, object] | None,
+    ) -> ManagerBuildResult | None:
+        if raw is None or set(raw) != {
+            "manifest_name",
+            "report_name",
+            "mod_id",
+            "fingerprint",
+            "selected_source_ids",
+        }:
+            return None
+        try:
+            manifest_name = str(raw["manifest_name"])
+            report_name = str(raw["report_name"])
+            if (
+                Path(manifest_name).name != manifest_name
+                or not manifest_name.startswith("CAMManager-")
+                or not manifest_name.casefold().endswith(".mmxml")
+                or report_name != "CAM-MERGE-REPORT.json"
+            ):
+                return None
+            selected = raw["selected_source_ids"]
+            if not isinstance(selected, list):
+                return None
+            root = self.paths.merged_output_root
+            result = ManagerBuildResult(
+                output_root=root,
+                manifest=root / manifest_name,
+                report=root / report_name,
+                capability_manifest=(
+                    root / Path(RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH)
+                ),
+                mod_id=normalize_guid(str(raw["mod_id"])),
+                fingerprint=str(raw["fingerprint"]),
+                selected_source_ids=tuple(
+                    normalize_guid(str(item)) for item in selected
+                ),
+            )
+            if not all(
+                path.is_file()
+                for path in (
+                    result.manifest,
+                    result.report,
+                    result.capability_manifest,
+                    result.runtime_feature_registry,
+                    result.controller_registry,
+                )
+            ):
+                return None
+            return result
+        except (TypeError, ValueError):
+            return None
+
+    def _qol_cache_is_current(self) -> bool:
+        return bool(
+            self._required_qol_ready()
+            and self._qol_input_signature is not None
+            and self._qol_input_signature == qol_input_signature(self.qol_service)
+        )
 
     def _set_qol_catalog(self, catalog: QolCatalogSnapshot) -> None:
         self.qol_catalog = catalog
@@ -571,6 +709,10 @@ class ManagerController:
             order=self.order,
             game_path=self.paths.game_path,
             standard_conflict_winners=self.standard_conflict_winners,
+            prepared_cache=self._prepared_merge_cache,
+        )
+        self._prepared_merge_cache.update(
+            (item.content_id, item) for item in self.plan.selected_merge
         )
 
     def _refresh_standard_plan(self) -> None:

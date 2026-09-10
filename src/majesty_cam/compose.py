@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass, replace
+from functools import lru_cache
 import hashlib
 import json
 from pathlib import Path
@@ -636,21 +637,32 @@ def inventory_package(selected: SelectedMod) -> PackageInventory:
     resources: list[CamResource] = []
     opaque_loads: list[OpaqueLoad] = []
     opaque_cam_sections: list[OpaqueCamSection] = []
-    source_filter = (
-        {
-            (section, key, path.resolve(), cam_order, section_order, entry_order)
-            for (
-                section,
-                key,
-                path,
-                cam_order,
-                section_order,
-                entry_order,
-            ) in selected.cam_resource_source_filter
-        }
-        if selected.cam_resource_source_filter is not None
-        else None
-    )
+    source_filter = None
+    if selected.cam_resource_source_filter is not None:
+        resolved_filter_paths: dict[Path, Path] = {}
+        source_filter = set()
+        for (
+            section,
+            key,
+            path,
+            cam_order,
+            section_order,
+            entry_order,
+        ) in selected.cam_resource_source_filter:
+            resolved_path = resolved_filter_paths.get(path)
+            if resolved_path is None:
+                resolved_path = path.resolve()
+                resolved_filter_paths[path] = resolved_path
+            source_filter.add(
+                (
+                    section,
+                    key,
+                    resolved_path,
+                    cam_order,
+                    section_order,
+                    entry_order,
+                )
+            )
 
     for dataset_index, dataset in enumerate(selected.package.datasets):
         if dataset.base.casefold() != "any" and not selected.semantic_passthrough:
@@ -665,6 +677,9 @@ def inventory_package(selected: SelectedMod) -> PackageInventory:
                     cam_order = len(cam_paths)
                     cam_paths.append(source)
                     archive = read_cam(source)
+                    resolved_source = (
+                        source.resolve() if source_filter is not None else None
+                    )
                     for section_order, section in enumerate(archive.sections):
                         if section.extension not in _SUPPORTED_CAM_SECTIONS:
                             if not selected.semantic_passthrough:
@@ -677,20 +692,19 @@ def inventory_package(selected: SelectedMod) -> PackageInventory:
                             )
                             continue
                         for entry_order, entry in enumerate(section.entries):
-                            resource_identity = (
-                                section.extension,
-                                entry.name[:4],
-                                source.resolve(),
-                                cam_order,
-                                section_order,
-                                entry_order,
-                            )
-                            if (
-                                source_filter is not None
-                                and resource_identity not in source_filter
-                            ) or (
-                                source_filter is None
-                                and selected.cam_resource_filter is not None
+                            if source_filter is not None:
+                                resource_identity = (
+                                    section.extension,
+                                    entry.name[:4],
+                                    resolved_source,
+                                    cam_order,
+                                    section_order,
+                                    entry_order,
+                                )
+                                if resource_identity not in source_filter:
+                                    continue
+                            elif (
+                                selected.cam_resource_filter is not None
                                 and (section.extension, entry.name[:4])
                                 not in selected.cam_resource_filter
                             ):
@@ -1479,7 +1493,7 @@ def _load_stock_activity_text_expression_source(
             "stock DataMX GPL definitions are required for activity-text "
             f"discovery: {path}"
         )
-    return parse_gpl(_read_source_text(path), str(path))
+    return _parse_semantic_source_file(path)
 
 
 def _load_stock_purchase_equipment_source(
@@ -1499,7 +1513,7 @@ def _load_stock_purchase_equipment_source(
             "installed stock GPLMx Purchase_Equipment source is required for "
             f"purchase-tail composition: {path}"
         )
-    source = parse_gpl(_read_source_text(path), str(path))
+    source = _parse_semantic_source_file(path)
     require_complete_semantic_coverage(source)
     source.require(DefinitionKind.FUNCTION, "Purchase_Equipment")
     return source
@@ -1522,7 +1536,7 @@ def _load_stock_purchase_bazaar_source(
             "installed stock GPLMx Purchase_Bazaar source is required for "
             f"purchase-tail composition: {path}"
         )
-    source = parse_gpl(_read_source_text(path), str(path))
+    source = _parse_semantic_source_file(path)
     require_complete_semantic_coverage(source)
     source.require(DefinitionKind.FUNCTION, "Purchase_Bazaar")
     return source
@@ -1543,7 +1557,7 @@ def _load_stock_controlled_follower_items(
                 "installed stock GPLMx controlled-monster source is required "
                 f"for follower movement composition: {path}"
             )
-        source = parse_gpl(_read_source_text(path), str(path))
+        source = _parse_semantic_source_file(path)
         require_complete_semantic_coverage(source)
         parsed.append(source)
     return (
@@ -1576,7 +1590,7 @@ def _load_stock_hero_quest_lifecycle_items(
             raise ComposeError(
                 f"installed stock hero decision source is missing or ambiguous: {script}"
             )
-        source = parse_gpl(_read_source_text(candidates[0]), str(candidates[0]))
+        source = _parse_semantic_source_file(candidates[0])
         require_complete_semantic_coverage(source)
         functions = [item for item in source.items if item.kind is DefinitionKind.FUNCTION]
         if len(functions) != 1:
@@ -1591,8 +1605,8 @@ def _load_stock_hero_quest_lifecycle_items(
             raise ComposeError(
                 f"installed stock hero lifecycle source is required: {path}"
             )
-    reset_source = parse_gpl(_read_source_text(reset_path), str(reset_path))
-    death_source = parse_gpl(_read_source_text(death_path), str(death_path))
+    reset_source = _parse_semantic_source_file(reset_path)
+    death_source = _parse_semantic_source_file(death_path)
     return (
         trees,
         reset_source.require(DefinitionKind.FUNCTION, "reset_tasks"),
@@ -1881,6 +1895,7 @@ def merge_art_resource_domains(
                 game_path,
                 tuple(eligible_art_cams),
                 owner=inventory.selected.alias,
+                lineages=lineages,
             )
         except (OSError, StockArtError, ValueError) as exc:
             raise ComposeError(
@@ -3419,7 +3434,7 @@ def filter_passthrough_descriptions(
         owner = inventory.selected.alias
         effective: dict[DescriptionKey, DescriptionRecord] = {}
         for path in inventory.descriptions:
-            document = parse_descriptions(path.read_bytes(), source=str(path))
+            document = _parse_description_file(path)
             # Match merge_description_resources: Majesty applies this owner's
             # Description directives in manifest order, so only its final
             # record for a key can affect the native result.
@@ -3745,7 +3760,7 @@ def analyze_description_stock_deltas(
         for inventory in inventories:
             owner = inventory.selected.alias
             for path in inventory.descriptions:
-                document = parse_descriptions(path.read_bytes(), source=str(path))
+                document = _parse_description_file(path)
                 relative = path.relative_to(
                     inventory.selected.package.root
                 ).as_posix()
@@ -3800,7 +3815,7 @@ def analyze_description_stock_deltas(
     for inventory in inventories:
         owner = inventory.selected.alias
         for path in inventory.descriptions:
-            document = parse_descriptions(path.read_bytes(), source=str(path))
+            document = _parse_description_file(path)
             for key, record in document.index.items():
                 stock_item = stock.get(key)
                 if stock_item is None:
@@ -3831,14 +3846,37 @@ def _load_effective_stock_descriptions(
     """Load the effective Original+MX stock Description index."""
 
     sdk_root = game_path / "SDK" / "OriginalQuests"
-    stock: dict[DescriptionKey, tuple[object, str]] = {}
+    paths: list[Path] = []
     for relative_directory in (Path("Data"), Path("DataMX")):
         directory = sdk_root / relative_directory
         if not directory.is_dir():
             raise ComposeError(f"stock Description directory was not found: {directory}")
+        paths.extend(
+            sorted(directory.glob("*.xml"), key=lambda item: item.name.casefold())
+        )
+    signature = tuple(
+        (str(path), info.st_size, info.st_mtime_ns)
+        for path in paths
+        for info in (path.stat(),)
+    )
+    return dict(_load_effective_stock_descriptions_cached(str(sdk_root), signature))
+
+
+@lru_cache(maxsize=8)
+def _load_effective_stock_descriptions_cached(
+    sdk_root_text: str,
+    signature: tuple[tuple[str, int, int], ...],
+) -> tuple[tuple[DescriptionKey, tuple[object, str]], ...]:
+    sdk_root = Path(sdk_root_text)
+    stock: dict[DescriptionKey, tuple[object, str]] = {}
+    for relative_directory in (Path("Data"), Path("DataMX")):
+        directory = sdk_root / relative_directory
         layer_seen: set[DescriptionKey] = set()
-        for path in sorted(directory.glob("*.xml"), key=lambda item: item.name.casefold()):
-            document = parse_descriptions(path.read_bytes(), source=str(path))
+        for path_text, _size, _mtime_ns in signature:
+            path = Path(path_text)
+            if path.parent != directory:
+                continue
+            document = _parse_description_file(path)
             duplicate = layer_seen.intersection(document.index)
             if duplicate:
                 labels = ", ".join(repr(key) for key in sorted(duplicate))
@@ -3849,7 +3887,7 @@ def _load_effective_stock_descriptions(
             layer_seen.update(document.index)
             for key, record in document.index.items():
                 stock[key] = (record, path.relative_to(sdk_root).as_posix())
-    return stock
+    return tuple(stock.items())
 
 
 def validate_controller_stock_evidence(
@@ -3890,7 +3928,7 @@ def validate_controller_stock_evidence(
     for inventory in inventories:
         owner = inventory.selected.alias
         for path in inventory.descriptions:
-            document = parse_descriptions(path.read_bytes(), source=str(path))
+            document = _parse_description_file(path)
             for record in document.records:
                 description_subtypes[(owner, record.key)] = (
                     record.to_element().get("subType", "")
@@ -3909,7 +3947,7 @@ def validate_controller_stock_evidence(
             key = (resource.section, resource.key)
             resource_counts[key] = resource_counts.get(key, 0) + 1
         for path in inventory.descriptions:
-            document = parse_descriptions(path.read_bytes(), source=str(path))
+            document = _parse_description_file(path)
             for record in document.records:
                 element = record.to_element()
                 if element.get("subType") != "Building":
@@ -5316,16 +5354,12 @@ def _parse_inventory_gpl_sources(
     for load in inventory.gpl_loads:
         for source_path in load.sources:
             path = source_path.absolute_path
-            text = _read_source_text(path)
             suffix = path.suffix.casefold()
-            if suffix == ".gpl":
-                source = parse_gpl(text, str(path))
-            elif suffix == ".dat":
-                source = parse_dat(text, str(path))
-            else:
+            if suffix not in {".gpl", ".dat"}:
                 raise ComposeError(
                     f"{owner}: unsupported GPL source extension: {path}"
                 )
+            source = _parse_semantic_source_file(path)
             try:
                 require_complete_semantic_coverage(source)
             except ValueError as exc:
@@ -5647,7 +5681,7 @@ def _require_name_generator_declarations(
     stock = {f"NM{index:02d}" for index in range(1, 18)}
     used: set[str] = set()
     for path in inventory.descriptions:
-        document = parse_descriptions(path.read_bytes(), source=str(path))
+        document = _parse_description_file(path)
         for record in document.records:
             for element in record.to_element().findall(".//NameGenType"):
                 value = element.get("value", "")
@@ -5688,7 +5722,7 @@ def _runtime_feature_evidence_errors(
     errors: list[str] = []
     description_elements: list[ET.Element] = []
     for path in inventory.descriptions:
-        document = parse_descriptions(path.read_bytes(), source=str(path))
+        document = _parse_description_file(path)
         description_elements.extend(record.to_element() for record in document.records)
 
     if isinstance(feature, NameGeneratorFeature):
@@ -5859,7 +5893,7 @@ def resolve_controller_registry(
         elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
             descriptions = []
             for path in inventory.descriptions:
-                document = parse_descriptions(path.read_bytes(), source=str(path))
+                document = _parse_description_file(path)
                 descriptions.extend(record.to_element() for record in document.records)
             matches = [
                 element for element in descriptions
@@ -6166,7 +6200,7 @@ def _require_controller_feature_evidence(
 
     descriptions = []
     for path in inventory.descriptions:
-        document = parse_descriptions(path.read_bytes(), source=str(path))
+        document = _parse_description_file(path)
         descriptions.extend(record.to_element() for record in document.records)
     gpl_functions: dict[str, list[str]] = {}
     callback_sources = _parse_inventory_gpl_sources(inventory)
@@ -6577,6 +6611,7 @@ def compose_package(
     inventory_death_drop_exclusions: Sequence[str] = (),
     runtime_capabilities: Sequence[str] = (),
     private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
+    prepared_inventories: Sequence[PackageInventory] | None = None,
 ) -> ComposePackageResult:
     """Generate one atomic, self-contained local profile from any N packages.
 
@@ -6609,7 +6644,20 @@ def compose_package(
         raise ComposeError(f"output destination already exists: {output_root}")
     output_root.parent.mkdir(parents=True, exist_ok=True)
 
-    inventories = tuple(inventory_package(selected) for selected in selected_mods)
+    if prepared_inventories is None:
+        inventories = tuple(inventory_package(selected) for selected in selected_mods)
+    else:
+        inventories = tuple(prepared_inventories)
+        if (
+            len(inventories) != len(selected_mods)
+            or any(
+                inventory.selected != selected
+                for inventory, selected in zip(inventories, selected_mods)
+            )
+        ):
+            raise ComposeError(
+                "prepared package inventories do not match the selected mods"
+            )
     has_named_cam_resources = any(
         resource.section in STOCK_NAMED_CAM_SECTIONS
         for inventory in inventories
@@ -7395,7 +7443,7 @@ def _validate_generated_runtime_evidence(
 
     descriptions: list[ET.Element] = []
     for path in inventory.descriptions:
-        document = parse_descriptions(path.read_bytes(), source=str(path))
+        document = _parse_description_file(path)
         descriptions.extend(record.to_element() for record in document.records)
 
     gpl_functions: dict[str, int] = {}
@@ -8336,7 +8384,7 @@ def _description_dialog_sources(
 ) -> set[str]:
     sources: set[str] = set()
     for path in inventory.descriptions:
-        document = parse_descriptions(path.read_bytes(), source=str(path))
+        document = _parse_description_file(path)
         for record in document.records:
             element = record.to_element()
             if element.get("subType") != "Building":
@@ -8533,6 +8581,49 @@ def _require_cam_entry(path: Path, section: bytes, key: bytes) -> CamEntry:
             f"expected exactly one {section!r}/{key!r} in {path}; found {len(matches)}"
         )
     return matches[0]
+
+
+def _parse_description_file(path: Path) -> DescriptionsDocument:
+    info = path.stat()
+    return _parse_description_file_cached(
+        str(path),
+        info.st_size,
+        info.st_mtime_ns,
+    )
+
+
+@lru_cache(maxsize=1024)
+def _parse_description_file_cached(
+    path_text: str,
+    _size: int,
+    _mtime_ns: int,
+) -> DescriptionsDocument:
+    path = Path(path_text)
+    return parse_descriptions(path.read_bytes(), source=path_text)
+
+
+def _parse_semantic_source_file(path: Path) -> ParsedSemanticSource:
+    info = path.stat()
+    return _parse_semantic_source_file_cached(
+        str(path),
+        info.st_size,
+        info.st_mtime_ns,
+    )
+
+
+@lru_cache(maxsize=1024)
+def _parse_semantic_source_file_cached(
+    path_text: str,
+    _size: int,
+    _mtime_ns: int,
+) -> ParsedSemanticSource:
+    path = Path(path_text)
+    text = _read_source_text(path)
+    if path.suffix.casefold() == ".gpl":
+        return parse_gpl(text, path_text)
+    if path.suffix.casefold() == ".dat":
+        return parse_dat(text, path_text)
+    raise ComposeError(f"unsupported semantic source extension: {path}")
 
 
 def _read_source_text(path: Path) -> str:

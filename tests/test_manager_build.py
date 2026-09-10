@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from majesty_cam.gpl import DefinitionKind
+from majesty_cam.compose import ComposeError
 from majesty_cam.intent_text import (
     INTENT_REGISTRY_RELATIVE_PATH,
     allocate_private_activity_text_ids,
@@ -1285,7 +1286,7 @@ class ManagerBuildPlanTests(unittest.TestCase):
                     phase="after symlink",
                 )
 
-    def test_prepare_reparse_rejects_a_changed_semantic_package_view(self):
+    def test_prepare_does_not_reparse_an_unchanged_package(self):
         registry = CompatibilityRegistry(specs={})
         with TemporaryDirectory() as tmp:
             package_root = Path(tmp) / "MergeMod"
@@ -1297,29 +1298,20 @@ class ManagerBuildPlanTests(unittest.TestCase):
             first = _prepared(
                 OTHER_ID, "Other CAM", package_root, registry=registry
             )
-            second = PreparedMergeMod(
-                **{
-                    **first.__dict__,
-                    "alias": "semantically-changed-after-first-parse",
-                }
-            )
             with patch(
                 "majesty_cam.manager.build.prepare_merge_package",
-                side_effect=(first, second),
-            ):
+                return_value=first,
+            ) as prepare:
                 plan = create_build_plan(
                     catalog,
                     {OTHER_ID: True},
                     registry=registry,
                 )
 
-            self.assertIn(
-                "inputs_changed_during_prepare",
-                [issue.code for issue in plan.issues],
-            )
-            self.assertFalse(plan.valid)
+            prepare.assert_called_once()
+            self.assertTrue(plan.valid)
 
-    def test_build_rejects_empty_to_nonempty_activity_text_rediscovery(self):
+    def test_build_reuses_prepared_activity_text_without_rediscovery(self):
         registry = CompatibilityRegistry(specs={})
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1358,13 +1350,18 @@ class ManagerBuildPlanTests(unittest.TestCase):
             with patch(
                 "majesty_cam.manager.build.discover_selected_private_activity_texts",
                 return_value=newly_discovered,
-            ), patch("majesty_cam.manager.build.compose_package") as composer:
-                with self.assertRaisesRegex(
-                    ManagerBuildError, "activity text changed after Prepare"
-                ):
+            ) as discover, patch(
+                "majesty_cam.manager.build.compose_package",
+                side_effect=ComposeError("fixture stop"),
+            ) as composer:
+                with self.assertRaisesRegex(ManagerBuildError, "fixture stop"):
                     build_merged_package(plan, paths)
 
-            composer.assert_not_called()
+            discover.assert_not_called()
+            self.assertEqual(
+                composer.call_args.kwargs["private_activity_texts"],
+                plan.private_activity_texts,
+            )
 
     def test_build_refuses_source_mutation_during_composition(self):
         registry = CompatibilityRegistry(specs={})

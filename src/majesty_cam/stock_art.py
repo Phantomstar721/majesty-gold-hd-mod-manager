@@ -246,6 +246,7 @@ def collapse_art_archives(
     paths: Sequence[Path],
     *,
     owner: str,
+    lineages: Sequence[StockArtLineage] | None = None,
 ) -> tuple[ClassifiedArtArchive, ...]:
     """Apply one component's native CAM order independently per stock family."""
 
@@ -263,7 +264,8 @@ def collapse_art_archives(
     if not source_archives:
         return ()
 
-    lineages = load_stock_art_lineages(game_path)
+    if lineages is None:
+        lineages = load_stock_art_lineages(game_path)
     assigned: list[
         tuple[Path, CamArchive, StockArtLineage, ArtArchiveAnalysis] | None
     ] = []

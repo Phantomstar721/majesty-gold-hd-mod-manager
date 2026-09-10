@@ -12,6 +12,7 @@ from ..compose import (
     ComposeError,
     ScopedSemanticResolution,
     compose_package,
+    discover_private_activity_texts,
     discover_selected_private_activity_texts,
     inventory_package,
     resolve_building_dialogs,
@@ -79,6 +80,7 @@ from .paths import ManagerPaths
 from .preflight import PreparedMergeMod, prepare_merge_package
 from .profile import normalize_guid
 from .profile_lock import ProfileLockError, acquire_merged_profile_lock
+from .startup_cache import metadata_signature
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
@@ -227,6 +229,7 @@ class BuildPlan:
     private_activity_texts: tuple[PrivateActivityTextBinding, ...] = ()
     stock_compose_inputs: tuple[tuple[str, str], ...] = ()
     compatibility_file_inputs: tuple[tuple[str, str], ...] = ()
+    source_metadata_signature: str = ""
     runtime_feature_registry: RuntimeFeatureRegistry = RuntimeFeatureRegistry()
     controller_registry: ResolvedControllerRegistry = _EMPTY_CONTROLLER_REGISTRY
 
@@ -273,16 +276,23 @@ def _prepare_selected_merge_entries(
     *,
     registry: CompatibilityRegistry,
     order_index: Mapping[str, int],
+    prepared_cache: Mapping[str, PreparedMergeMod] | None = None,
 ) -> list[PreparedMergeMod]:
-    prepared = [
-        prepare_merge_package(
-            content_id=entry.content_id,
-            display_name=entry.display_name,
-            source_root=entry.package_root,
-            registry=registry,
+    cache = prepared_cache or {}
+    prepared: list[PreparedMergeMod] = []
+    for entry in entries:
+        cached = cache.get(entry.content_id)
+        if cached is not None and _prepared_package_is_current(cached, entry):
+            prepared.append(cached)
+            continue
+        prepared.append(
+            prepare_merge_package(
+                content_id=entry.content_id,
+                display_name=entry.display_name,
+                source_root=entry.package_root,
+                registry=registry,
+            )
         )
-        for entry in entries
-    ]
     prepared.sort(
         key=lambda item: (
             item.priority,
@@ -293,6 +303,38 @@ def _prepare_selected_merge_entries(
     return prepared
 
 
+def _prepared_package_is_current(
+    prepared: PreparedMergeMod,
+    entry: CatalogEntry,
+) -> bool:
+    if (
+        not prepared.source_metadata_signature
+        or prepared.content_id != entry.content_id
+        or prepared.display_name != entry.display_name
+        or prepared.source_root != entry.package_root.resolve(strict=False)
+    ):
+        return False
+    paths = [prepared.effective_root]
+    if prepared.compatibility is not None and not prepared.substituted:
+        paths.append(prepared.compatibility.definition_path)
+    return metadata_signature(
+        paths,
+        context=("prepared-merge-package-v1",),
+        recursive_directories=True,
+    ) == prepared.source_metadata_signature
+
+
+def _prepared_inventories(
+    prepared: Sequence[PreparedMergeMod],
+):
+    """Reuse preflight inventories; synthesize only for legacy/test callers."""
+
+    return tuple(
+        item.inventory or inventory_package(item.selected_mod)
+        for item in prepared
+    )
+
+
 def create_build_plan(
     catalog: Catalog,
     selections: Mapping[str, bool],
@@ -301,6 +343,7 @@ def create_build_plan(
     order: Sequence[str] = (),
     game_path: Path | None = None,
     standard_conflict_winners: Mapping[str, str] = {},
+    prepared_cache: Mapping[str, PreparedMergeMod] | None = None,
 ) -> BuildPlan:
     normalized_selections = {
         normalize_guid(key): bool(value) for key, value in selections.items()
@@ -339,6 +382,7 @@ def create_build_plan(
         merge_entries,
         registry=registry,
         order_index=order_index,
+        prepared_cache=prepared_cache,
     )
     aliases: dict[str, PreparedMergeMod] = {}
     effective_mod_ids: dict[str, PreparedMergeMod] = {}
@@ -518,9 +562,7 @@ def create_build_plan(
         item.ready and isinstance(item.package, ModPackage) for item in prepared
     ):
         try:
-            inventories = tuple(
-                inventory_package(item.selected_mod) for item in prepared
-            )
+            inventories = _prepared_inventories(prepared)
             validate_gpl_feature_evidence(inventories, game_path=game_path)
             runtime_feature_registry = resolve_runtime_feature_registry(
                 inventories,
@@ -564,10 +606,16 @@ def create_build_plan(
     if game_path is not None and prepared and all(item.ready for item in prepared):
         try:
             stock_compose_inputs = _fingerprint_stock_compose_inputs(game_path)
-            private_activity_texts = discover_selected_private_activity_texts(
-                game_path,
-                tuple(item.selected_mod for item in prepared),
-            )
+            if all(item.inventory is not None for item in prepared):
+                private_activity_texts = discover_private_activity_texts(
+                    game_path,
+                    inventories,
+                )
+            else:
+                private_activity_texts = discover_selected_private_activity_texts(
+                    game_path,
+                    tuple(item.selected_mod for item in prepared),
+                )
         except (ComposeError, OSError, ValueError) as exc:
             issues.append(
                 BuildIssue(
@@ -593,57 +641,12 @@ def create_build_plan(
         stock_compose_inputs=stock_compose_inputs,
         compatibility_file_inputs=compatibility_file_inputs,
     )
-    try:
-        reparsed = _prepare_selected_merge_entries(
-            merge_entries,
-            registry=registry,
-            order_index=order_index,
-        )
-        current_stock_inputs = stock_compose_inputs
-        if game_path is not None and prepared and all(
-            item.ready for item in prepared
-        ):
-            current_stock_inputs = _fingerprint_stock_compose_inputs(game_path)
-        current_compatibility_inputs = tuple(
-            (
-                raw_path,
-                _sha256_file(Path(raw_path)),
-            )
-            for raw_path, _planned_sha256 in compatibility_file_inputs
-        )
-        current_fingerprint = _plan_fingerprint(
-            reparsed,
-            owner_resolutions=owner_resolutions,
-            semantic_resolutions=semantic_resolutions,
-            runtime_capabilities=capabilities,
-            runtime_feature_registry=runtime_feature_registry,
-            controller_registry=controller_registry,
-            private_activity_texts=private_activity_texts,
-            stock_compose_inputs=current_stock_inputs,
-            compatibility_file_inputs=current_compatibility_inputs,
-        )
-        if reparsed != prepared or current_fingerprint != fingerprint:
-            issues.append(
-                BuildIssue(
-                    "inputs_changed_during_prepare",
-                    (
-                        "Selected Merge mod, trusted compatibility, or installed "
-                        "stock files changed while the build plan was being prepared. "
-                        "Prepare the current selections again."
-                    ),
-                )
-            )
-    except (ComposeError, OSError, ValueError) as exc:
-        issues.append(
-            BuildIssue(
-                "inputs_changed_during_prepare",
-                (
-                    "Selected Merge mod, trusted compatibility, or installed "
-                    "stock files could not be revalidated after preparation: "
-                    f"{exc}"
-                ),
-            )
-        )
+    source_metadata_signature = _plan_source_metadata_signature(
+        prepared,
+        game_path=game_path,
+        stock_compose_inputs=stock_compose_inputs,
+        compatibility_file_inputs=compatibility_file_inputs,
+    )
     standard_order = _order_standard_ids(
         standards,
         order_index,
@@ -658,6 +661,7 @@ def create_build_plan(
         private_activity_texts=private_activity_texts,
         stock_compose_inputs=stock_compose_inputs,
         compatibility_file_inputs=compatibility_file_inputs,
+        source_metadata_signature=source_metadata_signature,
         runtime_feature_registry=runtime_feature_registry,
         controller_registry=controller_registry,
         fingerprint=fingerprint,
@@ -894,20 +898,15 @@ def build_merged_package(
         _require_current_plan_sources(
             plan, game_path=paths.game_path, phase="before composition"
         )
-        private_activity_texts = discover_selected_private_activity_texts(
-            paths.game_path,
-            tuple(item.selected_mod for item in plan.selected_merge),
+        inventories = (
+            tuple(item.inventory for item in plan.selected_merge)
+            if all(item.inventory is not None for item in plan.selected_merge)
+            else None
         )
-        if private_activity_texts != plan.private_activity_texts:
-            raise ManagerBuildError(
-                "Selected Merge mod activity text changed after Prepare. "
-                "Prepare the current selections again."
-            )
+        private_activity_texts = plan.private_activity_texts
         runtime_capabilities = set(plan.runtime_capabilities)
         if private_activity_texts:
             runtime_capabilities.add(PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY)
-        if progress:
-            progress("Merging CAM, Description, and GPL resources")
         result = compose_package(
             paths.game_path,
             staging,
@@ -919,6 +918,7 @@ def build_merged_package(
             semantic_resolutions=plan.semantic_resolutions,
             runtime_capabilities=tuple(sorted(runtime_capabilities)),
             private_activity_texts=private_activity_texts,
+            prepared_inventories=inventories,
         )
         _require_current_plan_sources(
             plan, game_path=paths.game_path, phase="during composition"
@@ -1261,8 +1261,12 @@ def _plan_fingerprint(
 ) -> str:
     packages = []
     for item in prepared:
-        files = []
-        if item.effective_root.is_dir():
+        files = (
+            list(item.package_file_inputs)
+            if item.package_file_inputs is not None
+            else []
+        )
+        if item.package_file_inputs is None and item.effective_root.is_dir():
             for path in sorted(
                 (value for value in item.effective_root.rglob("*") if value.is_file()),
                 key=lambda value: value.relative_to(item.effective_root).as_posix().casefold(),
@@ -1409,6 +1413,17 @@ def _canonical_runtime_feature(feature: object) -> dict:
 def _require_current_plan_sources(
     plan: BuildPlan, *, game_path: Path, phase: str
 ) -> None:
+    if (
+        plan.source_metadata_signature
+        and _plan_source_metadata_signature(
+            plan.selected_merge,
+            game_path=game_path,
+            stock_compose_inputs=plan.stock_compose_inputs,
+            compatibility_file_inputs=plan.compatibility_file_inputs,
+        )
+        == plan.source_metadata_signature
+    ):
+        return
     try:
         stock_compose_inputs = _fingerprint_stock_compose_inputs(game_path)
         current = _plan_fingerprint(
@@ -1440,6 +1455,40 @@ def _require_current_plan_sources(
             f"stock composition inputs changed {phase}. "
             "Prepare the current selections again."
         )
+
+
+def _plan_source_metadata_signature(
+    prepared: Sequence[PreparedMergeMod],
+    *,
+    game_path: Path | None,
+    stock_compose_inputs: Sequence[tuple[str, str]],
+    compatibility_file_inputs: Sequence[tuple[str, str]],
+) -> str:
+    """Cheaply invalidate exact source hashes when no input metadata changed."""
+
+    paths: list[Path] = [item.effective_root for item in prepared]
+    paths.extend(
+        item.compatibility.definition_path
+        for item in prepared
+        if item.compatibility is not None and not item.substituted
+    )
+    paths.extend(Path(raw_path) for raw_path, _sha256 in compatibility_file_inputs)
+    if game_path is not None:
+        paths.extend(
+            game_path / Path(relative)
+            for relative, _sha256 in stock_compose_inputs
+        )
+        paths.extend(
+            (
+                game_path / "SDK" / "OriginalQuests" / "Data",
+                game_path / "SDK" / "OriginalQuests" / "DataMX",
+            )
+        )
+    return metadata_signature(
+        paths,
+        context=("manager-build-inputs-v1",),
+        recursive_directories=True,
+    )
 
 
 def _fingerprint_stock_compose_inputs(

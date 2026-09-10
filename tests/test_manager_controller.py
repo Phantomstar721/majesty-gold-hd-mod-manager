@@ -186,6 +186,44 @@ class ManagerControllerTests(unittest.TestCase):
                 RuntimeFeatureRegistry(),
             )
 
+    def test_launch_reuses_current_session_validation_and_qol_status(self):
+        with TemporaryDirectory() as tmp:
+            paths = _manager_paths(Path(tmp), runtime_ready=True)
+            controller = ManagerController(
+                paths=paths, registry=CompatibilityRegistry(specs={})
+            )
+            controller.plan = BuildPlan(
+                selected_standard_ids=(STANDARD_ID,),
+                selected_merge=(),
+                resolution_owners={},
+                semantic_resolutions={},
+                runtime_capabilities=("generic-visitor-lists.v1",),
+                fingerprint="standard-only",
+                issues=(),
+            )
+            _set_required_qol_state(controller, installed=True)
+            controller._qol_input_signature = qol_input_signature(
+                controller.qol_service
+            )
+            controller._managed_build_cache_loaded = True
+            launched = LaunchResult(
+                launcher_pid=123,
+                active_mod_ids=(STANDARD_ID,),
+                executable=paths.game_executable,
+                runtime_dll=paths.runtime_dll,
+            )
+
+            with patch(
+                "majesty_cam.manager.controller.read_managed_build",
+                side_effect=AssertionError("unchanged output was revalidated"),
+            ), patch(
+                "majesty_cam.manager.controller.launch_majesty",
+                return_value=launched,
+            ) as launch:
+                controller.launch()
+
+            self.assertFalse(launch.call_args.kwargs["ensure_qol"])
+
     def test_scan_silently_restores_a_generated_profile_to_source_mods(self):
         with TemporaryDirectory() as tmp:
             paths = _manager_paths(Path(tmp))

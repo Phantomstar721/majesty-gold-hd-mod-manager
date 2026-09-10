@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import hashlib
 from pathlib import Path
 import re
 
@@ -8,7 +9,9 @@ from ..cam import read_cam
 from ..gpl import find_foreach_return_violations
 from ..compose import (
     ComposeError,
+    PackageInventory,
     SelectedMod,
+    discover_private_activity_texts,
     discover_selected_private_activity_texts,
     inventory_package,
     resolve_building_dialogs,
@@ -31,6 +34,7 @@ from .capabilities import (
 from .catalog import CatalogIssue, IssueSeverity
 from .compatibility import CompatibilityRegistry, CompatibilitySpec
 from .profile import normalize_guid
+from .startup_cache import metadata_signature
 
 
 _CG_DIALOG = re.compile(r"^CG[A-Z0-9]{2}$")
@@ -57,6 +61,21 @@ class PreparedMergeMod:
     substituted: bool
     compatibility: CompatibilitySpec | None
     issues: tuple[ReadinessIssue, ...]
+    inventory: PackageInventory | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    package_file_inputs: tuple[tuple[str, str], ...] | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    source_metadata_signature: str = field(
+        default="",
+        compare=False,
+        repr=False,
+    )
 
     @property
     def ready(self) -> bool:
@@ -133,6 +152,14 @@ def prepare_merge_package(
             )
 
     package: ModPackage | None = None
+    inventory: PackageInventory | None = None
+    package_file_inputs: tuple[tuple[str, str], ...] | None = None
+    source_metadata_signature = ""
+    signature_spec = spec if spec is not None and not substituted else None
+    source_metadata_signature_before = _source_metadata_signature(
+        effective_root,
+        spec=signature_spec,
+    )
     try:
         package = load_package(effective_root, definition=definition)
         effective_mod_id = normalize_guid(package.mod_id)
@@ -184,9 +211,15 @@ def prepare_merge_package(
                         effective_root / "mod-definition.json",
                     )
                 )
-        _validate_package(package, alias=alias, issues=issues)
         if isinstance(package, ModPackage) and package.definition is not None:
             inventory = inventory_package(SelectedMod(alias, package))
+        _validate_package(
+            package,
+            alias=alias,
+            issues=issues,
+            inventory=inventory,
+        )
+        if inventory is not None:
             resolve_runtime_feature_registry(
                 (inventory,),
                 capabilities,
@@ -196,6 +229,19 @@ def prepare_merge_package(
                 (inventory,),
                 capabilities,
                 building_dialogs=building_dialogs,
+            )
+        package_file_inputs = _package_file_inputs(effective_root)
+        source_metadata_signature = _source_metadata_signature(
+            effective_root,
+            spec=signature_spec,
+        )
+        if source_metadata_signature != source_metadata_signature_before:
+            issues.append(
+                ReadinessIssue(
+                    "package_changed_during_preflight",
+                    "The package changed while it was being checked. Rescan it.",
+                    effective_root,
+                )
             )
     except (OSError, PackageFormatError, ComposeError, ValueError) as exc:
         issues.append(
@@ -230,6 +276,9 @@ def prepare_merge_package(
         substituted=substituted,
         compatibility=spec,
         issues=tuple(issues),
+        inventory=inventory,
+        package_file_inputs=package_file_inputs,
+        source_metadata_signature=source_metadata_signature,
     )
 
 
@@ -263,10 +312,14 @@ def catalog_merge_preflight(
         return tuple(issues)
 
     try:
-        discover_selected_private_activity_texts(
-            game_path,
-            (prepared.selected_mod,),
-        )
+        if prepared.inventory is None:
+            # Retain the public test/adapter seam for synthetic prepared rows.
+            discover_selected_private_activity_texts(
+                game_path,
+                (prepared.selected_mod,),
+            )
+        else:
+            discover_private_activity_texts(game_path, (prepared.inventory,))
     except (ComposeError, OSError, ValueError) as exc:
         issues.append(
             CatalogIssue(
@@ -280,7 +333,7 @@ def catalog_merge_preflight(
         return tuple(issues)
 
     try:
-        inventory = inventory_package(prepared.selected_mod)
+        inventory = prepared.inventory or inventory_package(prepared.selected_mod)
         validate_gpl_feature_evidence((inventory,), game_path=game_path)
         runtime_features = resolve_runtime_feature_registry(
             (inventory,),
@@ -318,6 +371,7 @@ def _validate_package(
     *,
     alias: str,
     issues: list[ReadinessIssue],
+    inventory: PackageInventory | None = None,
 ) -> None:
     if package.definition is None:
         issues.append(
@@ -329,8 +383,8 @@ def _validate_package(
         )
         return
 
-    selected = SelectedMod(alias, package)
-    inventory = inventory_package(selected)
+    if inventory is None:
+        inventory = inventory_package(SelectedMod(alias, package))
 
     art_domains = {"main": 0, "interface": 0}
     has_bdep = False
@@ -479,6 +533,42 @@ def _slug(display_name: str, content_id: str) -> str:
         value = "mod"
     uuid_suffix = content_id.replace("-", "").casefold()
     return f"{value}-{uuid_suffix}"
+
+
+def _package_file_inputs(root: Path) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (
+            path.relative_to(root).as_posix(),
+            _sha256_file(path),
+        )
+        for path in sorted(
+            (value for value in root.rglob("*") if value.is_file()),
+            key=lambda value: value.relative_to(root).as_posix().casefold(),
+        )
+    )
+
+
+def _source_metadata_signature(
+    root: Path,
+    *,
+    spec: CompatibilitySpec | None,
+) -> str:
+    paths = [root]
+    if spec is not None:
+        paths.append(spec.definition_path)
+    return metadata_signature(
+        paths,
+        context=("prepared-merge-package-v1",),
+        recursive_directories=True,
+    )
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _read_gpl_source(path: Path) -> str:

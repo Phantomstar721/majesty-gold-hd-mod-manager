@@ -2392,7 +2392,6 @@ def _required_qol_explanation(key: str) -> str:
 def _player_progress_text(message: str) -> str:
     return {
         "Validating selected packages": "Checking selected mods",
-        "Merging CAM, Description, and GPL resources": "Combining selected mods",
         "Publishing validated profile": "Finishing your combined setup",
     }.get(message, _player_error_text(message))
 

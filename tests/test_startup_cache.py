@@ -30,6 +30,7 @@ from majesty_cam.manager.qol_service import (
 )
 from majesty_cam.manager.startup_cache import (
     StartupCache,
+    catalog_input_signature,
     metadata_signature,
     qol_input_signature,
 )
@@ -39,6 +40,88 @@ MOD_ID = "8C48289E-7C70-4426-8913-133F3544A182"
 
 
 class StartupCacheTests(unittest.TestCase):
+    def test_catalog_round_trip_and_installed_content_change_invalidation(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            mods = root / "Mods"
+            quests = root / "Quests"
+            workshop = root / "Workshop"
+            for path in (mods, quests, workshop):
+                path.mkdir()
+            package = mods / "Fixture"
+            package.mkdir()
+            payload = package / "content.gpl"
+            payload.write_text("function One() begin end", encoding="ascii")
+            entry = CatalogEntry(
+                content_id=MOD_ID,
+                raw_content_id=MOD_ID,
+                display_name="Fixture Mod",
+                kind=CatalogKind.STANDARD,
+                source=CatalogSource.LOCAL_MODS,
+                package_root=package,
+                manifest_path=package / "fixture.mmxml",
+                has_cam=False,
+                merge_ready=False,
+                content_definitions=(("function:one", "abc"),),
+            )
+            registry = CompatibilityRegistry(specs={})
+            signature = catalog_input_signature(
+                local_mods_root=mods,
+                local_quests_root=quests,
+                workshop_roots=(workshop,),
+                registry=registry,
+            )
+            cache_path = root / "startup-cache.json"
+            cache = StartupCache.load(cache_path)
+            cache.set_catalog(signature, Catalog(entries=(entry,)))
+            cache.save()
+
+            loaded = StartupCache.load(cache_path)
+            self.assertEqual(loaded.get_catalog(signature), Catalog(entries=(entry,)))
+
+            payload.write_text("function Two() begin end", encoding="ascii")
+            changed = catalog_input_signature(
+                local_mods_root=mods,
+                local_quests_root=quests,
+                workshop_roots=(workshop,),
+                registry=registry,
+            )
+            self.assertNotEqual(changed, signature)
+            self.assertIsNone(loaded.get_catalog(changed))
+
+    def test_managed_build_cache_requires_matching_output_metadata(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "Merged"
+            output.mkdir()
+            payload = output / "content.cam"
+            payload.write_bytes(b"first")
+            signature = metadata_signature(
+                (output,),
+                context=("managed-build-v1",),
+                recursive_directories=True,
+            )
+            result = {
+                "manifest_name": "CAMManager-test.mmxml",
+                "report_name": "CAM-MERGE-REPORT.json",
+                "mod_id": MOD_ID,
+                "fingerprint": "fixture",
+                "selected_source_ids": [MOD_ID],
+            }
+            cache = StartupCache.load(root / "startup-cache.json")
+            cache.set_managed_build(signature, result)
+            cache.save()
+
+            loaded = StartupCache.load(root / "startup-cache.json")
+            self.assertEqual(loaded.get_managed_build(signature), result)
+            payload.write_bytes(b"changed")
+            changed = metadata_signature(
+                (output,),
+                context=("managed-build-v1",),
+                recursive_directories=True,
+            )
+            self.assertIsNone(loaded.get_managed_build(changed))
+
     def test_preflight_round_trip_and_metadata_change_invalidation(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
@@ -240,7 +323,9 @@ class StartupCacheTests(unittest.TestCase):
                 second.scan()
                 second.scan(force_refresh=True)
 
-            self.assertEqual(inspect.call_count, 2)
+            # Rescan Content refreshes mod discovery, not unchanged executable
+            # patch state. QOL mutations have their own targeted refresh path.
+            self.assertEqual(inspect.call_count, 1)
 
 
 def _manager_paths(root: Path) -> ManagerPaths:

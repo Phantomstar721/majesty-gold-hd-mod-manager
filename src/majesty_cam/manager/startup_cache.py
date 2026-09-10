@@ -1,9 +1,10 @@
 """Versioned startup cache for unchanged manager inputs.
 
-The cache stores only derived discovery results.  Source packages, Majesty's
-executable, QOL scripts, and the manager compatibility payload remain the
-authorities.  Cheap metadata signatures invalidate cached work before it is
-reused; build and launch keep their existing content-hash revalidation.
+The cache stores only derived discovery and validation results. Source
+packages, generated output, Majesty's executable, QOL scripts, and manager
+compatibility data remain authoritative. Cheap complete metadata signatures
+invalidate cached work before it is reused; changed build inputs still receive
+the exact content-hash validation.
 """
 
 from __future__ import annotations
@@ -16,10 +17,17 @@ from pathlib import Path
 import stat
 import sys
 import tempfile
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from ..package import CamLoad, DescriptionsLoad, GplLoad, load_package
-from .catalog import CatalogIssue, IssueSeverity
+from .catalog import (
+    Catalog,
+    CatalogEntry,
+    CatalogIssue,
+    CatalogKind,
+    CatalogSource,
+    IssueSeverity,
+)
 from .compatibility import CompatibilityRegistry
 from .qol_service import (
     QolCatalogSnapshot,
@@ -31,7 +39,7 @@ from .qol_service import (
 )
 
 
-STARTUP_CACHE_SCHEMA_VERSION = 1
+STARTUP_CACHE_SCHEMA_VERSION = 3
 STARTUP_CACHE_FILENAME = "startup-cache.json"
 _STOCK_PREFLIGHT_INPUTS = (
     Path("DataMX/mx_gpltext.cam"),
@@ -44,6 +52,8 @@ class StartupCache:
     path: Path
     preflight: dict[str, dict[str, object]]
     qol: dict[str, object] | None
+    managed_build: dict[str, object] | None
+    catalog: dict[str, object] | None
 
     @classmethod
     def load(cls, path: Path) -> "StartupCache":
@@ -59,7 +69,19 @@ class StartupCache:
         qol = value.get("qol")
         if not isinstance(qol, dict):
             qol = None
-        return cls(path=path, preflight=dict(preflight), qol=qol)
+        managed_build = value.get("managed_build")
+        if not isinstance(managed_build, dict):
+            managed_build = None
+        catalog = value.get("catalog")
+        if not isinstance(catalog, dict):
+            catalog = None
+        return cls(
+            path=path,
+            preflight=dict(preflight),
+            qol=qol,
+            managed_build=managed_build,
+            catalog=catalog,
+        )
 
     def get_preflight(
         self, content_id: str, signature: str
@@ -191,11 +213,58 @@ class StartupCache:
             ],
         }
 
+    def get_managed_build(self, signature: str) -> dict[str, object] | None:
+        raw = self.managed_build
+        if (
+            not isinstance(raw, dict)
+            or raw.get("signature") != signature
+            or not isinstance(raw.get("result"), dict)
+        ):
+            return None
+        return dict(raw["result"])
+
+    def set_managed_build(
+        self,
+        signature: str,
+        result: Mapping[str, object] | None,
+    ) -> None:
+        self.managed_build = (
+            {"signature": signature, "result": dict(result)}
+            if result is not None
+            else None
+        )
+
+    def get_catalog(self, signature: str) -> Catalog | None:
+        raw = self.catalog
+        if (
+            not isinstance(raw, dict)
+            or raw.get("signature") != signature
+            or not isinstance(raw.get("entries"), list)
+            or not isinstance(raw.get("issues"), list)
+        ):
+            return None
+        try:
+            return Catalog(
+                entries=tuple(_catalog_entry_from_row(row) for row in raw["entries"]),
+                issues=tuple(_catalog_issue_from_row(row) for row in raw["issues"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def set_catalog(self, signature: str, catalog: Catalog) -> None:
+        self.catalog = {
+            "signature": signature,
+            "entries": [_catalog_entry_to_row(entry) for entry in catalog.entries],
+            "issues": [_catalog_issue_to_row(issue) for issue in catalog.issues],
+        }
+
     def save(self) -> None:
         payload = {
             "schema_version": STARTUP_CACHE_SCHEMA_VERSION,
             "merge_preflight": self.preflight,
             "qol": self.qol,
+            "managed_build": self.managed_build,
+            "catalog": self.catalog,
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -259,6 +328,180 @@ def qol_input_signature(service: QolService) -> str:
     )
 
 
+def catalog_input_signature(
+    *,
+    local_mods_root: Path,
+    local_quests_root: Path,
+    workshop_roots: Iterable[Path],
+    registry: CompatibilityRegistry,
+) -> str:
+    """Return a cheap complete identity for installed catalog inputs."""
+
+    paths: list[Path] = [
+        *_manager_cache_identity_paths(),
+        local_mods_root,
+        local_quests_root,
+        *workshop_roots,
+    ]
+    for spec in registry.specs.values():
+        paths.append(spec.definition_path)
+        paths.extend(spec.replacement_roots)
+    paths.extend(item.source_path for item in registry.combination_resolutions)
+    return metadata_signature(
+        paths,
+        context=("installed-catalog-v1",),
+        recursive_directories=True,
+    )
+
+
+def _catalog_issue_to_row(issue: CatalogIssue) -> dict[str, object]:
+    return {
+        "code": issue.code,
+        "message": issue.message,
+        "severity": issue.severity.value,
+        "path": str(issue.path) if issue.path is not None else None,
+        "content_id": issue.content_id,
+    }
+
+
+def _catalog_issue_from_row(raw: object) -> CatalogIssue:
+    if not isinstance(raw, dict):
+        raise ValueError("catalog issue cache row must be an object")
+    raw_path = raw.get("path")
+    raw_content_id = raw.get("content_id")
+    if raw_path is not None and not isinstance(raw_path, str):
+        raise ValueError("catalog issue path must be text")
+    if raw_content_id is not None and not isinstance(raw_content_id, str):
+        raise ValueError("catalog issue content ID must be text")
+    return CatalogIssue(
+        code=_required_string(raw.get("code")),
+        message=_required_string(raw.get("message"), allow_empty=True),
+        severity=IssueSeverity(_required_string(raw.get("severity"))),
+        path=Path(raw_path) if raw_path is not None else None,
+        content_id=raw_content_id,
+    )
+
+
+def _catalog_entry_to_row(entry: CatalogEntry) -> dict[str, object]:
+    return {
+        "content_id": entry.content_id,
+        "raw_content_id": entry.raw_content_id,
+        "display_name": entry.display_name,
+        "kind": entry.kind.value,
+        "source": entry.source.value,
+        "package_root": str(entry.package_root),
+        "manifest_path": str(entry.manifest_path),
+        "has_cam": entry.has_cam,
+        "merge_ready": entry.merge_ready,
+        "compatibility_applied": entry.compatibility_applied,
+        "generated": entry.generated,
+        "issues": [_catalog_issue_to_row(issue) for issue in entry.issues],
+        "description": entry.description,
+        "details": entry.details,
+        "collection_id": entry.collection_id,
+        "collection_name": entry.collection_name,
+        "collection_index": entry.collection_index,
+        "collection_size": entry.collection_size,
+        "variant_label": entry.variant_label,
+        "incompatible_ids": list(entry.incompatible_ids),
+        "incompatible_names": list(entry.incompatible_names),
+        "load_after_ids": list(entry.load_after_ids),
+        "load_after_names": list(entry.load_after_names),
+        "load_before_ids": list(entry.load_before_ids),
+        "load_before_names": list(entry.load_before_names),
+        "required_ids": list(entry.required_ids),
+        "required_names": list(entry.required_names),
+        "unresolved_overlap_ids": list(entry.unresolved_overlap_ids),
+        "unresolved_overlap_names": list(entry.unresolved_overlap_names),
+        "content_definitions": [list(item) for item in entry.content_definitions],
+    }
+
+
+def _catalog_entry_from_row(raw: object) -> CatalogEntry:
+    if not isinstance(raw, dict):
+        raise ValueError("catalog entry cache row must be an object")
+    optional_text = (
+        "content_id",
+        "raw_content_id",
+        "description",
+        "details",
+        "collection_id",
+        "collection_name",
+        "variant_label",
+    )
+    for key in optional_text:
+        if raw.get(key) is not None and not isinstance(raw.get(key), str):
+            raise ValueError(f"catalog entry {key} must be text")
+    sequence_fields = (
+        "incompatible_ids",
+        "incompatible_names",
+        "load_after_ids",
+        "load_after_names",
+        "load_before_ids",
+        "load_before_names",
+        "required_ids",
+        "required_names",
+        "unresolved_overlap_ids",
+        "unresolved_overlap_names",
+    )
+    sequences: dict[str, tuple[str, ...]] = {}
+    for key in sequence_fields:
+        value = raw.get(key)
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) for item in value
+        ):
+            raise ValueError(f"catalog entry {key} must be a text list")
+        sequences[key] = tuple(value)
+    definitions = raw.get("content_definitions")
+    if not isinstance(definitions, list):
+        raise ValueError("catalog content definitions must be a list")
+    content_definitions = tuple(
+        (_required_string(item[0]), _required_string(item[1]))
+        for item in definitions
+        if isinstance(item, list) and len(item) == 2
+    )
+    if len(content_definitions) != len(definitions):
+        raise ValueError("catalog content definition row is invalid")
+    issues = raw.get("issues")
+    if not isinstance(issues, list):
+        raise ValueError("catalog entry issues must be a list")
+    booleans = (
+        "has_cam",
+        "merge_ready",
+        "compatibility_applied",
+        "generated",
+    )
+    if any(type(raw.get(key)) is not bool for key in booleans):
+        raise ValueError("catalog entry boolean field is invalid")
+    collection_index = raw.get("collection_index")
+    collection_size = raw.get("collection_size")
+    if type(collection_index) is not int or type(collection_size) is not int:
+        raise ValueError("catalog collection positions must be integers")
+    return CatalogEntry(
+        content_id=raw.get("content_id"),
+        raw_content_id=raw.get("raw_content_id"),
+        display_name=_required_string(raw.get("display_name")),
+        kind=CatalogKind(_required_string(raw.get("kind"))),
+        source=CatalogSource(_required_string(raw.get("source"))),
+        package_root=Path(_required_string(raw.get("package_root"))),
+        manifest_path=Path(_required_string(raw.get("manifest_path"))),
+        has_cam=raw["has_cam"],
+        merge_ready=raw["merge_ready"],
+        compatibility_applied=raw["compatibility_applied"],
+        generated=raw["generated"],
+        issues=tuple(_catalog_issue_from_row(item) for item in issues),
+        description=raw.get("description"),
+        details=raw.get("details"),
+        collection_id=raw.get("collection_id"),
+        collection_name=raw.get("collection_name"),
+        collection_index=collection_index,
+        collection_size=collection_size,
+        variant_label=raw.get("variant_label"),
+        content_definitions=content_definitions,
+        **sequences,
+    )
+
+
 def metadata_signature(
     paths: Iterable[Path],
     *,
@@ -270,10 +513,10 @@ def metadata_signature(
     digest = hashlib.sha256()
     for value in context:
         _feed(digest, "context", value)
-    unique = {
-        str(Path(path).resolve(strict=False)).casefold(): Path(path).resolve(strict=False)
-        for path in paths
-    }
+    unique: dict[str, Path] = {}
+    for raw_path in paths:
+        path = Path(raw_path).resolve(strict=False)
+        unique.setdefault(str(path).casefold(), path)
     for key, path in sorted(unique.items()):
         _feed(digest, "root", key)
         _snapshot_path(digest, path, recursive=recursive_directories)
@@ -453,6 +696,7 @@ __all__ = [
     "STARTUP_CACHE_FILENAME",
     "STARTUP_CACHE_SCHEMA_VERSION",
     "StartupCache",
+    "catalog_input_signature",
     "merge_preflight_signature",
     "metadata_signature",
     "qol_input_signature",
