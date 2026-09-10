@@ -16,6 +16,8 @@ from majesty_cam.gpl import (
     merge_semantic_items,
     merge_sources,
     add_inventory_death_drop_exclusions,
+    add_controlled_follower_movement_adjustments,
+    add_hero_quest_lifecycle_callbacks,
     add_purchase_bazaar_tail_callbacks,
     add_purchase_equipment_tail_callbacks,
     parse_dat,
@@ -27,6 +29,63 @@ from majesty_cam.gpl import (
 
 
 class GplParsingTests(unittest.TestCase):
+    def test_hero_quest_lifecycle_uses_exact_stock_decision_reset_and_death_anchors(self):
+        callback_source = parse_gpl(textwrap.dedent("""\
+            function Quest_Decide(agent ThisAgent) is boolean
+            begin
+                return FALSE;
+            end
+            function Quest_Reset(agent ThisAgent)
+            begin
+            end
+            function Quest_Death(agent ThisAgent)
+            begin
+            end
+        """), "callbacks.gpl")
+        tree = parse_gpl(textwrap.dedent("""\
+            function adept_tree(agent thisagent)
+            begin
+                if ($check_nearby(thisagent) == False)
+
+                if ($Check_rewards(thisagent,FALSE) == False)
+                    $Go_home(thisagent,95);
+            end
+        """), "mx_Adept.gpl").require("function", "adept_tree")
+        reset = parse_gpl(textwrap.dedent("""\
+            function reset_tasks(agent thisagent)
+            begin
+                $StopMoving (ThisAgent);
+                thisagent's "target" = $Nullagent();
+            end
+        """), "mx_LowLevel.gpl").require("function", "reset_tasks")
+        death = parse_gpl(textwrap.dedent('''\
+            function Unit_Call_Deathscript ( agent thisagent )
+            begin
+                $DeleteAllEffectors ( thisagent );
+                // call the unit's deathscript
+                if ($validfunction(thisagent's "IGDeathScript") == TRUE)
+                    (thisagent's "IGDeathScript")(thisagent);
+            end
+        '''), "mx_Hero_Deaths.gpl").require("function", "Unit_Call_Deathscript")
+        merged = merge_sources([], {"mod": [callback_source]})
+
+        result = add_hero_quest_lifecycle_callbacks(
+            merged,
+            [(("mx_adept",), "Quest_Decide", "Quest_Reset", "Quest_Death")],
+            stock_hero_trees={"mx_adept": tree},
+            stock_reset_tasks=reset,
+            stock_unit_death=death,
+        )
+
+        decision_text = next(item.text for item in result.items if item.normalized_name == "adept_tree")
+        self.assertLess(decision_text.index("$check_nearby"), decision_text.index("$Quest_Decide"))
+        self.assertLess(decision_text.index("$Quest_Decide"), decision_text.index("$Check_rewards"))
+        reset_text = next(item.text for item in result.items if item.normalized_name == "reset_tasks")
+        self.assertLess(reset_text.index("$Quest_Reset"), reset_text.index("$StopMoving"))
+        death_text = next(item.text for item in result.items if item.normalized_name == "unit_call_deathscript")
+        self.assertLess(death_text.index("$DeleteAllEffectors"), death_text.index("$Quest_Death"))
+        self.assertLess(death_text.index("$Quest_Death"), death_text.index("$validfunction"))
+
     def test_foreach_return_scan_handles_blocks_single_statements_and_case(self):
         source = textwrap.dedent(
             """\
@@ -256,6 +315,74 @@ class GplParsingTests(unittest.TestCase):
 
 
 class SemanticMergeTests(unittest.TestCase):
+    def test_controlled_follower_movement_uses_stock_begin_and_cleanup(self):
+        stock_control = parse_gpl(_control_monster(), "control.gpl")
+        stock_controlled = parse_gpl(_controlled_monster(), "controlled.gpl")
+        callback = parse_gpl(_two_agent_callback("Rental_Speed_Applies"), "mod.gpl")
+        merged = merge_sources([], {"mod": [callback]})
+
+        result = add_controlled_follower_movement_adjustments(
+            merged,
+            (("Rental_Speed_Applies", -125, _movement_markers()),),
+            stock_control_monster=stock_control.require("function", "Control_Monster"),
+            stock_controlled_monster_death=stock_controlled.require(
+                "function", "Controlled_Monster_Death"
+            ),
+            stock_leader_dead=stock_controlled.require("function", "leader_dead"),
+        )
+
+        emitted = result.emit_project_source_set().gpl_text
+        control = emitted[emitted.index("Function Control_Monster"):]
+        self.assertLess(
+            control.index("$setunitplayernumber"),
+            control.index("$Rental_Speed_Applies"),
+        )
+        self.assertIn(
+            "$AdjustAttribute ( Target, #ATTRIB_MovementRateModifier, -125 );",
+            control,
+        )
+        self.assertEqual(
+            sum(emitted.count(f'"{marker}"') for marker in _movement_markers()),
+            24,
+        )
+        self.assertIn("#ATTRIB_Speed ) - $GetAttribute", emitted)
+        self.assertIn(">= 4 &&", emitted)
+        self.assertEqual(
+            emitted.count(
+                "$AdjustAttribute ( ThisAgent, #ATTRIB_MovementRateModifier, 125 );"
+            ),
+            8,
+        )
+        self.assertLess(
+            emitted.index(
+                "$AdjustAttribute ( ThisAgent, #ATTRIB_MovementRateModifier, 125 );"
+            ),
+            emitted.index("$Monster_Gravestone"),
+        )
+
+    def test_controlled_follower_movement_fails_closed_on_changed_stock_anchor(self):
+        stock_control = parse_gpl(
+            _control_monster().replace("$setunitplayernumber", "$different_handoff"),
+            "changed-control.gpl",
+        )
+        stock_controlled = parse_gpl(_controlled_monster(), "controlled.gpl")
+        callback = parse_gpl(_two_agent_callback("Rental_Speed_Applies"), "mod.gpl")
+
+        with self.assertRaisesRegex(ValueError, "player-ownership handoff"):
+            add_controlled_follower_movement_adjustments(
+                merge_sources([], {"mod": [callback]}),
+                (("Rental_Speed_Applies", -100, _movement_markers()),),
+                stock_control_monster=stock_control.require(
+                    "function", "Control_Monster"
+                ),
+                stock_controlled_monster_death=stock_controlled.require(
+                    "function", "Controlled_Monster_Death"
+                ),
+                stock_leader_dead=stock_controlled.require(
+                    "function", "leader_dead"
+                ),
+            )
+
     def test_purchase_bazaar_tail_runs_after_all_bazaar_items(self):
         stock = parse_gpl(_purchase_bazaar(), "stock-bazaar.gpl")
         callback = parse_gpl(_boolean_callback("Zoo_Rental_Check"), "zoo.gpl")
@@ -627,6 +754,65 @@ def _boolean_callback(name: str) -> str:
         Function {name} (agent ThisAgent) is boolean
         Begin
             return False;
+        End
+
+        """
+    )
+
+
+def _two_agent_callback(name: str) -> str:
+    return textwrap.dedent(
+        f"""\
+        Function {name} (agent Leader, agent Follower) is boolean
+        Declare
+        Begin
+            return False;
+        End
+
+        """
+    )
+
+
+def _movement_markers() -> tuple[str, str, str, str]:
+    return tuple(f"MCF0123456789AB{tier}" for tier in range(1, 5))
+
+
+def _control_monster() -> str:
+    return textwrap.dedent(
+        """\
+        Function Control_Monster ( agent ThisAgent, agent Target )
+        Begin
+            If ( $IsDead ( Target ))
+                return;
+            ( ThisAgent's "Num_Followers" ) ++;
+            Target's "ActiveScript" = $fake_wander;
+            $createeffector ( target, "Charm_icon", 1, "infinite" );
+            Target's "BackScript" = $Controlled_Monster;
+            Target's "IGDeathScript" = $Controlled_Monster_Death;
+            Target's "leader" = ThisAgent;
+            $setunitplayernumber ( target, $getunitplayernumber ( thisagent ));
+        End
+
+        """
+    )
+
+
+def _controlled_monster() -> str:
+    return textwrap.dedent(
+        """\
+        Function Controlled_Monster_Death (agent ThisAgent)
+        Begin
+            $Monster_Gravestone (ThisAgent);
+        End
+
+        function leader_dead(agent thisagent) is boolean
+        Begin
+            if ($isvalidgamepiece (thisagent's "leader") == false)
+                begin
+                    $deleteeffector(thisagent,"charm_icon");
+                    return TRUE;
+                end
+            return FALSE;
         End
 
         """

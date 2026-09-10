@@ -242,15 +242,33 @@ constexpr MajestyBuildProfile kBeta2BuildProfile = {
 
 const MajestyBuildProfile* g_buildProfile = nullptr;
 using OccupantPanel = MajestyStockControllers::OccupantActionPanelRecord;
+using QuestBoard = MajestyStockControllers::QuestBoardRecord;
 const OccupantPanel* g_parentOccupantPanel = nullptr;
 const OccupantPanel* g_activeOccupantPanel = nullptr;
 const OccupantPanel* g_executingOccupantPanel = nullptr;
+const QuestBoard* g_parentQuestBoard = nullptr;
+const QuestBoard* g_activeQuestBoard = nullptr;
+const QuestBoard* g_executingQuestBoard = nullptr;
+const char* g_executingQuestCallback = nullptr;
+int g_activeQuestRevision = -1;
+int g_activeQuestRefreshCost = -1;
+int g_activeQuestRefreshEnabled = -1;
+bool g_activeQuestBoardFaulted = false;
 constexpr std::uint32_t kMx05DialogId = 0x3530584D;
+constexpr std::uint32_t kMx05SelectionControlId = 0x1388;
+constexpr std::uint32_t kMx05SelectedActionCoinControlId = 0x138C;
+constexpr std::uint32_t kMx05SelectedActionPriceControlId = 0x1F46;
+constexpr std::uint32_t kQuestRefreshCoinControlId = 0x7104;
 bool ValidateOccupantPanelProfile();
+bool ValidateQuestBoardProfile();
+bool OccupantCallMatches(std::uintptr_t callRva, std::uintptr_t targetRva);
+std::uintptr_t RelativeCallTarget(const unsigned char* call);
 bool InstallOccupantPanelRoute();
 bool InstallOccupantChildVtable(std::uint32_t controller);
+bool InstallQuestBoardChildVtable(std::uint32_t controller);
 bool InstallOccupantParentVtable(std::uint32_t controller);
 bool OpenOccupantPanel(void* controller, std::uint32_t command, int* result);
+bool OpenQuestBoardPanel(void* controller, std::uint32_t command, int* result);
 constexpr std::uint32_t kAp10DialogId = 0x30315041;
 constexpr std::uint32_t kAp69DialogId = 0x39365041;
 constexpr std::uint32_t kAp41DialogId = 0x31345041;
@@ -293,6 +311,11 @@ constexpr unsigned char kStockUnknownDialogEpilogue[
 // RTTI-backed table. Runtime code copies the live table instead of selecting
 // either address.
 constexpr std::size_t kAp10VtableEntries = 17;
+// Public AP08 vtable 0x0073D37C and beta2 vtable 0x00756054 each contain
+// exactly 13 executable entries through +0x30.  The following word begins
+// string data.  Slots 1, 3, and 8 retain the same setup, command, and event
+// roles used by the other streamed building controllers.
+constexpr std::size_t kAp08VtableEntries = 13;
 constexpr std::size_t kAp69VtableEntries = 11;
 
 std::uintptr_t g_resumeWithController = 0;
@@ -361,6 +384,17 @@ StockStringAssign g_privateIntentStringAssign = nullptr;
 std::vector<MajestyIntentText::RegistryRecord> g_privateIntentRecords;
 std::vector<MajestyStringView> g_privateIntentViews;
 MajestyRuntimeCapabilities::Manifest g_runtimeCapabilities;
+
+constexpr std::uint32_t kFirstQuestOfferIntentId = 0x70000000u;
+constexpr std::size_t kMaximumQuestOffers = 4;
+struct QuestOfferPresentation {
+    void* agent;
+    std::string name;
+    std::string detail;
+    MajestyStringView detailView;
+};
+QuestOfferPresentation g_questOfferPresentations[kMaximumQuestOffers] = {};
+std::size_t g_questOfferPresentationCount = 0;
 
 HMODULE g_runtimeModule = nullptr;
 std::uintptr_t g_imageBase = 0;
@@ -873,7 +907,8 @@ StockControllerRegistryState LoadStockControllerRegistry() {
         static_cast<unsigned int>(g_stockControllerRegistry.panels.size() +
             g_stockControllerRegistry.rewardPanels.size() +
             g_stockControllerRegistry.occupantActionPanels.size() +
-            g_stockControllerRegistry.buildingOpenToggles.size()),
+            g_stockControllerRegistry.buildingOpenToggles.size() +
+            g_stockControllerRegistry.questBoards.size()),
         static_cast<unsigned int>(
             g_stockControllerRegistry.meters.size() +
             g_stockControllerRegistry.researchRows.size() +
@@ -884,7 +919,8 @@ StockControllerRegistryState LoadStockControllerRegistry() {
             g_stockControllerRegistry.rewardPanels.size() +
             g_stockControllerRegistry.occupantActionPanels.size() +
             g_stockControllerRegistry.hostileMonsterFlags.size() +
-            g_stockControllerRegistry.buildingOpenToggles.size()));
+            g_stockControllerRegistry.buildingOpenToggles.size() +
+            g_stockControllerRegistry.questBoards.size()));
     WriteLog(message);
     return StockControllerRegistryState::Loaded;
 }
@@ -1030,6 +1066,11 @@ PrivateIntentRegistryState LoadPrivateIntentRegistry() {
 }
 
 const MajestyStringView* FindPrivateIntentText(std::uint32_t id) {
+    if (id >= kFirstQuestOfferIntentId &&
+        id - kFirstQuestOfferIntentId < g_questOfferPresentationCount) {
+        return &g_questOfferPresentations[
+            id - kFirstQuestOfferIntentId].detailView;
+    }
     const auto found = std::lower_bound(
         g_privateIntentRecords.begin(),
         g_privateIntentRecords.end(),
@@ -1400,6 +1441,8 @@ bool ValidatePrivateNameGeneratorProfile() {
 bool ValidateMajestyBuildProfile() {
     if (!g_stockControllerRegistry.occupantActionPanels.empty() &&
         !ValidateOccupantPanelProfile()) return false;
+    if (!g_stockControllerRegistry.questBoards.empty() &&
+        !ValidateQuestBoardProfile()) return false;
     // Preflight every site selected by MMCP before installing any hook from
     // those groups. Unselected specialized sites are deliberately untouched
     // and cannot reject an otherwise generic manager launch.
@@ -3623,6 +3666,18 @@ void __fastcall SecondaryPanelControllerEvent(
 
 void ClearSecondaryPanelControllerOwnedState() {
     g_activeOccupantPanel = nullptr;
+    g_activeQuestBoard = nullptr;
+    g_activeQuestBoardFaulted = false;
+    g_activeQuestRevision = -1;
+    g_activeQuestRefreshCost = -1;
+    g_activeQuestRefreshEnabled = -1;
+    for (std::size_t index = 0; index < kMaximumQuestOffers; ++index) {
+        g_questOfferPresentations[index].agent = nullptr;
+        g_questOfferPresentations[index].name.clear();
+        g_questOfferPresentations[index].detail.clear();
+        g_questOfferPresentations[index].detailView = {};
+    }
+    g_questOfferPresentationCount = 0;
     InterlockedExchange(&g_secondaryPanelHandle, 0);
     InterlockedExchange(&g_secondaryPanelActive, 0);
     InterlockedExchange(&g_captureChildController, 0);
@@ -3681,6 +3736,7 @@ int __fastcall ParentPanelControllerControl(
     int openResult = 0;
     if (HandleBuildingOpenToggle(controller, controlId, &openResult)) return openResult;
     if (OpenOccupantPanel(controller, controlId, &openResult)) return openResult;
+    if (OpenQuestBoardPanel(controller, controlId, &openResult)) return openResult;
     const auto* gate = ActiveUpgradeGate();
     if (gate != nullptr && controlId == gate->upgradeControlId) {
         using GetPanelContext = void* (__thiscall*)(void*);
@@ -3809,6 +3865,7 @@ void __fastcall ParentPanelControllerEvent(
 
 void __cdecl ParentPanelControllerDestroyed(void*, void*) {
     g_parentOccupantPanel = nullptr;
+    g_parentQuestBoard = nullptr;
     // Stock may destroy only this parent after opening a child in the primary
     // slot. The child owns its own native building handle and private mapping;
     // only its exact-instance destructor may invalidate that live UI state.
@@ -4159,6 +4216,7 @@ int __fastcall RewardParentControl(
     int openResult = 0;
     if (HandleBuildingOpenToggle(controller, controlId, &openResult)) return openResult;
     if (OpenOccupantPanel(controller, controlId, &openResult)) return openResult;
+    if (OpenQuestBoardPanel(controller, controlId, &openResult)) return openResult;
     const auto* panel = g_parentRewardPanelRecord;
     if (panel == nullptr || controlId != panel->openCommandId) {
         return g_stockRewardParentControl(controller, controlId);
@@ -4233,6 +4291,419 @@ constexpr OccupantBuildProfile kBeta2Occupants = {
 const OccupantBuildProfile& OccupantProfile() {
     return g_buildProfile == &kPublicBuildProfile ? kPublicOccupants : kBeta2Occupants;
 }
+
+// The stock MX05 cost evaluator constructs one GPL call object, adds the
+// selected agent, executes it, reads one scalar result, and destroys the call
+// object.  Quest-board presentation uses that literal evaluator lifecycle and
+// only adds the already-supported integer argument for its bounded row queries.
+struct QuestBoardBuildProfile {
+    std::uintptr_t evaluatorHelper;
+    std::uintptr_t evaluatorConstructor;
+    std::uintptr_t addAgent;
+    std::uintptr_t addInteger;
+    std::uintptr_t execute;
+    std::uintptr_t scalarResult;
+    std::uintptr_t resultAt;
+    std::uintptr_t resolveAgent;
+    std::uintptr_t evaluatorDestructor;
+    std::uintptr_t stringDestructor;
+    std::uintptr_t parentVtable;
+    std::uintptr_t rowNameFormatterCall;
+    std::uintptr_t rowNameFormatter;
+    std::uintptr_t rowIntentAttributeCall;
+};
+constexpr QuestBoardBuildProfile kPublicQuestBoard = {
+    0x000BBDB0, 0x00163680, 0x00162C40, 0x00162C60,
+    0x001637C0, 0x00163520, 0x0002DDF0, 0x00158B20,
+    0x00163760, 0x00227C30, 0x0033D37C,
+    0x00098485, 0x000422F0, 0x0009873D,
+};
+constexpr QuestBoardBuildProfile kBeta2QuestBoard = {
+    0x000BC7F0, 0x001797B0, 0x00178D70, 0x00178D90,
+    0x001798F0, 0x00179650, 0x0002ED50, 0x0016EC60,
+    0x00179890, 0x0023A3D0, 0x00356054,
+    0x00098AB5, 0x00043200, 0x00098D6D,
+};
+const QuestBoardBuildProfile& QuestBoardProfile() {
+    return g_buildProfile == &kPublicBuildProfile
+        ? kPublicQuestBoard : kBeta2QuestBoard;
+}
+
+// GplType's stock runtime tags are part of the evaluator ABI.  Never invoke a
+// typed value virtual until the returned object carries the matching tag: the
+// base implementation reports a fatal GPL type error rather than coercing it.
+constexpr std::uint32_t kGplNullResultType = 0;
+constexpr std::uint32_t kGplIntegerResultType = 1;
+constexpr std::uint32_t kGplStringResultType = 3;
+constexpr std::uint32_t kGplAgentResultType = 5;
+
+bool IsQuestBoardAgentCompatibleResultType(std::uint32_t type) {
+    // Compiled GPL functions declared `is agent` cross the external evaluator
+    // boundary in two stock shapes. Native engine callbacks may produce the
+    // internal GplAgent value (type 5), while package GPL returns the durable
+    // unit ID as GplInteger (type 1). Both are resolved through Majesty's same
+    // stock agent-handle resolver below; Null remains the contiguous-list end.
+    return type == kGplNullResultType || type == kGplIntegerResultType ||
+        type == kGplAgentResultType;
+}
+
+bool ValidateQuestBoardProfile() {
+    const auto& profile = QuestBoardProfile();
+    const unsigned char helperEntry[] = {0x6A, 0xFF, 0x68};
+    const unsigned char addIntegerEntry[] = {0x83, 0xC1, 0x08, 0xE9};
+    const unsigned char resolveAgentEntry[] = {
+        0x56, 0x8B, 0xF1, 0x8B, 0x46, 0x08, 0x50, 0xE8,
+    };
+    auto** parentVtable = reinterpret_cast<void**>(
+        g_imageBase + profile.parentVtable);
+    auto** childVtable = reinterpret_cast<void**>(
+        g_imageBase + OccupantProfile().childVtable);
+    const bool ap08Shape =
+        parentVtable[0] != nullptr && parentVtable[1] != nullptr &&
+        parentVtable[3] != nullptr && parentVtable[8] != nullptr &&
+        reinterpret_cast<std::uintptr_t>(parentVtable[12]) >= g_imageBase &&
+        reinterpret_cast<std::uintptr_t>(parentVtable[12]) <
+            g_imageBase + 0x00400000u;
+    const auto populationAddress = reinterpret_cast<std::uintptr_t>(
+        childVtable[11]);
+    const bool populationInImage =
+        populationAddress != 0 && populationAddress >= g_imageBase && populationAddress <
+            g_imageBase + 0x00400000u &&
+        populationAddress <= static_cast<std::uintptr_t>(-1) - 0xE4u;
+    const auto* population = populationInImage
+        ? reinterpret_cast<const unsigned char*>(populationAddress)
+        : nullptr;
+    const auto eraseTarget = RelativeCallTarget(
+        population == nullptr ? nullptr : population + 0x3F);
+    const auto insertTarget = RelativeCallTarget(
+        population == nullptr ? nullptr : population + 0xDF);
+    const bool mx05ListShape = populationInImage &&
+        reinterpret_cast<std::uintptr_t>(childVtable[14]) >= g_imageBase &&
+        reinterpret_cast<std::uintptr_t>(childVtable[14]) <
+            g_imageBase + 0x00400000u &&
+        eraseTarget >= g_imageBase && eraseTarget < g_imageBase + 0x00400000u &&
+        insertTarget >= g_imageBase && insertTarget < g_imageBase + 0x00400000u;
+    return ValidateOccupantPanelProfile() &&
+        ValidatePrivateIntentTextProfile() && ap08Shape && mx05ListShape &&
+        MatchesProfileBytes(
+            profile.evaluatorHelper, helperEntry, sizeof(helperEntry),
+            "MX05 GPL scalar evaluator") &&
+        OccupantCallMatches(
+            profile.evaluatorHelper + 0x2D, OccupantProfile().stringConstructor) &&
+        OccupantCallMatches(
+            profile.evaluatorHelper + 0x43, profile.evaluatorConstructor) &&
+        OccupantCallMatches(
+            profile.evaluatorHelper + 0x51, profile.stringDestructor) &&
+        OccupantCallMatches(profile.evaluatorHelper + 0x5F, profile.addAgent) &&
+        OccupantCallMatches(profile.evaluatorHelper + 0x68, profile.execute) &&
+        OccupantCallMatches(
+            profile.evaluatorHelper + 0x71, profile.scalarResult) &&
+        OccupantCallMatches(profile.scalarResult + 0x05, profile.resultAt) &&
+        OccupantCallMatches(
+            profile.evaluatorHelper + 0x84, profile.evaluatorDestructor) &&
+        MatchesProfileBytes(
+            profile.addInteger, addIntegerEntry, sizeof(addIntegerEntry),
+            "GPL integer argument adapter") &&
+        MatchesProfileBytes(
+            profile.resolveAgent, resolveAgentEntry, sizeof(resolveAgentEntry),
+            "GPL agent result resolver") &&
+        OccupantCallMatches(
+            profile.rowNameFormatterCall, profile.rowNameFormatter) &&
+        OccupantCallMatches(
+            profile.rowIntentAttributeCall,
+            g_buildProfile->readPackedAttributeRva);
+}
+
+bool EvaluateQuestBoardScalar(
+    const char* symbol,
+    void* agent,
+    bool hasInteger,
+    int integerValue,
+    std::uint32_t* result,
+    bool trace) {
+    if (symbol == nullptr || agent == nullptr || result == nullptr) {
+        if (trace) WriteLog("Quest list callback status=invalid-input.");
+        return false;
+    }
+    *result = 0;
+    const auto& profile = QuestBoardProfile();
+    std::uint32_t nativeString[3] = {};
+    __declspec(align(4)) unsigned char evaluator[0x40] = {};
+    using ConstructString = void* (__thiscall*)(void*, const char*);
+    using DestroyString = void (__thiscall*)(void*);
+    using ConstructEvaluator = void* (__thiscall*)(void*, const void*);
+    using AddAgent = void (__thiscall*)(void*, void*);
+    using AddInteger = void (__thiscall*)(void*, int);
+    using Execute = void (__thiscall*)(void*);
+    using ResultAt = void** (__thiscall*)(void*, std::uint32_t);
+    using ScalarResult = std::uint32_t (__thiscall*)(void*);
+    using DestroyEvaluator = void (__thiscall*)(void*);
+    reinterpret_cast<ConstructString>(
+        g_imageBase + OccupantProfile().stringConstructor)(nativeString, symbol);
+    reinterpret_cast<ConstructEvaluator>(
+        g_imageBase + profile.evaluatorConstructor)(evaluator, nativeString);
+    reinterpret_cast<DestroyString>(
+        g_imageBase + profile.stringDestructor)(nativeString);
+    const std::uint32_t resolutionToken =
+        *reinterpret_cast<const std::uint32_t*>(evaluator + 4);
+    if (trace) {
+        char message[320] = {};
+        std::snprintf(
+            message, sizeof(message),
+            "Quest list callback resolve: symbol=%s owner=0x%08lX integer=%d has_integer=%u token=0x%08lX resolved=%u.",
+            symbol,
+            static_cast<unsigned long>(reinterpret_cast<std::uintptr_t>(agent)),
+            integerValue, hasInteger ? 1u : 0u,
+            static_cast<unsigned long>(resolutionToken),
+            resolutionToken != 0 ? 1u : 0u);
+        WriteLog(message);
+    }
+    if (resolutionToken == 0) {
+        reinterpret_cast<DestroyEvaluator>(
+            g_imageBase + profile.evaluatorDestructor)(evaluator);
+        return false;
+    }
+    reinterpret_cast<AddAgent>(g_imageBase + profile.addAgent)(evaluator, agent);
+    if (hasInteger) {
+        reinterpret_cast<AddInteger>(
+            g_imageBase + profile.addInteger)(evaluator, integerValue);
+    }
+    reinterpret_cast<Execute>(g_imageBase + profile.execute)(evaluator);
+    void** entry = reinterpret_cast<ResultAt>(
+        g_imageBase + profile.resultAt)(evaluator + 0x24, 0);
+    void* value = entry == nullptr ? nullptr : *entry;
+    const std::uint32_t type = value == nullptr ? 0xFFFFFFFFu :
+        *reinterpret_cast<const std::uint32_t*>(
+            static_cast<const unsigned char*>(value) + 4);
+    const bool valid = type == kGplIntegerResultType;
+    if (valid) {
+        *result = reinterpret_cast<ScalarResult>(
+            g_imageBase + profile.scalarResult)(evaluator);
+    }
+    if (trace) {
+        char message[256] = {};
+        std::snprintf(
+            message, sizeof(message),
+            "Quest list callback complete: symbol=%s invoked=1 type=0x%08lX valid=%u result=0x%08lX (%lu).",
+            symbol, static_cast<unsigned long>(type), valid ? 1u : 0u,
+            static_cast<unsigned long>(*result),
+            static_cast<unsigned long>(*result));
+        WriteLog(message);
+    }
+    reinterpret_cast<DestroyEvaluator>(
+        g_imageBase + profile.evaluatorDestructor)(evaluator);
+    return valid;
+}
+using QuestBoardScalarEvaluator = bool (*)(
+    const char*, void*, bool, int, std::uint32_t*, bool);
+QuestBoardScalarEvaluator g_questBoardScalarEvaluator =
+    &EvaluateQuestBoardScalar;
+
+bool EvaluateQuestBoardBoolean(
+    const char* symbol,
+    void* agent,
+    bool* result,
+    bool trace) {
+    if (symbol == nullptr || agent == nullptr || result == nullptr) {
+        if (trace) WriteLog("Quest boolean callback status=invalid-input.");
+        return false;
+    }
+    *result = false;
+    // Stock native callers evaluate GPL boolean callbacks through the same
+    // scalar-result helper used by integer callbacks, then `test eax, eax`.
+    // Across this external evaluator boundary the result object is therefore
+    // GplInteger (type 1), even though GPL's internal GplBoolean class is type
+    // 6. Preserve that exact boundary instead of invoking GplBoolean's virtual.
+    std::uint32_t scalar = 0;
+    const bool valid = EvaluateQuestBoardScalar(
+        symbol, agent, false, 0, &scalar, trace);
+    if (valid) *result = scalar != 0;
+    if (trace) {
+        char message[224] = {};
+        std::snprintf(
+            message, sizeof(message),
+            "Quest boolean callback: symbol=%s scalar=%lu valid=%u result=%u.",
+            symbol, static_cast<unsigned long>(scalar), valid ? 1u : 0u,
+            *result ? 1u : 0u);
+        WriteLog(message);
+    }
+    return valid;
+}
+using QuestBoardBooleanEvaluator = bool (*)(
+    const char*, void*, bool*, bool);
+QuestBoardBooleanEvaluator g_questBoardBooleanEvaluator =
+    &EvaluateQuestBoardBoolean;
+
+bool EvaluateQuestBoardAgent(
+    const char* symbol,
+    void* owner,
+    int row,
+    void** result,
+    bool trace) {
+    if (symbol == nullptr || owner == nullptr || result == nullptr ||
+        row < 1 || row > 4) {
+        if (trace) WriteLog("Quest agent callback status=invalid-input.");
+        return false;
+    }
+    *result = nullptr;
+    const auto& profile = QuestBoardProfile();
+    std::uint32_t nativeString[3] = {};
+    __declspec(align(4)) unsigned char evaluator[0x40] = {};
+    using ConstructString = void* (__thiscall*)(void*, const char*);
+    using DestroyString = void (__thiscall*)(void*);
+    using ConstructEvaluator = void* (__thiscall*)(void*, const void*);
+    using AddAgent = void (__thiscall*)(void*, void*);
+    using AddInteger = void (__thiscall*)(void*, int);
+    using Execute = void (__thiscall*)(void*);
+    using ResultAt = void** (__thiscall*)(void*, std::uint32_t);
+    using ScalarResult = std::uint32_t (__thiscall*)(void*);
+    using AgentValue = void* (__thiscall*)(void*);
+    using ResolveAgent = void* (__thiscall*)(void*);
+    using DestroyEvaluator = void (__thiscall*)(void*);
+    reinterpret_cast<ConstructString>(
+        g_imageBase + OccupantProfile().stringConstructor)(nativeString, symbol);
+    reinterpret_cast<ConstructEvaluator>(
+        g_imageBase + profile.evaluatorConstructor)(evaluator, nativeString);
+    reinterpret_cast<DestroyString>(
+        g_imageBase + profile.stringDestructor)(nativeString);
+    if (*reinterpret_cast<const std::uint32_t*>(evaluator + 4) == 0) {
+        reinterpret_cast<DestroyEvaluator>(
+            g_imageBase + profile.evaluatorDestructor)(evaluator);
+        return false;
+    }
+    reinterpret_cast<AddAgent>(g_imageBase + profile.addAgent)(evaluator, owner);
+    reinterpret_cast<AddInteger>(g_imageBase + profile.addInteger)(evaluator, row);
+    reinterpret_cast<Execute>(g_imageBase + profile.execute)(evaluator);
+    void** entry = reinterpret_cast<ResultAt>(
+        g_imageBase + profile.resultAt)(evaluator + 0x24, 0);
+    void* value = entry == nullptr ? nullptr : *entry;
+    const std::uint32_t type = value == nullptr ? 0xFFFFFFFFu :
+        *reinterpret_cast<const std::uint32_t*>(
+            static_cast<const unsigned char*>(value) + 4);
+    // Majesty represents GPL Null() as result type 0. Stock callers treat
+    // that value as an absent optional agent; it is the required contiguous
+    // list terminator, not a callback failure. Never invoke a typed virtual
+    // until the result tag has selected the matching stock path.
+    bool valid = IsQuestBoardAgentCompatibleResultType(type);
+    if (type == kGplAgentResultType) {
+        auto** vtable = *reinterpret_cast<void***>(value);
+        void* handle = reinterpret_cast<AgentValue>(vtable[0x5C / 4])(value);
+        *result = handle == nullptr ? nullptr :
+            reinterpret_cast<ResolveAgent>(
+                g_imageBase + profile.resolveAgent)(handle);
+        valid = *result != nullptr;
+    } else if (type == kGplIntegerResultType) {
+        // The stock scalar-result helper extracts the ID from GplInteger. The
+        // stock agent resolver at resolveAgent then reads ID at +8, caches the
+        // resolved piece at +0C, rejects inactive pieces, and returns the live
+        // agent. Reproduce that exact 16-byte handle shape; do not cast the ID
+        // into a pointer or maintain a private registry.
+        struct StockAgentHandle {
+            std::uint32_t reserved0;
+            std::uint32_t reserved1;
+            std::uint32_t id;
+            void* cached;
+        } handle = {};
+        handle.id = reinterpret_cast<ScalarResult>(
+            g_imageBase + profile.scalarResult)(evaluator);
+        if (handle.id != 0) {
+            *result = reinterpret_cast<ResolveAgent>(
+                g_imageBase + profile.resolveAgent)(&handle);
+            valid = *result != nullptr;
+        }
+    }
+    if (trace) {
+        char message[256] = {};
+        std::snprintf(
+            message, sizeof(message),
+            "Quest agent callback: symbol=%s row=%d type=0x%08lX valid=%u agent=0x%08lX.",
+            symbol, row, static_cast<unsigned long>(type), valid ? 1u : 0u,
+            static_cast<unsigned long>(
+                reinterpret_cast<std::uintptr_t>(*result)));
+        WriteLog(message);
+    }
+    reinterpret_cast<DestroyEvaluator>(
+        g_imageBase + profile.evaluatorDestructor)(evaluator);
+    return valid;
+}
+
+bool EvaluateQuestBoardString(
+    const char* symbol,
+    void* owner,
+    int row,
+    std::string* result,
+    bool trace) {
+    if (symbol == nullptr || owner == nullptr || result == nullptr ||
+        row < 1 || row > 4) {
+        if (trace) WriteLog("Quest text callback status=invalid-input.");
+        return false;
+    }
+    result->clear();
+    const auto& profile = QuestBoardProfile();
+    std::uint32_t nativeString[3] = {};
+    __declspec(align(4)) unsigned char evaluator[0x40] = {};
+    using ConstructString = void* (__thiscall*)(void*, const char*);
+    using DestroyString = void (__thiscall*)(void*);
+    using ConstructEvaluator = void* (__thiscall*)(void*, const void*);
+    using AddAgent = void (__thiscall*)(void*, void*);
+    using AddInteger = void (__thiscall*)(void*, int);
+    using Execute = void (__thiscall*)(void*);
+    using ResultAt = void** (__thiscall*)(void*, std::uint32_t);
+    using StringValue = const MajestyStringView* (__thiscall*)(void*);
+    using DestroyEvaluator = void (__thiscall*)(void*);
+    reinterpret_cast<ConstructString>(
+        g_imageBase + OccupantProfile().stringConstructor)(nativeString, symbol);
+    reinterpret_cast<ConstructEvaluator>(
+        g_imageBase + profile.evaluatorConstructor)(evaluator, nativeString);
+    reinterpret_cast<DestroyString>(
+        g_imageBase + profile.stringDestructor)(nativeString);
+    if (*reinterpret_cast<const std::uint32_t*>(evaluator + 4) == 0) {
+        reinterpret_cast<DestroyEvaluator>(
+            g_imageBase + profile.evaluatorDestructor)(evaluator);
+        return false;
+    }
+    reinterpret_cast<AddAgent>(g_imageBase + profile.addAgent)(evaluator, owner);
+    reinterpret_cast<AddInteger>(g_imageBase + profile.addInteger)(evaluator, row);
+    reinterpret_cast<Execute>(g_imageBase + profile.execute)(evaluator);
+    void** entry = reinterpret_cast<ResultAt>(
+        g_imageBase + profile.resultAt)(evaluator + 0x24, 0);
+    void* value = entry == nullptr ? nullptr : *entry;
+    bool valid = value != nullptr &&
+        *reinterpret_cast<const std::uint32_t*>(
+            static_cast<const unsigned char*>(value) + 4) ==
+            kGplStringResultType;
+    if (valid) {
+        auto** vtable = *reinterpret_cast<void***>(value);
+        const MajestyStringView* view =
+            reinterpret_cast<StringValue>(vtable[0x30 / 4])(value);
+        valid = view != nullptr && view->length <= 160 &&
+            (view->length == 0 || view->data != nullptr);
+        if (valid && view->length != 0) {
+            result->assign(view->data, view->length);
+            valid = result->find('\0') == std::string::npos;
+        }
+    }
+    if (trace) {
+        char message[224] = {};
+        std::snprintf(
+            message, sizeof(message),
+            "Quest text callback: symbol=%s row=%d valid=%u length=%lu.",
+            symbol, row, valid ? 1u : 0u,
+            static_cast<unsigned long>(result->size()));
+        WriteLog(message);
+    }
+    reinterpret_cast<DestroyEvaluator>(
+        g_imageBase + profile.evaluatorDestructor)(evaluator);
+    return valid;
+}
+using QuestBoardAgentEvaluator = bool (*)(
+    const char*, void*, int, void**, bool);
+using QuestBoardStringEvaluator = bool (*)(
+    const char*, void*, int, std::string*, bool);
+QuestBoardAgentEvaluator g_questBoardAgentEvaluator =
+    &EvaluateQuestBoardAgent;
+QuestBoardStringEvaluator g_questBoardStringEvaluator =
+    &EvaluateQuestBoardString;
 using BuildingCommandDispatch = void (__cdecl*)(std::uint32_t, std::uint32_t,
                                                std::uint32_t, std::uint32_t);
 BuildingCommandDispatch g_stockOccupantDispatch = nullptr;
@@ -4262,27 +4733,57 @@ void* OccupantString(void* destination, const char* symbol) {
     return reinterpret_cast<Construct>(g_imageBase + OccupantProfile().stringConstructor)(destination, symbol);
 }
 void* __fastcall OccupantCostString(void* destination, void*, const char* stockSymbol) {
-    return OccupantString(destination, g_activeOccupantPanel == nullptr
-        ? stockSymbol : g_activeOccupantPanel->costCallbackSymbol.c_str());
+    const char* symbol = stockSymbol;
+    if (g_activeOccupantPanel != nullptr) {
+        symbol = g_activeOccupantPanel->costCallbackSymbol.c_str();
+    } else if (g_activeQuestBoard != nullptr) {
+        symbol = g_activeQuestBoard->selectedCostCallbackSymbol.c_str();
+    }
+    return OccupantString(destination, symbol);
 }
 void* __fastcall OccupantActionString(void* destination, void*, const char* stockSymbol) {
-    return OccupantString(destination, g_executingOccupantPanel == nullptr
-        ? stockSymbol : g_executingOccupantPanel->actionCallbackSymbol.c_str());
+    const char* symbol = stockSymbol;
+    if (g_executingOccupantPanel != nullptr) {
+        symbol = g_executingOccupantPanel->actionCallbackSymbol.c_str();
+    } else if (g_executingQuestCallback != nullptr) {
+        symbol = g_executingQuestCallback;
+    }
+    return OccupantString(destination, symbol);
 }
 void __cdecl SubmitOccupantAction(std::uint32_t command, std::uint32_t building,
                                  std::uint32_t agent, std::uint32_t price) {
-    if (command == 0x15 && g_activeOccupantPanel != nullptr)
-        command = g_activeOccupantPanel->actionCommandId;
+    if (command == 0x15) {
+        if (g_activeOccupantPanel != nullptr) {
+            command = g_activeOccupantPanel->actionCommandId;
+        } else if (g_activeQuestBoard != nullptr) {
+            command = g_activeQuestBoard->selectedActionCommandId;
+        }
+    }
     reinterpret_cast<BuildingCommandDispatch>(
         g_imageBase + g_buildProfile->submitBuildingCommandRva)(command, building, agent, price);
 }
 void __cdecl DispatchOccupantAction(std::uint32_t command, std::uint32_t building,
                                    std::uint32_t agent, std::uint32_t price) {
     const auto* record = g_stockControllerRegistry.FindOccupantPanelByCommand(command);
+    bool questRefresh = false;
+    const auto* quest = g_stockControllerRegistry.FindQuestBoardByCommand(
+        command, &questRefresh);
     const auto* previous = g_executingOccupantPanel;
+    const auto* previousQuest = g_executingQuestBoard;
+    const char* previousQuestCallback = g_executingQuestCallback;
     g_executingOccupantPanel = record;
-    g_stockOccupantDispatch(record == nullptr ? command : 0x15, building, agent, price);
+    g_executingQuestBoard = quest;
+    g_executingQuestCallback = quest == nullptr
+        ? nullptr
+        : (questRefresh
+            ? quest->refreshCallbackSymbol.c_str()
+            : quest->selectedActionCallbackSymbol.c_str());
+    g_stockOccupantDispatch(
+        record == nullptr && quest == nullptr ? command : 0x15,
+        building, agent, price);
     g_executingOccupantPanel = previous;
+    g_executingQuestBoard = previousQuest;
+    g_executingQuestCallback = previousQuestCallback;
 }
 bool WriteOccupantBranch(std::uintptr_t address, void* target, unsigned char opcode,
                          std::size_t size = 5) {
@@ -4322,9 +4823,597 @@ bool OpenOccupantPanel(void* controller, std::uint32_t command, int* result) {
     }
     return false;
 }
+
+bool OpenQuestBoardPanel(void* controller, std::uint32_t command, int* result) {
+    if (g_parentQuestBoard == nullptr) return false;
+    for (const auto& panel : g_stockControllerRegistry.questBoards) {
+        if (panel.parentDialogId != g_parentQuestBoard->parentDialogId ||
+            panel.openCommandId != command) continue;
+        using Open = int (__thiscall*)(void*, std::uint32_t, std::uint32_t);
+        *result = reinterpret_cast<Open>(
+            g_imageBase + g_buildProfile->openDialogRva)(
+                controller, panel.childDialogId, 0);
+        return true;
+    }
+    return false;
+}
+
+bool QueryQuestBoard(
+    const char* symbol,
+    void* guild,
+    std::uint32_t row,
+    std::uint32_t* result,
+    bool trace = true) {
+    return g_questBoardScalarEvaluator(
+        symbol, guild, row != 0, static_cast<int>(row), result, trace);
+}
+
+bool QueryQuestBoardBoolean(
+    const char* symbol,
+    void* guild,
+    bool* result,
+    bool trace = true) {
+    return g_questBoardBooleanEvaluator(symbol, guild, result, trace);
+}
+
+bool QueryQuestBoardAgent(
+    const char* symbol,
+    void* guild,
+    std::uint32_t row,
+    void** result,
+    bool trace = true) {
+    return g_questBoardAgentEvaluator(
+        symbol, guild, static_cast<int>(row), result, trace);
+}
+
+bool QueryQuestBoardString(
+    const char* symbol,
+    void* guild,
+    std::uint32_t row,
+    std::string* result,
+    bool trace = true) {
+    return g_questBoardStringEvaluator(
+        symbol, guild, static_cast<int>(row), result, trace);
+}
+
+const QuestOfferPresentation* FindQuestOfferPresentation(void* agent) {
+    for (std::size_t index = 0;
+         index < g_questOfferPresentationCount; ++index) {
+        if (g_questOfferPresentations[index].agent == agent) {
+            return &g_questOfferPresentations[index];
+        }
+    }
+    return nullptr;
+}
+
+using StockQuestRowNameFormatter = void* (__cdecl*)(
+    MajestyStringView*, void*, int);
+using StockQuestRowAttributeReader = int (__thiscall*)(
+    void*, std::uint32_t, std::uint32_t);
+StockQuestRowNameFormatter g_stockQuestRowNameFormatter = nullptr;
+StockQuestRowAttributeReader g_stockQuestRowAttributeReader = nullptr;
+
+void* __cdecl QuestBoardRowNameFormatter(
+    MajestyStringView* destination,
+    void* agent,
+    int stockStyle) {
+    const QuestOfferPresentation* presentation =
+        g_activeQuestBoard == nullptr
+            ? nullptr : FindQuestOfferPresentation(agent);
+    if (presentation == nullptr || presentation->name.empty() ||
+        destination == nullptr || g_privateIntentStringAssign == nullptr) {
+        return g_stockQuestRowNameFormatter(destination, agent, stockStyle);
+    }
+    const auto length = static_cast<std::uint32_t>(
+        presentation->name.size());
+    const MajestyStringView view = {
+        presentation->name.c_str(), length, length,
+    };
+    return g_privateIntentStringAssign(destination, &view);
+}
+
+int __fastcall QuestBoardRowIntentAttribute(
+    void* agent,
+    void*,
+    std::uint32_t attribute,
+    std::uint32_t fallback) {
+    if (g_activeQuestBoard != nullptr &&
+        attribute == 0x1E565041u) {
+        for (std::size_t index = 0;
+             index < g_questOfferPresentationCount; ++index) {
+            if (g_questOfferPresentations[index].agent == agent) {
+                return static_cast<int>(
+                    kFirstQuestOfferIntentId + index);
+            }
+        }
+    }
+    return g_stockQuestRowAttributeReader(agent, attribute, fallback);
+}
+
+bool InstallQuestBoardRowPresentation() {
+    const auto& profile = QuestBoardProfile();
+    if (!OccupantCallMatches(
+            profile.rowNameFormatterCall, profile.rowNameFormatter) ||
+        !OccupantCallMatches(
+            profile.rowIntentAttributeCall,
+            g_buildProfile->readPackedAttributeRva) ||
+        g_privateIntentStringAssign == nullptr) {
+        WriteLog(
+            "Private quest-row presentation refused: stock MX05 painter sites changed.");
+        return false;
+    }
+    g_stockQuestRowNameFormatter =
+        reinterpret_cast<StockQuestRowNameFormatter>(
+            g_imageBase + profile.rowNameFormatter);
+    g_stockQuestRowAttributeReader =
+        reinterpret_cast<StockQuestRowAttributeReader>(
+            g_imageBase + g_buildProfile->readPackedAttributeRva);
+    return WriteOccupantBranch(
+               g_imageBase + profile.rowNameFormatterCall,
+               reinterpret_cast<void*>(&QuestBoardRowNameFormatter), 0xE8) &&
+        WriteOccupantBranch(
+               g_imageBase + profile.rowIntentAttributeCall,
+               reinterpret_cast<void*>(&QuestBoardRowIntentAttribute), 0xE8);
+}
+
+bool IsLiveQuestBoardController(
+    const void* controller,
+    const QuestBoard* expectedBoard) {
+    return controller != nullptr && expectedBoard != nullptr &&
+        InterlockedCompareExchange(&g_childController, 0, 0) ==
+            static_cast<LONG>(reinterpret_cast<std::uintptr_t>(controller)) &&
+        g_activeQuestBoard == expectedBoard;
+}
+
+using QuestVectorErase = void* (__thiscall*)(
+    void*, void*, void*, std::uint32_t*, void*, std::uint32_t*);
+using QuestVectorInsert = void* (__thiscall*)(
+    void*, void*, void*, std::uint32_t*, std::uint32_t*);
+ControllerSetup g_stockQuestBoardPopulate = nullptr;
+ControllerSetup g_stockQuestBoardRefresh = nullptr;
+ControllerControl g_stockQuestBoardControl = nullptr;
+QuestVectorErase g_stockQuestVectorErase = nullptr;
+QuestVectorInsert g_stockQuestVectorInsert = nullptr;
+
+std::uintptr_t RelativeCallTarget(const unsigned char* call) {
+    if (call == nullptr || call[0] != 0xE8) return 0;
+    std::int32_t relative = 0;
+    std::memcpy(&relative, call + 1, sizeof(relative));
+    return reinterpret_cast<std::uintptr_t>(call) + 5 + relative;
+}
+
+bool ReplaceQuestListVector(
+    std::uint32_t controller,
+    const std::uint32_t* agents,
+    std::size_t count) {
+    if (controller == 0 || agents == nullptr || count > 4 ||
+        g_stockQuestVectorErase == nullptr ||
+        g_stockQuestVectorInsert == nullptr) return false;
+    auto* vector = reinterpret_cast<unsigned char*>(controller) + 0x34;
+    void* owner = *reinterpret_cast<void**>(vector);
+    auto* position = *reinterpret_cast<std::uint32_t**>(vector + 0x0C);
+    auto* boundary = *reinterpret_cast<std::uint32_t**>(vector + 0x10);
+    std::uint32_t iteratorResult[2] = {};
+    // Literal MX05 population first erases [begin,end) through the list
+    // vector's own helper. Quest lists use that exact operation rather than
+    // overwriting private container fields or borrowing an Occupants relation.
+    g_stockQuestVectorErase(
+        vector, iteratorResult, owner, position, owner, boundary);
+    for (std::size_t index = 0; index < count; ++index) {
+        owner = *reinterpret_cast<void**>(vector);
+        position = *reinterpret_cast<std::uint32_t**>(vector + 0x0C);
+        std::uint32_t agent = agents[index];
+        iteratorResult[0] = iteratorResult[1] = 0;
+        // This is the same native insertion helper used by MX05's slot-11
+        // population virtual for every member of relation index 2.
+        g_stockQuestVectorInsert(
+            vector, iteratorResult, owner, position, &agent);
+    }
+    return true;
+}
+
+void ClearQuestBoardPresentation(std::uint32_t controller) {
+    std::uint32_t unused = 0;
+    if (controller != 0) {
+        ReplaceQuestListVector(controller, &unused, 0);
+    }
+    for (std::size_t index = 0; index < kMaximumQuestOffers; ++index) {
+        g_questOfferPresentations[index] = {};
+    }
+    g_questOfferPresentationCount = 0;
+    g_activeQuestRevision = -1;
+}
+
+void FaultQuestBoardPresentation(
+    std::uint32_t controller,
+    const char* reason) {
+    WriteLog(reason);
+    ClearQuestBoardPresentation(controller);
+    // Keep the captured stock MX05 controller and its native Back/selection
+    // lifecycle intact. Only the package-fed rows are disabled for this child
+    // instance; opening a new instance gets a fresh validation attempt.
+    g_activeQuestBoardFaulted = true;
+}
+
+void __fastcall QuestBoardPopulate(void* controller, void*) {
+    const auto* board = g_activeQuestBoard;
+    if (!IsLiveQuestBoardController(controller, board)) {
+        if (g_stockQuestBoardPopulate != nullptr)
+            g_stockQuestBoardPopulate(controller);
+        return;
+    }
+    const auto value = reinterpret_cast<std::uint32_t>(controller);
+    if (g_activeQuestBoardFaulted) return;
+    auto* guild = NativePanelContext(value);
+    if (guild == nullptr) {
+        FaultQuestBoardPresentation(
+            value,
+            "Quest-board rows disabled: the stock MX05 controller lost its native building context.");
+        return;
+    }
+    const std::uint32_t guildId =
+        *reinterpret_cast<const std::uint32_t*>(guild + 0x70);
+    char contextTrace[256] = {};
+    std::snprintf(
+        contextTrace, sizeof(contextTrace),
+        "Quest list population: controller=0x%08lX owner=0x%08lX owner_id=0x%08lX.",
+        static_cast<unsigned long>(value),
+        static_cast<unsigned long>(reinterpret_cast<std::uintptr_t>(guild)),
+        static_cast<unsigned long>(guildId));
+    WriteLog(contextTrace);
+
+    std::uint32_t revision = 0;
+    if (!QueryQuestBoard(
+            board->revisionCallbackSymbol.c_str(), guild, 0, &revision)) {
+        FaultQuestBoardPresentation(
+            value,
+            "Quest-board rows disabled: the package revision callback could not be evaluated.");
+        return;
+    }
+    if (g_activeQuestRevision != -1 &&
+        g_activeQuestRevision == static_cast<int>(revision)) {
+        return;
+    }
+    std::uint32_t agents[4] = {};
+    QuestOfferPresentation presentations[kMaximumQuestOffers] = {};
+    std::size_t count = 0;
+    bool reachedEnd = false;
+    for (std::uint32_t row = 1; row <= 4; ++row) {
+        void* agent = nullptr;
+        if (!QueryQuestBoardAgent(
+                board->listSourceCallbackSymbol.c_str(), guild, row, &agent)) {
+            FaultQuestBoardPresentation(
+                value,
+                "Quest-board rows disabled: the package list callback did not return a stock agent value.");
+            return;
+        }
+        char rowTrace[224] = {};
+        std::snprintf(
+            rowTrace, sizeof(rowTrace),
+            "Quest list row-query: row=%lu agent=0x%08lX present=%u.",
+            static_cast<unsigned long>(row),
+            static_cast<unsigned long>(reinterpret_cast<std::uintptr_t>(agent)),
+            agent != nullptr ? 1u : 0u);
+        WriteLog(rowTrace);
+        if (agent == nullptr) {
+            reachedEnd = true;
+        } else {
+            if (reachedEnd) {
+                FaultQuestBoardPresentation(
+                    value,
+                    "Quest-board rows disabled: the package returned a non-contiguous agent sequence.");
+                return;
+            }
+            for (std::size_t prior = 0; prior < count; ++prior) {
+                if (presentations[prior].agent == agent) {
+                    FaultQuestBoardPresentation(
+                        value,
+                        "Quest-board rows disabled: the package returned the same agent more than once.");
+                    return;
+                }
+            }
+            std::string name;
+            std::string goal;
+            std::uint32_t reward = 0;
+            if (!QueryQuestBoardString(
+                    board->offerNameCallbackSymbol.c_str(), guild, row,
+                    &name) ||
+                !QueryQuestBoardString(
+                    board->offerGoalCallbackSymbol.c_str(), guild, row,
+                    &goal) ||
+                !QueryQuestBoard(
+                    board->offerRewardCallbackSymbol.c_str(), guild, row,
+                    &reward) ||
+                name.empty() || goal.empty() || reward > 0x7FFFFFFFu) {
+                FaultQuestBoardPresentation(
+                    value,
+                    "Quest-board rows disabled: a package row did not provide valid bounded display values.");
+                return;
+            }
+            char rewardText[48] = {};
+            std::snprintf(
+                rewardText, sizeof(rewardText), " (%lu gold)",
+                static_cast<unsigned long>(reward));
+            presentations[count].agent = agent;
+            presentations[count].name = std::move(name);
+            presentations[count].detail = std::move(goal);
+            presentations[count].detail += rewardText;
+            if (presentations[count].detail.size() > 208) {
+                FaultQuestBoardPresentation(
+                    value,
+                    "Quest-board rows disabled: a package row exceeded the supported display-text bound.");
+                return;
+            }
+            agents[count] = static_cast<std::uint32_t>(
+                reinterpret_cast<std::uintptr_t>(agent));
+            ++count;
+        }
+    }
+    if (!ReplaceQuestListVector(value, agents, count)) {
+        FaultQuestBoardPresentation(
+            value,
+            "Quest-board rows disabled: stock MX05 rejected the replacement agent vector.");
+        return;
+    }
+    for (std::size_t index = 0; index < kMaximumQuestOffers; ++index) {
+        g_questOfferPresentations[index] = {};
+    }
+    g_questOfferPresentationCount = count;
+    for (std::size_t index = 0; index < count; ++index) {
+        g_questOfferPresentations[index].agent = presentations[index].agent;
+        g_questOfferPresentations[index].name =
+            std::move(presentations[index].name);
+        g_questOfferPresentations[index].detail =
+            std::move(presentations[index].detail);
+        const auto length = static_cast<std::uint32_t>(
+            g_questOfferPresentations[index].detail.size());
+        g_questOfferPresentations[index].detailView = {
+            g_questOfferPresentations[index].detail.c_str(), length, length,
+        };
+    }
+    g_activeQuestRevision = static_cast<int>(revision);
+    char resultTrace[192] = {};
+    std::snprintf(
+        resultTrace, sizeof(resultTrace),
+        "Quest list population complete: revision=%lu offer_count=%lu.",
+        static_cast<unsigned long>(revision),
+        static_cast<unsigned long>(count));
+    WriteLog(resultTrace);
+}
+
+void RefreshQuestBoardChildActionChrome(void* controller) {
+    const auto* board = g_activeQuestBoard;
+    if (!IsLiveQuestBoardController(controller, board)) return;
+    const auto value = reinterpret_cast<std::uint32_t>(controller);
+    // MX05's own selected-action presenter disables control 0x138B and clears
+    // 0x1F46 when its list reports -1, but it leaves the adjacent coin and
+    // price surfaces visible.  For Manager quest boards only, suppress those
+    // two empty surfaces after the stock presenter has finished.  A valid
+    // selection restores both surfaces without replacing MX05's selection,
+    // affordability, command, or Back behavior.
+    const bool hasSelection = SendControllerMessage(
+        value, kMx05SelectionControlId, 0x22u, 0u, 0u) != 0xFFFFFFFFu;
+    SetControllerControlVisible(
+        value, kMx05SelectedActionCoinControlId, hasSelection);
+    SetControllerControlVisible(
+        value, kMx05SelectedActionPriceControlId, hasSelection);
+}
+
+void SetQuestBoardRefreshVisible(std::uint32_t controller, bool visible) {
+    const auto* board = g_activeQuestBoard;
+    if (board == nullptr) return;
+    SetControllerControlVisible(controller, board->refreshControlId, visible);
+    SetControllerControlVisible(
+        controller, board->refreshPriceBindingId, visible);
+    SetControllerControlVisible(
+        controller, kQuestRefreshCoinControlId, visible);
+}
+
+void RefreshQuestBoardRefreshPresentation(void* controller, bool force = false) {
+    const auto* board = g_activeQuestBoard;
+    if (!IsLiveQuestBoardController(controller, board)) return;
+    const auto value = reinterpret_cast<std::uint32_t>(controller);
+    auto* guild = NativePanelContext(value);
+    std::uint32_t refreshCost = 0;
+    bool canRefresh = false;
+    if (guild == nullptr || !QueryQuestBoard(
+            board->refreshCostCallbackSymbol.c_str(), guild, 0,
+            &refreshCost) ||
+        !QueryQuestBoardBoolean(
+            board->canRefreshCallbackSymbol.c_str(), guild,
+            &canRefresh) ||
+        refreshCost > 0x7FFFFFFFu) {
+        WriteLog(
+            "Quest-board child Refresh withheld: package callbacks did not provide a valid stock quote.");
+        g_activeQuestRefreshCost = -1;
+        g_activeQuestRefreshEnabled = 0;
+        SetQuestBoardRefreshVisible(value, false);
+        return;
+    }
+    const int quotedCost = static_cast<int>(refreshCost);
+    const int enabled = canRefresh ? 1 : 0;
+    const bool publishCost = force || g_activeQuestRefreshCost != quotedCost;
+    const bool publishEnabled = force || g_activeQuestRefreshEnabled != enabled;
+    g_activeQuestRefreshCost = quotedCost;
+    g_activeQuestRefreshEnabled = enabled;
+    if (publishCost) {
+        SetControllerControlInteger(
+            value, board->refreshPriceBindingId, quotedCost);
+    }
+    if (publishEnabled) {
+        SetQuestBoardRefreshVisible(value, canRefresh);
+    }
+    if (canRefresh) {
+        // Literal MX05/AP17 control message: parameter 0 leaves the action
+        // enabled; parameter 1 presents it disabled. The native queued command
+        // path independently revalidates the quoted debit on click/dispatch.
+        SendControllerMessage(
+            value, board->refreshControlId, 0x0Au,
+            StockCurrentPlayerGold() < quotedCost ? 1u : 0u, 0u);
+    }
+}
+
+int HandleQuestBoardRefreshControl(
+    void* controller, std::uint32_t controlId) {
+    const auto* board = g_activeQuestBoard;
+    if (!IsLiveQuestBoardController(controller, board) ||
+        controlId != board->refreshControlId) return -1;
+    const auto value = reinterpret_cast<std::uint32_t>(controller);
+    if (g_activeQuestBoardFaulted) {
+        SetQuestBoardRefreshVisible(value, false);
+        return 0;
+    }
+    auto* guild = NativePanelContext(value);
+    if (guild == nullptr) return 0;
+    const std::uint32_t guildId =
+        *reinterpret_cast<std::uint32_t*>(guild + 0x70);
+    bool canRefresh = false;
+    std::uint32_t refreshCost = 0;
+    if (guildId == 0 || !QueryQuestBoardBoolean(
+            board->canRefreshCallbackSymbol.c_str(), guild,
+            &canRefresh) ||
+        !QueryQuestBoard(
+            board->refreshCostCallbackSymbol.c_str(), guild, 0,
+            &refreshCost) ||
+        !canRefresh || refreshCost > 0x7FFFFFFFu ||
+        StockCurrentPlayerGold() < static_cast<int>(refreshCost)) {
+        RefreshQuestBoardRefreshPresentation(controller, true);
+        return 0;
+    }
+    using SubmitBuildingCommand = void (__cdecl*)(
+        std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t);
+    reinterpret_cast<SubmitBuildingCommand>(
+        g_imageBase + g_buildProfile->submitBuildingCommandRva)(
+            board->refreshCommandId, guildId, guildId, refreshCost);
+    g_activeQuestRefreshEnabled = 0;
+    SetQuestBoardRefreshVisible(value, false);
+    return 0;
+}
+
+int __fastcall QuestBoardControl(
+    void* controller, void*, std::uint32_t controlId) {
+    const auto* board = g_activeQuestBoard;
+    const int refreshResult = HandleQuestBoardRefreshControl(
+        controller, controlId);
+    if (refreshResult >= 0) return refreshResult;
+    const int result = g_stockQuestBoardControl(controller, controlId);
+    // The delegated stock handler may destroy the child (Back).  Never touch
+    // panel state unless this exact controller still owns the active board.
+    if (controlId == kMx05SelectionControlId &&
+        IsLiveQuestBoardController(controller, board)) {
+        RefreshQuestBoardChildActionChrome(controller);
+    }
+    return result;
+}
+
+void __fastcall QuestBoardRefresh(void* controller, void*) {
+    const auto* board = g_activeQuestBoard;
+    g_stockQuestBoardRefresh(controller);
+    if (IsLiveQuestBoardController(controller, board)) {
+        RefreshQuestBoardChildActionChrome(controller);
+        if (g_activeQuestBoardFaulted) {
+            SetQuestBoardRefreshVisible(
+                reinterpret_cast<std::uint32_t>(controller), false);
+        } else {
+            RefreshQuestBoardRefreshPresentation(controller);
+        }
+    }
+}
+
+ControllerEvent g_stockQuestBoardEvent = nullptr;
+
+void __fastcall QuestBoardEvent(
+    void* controller, void*, std::uint32_t a1, std::uint32_t a2,
+    std::uint32_t a3, std::uint32_t a4) {
+    const auto* board = g_activeQuestBoard;
+    g_stockQuestBoardEvent(controller, a1, a2, a3, a4);
+    if (!IsLiveQuestBoardController(controller, board) ||
+        g_activeQuestBoardFaulted) return;
+
+    if (a3 == 0x09435358u) {
+        // This is the complete stock MX05 branch: one virtual slot-14 list
+        // refresh and return. The installed slot-14 wrapper applies only the
+        // approved empty-selection chrome visibility after stock presentation
+        // and emits no follow-up event.
+        return;
+    }
+
+    // Package lists are not stored in Majesty's relation index 2, so their
+    // revision cannot emit XSCX. Observe the bounded revision value at the
+    // existing stock event boundary, but do not touch any control unless it
+    // actually changes. A change is translated into the same slot-14 refresh
+    // MX05 performs for XSCX; unchanged high-frequency events are read-only.
+    auto* guild = NativePanelContext(
+        reinterpret_cast<std::uint32_t>(controller));
+    std::uint32_t revision = 0;
+    if (guild == nullptr || !QueryQuestBoard(
+            board->revisionCallbackSymbol.c_str(), guild, 0, &revision, false)) {
+        QueryQuestBoard(
+            board->revisionCallbackSymbol.c_str(), guild, 0, &revision, true);
+        FaultQuestBoardPresentation(
+            reinterpret_cast<std::uint32_t>(controller),
+            "Quest-board rows disabled: the package revision callback failed at a stock MX05 event boundary.");
+        return;
+    }
+    if (g_activeQuestRevision == static_cast<int>(revision)) return;
+    char revisionTrace[176] = {};
+    std::snprintf(
+        revisionTrace, sizeof(revisionTrace),
+        "Quest list revision changed: previous=%d current=%lu; invoking stock MX05 refresh.",
+        g_activeQuestRevision, static_cast<unsigned long>(revision));
+    WriteLog(revisionTrace);
+    if (g_stockQuestBoardRefresh == nullptr) {
+        StopUnsafeManagerRuntimeLaunch(
+            "A quest-list controller lost MX05's native refresh virtual.");
+    }
+    QuestBoardRefresh(controller, nullptr);
+}
+
+bool InstallQuestBoardChildVtable(std::uint32_t controller) {
+    static void* table[15] = {};
+    auto*** object = reinterpret_cast<void***>(controller);
+    auto** stock = reinterpret_cast<void**>(
+        g_imageBase + OccupantProfile().childVtable);
+    if (*object != stock) return false;
+    if (table[0] == nullptr) {
+        std::memcpy(table, stock, sizeof(table));
+        if (!MajestyControllerLifecycle::RegisterManagedVtable(
+                table, stock, 15, &g_childController,
+                &SecondaryPanelControllerDestroyed, nullptr)) return false;
+        g_stockQuestBoardEvent =
+            reinterpret_cast<ControllerEvent>(stock[8]);
+        g_stockQuestBoardControl =
+            reinterpret_cast<ControllerControl>(stock[3]);
+        g_stockQuestBoardPopulate =
+            reinterpret_cast<ControllerSetup>(stock[11]);
+        g_stockQuestBoardRefresh =
+            reinterpret_cast<ControllerSetup>(stock[14]);
+        const auto* population =
+            reinterpret_cast<const unsigned char*>(stock[11]);
+        const auto eraseTarget = RelativeCallTarget(population + 0x3F);
+        const auto insertTarget = RelativeCallTarget(population + 0xDF);
+        if (eraseTarget < g_imageBase ||
+            eraseTarget >= g_imageBase + 0x00400000u ||
+            insertTarget < g_imageBase ||
+            insertTarget >= g_imageBase + 0x00400000u) return false;
+        g_stockQuestVectorErase =
+            reinterpret_cast<QuestVectorErase>(eraseTarget);
+        g_stockQuestVectorInsert =
+            reinterpret_cast<QuestVectorInsert>(insertTarget);
+        table[3] = reinterpret_cast<void*>(&QuestBoardControl);
+        table[8] = reinterpret_cast<void*>(&QuestBoardEvent);
+        table[11] = reinterpret_cast<void*>(&QuestBoardPopulate);
+        table[14] = reinterpret_cast<void*>(&QuestBoardRefresh);
+    }
+    *object = table;
+    InterlockedExchange(&g_childController, static_cast<LONG>(controller));
+    return true;
+}
+
 struct OccupantParentClass {
     void* table[kAp10VtableEntries];
     void** stock;
+    std::size_t entryCount;
 };
 std::vector<OccupantParentClass*> g_occupantParentClasses;
 OccupantParentClass* FindOccupantParentClass(void* controller) {
@@ -4347,6 +5436,7 @@ int __fastcall OccupantParentControl(void* controller, void*, std::uint32_t comm
     int openResult = 0;
     if (HandleBuildingOpenToggle(controller, command, &openResult)) return openResult;
     if (OpenOccupantPanel(controller, command, &openResult)) return openResult;
+    if (OpenQuestBoardPanel(controller, command, &openResult)) return openResult;
     auto* entry = FindOccupantParentClass(controller);
     if (entry != nullptr) {
         const int result = reinterpret_cast<ControllerControl>(
@@ -4355,7 +5445,6 @@ int __fastcall OccupantParentControl(void* controller, void*, std::uint32_t comm
         return result;
     }
     StopUnsafeManagerRuntimeLaunch("Private occupant parent lost its stock controller class.");
-    return 0;
 }
 void __fastcall OccupantParentEvent(
     void* controller, void*, std::uint32_t a1, std::uint32_t a2,
@@ -4376,9 +5465,20 @@ bool InstallOccupantParentVtable(std::uint32_t controller) {
     }
     auto* entry = new OccupantParentClass();
     entry->stock = *object;
-    std::memcpy(entry->table, entry->stock, sizeof(entry->table));
+    entry->entryCount = g_parentQuestBoard == nullptr
+        ? kAp10VtableEntries : kAp08VtableEntries;
+    if (g_parentQuestBoard != nullptr &&
+        (g_parentQuestBoard->parentControllerBase != 0x38305041u ||
+         entry->stock != reinterpret_cast<void**>(
+             g_imageBase + QuestBoardProfile().parentVtable))) {
+        delete entry;
+        return false;
+    }
+    std::memcpy(
+        entry->table, entry->stock, entry->entryCount * sizeof(void*));
     if (!MajestyControllerLifecycle::RegisterManagedVtable(entry->table, entry->stock,
-            kAp10VtableEntries, &g_parentController, &ParentPanelControllerDestroyed, nullptr)) {
+            entry->entryCount, &g_parentController,
+            &ParentPanelControllerDestroyed, nullptr)) {
         delete entry;
         return false;
     }
@@ -4625,20 +5725,21 @@ extern "C" void __stdcall CaptureSecondaryController(
                 "A resolved parent controller could not install its stock-lifecycle vtable clone.");
         }
         // The factory result hook runs after the stock controller's initial
-        // setup presenter.  Its setup slot therefore cannot initialize a
-        // newly installed manager-owned toggle on this first presentation.
-        // Apply the same MX22-derived presentation once immediately after the
-        // combined parent vtable is live; this is a safe no-op for parents
-        // without a declared toggle.  Later setup, event, and command refresh
-        // boundaries remain unchanged.
+        // setup presenter. The proven MX22 toggle can be initialized here
+        // because it reads only native building state. Package GPL callbacks
+        // are deferred to the installed stock AP08 event lifecycle, after the
+        // controller has been inserted and is live.
         RefreshBuildingOpenToggle(controller);
-        WriteLog("Captured a manager parent and installed its scoped AP10 command guard.");
+        WriteLog(
+            "Captured a manager parent and installed its declared stock-class command guard.");
         return;
     }
     if (InterlockedExchange(&g_captureChildController, 0) == 1) {
         InterlockedExchange(
             &g_secondaryPanelHandle, static_cast<LONG>(creationHandle));
-        const bool installed = g_activeOccupantPanel != nullptr
+        const bool installed = g_activeQuestBoard != nullptr
+            ? InstallQuestBoardChildVtable(controller)
+            : g_activeOccupantPanel != nullptr
             ? InstallOccupantChildVtable(controller)
             : g_activeRewardPanelRecord != nullptr
             ? InstallRewardPanelControllerVtable(controller)
@@ -4752,6 +5853,22 @@ void LogDialogFactoryRequest(
 
 extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) {
     const std::uint32_t requested = *idAddress;
+    if (g_stockControllerRegistry.FindQuestBoardByChild(requested) != nullptr) {
+        *idAddress = kMx05DialogId;
+        LogDialogFactoryRequest(
+            idAddress, requested,
+            " Mapped private quest board to stock MX05.");
+        return;
+    }
+    const auto* questParent =
+        g_stockControllerRegistry.FindQuestBoardByParent(requested);
+    if (questParent != nullptr) {
+        *idAddress = questParent->parentControllerBase;
+        LogDialogFactoryRequest(
+            idAddress, requested,
+            " Preserved declared stock quest-board parent controller.");
+        return;
+    }
     if (g_stockControllerRegistry.FindOccupantPanelByChild(requested) != nullptr) {
         *idAddress = kMx05DialogId;
         LogDialogFactoryRequest(idAddress, requested, " Mapped private occupant panel to stock MX05.");
@@ -4812,6 +5929,7 @@ extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) 
     }
     if (g_stockControllerRegistry.FindPanelByParentDialog(requested) != nullptr ||
         g_stockControllerRegistry.FindRewardPanelByParentDialog(requested) != nullptr ||
+        g_stockControllerRegistry.FindQuestBoardByParent(requested) != nullptr ||
         g_stockControllerRegistry.FindBuildingOpenToggleByParent(requested) != nullptr) {
         LogDialogFactoryRequest(idAddress, requested);
         return;
@@ -4870,7 +5988,9 @@ extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments)
     const auto* requestedChild = g_stockControllerRegistry.FindPanelByChildDialog(requested);
     const auto* rewardChild = g_stockControllerRegistry.FindRewardPanelByChildDialog(requested);
     const auto* occupantChild = g_stockControllerRegistry.FindOccupantPanelByChild(requested);
-    if (requestedChild != nullptr || rewardChild != nullptr || occupantChild != nullptr) {
+    const auto* questChild = g_stockControllerRegistry.FindQuestBoardByChild(requested);
+    if (requestedChild != nullptr || rewardChild != nullptr ||
+        occupantChild != nullptr || questChild != nullptr) {
         // A new private child takes the tracked child slot. An older child's
         // delayed destructor cannot clear this new mapping (exact-instance
         // lifecycle guard). The parent slot is independent.
@@ -4881,6 +6001,11 @@ extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments)
         g_activeRewardFlagState = rewardChild == nullptr
             ? nullptr : FindRewardStateByPanel(rewardChild->panelKey);
         g_activeOccupantPanel = occupantChild;
+        g_activeQuestBoard = questChild;
+        g_activeQuestBoardFaulted = false;
+        g_activeQuestRevision = -1;
+        g_activeQuestRefreshCost = -1;
+        g_activeQuestRefreshEnabled = -1;
         InterlockedExchange(&g_secondaryPanelActive, 1);
         InterlockedExchange(&g_captureChildController, 1);
         return;
@@ -4889,16 +6014,19 @@ extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments)
     const auto* requestedParent = g_stockControllerRegistry.FindPanelByParentDialog(requested);
     const auto* rewardParent = g_stockControllerRegistry.FindRewardPanelByParentDialog(requested);
     const auto* occupantParent = g_stockControllerRegistry.FindOccupantPanelByParent(requested);
+    const auto* questParent = g_stockControllerRegistry.FindQuestBoardByParent(requested);
     const auto* toggleParent =
         g_stockControllerRegistry.FindBuildingOpenToggleByParent(requested);
     if (requestedParent != nullptr || rewardParent != nullptr ||
-        occupantParent != nullptr || toggleParent != nullptr) {
+        occupantParent != nullptr || questParent != nullptr ||
+        toggleParent != nullptr) {
         // Only a parent creation changes parent recipes. AP91 Visitors, member
         // lists, and auxiliary notices must not erase a surviving parent's
         // occupant/reward/research openers.
         g_parentPanelRecord = requestedParent;
         g_parentRewardPanelRecord = rewardParent;
         g_parentOccupantPanel = occupantParent;
+        g_parentQuestBoard = questParent;
         g_parentOpenToggleRecord = toggleParent;
         InterlockedExchange(&g_captureParentController, 1);
         WriteLog("Creation entry captured a resolved parent dialog.");
@@ -5449,6 +6577,10 @@ DWORD WINAPI InitializeRuntime(void*) {
     const bool managerLaunch = true;
     const bool privateActivityText = HasRuntimeCapability(
         MajestyRuntimeCapabilities::kPrivateActivityText);
+    const bool privateQuestRows =
+        !g_stockControllerRegistry.questBoards.empty();
+    const bool privateIntentResolver =
+        privateActivityText || privateQuestRows;
     const bool freestyleCam = HasRuntimeCapability(
         MajestyRuntimeCapabilities::kFreestyleCamRebind);
     const bool expandedBuildingSlots = HasRuntimeCapability(
@@ -5459,7 +6591,8 @@ DWORD WINAPI InitializeRuntime(void*) {
         !g_stockControllerRegistry.panels.empty() ||
         !g_stockControllerRegistry.occupantActionPanels.empty() ||
         !g_stockControllerRegistry.rewardPanels.empty() ||
-        !g_stockControllerRegistry.buildingOpenToggles.empty();
+        !g_stockControllerRegistry.buildingOpenToggles.empty() ||
+        !g_stockControllerRegistry.questBoards.empty();
     const bool ap10Ap69ControllerRecipes =
         !g_stockControllerRegistry.panels.empty();
     const bool privateRewardFlagRecipes =
@@ -5501,6 +6634,8 @@ DWORD WINAPI InitializeRuntime(void*) {
             StopUnsafeManagerRuntimeLaunch(
                 "Terminating manager launch before Majesty resumes: private activity text was declared without a valid non-empty intent registry.");
         }
+    }
+    if (privateIntentResolver) {
         if (!ValidatePrivateIntentTextProfile()) {
             StopUnsafeManagerRuntimeLaunch(
                 "Terminating manager launch before Majesty resumes: the shared activity-text resolver does not match its selected profile.");
@@ -5515,7 +6650,7 @@ DWORD WINAPI InitializeRuntime(void*) {
     }
 #endif
 
-    if (privateActivityText) {
+    if (privateIntentResolver) {
         RequireManagerRuntimeInstall(
             InstallPrivateIntentTextResolver(),
             managerLaunch,
@@ -5575,9 +6710,15 @@ DWORD WINAPI InitializeRuntime(void*) {
             "Terminating manager launch before Majesty resumes: the game-update refresh bridge could not be installed.");
     }
     if (stockControllerRecipes) {
-        if (!g_stockControllerRegistry.occupantActionPanels.empty()) {
+        if (!g_stockControllerRegistry.occupantActionPanels.empty() ||
+            !g_stockControllerRegistry.questBoards.empty()) {
             RequireManagerRuntimeInstall(InstallOccupantPanelRoute(), managerLaunch,
                 "Terminating manager launch: stock occupant action route could not be installed.");
+        }
+        if (privateQuestRows) {
+            RequireManagerRuntimeInstall(
+                InstallQuestBoardRowPresentation(), managerLaunch,
+                "Terminating manager launch: stock quest-row presentation route could not be installed.");
         }
         RequireManagerRuntimeInstall(
             InstallDialogCreationHook(),

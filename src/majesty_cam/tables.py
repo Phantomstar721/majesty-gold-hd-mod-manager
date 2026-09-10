@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 
 class TableFormatError(ValueError):
@@ -48,6 +48,16 @@ class BdepDelta:
 class BdepMergeResult:
     payload: bytes
     deltas: tuple[BdepDelta, ...]
+
+
+@dataclass(frozen=True)
+class BdepRowResolution:
+    row: BdepRow
+    participant_owners: frozenset[str]
+
+    def __post_init__(self) -> None:
+        if not self.participant_owners:
+            raise ValueError("BDEP row resolution participants cannot be empty")
 
 
 _BDEP_ROW = re.compile(rb"^([A-Za-z0-9_]+)(?:\s*:\s*(.*?))?\s*$")
@@ -108,6 +118,8 @@ def merge_bdep_stock_relative(
     effective_stock: bytes,
     stock_ancestors: Sequence[tuple[str, bytes]],
     variants: Iterable[tuple[str, bytes]],
+    *,
+    resolutions: Mapping[str, BdepRowResolution] | None = None,
 ) -> BdepMergeResult:
     """Merge complete BDEP tables after proving each package's stock lineage.
 
@@ -143,7 +155,11 @@ def merge_bdep_stock_relative(
         )
         for owner, payload in variants
     )
-    return _merge_bdep_deltas(effective_stock, deltas)
+    return _merge_bdep_deltas(
+        effective_stock,
+        deltas,
+        resolutions=resolutions,
+    )
 
 
 def _resolve_bdep_stock_relative_delta(
@@ -275,17 +291,26 @@ def _different_bdep_outcome_keys(
 
 
 def _merge_bdep_deltas(
-    stock: bytes, deltas: Sequence[BdepDelta]
+    stock: bytes,
+    deltas: Sequence[BdepDelta],
+    *,
+    resolutions: Mapping[str, BdepRowResolution] | None = None,
 ) -> BdepMergeResult:
     stock_rows = parse_bdep(stock)
     stock_map = {row.building_id: row for row in stock_rows}
+    resolution_map = dict(resolutions or {})
     chosen: dict[str, tuple[BdepRow, list[str]]] = {}
     addition_order: list[str] = []
+    changed_owners: dict[str, set[str]] = {}
 
     for delta in deltas:
         owner = delta.owner
         for row in delta.rows:
             key = row.building_id
+            changed_owners.setdefault(key, set()).add(owner)
+            resolution = resolution_map.get(key)
+            if resolution is not None and owner in resolution.participant_owners:
+                row = resolution.row
             current = chosen.get(key)
             if current is None:
                 chosen[key] = (row, [owner])
@@ -295,6 +320,13 @@ def _merge_bdep_deltas(
             if current[0] != row:
                 raise TableMergeConflict("BDEP", row.building_id, (*current[1], owner))
             current[1].append(owner)
+
+    for key, resolution in resolution_map.items():
+        missing = resolution.participant_owners.difference(
+            changed_owners.get(key, set())
+        )
+        if missing:
+            raise TableMergeConflict("BDEP", key, tuple(sorted(missing)))
 
     output_rows = list(stock_rows)
     positions = {

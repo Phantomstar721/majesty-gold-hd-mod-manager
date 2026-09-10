@@ -281,7 +281,7 @@ def catalog_merge_preflight(
 
     try:
         inventory = inventory_package(prepared.selected_mod)
-        validate_gpl_feature_evidence((inventory,))
+        validate_gpl_feature_evidence((inventory,), game_path=game_path)
         runtime_features = resolve_runtime_feature_registry(
             (inventory,),
             prepared.runtime_capabilities,

@@ -35,11 +35,14 @@ from ..intent_text import (
     decode_intent_registry,
 )
 from ..gpl_features import (
+    StockControlledFollowerSpeedSync,
     StockGplmxPurchaseEquipmentTail,
     StockGplmxPurchaseBazaarTail,
+    StockHeroQuestLifecycle,
     gpl_feature_mapping,
 )
 from ..package import (
+    EnchantmentRowFeature,
     ModPackage,
     NameGeneratorFeature,
     PackageFormatError,
@@ -193,6 +196,7 @@ def _controller_record_count(registry: ResolvedControllerRegistry) -> int:
             registry.occupant_action_panels,
             registry.hostile_monster_flags,
             registry.building_open_toggles,
+            registry.quest_boards,
         )
     )
 
@@ -517,7 +521,7 @@ def create_build_plan(
             inventories = tuple(
                 inventory_package(item.selected_mod) for item in prepared
             )
-            validate_gpl_feature_evidence(inventories)
+            validate_gpl_feature_evidence(inventories, game_path=game_path)
             runtime_feature_registry = resolve_runtime_feature_registry(
                 inventories,
                 tuple(sorted(capabilities)),
@@ -1377,17 +1381,29 @@ def _canonical_runtime_feature(feature: object) -> dict:
             "generator_id": feature.generator_id,
             "name_tables": list(feature.name_part_ids),
         }
-    if isinstance(feature, (StockGplmxPurchaseEquipmentTail, StockGplmxPurchaseBazaarTail)):
+    if isinstance(
+        feature,
+        (
+            StockGplmxPurchaseEquipmentTail,
+            StockGplmxPurchaseBazaarTail,
+            StockControlledFollowerSpeedSync,
+            StockHeroQuestLifecycle,
+        ),
+    ):
         return gpl_feature_mapping(feature)
     try:
         return controller_feature_mapping(feature)
     except ControllerFeatureError:
         pass
-    return {
-        "type": "stock.ap78-enchantment-row.v1",
-        "overlay_id": feature.overlay_id,
-        "display_text": feature.display_text,
-    }
+    if isinstance(feature, EnchantmentRowFeature):
+        return {
+            "type": "stock.ap78-enchantment-row.v1",
+            "overlay_id": feature.overlay_id,
+            "display_text": feature.display_text,
+        }
+    raise ManagerBuildError(
+        f"cannot fingerprint unsupported runtime feature {type(feature).__name__}"
+    )
 
 
 def _require_current_plan_sources(

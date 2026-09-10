@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
+import re
 from typing import Mapping, Optional, Sequence, Tuple, Union
 import xml.etree.ElementTree as ET
 
@@ -10,6 +11,8 @@ from .runtime_capabilities import is_runtime_capability_name
 from .gpl_features import (
     GplFeature,
     GplFeatureError,
+    StockControlledFollowerSpeedSync,
+    StockHeroQuestLifecycle,
     StockGplmxPurchaseEquipmentTail,
     StockGplmxPurchaseBazaarTail,
     gpl_feature_mapping,
@@ -71,6 +74,7 @@ class GplPath:
 @dataclass(frozen=True)
 class GplLoad:
     files: Tuple[GplPath, ...]
+    recovered_project: Optional[PackagePath] = None
 
     @property
     def target(self) -> PackagePath:
@@ -94,7 +98,27 @@ class DescriptionsLoad:
     file: PackagePath
 
 
-LoadDirective = Union[CamLoad, DescriptionsLoad, GplLoad]
+@dataclass(frozen=True)
+class StringsLoad:
+    file: PackagePath
+
+
+@dataclass(frozen=True)
+class OpaqueLoad:
+    """One native Standard-Mod directive the generated profile never emits.
+
+    ``known_native_only`` is true only for stock Majesty directive families
+    whose runtime namespace is distinct from CAM, Description, GPL, and
+    Strings. Other directives remain visible to reconciliation but fail closed
+    because their load-last interaction cannot be proved.
+    """
+
+    tag: str
+    file: Optional[PackagePath]
+    known_native_only: bool = False
+
+
+LoadDirective = Union[CamLoad, DescriptionsLoad, StringsLoad, GplLoad, OpaqueLoad]
 
 
 @dataclass(frozen=True)
@@ -111,6 +135,12 @@ class LoadBlock:
     def descriptions(self) -> Tuple[PackagePath, ...]:
         return tuple(
             item.file for item in self.directives if isinstance(item, DescriptionsLoad)
+        )
+
+    @property
+    def strings(self) -> Tuple[PackagePath, ...]:
+        return tuple(
+            item.file for item in self.directives if isinstance(item, StringsLoad)
         )
 
     @property
@@ -223,6 +253,59 @@ def load_package(
         manifest_path=manifest,
         metadata=metadata,
         definition=parsed_definition,
+    )
+
+
+def load_standard_component(
+    package_root: Union[str, Path],
+    *,
+    manifest_path: Union[str, Path],
+    mod_id: str,
+) -> ModPackage:
+    """Load one exact ordinary Mod component for semantic reconciliation.
+
+    Historical Workshop manifests commonly contain several mutually-exclusive
+    ``Mod`` elements and sometimes omit their source list even though a matching
+    ``.gplproj`` is shipped.  This path selects only the requested UUID, accepts
+    Strings resources, and recovers sources solely from the project whose stem
+    exactly matches the declared BCD target. A historical sole-project fallback
+    is allowed only when the manifest itself contains one Mod component, so a
+    project can never be borrowed from a sibling variant.
+
+    The returned schema-v3 definition is deliberately empty: Standard Mods do
+    not gain manager runtime features merely by participating in text merging.
+    """
+
+    root = _resolve_package_root(package_root)
+    manifest = _select_manifest(root, manifest_path)
+    metadata = _parse_manifest(
+        root,
+        manifest,
+        selected_mod_id=mod_id,
+        allow_strings=True,
+        allow_direct_gpl_target=True,
+        recover_project_sources=True,
+        allow_opaque_native_loads=True,
+    )
+    definition = ModDefinition(
+        schema_version=3,
+        mod_id=metadata.mod_id,
+        internal_name="StandardMergeComponent",
+        display_name=metadata.display_name,
+        custom_buildings=(),
+        runtime_features=(),
+    )
+    return ModPackage(
+        root=root,
+        manifest_path=manifest,
+        metadata=ModMetadata(
+            mod_id=metadata.mod_id,
+            display_names=metadata.display_names,
+            short_descriptions=metadata.short_descriptions,
+            long_descriptions=metadata.long_descriptions,
+            datasets=metadata.datasets,
+        ),
+        definition=definition,
     )
 
 
@@ -348,11 +431,16 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             if (
                 building.controller_base,
                 building.panel_resource_template,
-            ) not in {("AP07", "AP10"), ("AP10", "AP10"), ("MX09", "MX09")}:
+            ) not in {
+                ("AP07", "AP10"),
+                ("AP08", "AP08"),
+                ("AP10", "AP10"),
+                ("MX09", "MX09"),
+            }:
                 raise PackageFormatError(
                     f"{context} requests an unsupported stock controller/panel "
-                    "combination; supported combinations are AP07/AP10 and "
-                    "AP10/AP10, and MX09/MX09"
+                    "combination; supported combinations are AP07/AP10, "
+                    "AP08/AP08, AP10/AP10, and MX09/MX09"
                 )
         else:
             assert building.dialog_id is not None
@@ -436,6 +524,8 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         elif feature_type in {
             "stock.gplmx-purchase-equipment-tail.v1",
             "stock.gplmx-purchase-bazaar-tail.v1",
+            "stock.controlled-follower-speed-sync.v1",
+            "stock.hero-quest-lifecycle.v1",
         }:
             try:
                 feature = parse_gpl_feature(raw_feature)
@@ -444,7 +534,11 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             gpl_features.append(feature)
             feature_key = (
                 feature_type,
-                feature.callback_key.casefold(),
+                (
+                    feature.feature_key
+                    if isinstance(feature, (StockControlledFollowerSpeedSync, StockHeroQuestLifecycle))
+                    else feature.callback_key
+                ).casefold(),
             )
         else:
             try:
@@ -472,6 +566,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             elif feature_type in {
                 "stock.ap10-ap69-secondary-panel.v1",
                 "stock.mx04-mx05-occupant-action-panel.v1",
+                "stock.ap08-mx05-quest-list-panel.v1",
                 "stock.mx09-ap41-reward-panel.v1",
                 "stock.ap17-upgrade-research-gate.v1",
             }:
@@ -572,7 +667,16 @@ def _select_manifest(
     return candidate
 
 
-def _parse_manifest(root: Path, manifest: Path) -> ModMetadata:
+def _parse_manifest(
+    root: Path,
+    manifest: Path,
+    *,
+    selected_mod_id: str | None = None,
+    allow_strings: bool = True,
+    allow_direct_gpl_target: bool = False,
+    recover_project_sources: bool = False,
+    allow_opaque_native_loads: bool = False,
+) -> ModMetadata:
     try:
         xml_bytes = manifest.read_bytes()
     except OSError as exc:
@@ -586,11 +690,25 @@ def _parse_manifest(root: Path, manifest: Path) -> ModMetadata:
         raise PackageFormatError(f"invalid XML in manifest {manifest}: {exc}") from exc
 
     mod_nodes = [node for node in xml_root.iter() if _local_name(node.tag) == "Mod"]
-    if len(mod_nodes) != 1:
+    if selected_mod_id is None and len(mod_nodes) != 1:
         raise PackageFormatError(
             f"manifest must contain exactly one Mod element; found {len(mod_nodes)}"
         )
-    mod_node = mod_nodes[0]
+    if selected_mod_id is None:
+        mod_node = mod_nodes[0]
+    else:
+        requested = _uuid_text(selected_mod_id)
+        matches = [
+            node
+            for node in mod_nodes
+            if _uuid_text(node.get("id", "")) == requested
+        ]
+        if len(matches) != 1:
+            raise PackageFormatError(
+                "manifest must contain exactly one requested Mod element "
+                f"{selected_mod_id!r}; found {len(matches)}"
+            )
+        mod_node = matches[0]
     mod_id = _required_string(mod_node.get("id"), "manifest Mod id")
 
     display_names = _localized_children(mod_node, "DisplayName")
@@ -646,7 +764,43 @@ def _parse_manifest(root: Path, manifest: Path) -> ModMetadata:
                         DescriptionsLoad(registry.add(_element_text(child), context))
                     )
                 elif tag == "GPL":
-                    directives.append(_parse_gpl_load(child, registry, context))
+                    directives.append(
+                        _parse_gpl_load(
+                            child,
+                            registry,
+                            context,
+                            allow_direct_target=allow_direct_gpl_target,
+                            recover_project_sources=recover_project_sources,
+                            allow_sole_project_fallback=len(mod_nodes) == 1,
+                        )
+                    )
+                elif tag == "Strings" and allow_strings:
+                    directives.append(
+                        StringsLoad(registry.add(_element_text(child), context))
+                    )
+                elif allow_opaque_native_loads:
+                    raw_path = _element_text(child)
+                    known_native_only = tag in {"Constants", "Template"} and not list(
+                        child
+                    )
+                    opaque_path = None
+                    if raw_path:
+                        try:
+                            opaque_path = registry.add(raw_path, context)
+                        except PackageFormatError:
+                            if known_native_only:
+                                raise
+                            # Unknown directives are retained for a precise
+                            # reconciliation error. Their grammar may not be a
+                            # package-relative file path, so do not reinterpret
+                            # arbitrary content as one.
+                    directives.append(
+                        OpaqueLoad(
+                            tag=tag,
+                            file=opaque_path,
+                            known_native_only=known_native_only,
+                        )
+                    )
                 else:
                     raise PackageFormatError(
                         f"{context} is an unsupported manifest Load directive"
@@ -664,11 +818,23 @@ def _parse_manifest(root: Path, manifest: Path) -> ModMetadata:
 
 
 def _parse_gpl_load(
-    gpl_node: ET.Element, registry: "_PathRegistry", context: str
+    gpl_node: ET.Element,
+    registry: "_PathRegistry",
+    context: str,
+    *,
+    allow_direct_target: bool = False,
+    recover_project_sources: bool = False,
+    allow_sole_project_fallback: bool = False,
 ) -> GplLoad:
     files = []
+    recovered_project = None
     target_count = 0
-    for index, child in enumerate(list(gpl_node)):
+    children = list(gpl_node)
+    if not children and allow_direct_target:
+        target = registry.add(_element_text(gpl_node), context)
+        files.append(GplPath(role="target", file=target))
+        target_count = 1
+    for index, child in enumerate(children):
         tag = _local_name(child.tag)
         if tag not in {"Target", "Source"}:
             raise PackageFormatError(
@@ -683,7 +849,100 @@ def _parse_gpl_load(
         raise PackageFormatError(
             f"{context} must contain exactly one Target; found {target_count}"
         )
-    return GplLoad(files=tuple(files))
+    if recover_project_sources and not any(item.role == "source" for item in files):
+        target = next(item.file for item in files if item.role == "target")
+        recovered_project, recovered_sources = _recover_exact_project_sources(
+            registry.root,
+            target,
+            context,
+            allow_sole_project_fallback=allow_sole_project_fallback,
+        )
+        files.extend(recovered_sources)
+    return GplLoad(files=tuple(files), recovered_project=recovered_project)
+
+
+_GPL_PROJECT_ROW = re.compile(
+    r'^\s*(source|data)\s*=\s*"([^"]+)"\s*$', re.IGNORECASE
+)
+
+
+def _recover_exact_project_sources(
+    root: Path,
+    target: PackagePath,
+    context: str,
+    *,
+    allow_sole_project_fallback: bool,
+) -> tuple[Optional[PackagePath], list[GplPath]]:
+    target_stem = target.absolute_path.stem.casefold()
+    candidates = tuple(
+        path
+        for path in root.rglob("*.gplproj")
+        if path.is_file() and not path.is_symlink() and path.stem.casefold() == target_stem
+    )
+    if not candidates and allow_sole_project_fallback:
+        all_projects = tuple(
+            path
+            for path in root.rglob("*.gplproj")
+            if path.is_file() and not path.is_symlink()
+        )
+        # A handful of early Workshop packages called their sole project
+        # ``path.gplproj`` while naming the emitted target ``bytecode.bcd``.
+        # One project is still unambiguous; multiple non-matching projects are not.
+        candidates = all_projects if len(all_projects) == 1 else ()
+    if not candidates:
+        return None, []
+    if len(candidates) != 1:
+        raise PackageFormatError(
+            f"{context} has multiple matching source projects for {target.relative_path!r}"
+        )
+    project = candidates[0].resolve(strict=True)
+    _ensure_inside_root(root, project, context)
+    project_package_path = PackagePath(
+        declared_path=project.name,
+        relative_path=project.relative_to(root).as_posix(),
+        absolute_path=project,
+    )
+    try:
+        project_text = project.read_text(encoding="cp1252")
+    except (OSError, UnicodeError) as exc:
+        raise PackageFormatError(f"cannot read GPL project: {project}") from exc
+    result: list[GplPath] = []
+    for line_number, line in enumerate(project_text.splitlines(), 1):
+        match = _GPL_PROJECT_ROW.fullmatch(line)
+        if match is None:
+            if line.strip():
+                raise PackageFormatError(
+                    f"{project}:{line_number}: unsupported GPL project row"
+                )
+            continue
+        candidate = (project.parent / Path(match.group(2).replace("\\", "/"))).resolve(
+            strict=True
+        )
+        _ensure_inside_root(root, candidate, context)
+        if not candidate.is_file() or candidate.suffix.casefold() not in {".gpl", ".dat"}:
+            raise PackageFormatError(
+                f"{project}:{line_number}: source is not a GPL/DAT file"
+            )
+        result.append(
+            GplPath(
+                role="source",
+                file=PackagePath(
+                    declared_path=match.group(2),
+                    relative_path=candidate.relative_to(root).as_posix(),
+                    absolute_path=candidate,
+                ),
+            )
+        )
+    return project_package_path, result
+
+
+def _uuid_text(value: str) -> str:
+    import uuid
+
+    try:
+        return str(uuid.UUID(value.strip().strip("{}"))).casefold()
+    except (AttributeError, ValueError) as exc:
+        raise PackageFormatError(f"invalid manifest Mod id: {value!r}") from exc
 
 
 class _PathRegistry:
@@ -811,7 +1070,15 @@ def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
             "overlay_id": feature.overlay_id,
             "display_text": feature.display_text,
         }
-    if isinstance(feature, (StockGplmxPurchaseEquipmentTail, StockGplmxPurchaseBazaarTail)):
+    if isinstance(
+        feature,
+        (
+            StockGplmxPurchaseEquipmentTail,
+            StockGplmxPurchaseBazaarTail,
+            StockControlledFollowerSpeedSync,
+            StockHeroQuestLifecycle,
+        ),
+    ):
         return gpl_feature_mapping(feature)
     try:
         return controller_feature_mapping(feature)
@@ -929,13 +1196,17 @@ __all__ = [
     "ModMetadata",
     "ModPackage",
     "NameGeneratorFeature",
+    "OpaqueLoad",
     "PackageFormatError",
     "PackageRuntimeFeature",
     "PackagePath",
     "RuntimeFeature",
     "StockGplmxPurchaseEquipmentTail",
     "StockGplmxPurchaseBazaarTail",
+    "StockControlledFollowerSpeedSync",
+    "StringsLoad",
     "load_mod_definition",
     "load_package",
+    "load_standard_component",
     "parse_mod_definition",
 ]

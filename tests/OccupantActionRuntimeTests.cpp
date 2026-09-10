@@ -6,10 +6,14 @@
 namespace {
 std::uint32_t g_seen[4] = {};
 const OccupantPanel* g_seenOwner = nullptr;
+const QuestBoard* g_seenQuestOwner = nullptr;
+const char* g_seenQuestCallback = nullptr;
 void __cdecl RecordCommand(std::uint32_t command, std::uint32_t building,
                            std::uint32_t agent, std::uint32_t price) {
     g_seen[0] = command; g_seen[1] = building; g_seen[2] = agent; g_seen[3] = price;
     g_seenOwner = g_executingOccupantPanel;
+    g_seenQuestOwner = g_executingQuestBoard;
+    g_seenQuestCallback = g_executingQuestCallback;
 }
 void __cdecl NestedCommand(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t) {
     const auto* outer = g_executingOccupantPanel;
@@ -30,6 +34,20 @@ int main() {
         {"stable", 0x31303042, 0x31303050, 0x4101, 0x10000, "Stable_Cost", "Stable_Action", 0x30315041},
         {"clinic", 0x32303042, 0x32303050, 0x4102, 0x10001, "Clinic_Cost", "Clinic_Action", 0x3930584D},
     };
+    MajestyStockControllers::QuestBoardRecord quest = {};
+    quest.panelKey = "missions";
+    quest.parentDialogId = 0x31304741;
+    quest.childDialogId = 0x31304251;
+    quest.openCommandId = 0x7101;
+    quest.selectedActionCommandId = 0x20000;
+    quest.refreshCommandId = 0x20001;
+    quest.offerNameCallbackSymbol = "Quest_Name";
+    quest.offerGoalCallbackSymbol = "Quest_Goal";
+    quest.offerRewardCallbackSymbol = "Quest_Reward";
+    quest.selectedActionCallbackSymbol = "Quest_Reject";
+    quest.refreshCallbackSymbol = "Quest_Refresh";
+    quest.parentControllerBase = 0x38305041;
+    g_stockControllerRegistry.questBoards = {quest};
     const auto* stable = &g_stockControllerRegistry.occupantActionPanels[0];
     const auto* clinic = &g_stockControllerRegistry.occupantActionPanels[1];
     g_stockOccupantDispatch = &RecordCommand;
@@ -39,6 +57,20 @@ int main() {
     assert(g_seenOwner == clinic && g_seen[0] == 21);
     assert(g_seen[1] == 10 && g_seen[2] == 20 && g_seen[3] == 300);
     assert(g_executingOccupantPanel == nullptr);
+    // Quest commands use the same exact native MX05 queue/debit executor but
+    // select their callback from the immutable manager command ID, not UI
+    // state. Reject and refresh keep their durable agent and quoted price.
+    const auto* missions = &g_stockControllerRegistry.questBoards[0];
+    DispatchOccupantAction(0x20000, 30, 40, 0);
+    assert(g_seenQuestOwner == missions && g_seen[0] == 21);
+    assert(g_seen[1] == 30 && g_seen[2] == 40 && g_seen[3] == 0);
+    assert(std::strcmp(g_seenQuestCallback, "Quest_Reject") == 0);
+    assert(g_executingQuestBoard == nullptr && g_executingQuestCallback == nullptr);
+    DispatchOccupantAction(0x20001, 30, 30, 500);
+    assert(g_seenQuestOwner == missions && g_seen[0] == 21);
+    assert(g_seen[1] == 30 && g_seen[2] == 30 && g_seen[3] == 500);
+    assert(std::strcmp(g_seenQuestCallback, "Quest_Refresh") == 0);
+    assert(g_executingQuestBoard == nullptr && g_executingQuestCallback == nullptr);
     // Changing panel cannot change a queued command's owner.
     g_activeOccupantPanel = stable;
     DispatchOccupantAction(0x10001, 10, 20, 300);
@@ -84,6 +116,12 @@ int main() {
     args[1] = stable->childDialogId;
     ResolveDialogFactoryRequest(args + 1);
     assert(args[1] == kMx05DialogId);
+    args[1] = missions->parentDialogId;
+    ResolveDialogFactoryRequest(args + 1);
+    assert(args[1] == 0x38305041);
+    args[1] = missions->childDialogId;
+    ResolveDialogFactoryRequest(args + 1);
+    assert(args[1] == kMx05DialogId);
     // Creation requests alone do not prove destruction. Both notices and
     // stock Visitors/list requests preserve live mappings until stock teardown.
     std::uint32_t creation[] = {0x36335041, 0, 0, 0}; // AP36 notice
@@ -99,7 +137,8 @@ int main() {
     ResolveDialogCreationRequest(creation);
     assert(g_activeOccupantPanel == clinic && g_captureChildController == 1);
     ClearSecondaryPanelControllerOwnedState();
-    assert(g_activeOccupantPanel == nullptr && g_captureChildController == 0);
-    std::puts("Occupant panel x86 routing tests passed.");
+    assert(g_activeOccupantPanel == nullptr && g_activeQuestBoard == nullptr &&
+           g_captureChildController == 0);
+    std::puts("Occupant and quest-board x86 routing tests passed.");
     return 0;
 }

@@ -257,7 +257,7 @@ bool ExpectInvalid(
         registry.sovereignTargetActions.empty() &&
         registry.rewardPanels.empty() && registry.hostileMonsterFlags.empty() &&
         registry.occupantActionPanels.empty() &&
-        registry.buildingOpenToggles.empty();
+        registry.buildingOpenToggles.empty() && registry.questBoards.empty();
 }
 
 }  // namespace
@@ -603,6 +603,53 @@ int main() {
     for (std::size_t size = 0; size < toggles.size(); ++size) {
         if (MajestyStockControllers::ParseRegistry(
                 toggles.data(), size, &registry, &error)) return 40;
+    }
+
+    auto quests = Header(0, 0, 0, 0, 0, 0, 0);
+    quests[4] = 7;
+    AppendU32(&quests, 0);  // occupant panels
+    AppendU32(&quests, 0);  // building toggles
+    AppendU32(&quests, 1);  // quest boards
+    AppendString(&quests, "quest-board");
+    AppendU32(&quests, FourCC("AGP1"));
+    AppendU32(&quests, FourCC("QBP1"));
+    AppendU32(&quests, 0x7101);
+    AppendU32(&quests, 0x20000);  // selected action
+    AppendU32(&quests, 0x20001);  // refresh
+    AppendU32(&quests, 0x7102);
+    AppendU32(&quests, 0x7103);
+    const char* questCallbacks[] = {
+        "QB_At", "QB_Revision", "QB_Name", "QB_Goal", "QB_Reward",
+        "QB_SelectedCost", "QB_Reject",
+        "QB_RefreshCost", "QB_CanRefresh", "QB_Refresh",
+    };
+    for (std::size_t index = 0;
+         index < sizeof(questCallbacks) / sizeof(questCallbacks[0]); ++index) {
+        AppendString(&quests, questCallbacks[index]);
+    }
+    AppendU32(&quests, FourCC("AP08"));
+    bool questRefresh = false;
+    if (!MajestyStockControllers::ParseRegistry(
+            quests.data(), quests.size(), &registry, &error) ||
+        registry.questBoards.size() != 1 ||
+        registry.FindQuestBoardByChild(FourCC("QBP1")) == nullptr ||
+        registry.FindQuestBoardByParent(FourCC("AGP1")) == nullptr ||
+        registry.FindQuestBoardByCommand(
+            0x20000, &questRefresh) == nullptr || questRefresh ||
+        registry.FindQuestBoardByCommand(
+            0x20001, &questRefresh) == nullptr || !questRefresh) {
+        std::fprintf(stderr, "Generic quest-board MMCR rejected: %s\n", error.c_str());
+        return 41;
+    }
+    std::vector<unsigned char> obsoleteQuests = quests;
+    obsoleteQuests[4] = 5;
+    if (!ExpectInvalid(obsoleteQuests, "v5 fixed-row")) return 43;
+    obsoleteQuests = quests;
+    obsoleteQuests[4] = 6;
+    if (!ExpectInvalid(obsoleteQuests, "v6 quest rows")) return 44;
+    for (std::size_t size = 0; size < quests.size(); ++size) {
+        if (MajestyStockControllers::ParseRegistry(
+                quests.data(), size, &registry, &error)) return 42;
     }
     std::puts("Stock controller registry parser tests passed.");
     return 0;

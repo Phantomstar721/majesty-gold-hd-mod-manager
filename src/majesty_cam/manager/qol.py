@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 
 from .._subprocess import no_console_window_options
+from .elevation import directory_requires_elevation, run_elevated_hidden
 
 
 class QolPatchError(RuntimeError):
@@ -137,6 +138,8 @@ def _run_installer(installer: Path, game_path: Path, *, dry_run: bool) -> subpro
     if dry_run:
         command.append("-DryRun")
     try:
+        if not dry_run and directory_requires_elevation(game_path):
+            return run_elevated_hidden(command)
         return subprocess.run(
             command,
             check=False,

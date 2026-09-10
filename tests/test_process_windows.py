@@ -339,8 +339,14 @@ class ManagerProcessWiringTests(unittest.TestCase):
         self.assertNotIn("pause", batch.casefold())
         self.assertIn("Start-Process -FilePath $pythonw", script)
         self.assertIn("-WindowStyle Hidden", script)
+        self.assertNotIn("-Verb RunAs", script)
         self.assertIn("WScript.Shell", script)
         self.assertIn("Write-Error $detail", script)
+
+        build_script = (
+            REPO_ROOT / "scripts" / "Build-ModManagerExe.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("--uac-admin", build_script)
 
 
 def _manager_paths(root: Path) -> ManagerPaths:

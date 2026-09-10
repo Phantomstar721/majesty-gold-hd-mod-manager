@@ -12,6 +12,7 @@ class DefinitionKind(str, Enum):
     FUNCTION = "function"
     EXPRESSION = "expression"
     DAT_BLOCK = "dat_block"
+    PROTOTYPE = "prototype"
 
 
 class ConflictKind(str, Enum):
@@ -250,7 +251,11 @@ class SemanticMergeResult:
         gpl_items = [
             item
             for item in self.items
-            if item.kind in (DefinitionKind.EXPRESSION, DefinitionKind.FUNCTION)
+            if item.kind in (
+                DefinitionKind.EXPRESSION,
+                DefinitionKind.FUNCTION,
+                DefinitionKind.PROTOTYPE,
+            )
         ]
         dat_items = [item for item in self.items if item.kind == DefinitionKind.DAT_BLOCK]
         actual_gpl_name = gpl_filename if gpl_items else None
@@ -274,6 +279,14 @@ class SemanticMergeResult:
 
 _FUNCTION_START_RE = re.compile(
     r"^[ \t]*function[ \t]+([A-Za-z_][A-Za-z0-9_]*)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_PROTOTYPE_START_RE = re.compile(
+    r"^[ \t]*prototype[ \t]+([A-Za-z_][A-Za-z0-9_]*)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_TOP_LEVEL_END_RE = re.compile(
+    r"^[ \t]*end[ \t]*(?://[^\r\n]*)?(?:\r\n|\r|\n|$)",
     re.IGNORECASE | re.MULTILINE,
 )
 _EXPRESSION_RE = re.compile(
@@ -339,11 +352,40 @@ def find_foreach_return_violations(
 
 
 def parse_gpl(text: str, source_name: str = "<memory>") -> ParsedSemanticSource:
-    """Parse top-level GPL function and expression definitions without reformatting."""
+    """Parse top-level GPL prototypes, functions, and expressions exactly."""
 
     masked = _mask_non_code(text)
-    function_starts = list(_FUNCTION_START_RE.finditer(masked))
     provisional: list[SemanticItem] = []
+    prototype_ranges: list[tuple[int, int]] = []
+    prototype_starts = list(_PROTOTYPE_START_RE.finditer(masked))
+    for index, match in enumerate(prototype_starts):
+        limit = (
+            prototype_starts[index + 1].start()
+            if index + 1 < len(prototype_starts)
+            else len(text)
+        )
+        end_match = _TOP_LEVEL_END_RE.search(masked, match.end(), limit)
+        if end_match is None:
+            raise UnterminatedDefinitionError(
+                source_name,
+                DefinitionKind.PROTOTYPE,
+                match.group(1),
+                _line_number(text, match.start()),
+            )
+        span = _make_span(text, match.start(), end_match.end())
+        provisional.append(
+            SemanticItem(
+                kind=DefinitionKind.PROTOTYPE,
+                name=match.group(1),
+                text=span.extract(text),
+                source_name=source_name,
+                span=span,
+            )
+        )
+        prototype_ranges.append((span.start, span.end))
+
+    masked_without_prototypes = _mask_spans(masked, prototype_ranges)
+    function_starts = list(_FUNCTION_START_RE.finditer(masked_without_prototypes))
     function_ranges: list[tuple[int, int]] = []
 
     for index, match in enumerate(function_starts):
@@ -355,7 +397,7 @@ def parse_gpl(text: str, source_name: str = "<memory>") -> ParsedSemanticSource:
         depth = 0
         saw_begin = False
         definition_end: Optional[int] = None
-        for token in _BEGIN_END_RE.finditer(masked, match.end(), limit):
+        for token in _BEGIN_END_RE.finditer(masked_without_prototypes, match.end(), limit):
             keyword = token.group(1).casefold()
             if keyword == "begin":
                 saw_begin = True
@@ -387,7 +429,7 @@ def parse_gpl(text: str, source_name: str = "<memory>") -> ParsedSemanticSource:
         )
         function_ranges.append((span.start, span.end))
 
-    for match in _EXPRESSION_RE.finditer(masked):
+    for match in _EXPRESSION_RE.finditer(masked_without_prototypes):
         if _inside_any_range(match.start(), function_ranges):
             continue
         span = _make_span(text, match.start(), match.end())
@@ -402,6 +444,17 @@ def parse_gpl(text: str, source_name: str = "<memory>") -> ParsedSemanticSource:
         )
 
     return _finish_parse(source_name, text, provisional)
+
+
+def _mask_spans(text: str, spans: Sequence[tuple[int, int]]) -> str:
+    if not spans:
+        return text
+    chars = list(text)
+    for start, end in spans:
+        for index in range(start, end):
+            if chars[index] not in "\r\n":
+                chars[index] = " "
+    return "".join(chars)
 
 
 def parse_dat(text: str, source_name: str = "<memory>") -> ParsedSemanticSource:
@@ -844,6 +897,459 @@ def add_purchase_bazaar_tail_callbacks(
     return SemanticMergeResult(
         tuple(resolved if item.key == target_key else item for item in items),
         result.conflicts,
+    )
+
+
+def add_hero_quest_lifecycle_callbacks(
+    result: SemanticMergeResult,
+    hooks: Iterable[tuple[Sequence[str], str, str, str]],
+    *,
+    stock_hero_trees: Mapping[str, SemanticItem],
+    stock_reset_tasks: Optional[SemanticItem] = None,
+    stock_unit_death: Optional[SemanticItem] = None,
+    source_name: str = "<hero-quest lifecycle composition>",
+) -> SemanticMergeResult:
+    """Splice package callbacks into three exact stock hero boundaries.
+
+    Decision callbacks run after ``Check_Nearby`` declines and immediately
+    before the unchanged ``Check_rewards`` call.  Reset callbacks run before
+    stock ``Reset_Tasks`` clears Target/scripts, and death callbacks run after
+    stock ``DeleteAllEffectors`` and before ``IGDeathScript``.  A TRUE decision
+    callback owns the task it just installed and short-circuits only that
+    decision-tree cascade.
+    """
+
+    requested = []
+    seen = set()
+    for raw_scripts, decision, reset, death in hooks:
+        scripts = tuple(sorted({script.casefold() for script in raw_scripts}))
+        if not scripts:
+            raise ValueError("hero-quest lifecycle requires at least one hero script")
+        for symbol in (decision, reset, death):
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", symbol):
+                raise ValueError(f"invalid hero-quest callback symbol: {symbol!r}")
+            if symbol.casefold() in seen:
+                raise ValueError(f"duplicate hero-quest callback symbol: {symbol!r}")
+            seen.add(symbol.casefold())
+        requested.append((scripts, decision, reset, death))
+    if not requested:
+        return result
+
+    result.require_clean()
+    items = list(result.items)
+    functions = {
+        item.normalized_name: item
+        for item in items
+        if item.kind is DefinitionKind.FUNCTION
+    }
+    for _, decision, reset, death in requested:
+        for symbol, returns_boolean in (
+            (decision, True), (reset, False), (death, False),
+        ):
+            item = functions.get(symbol.casefold())
+            if item is None:
+                raise ValueError(
+                    "hero-quest callbacks must name package-owned GPL functions; "
+                    f"missing: {symbol}"
+                )
+            masked = _mask_non_code(item.text)
+            suffix = r"\s+is\s+boolean" if returns_boolean else ""
+            signature = (
+                r"\s*function\s+" + re.escape(symbol)
+                + r"\s*\(\s*agent\s+[A-Za-z_][A-Za-z0-9_]*\s*\)"
+                + suffix + r"\s*(?:declare|begin)\b"
+            )
+            if re.match(signature, masked, re.IGNORECASE) is None:
+                expected = "(agent) is boolean" if returns_boolean else "(agent)"
+                raise ValueError(
+                    f"hero-quest callback {symbol!r} must use signature {expected}"
+                )
+
+    by_script: dict[str, list[str]] = {}
+    reset_symbols = []
+    death_symbols = []
+    for scripts, decision, reset, death in requested:
+        for script in scripts:
+            by_script.setdefault(script, []).append(decision)
+        reset_symbols.append(reset)
+        death_symbols.append(death)
+
+    for script, callbacks in sorted(by_script.items()):
+        stock = stock_hero_trees.get(script)
+        if stock is None:
+            raise ValueError(f"unsupported or missing stock hero decision tree: {script}")
+        target = next(
+            (item for item in items if item.key == stock.key),
+            None,
+        )
+        if target is None:
+            target = replace(stock, span=None)
+            items.append(target)
+        masked_target = _mask_non_code(target.text)
+        near_matches = list(re.finditer(
+            r"^[ \t]*if\s*\(\s*\$check_nearby\s*\(\s*thisagent\s*\)\s*==\s*False\s*\)[ \t]*\r?$",
+            masked_target, re.IGNORECASE | re.MULTILINE,
+        ))
+        reward_matches = list(re.finditer(
+            r"^[ \t]*if\s*\(\s*\$Check_rewards\s*\(\s*thisagent\s*,\s*(?:TRUE|FALSE)\s*\)\s*==\s*False\s*\)[ \t]*\r?$",
+            masked_target, re.IGNORECASE | re.MULTILINE,
+        ))
+        if (
+            len(near_matches) != 1 or len(reward_matches) != 1
+            or near_matches[0].end() > reward_matches[0].start()
+            or masked_target[near_matches[0].end():reward_matches[0].start()].strip()
+        ):
+            raise ValueError(
+                f"{script} does not contain exactly one recognized "
+                "Check_Nearby/Check_rewards decision anchor"
+            )
+        reward_match = reward_matches[0]
+        newline = "\r\n" if "\r\n" in target.text else "\n"
+        reward_line = target.text[reward_match.start():reward_match.end()]
+        indent = re.match(r"[ \t]*", reward_line).group(0)
+        insertion = "".join(
+            f"{indent}if (${symbol}(ThisAgent) == False){newline}{newline}"
+            for symbol in callbacks
+        )
+        updated = replace(
+            target,
+            text=(target.text[:reward_match.start()] + insertion
+                  + target.text[reward_match.start():]),
+            source_name=source_name,
+            span=None,
+        )
+        items = [updated if item.key == target.key else item for item in items]
+
+    def materialize(name: str, stock: Optional[SemanticItem]) -> SemanticItem:
+        key = semantic_key(DefinitionKind.FUNCTION, name)
+        existing = [item for item in items if item.key == key]
+        if len(existing) == 1:
+            return existing[0]
+        if existing:
+            raise ValueError(f"{name} is defined more than once")
+        if stock is None or stock.key != key:
+            raise ValueError(f"hero-quest lifecycle requires installed stock {name}")
+        item = replace(stock, span=None)
+        items.append(item)
+        return item
+
+    reset_item = materialize("reset_tasks", stock_reset_tasks)
+    reset_anchor = re.compile(
+        r"(?P<begin>\bbegin\s*\r?\n)(?P<body>[\s\S]*?\$StopMoving\s*\(\s*ThisAgent\s*\)\s*;)",
+        re.IGNORECASE,
+    )
+    reset_matches = list(reset_anchor.finditer(reset_item.text))
+    if len(reset_matches) != 1:
+        raise ValueError("reset_tasks does not contain the recognized stock entry anchor")
+    reset_match = reset_matches[0]
+    newline = "\r\n" if "\r\n" in reset_item.text else "\n"
+    reset_insert = "".join(f"\t${symbol}(ThisAgent);{newline}" for symbol in reset_symbols)
+    updated_reset = replace(
+        reset_item,
+        text=(reset_item.text[:reset_match.end("begin")] + reset_insert
+              + reset_item.text[reset_match.end("begin"):]),
+        source_name=source_name,
+        span=None,
+    )
+    items = [updated_reset if item.key == reset_item.key else item for item in items]
+
+    death_item = materialize("Unit_Call_Deathscript", stock_unit_death)
+    death_anchor = re.compile(
+        r"(?P<delete>^[ \t]*\$DeleteAllEffectors\s*\(\s*thisagent\s*\)\s*;\s*$)"
+        r"(?P<gap>\r?\n(?:[ \t]*\r?\n|[ \t]*//[^\r\n]*\r?\n)*)"
+        r"(?P<callback>^[ \t]*if\s*\(\s*\$validfunction\s*\(\s*thisagent's\s+\"IGDeathScript\"\s*\)\s*==\s*TRUE\s*\))",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    death_matches = list(death_anchor.finditer(death_item.text))
+    if len(death_matches) != 1:
+        raise ValueError(
+            "Unit_Call_Deathscript does not contain the recognized stock cleanup anchor"
+        )
+    death_match = death_matches[0]
+    newline = "\r\n" if "\r\n" in death_item.text else "\n"
+    indent = re.match(r"[ \t]*", death_match.group("callback")).group(0)
+    death_insert = "".join(
+        f"{indent}${symbol}(ThisAgent);{newline}" for symbol in death_symbols
+    ) + newline
+    updated_death = replace(
+        death_item,
+        text=(death_item.text[:death_match.start("callback")] + death_insert
+              + death_item.text[death_match.start("callback"):]),
+        source_name=source_name,
+        span=None,
+    )
+    items = [updated_death if item.key == death_item.key else item for item in items]
+    return SemanticMergeResult(tuple(items), result.conflicts)
+
+
+def add_controlled_follower_movement_adjustments(
+    result: SemanticMergeResult,
+    hooks: Iterable[tuple[str, int, Sequence[str]]],
+    *,
+    stock_control_monster: Optional[SemanticItem] = None,
+    stock_controlled_monster_death: Optional[SemanticItem] = None,
+    stock_leader_dead: Optional[SemanticItem] = None,
+    source_name: str = "<controlled-follower movement composition>",
+) -> SemanticMergeResult:
+    """Attach reversible movement adjustments to stock controlled followers.
+
+    Each hook is ``(eligibility_callback, per_tier_step, four_markers)``.  The
+    callback is evaluated only after stock ``Control_Monster`` has completed
+    its follower setup.  For each positive stock Speed-tier difference from
+    one through four, one generated private effector records one applied step.
+    Stock death and leader-loss callbacks remove the exact applied steps once,
+    without timers, polling, or replacement AI.
+    """
+
+    requested: list[tuple[str, int, tuple[str, str, str, str]]] = []
+    seen_symbols: set[str] = set()
+    seen_markers: set[str] = set()
+    for symbol, adjustment, raw_markers in hooks:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", symbol):
+            raise ValueError(
+                f"invalid controlled-follower eligibility callback: {symbol!r}"
+            )
+        if (
+            not isinstance(adjustment, int)
+            or isinstance(adjustment, bool)
+            or not -10000 <= adjustment <= -1
+        ):
+            raise ValueError(
+                "controlled-follower movement step must be an integer "
+                "from -10000 to -1"
+            )
+        markers = tuple(raw_markers)
+        if len(markers) != 4 or any(
+            re.fullmatch(r"MCF[0-9A-F]{12}[1-4]", marker) is None
+            for marker in markers
+        ):
+            raise ValueError("controlled-follower speed sync requires four manager markers")
+        symbol_key = symbol.casefold()
+        if symbol_key in seen_symbols:
+            raise ValueError(
+                f"duplicate controlled-follower eligibility callback: {symbol!r}"
+            )
+        seen_symbols.add(symbol_key)
+        for marker in markers:
+            marker_key = marker.casefold()
+            if marker_key in seen_markers:
+                raise ValueError(
+                    f"duplicate manager controlled-follower marker: {marker!r}"
+                )
+            seen_markers.add(marker_key)
+        requested.append((symbol, adjustment, markers))
+    if not requested:
+        return result
+
+    result.require_clean()
+    items = list(result.items)
+    for _symbol, _adjustment, markers in requested:
+        for marker in markers:
+            owners = [
+                item.source_name
+                for item in items
+                if marker.casefold() in item.text.casefold()
+            ]
+            if owners:
+                raise ValueError(
+                    f"generated controlled-follower marker {marker!r} already "
+                    f"appears in package GPL source: {', '.join(owners)}"
+                )
+    control = _materialize_stock_function(
+        items, "Control_Monster", stock_control_monster,
+        "controlled-follower movement adjustments",
+    )
+    death = _materialize_stock_function(
+        items, "Controlled_Monster_Death", stock_controlled_monster_death,
+        "controlled-follower movement adjustments",
+    )
+    leader_dead = _materialize_stock_function(
+        items, "leader_dead", stock_leader_dead,
+        "controlled-follower movement adjustments",
+    )
+
+    function_names = {
+        item.normalized_name
+        for item in items
+        if item.kind == DefinitionKind.FUNCTION
+    }
+    missing = [symbol for symbol, _adjustment, _markers in requested
+               if symbol.casefold() not in function_names]
+    if missing:
+        raise ValueError(
+            "controlled-follower movement features must name package-owned "
+            f"eligibility callbacks; missing: {', '.join(missing)}"
+        )
+
+    control = _inject_controlled_follower_begin(control, requested, source_name)
+    death = _inject_controlled_follower_cleanup(
+        death,
+        requested,
+        re.compile(
+            r"(?P<indent>^[ \t]*)\$Monster_Gravestone\s*"
+            r"\(\s*ThisAgent\s*\)\s*;",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+        "Controlled_Monster_Death stock gravestone handoff",
+        source_name,
+    )
+    leader_dead = _inject_controlled_follower_cleanup(
+        leader_dead,
+        requested,
+        re.compile(
+            r"(?P<indent>^[ \t]*)\$deleteeffector\s*"
+            r"\(\s*thisagent\s*,\s*\"charm_icon\"\s*\)\s*;",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+        "leader_dead stock charm cleanup",
+        source_name,
+    )
+    replacements = {
+        control.key: control,
+        death.key: death,
+        leader_dead.key: leader_dead,
+    }
+    return SemanticMergeResult(
+        tuple(replacements.get(item.key, item) for item in items),
+        result.conflicts,
+    )
+
+
+def _materialize_stock_function(
+    items: list[SemanticItem],
+    name: str,
+    stock_item: Optional[SemanticItem],
+    label: str,
+) -> SemanticItem:
+    key = semantic_key(DefinitionKind.FUNCTION, name)
+    matches = [item for item in items if item.key == key]
+    if not matches:
+        if stock_item is None or stock_item.key != key:
+            raise ValueError(
+                f"{label} require installed stock GPLMx {name} source"
+            )
+        item = replace(stock_item, span=None)
+        items.append(item)
+        return item
+    if len(matches) != 1:  # pragma: no cover - semantic merge prevents this
+        raise ValueError(f"{name} is defined more than once")
+    return matches[0]
+
+
+def _inject_controlled_follower_begin(
+    target: SemanticItem,
+    hooks: Sequence[tuple[str, int, tuple[str, str, str, str]]],
+    source_name: str,
+) -> SemanticItem:
+    masked = _mask_non_code(target.text)
+    required = (
+        "$IsDead",
+        "++",
+        "$fake_wander",
+        "$createeffector",
+        "$Controlled_Monster",
+        "$Controlled_Monster_Death",
+        "= ThisAgent",
+    )
+    positions = [masked.casefold().find(token.casefold()) for token in required]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        raise ValueError(
+            "Control_Monster does not contain the complete recognized stock "
+            "controlled-follower setup lifecycle"
+        )
+    anchor = re.compile(
+        r"(?P<indent>^[ \t]*)\$setunitplayernumber\s*\(\s*target\s*,\s*"
+        r"\$getunitplayernumber\s*\(\s*thisagent\s*\)\s*\)\s*;",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    matches = list(anchor.finditer(masked))
+    if len(matches) != 1 or positions[-1] >= matches[0].start():
+        raise ValueError(
+            "Control_Monster does not contain exactly one recognized stock "
+            "player-ownership handoff"
+        )
+    for _symbol, _adjustment, markers in hooks:
+        for marker in markers:
+            if marker.casefold() in target.text.casefold():
+                raise ValueError(
+                    f"Control_Monster already contains generated marker {marker!r}"
+                )
+    match = matches[0]
+    indent = match.group("indent")
+    newline = "\r\n" if "\r\n" in target.text else "\n"
+    lines: list[str] = []
+    for symbol, adjustment, markers in hooks:
+        lines.extend((
+            f"{indent}If (${symbol} ( ThisAgent, Target ))",
+            f"{indent}\tbegin",
+            f"{indent}\t\tIf ($GetAttribute ( ThisAgent, #ATTRIB_Speed ) >= 1 &&",
+            f"{indent}\t\t\t$GetAttribute ( ThisAgent, #ATTRIB_Speed ) <= 5 &&",
+            f"{indent}\t\t\t$GetAttribute ( Target, #ATTRIB_Speed ) >= 1 &&",
+            f"{indent}\t\t\t$GetAttribute ( Target, #ATTRIB_Speed ) <= 5)",
+            f"{indent}\t\t\tbegin",
+        ))
+        for tier, marker in enumerate(markers, start=1):
+            lines.extend((
+                f"{indent}\t\t\t\tIf ("
+                f"$GetAttribute ( ThisAgent, #ATTRIB_Speed ) - "
+                f"$GetAttribute ( Target, #ATTRIB_Speed ) >= {tier} &&",
+                f"{indent}\t\t\t\t\t$CheckEffector ( Target, \"{marker}\" ) == FALSE)",
+                f"{indent}\t\t\t\t\tbegin",
+                f"{indent}\t\t\t\t\t\t$AdjustAttribute ( Target, "
+                f"#ATTRIB_MovementRateModifier, {adjustment} );",
+                f"{indent}\t\t\t\t\t\t$CreateEffector ( Target, \"{marker}\", 1, \"infinite\" );",
+                f"{indent}\t\t\t\t\tend",
+            ))
+        lines.extend((
+            f"{indent}\t\t\tend",
+            f"{indent}\tend",
+        ))
+    insertion = newline + newline.join(lines)
+    return replace(
+        target,
+        text=target.text[:match.end()] + insertion + target.text[match.end():],
+        source_name=source_name,
+        span=None,
+    )
+
+
+def _inject_controlled_follower_cleanup(
+    target: SemanticItem,
+    hooks: Sequence[tuple[str, int, tuple[str, str, str, str]]],
+    anchor: re.Pattern[str],
+    anchor_label: str,
+    source_name: str,
+) -> SemanticItem:
+    matches = list(anchor.finditer(target.text))
+    if len(matches) != 1:
+        raise ValueError(f"{anchor_label} is missing or ambiguous")
+    for _symbol, _adjustment, markers in hooks:
+        for marker in markers:
+            if marker.casefold() in target.text.casefold():
+                raise ValueError(
+                    f"{target.name} already contains generated marker {marker!r}"
+                )
+    match = matches[0]
+    indent = match.group("indent")
+    newline = "\r\n" if "\r\n" in target.text else "\n"
+    lines: list[str] = []
+    for _symbol, adjustment, markers in hooks:
+        reverse = -adjustment
+        for marker in markers:
+            lines.extend((
+                f"{indent}If ($CheckEffector ( ThisAgent, \"{marker}\" ))",
+                f"{indent}\tbegin",
+                f"{indent}\t\t$AdjustAttribute ( ThisAgent, "
+                f"#ATTRIB_MovementRateModifier, {reverse} );",
+                f"{indent}\t\t$DeleteEffector ( ThisAgent, \"{marker}\" );",
+                f"{indent}\tend",
+            ))
+    insertion = newline.join(lines) + newline
+    return replace(
+        target,
+        text=target.text[:match.start()] + insertion + target.text[match.start():],
+        source_name=source_name,
+        span=None,
     )
 
 
@@ -1296,6 +1802,8 @@ __all__ = [
     "add_inventory_death_drop_exclusions",
     "add_purchase_equipment_tail_callbacks",
     "add_purchase_bazaar_tail_callbacks",
+    "add_hero_quest_lifecycle_callbacks",
+    "add_controlled_follower_movement_adjustments",
     "find_foreach_return_violations",
     "rewrite_integer_expression",
     "parse_dat",

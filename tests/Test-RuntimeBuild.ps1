@@ -159,7 +159,7 @@ try {
         "runtime feature registry contains trailing bytes", "FindEnchantmentRow"
     ) "Runtime feature registry contract"
     Assert-ContainsAny @($controllerSource, $controllerHeader) @(
-        "kRegistryVersion = 4", "kMaximumRecordCount = 256",
+        "kRegistryVersion = 7", "kMaximumRecordCount = 256",
         "kMaximumPanelCount = 32", "kMaximumRegistryBytes = 512u * 1024u",
         "ParseRegistry", "FindPanelByParentDialog", "FindPanelByChildDialog",
         "FindRewardPanelByParentDialog", "FindHostileMonsterFlagByMode",
@@ -171,9 +171,16 @@ try {
         "HasFourCCPrefix(item.privateMode, 'S', 'p')",
         "MMCR private sovereign mode collides with a stock mode",
         "!buildingFamilies.insert(item->buildingFamilyId).second",
-        "stockTargetModes.find(*mode)", "stockExecutorModes.find(*mode)"
+        "stockTargetModes.find(*mode)", "stockExecutorModes.find(*mode)",
+        "FindQuestBoardByCommand", "MMCR v7 without quest lists is noncanonical",
+        "MMCR v6 quest rows lack private display callbacks",
+        "MMCR v5 fixed-row quest boards are unsupported"
     ) "Stock-controller registry contract"
     Assert-ContainsAny @($runtimeSource) @(
+        "EvaluateQuestBoardBoolean", "EvaluateQuestBoardScalar(",
+        "kGplNullResultType = 0", "kGplIntegerResultType = 1",
+        "kGplAgentResultType = 5", "scalar != 0",
+        "IsQuestBoardAgentCompatibleResultType(type)",
         "FindRewardStateByPrivateMode",
         "state.modeObject == modeObject",
         "g_buildProfile->getFlagModeManagerRva",
@@ -266,6 +273,7 @@ try {
         "InstallPrivateSpellDescriptorResolver()", "InstallPrivateSovereignSpellRoute()",
         "InstallPrivateRageRoute()", "InstallDialogCreationHook()",
         "InstallDialogFactoryTrace()", "InstallSecondaryControllerHook()",
+        "InstallQuestBoardRowPresentation()",
         "InstallGameUpdateRefreshBridge()", "InstallPrivateEnchantmentRows()"
     )) {
         $position = $initialize.IndexOf($requiredPreWindowInstall)
@@ -295,8 +303,12 @@ try {
     }
     $capabilityGates = @(
         @{ Condition = "privateActivityText"; Calls = @(
-            "LoadPrivateIntentRegistry()", "ValidatePrivateIntentTextProfile()",
+            "LoadPrivateIntentRegistry()") },
+        @{ Condition = "privateIntentResolver"; Calls = @(
+            "ValidatePrivateIntentTextProfile()",
             "InstallPrivateIntentTextResolver()") },
+        @{ Condition = "privateQuestRows"; Calls = @(
+            "InstallQuestBoardRowPresentation()") },
         @{ Condition = "freestyleCam"; Calls = @("InstallFreestyleCamRuntime(") },
         @{ Condition = "expandedBuildingSlots"; Calls = @(
             "InstallCustomGuildFactoryFallback()") },
@@ -341,7 +353,7 @@ try {
         "InstallDialogCreationHook", "InstallDialogFactoryTrace",
         "InstallSecondaryControllerHook", "InstallGameUpdateRefreshBridge",
         "InstallPrivateRewardFlagModeRegistry", "InstallPrivateEnchantmentRows",
-        "InstallWindowProcedureHook"
+        "InstallQuestBoardRowPresentation", "InstallWindowProcedureHook"
     )) {
         $pattern = "RequireManagerRuntimeInstall\(\s*" + [regex]::Escape($install) + "\("
         if (-not [regex]::IsMatch($initialize, $pattern)) {
@@ -472,6 +484,14 @@ try {
         "ClearSecondaryPanelControllerOwnedState();",
         "StopUnsafeManagerRuntimeLaunch("
     ) "Matched panel creation failure boundary"
+    foreach ($forbiddenCaptureCallback in @(
+        "RefreshQuestBoardParentPresentation(",
+        "QueryQuestBoard("
+    )) {
+        if ($captureController.Contains($forbiddenCaptureCallback)) {
+            throw "Controller capture must not execute package GPL: $forbiddenCaptureCallback"
+        }
+    }
     $dialogCreation = Get-SourceSpan $runtimeSource `
         'extern "C" void __stdcall ResolveDialogCreationRequest(' `
         "__declspec(naked) void DialogCreationHook()"
@@ -482,6 +502,57 @@ try {
         "g_parentPanelRecord = requestedParent;",
         "g_parentOccupantPanel = occupantParent;"
     ) "Dialog replacement ownership boundary"
+
+    $questChildInstall = Get-SourceSpan $runtimeSource `
+        "bool InstallQuestBoardChildVtable(std::uint32_t controller) {" `
+        "struct OccupantParentClass"
+    Assert-ContainsAny @($questChildInstall) @(
+        "table[3] = reinterpret_cast<void*>(&QuestBoardControl);",
+        "table[8] = reinterpret_cast<void*>(&QuestBoardEvent);",
+        "table[11] = reinterpret_cast<void*>(&QuestBoardPopulate);",
+        "table[14] = reinterpret_cast<void*>(&QuestBoardRefresh);"
+    ) "MX05 quest lifecycle and presentation hooks"
+    foreach ($forbiddenQuestChildHook in @(
+        "table[1] = reinterpret_cast<void*>(&QuestBoardSetup);"
+    )) {
+        if ($questChildInstall.Contains($forbiddenQuestChildHook)) {
+            throw "MX05 quest child replaced stock setup: $forbiddenQuestChildHook"
+        }
+    }
+    Assert-ContainsAny @($runtimeSource) @(
+        "RefreshQuestBoardRefreshPresentation",
+        "SetQuestBoardRefreshVisible",
+        "HandleQuestBoardRefreshControl",
+        "kQuestRefreshCoinControlId = 0x7104"
+    ) "MX05 child Refresh presentation"
+    $questEvent = Get-SourceSpan $runtimeSource `
+        "void __fastcall QuestBoardEvent(" `
+        "bool InstallQuestBoardChildVtable("
+    Assert-Ordered $questEvent @(
+        "g_stockQuestBoardEvent(",
+        "if (a3 == 0x09435358u)",
+        "return;",
+        "if (g_activeQuestRevision == static_cast<int>(revision)) return;",
+        "QuestBoardRefresh(controller, nullptr);"
+    ) "MX05 stock XSCX and revision refresh"
+    foreach ($forbiddenQuestEventWrite in @(
+        "SetControllerControlInteger(", "SendControllerMessage("
+    )) {
+        if ($questEvent.Contains($forbiddenQuestEventWrite)) {
+            throw "MX05 quest event performs a non-stock child write: $forbiddenQuestEventWrite"
+        }
+    }
+    $questPopulation = Get-SourceSpan $runtimeSource `
+        "void __fastcall QuestBoardPopulate(" `
+        "void RefreshQuestBoardChildActionChrome("
+    Assert-ContainsAny @($questPopulation) @(
+        "FaultQuestBoardPresentation(",
+        "package list callback did not return a stock agent value",
+        "return;"
+    ) "Fault-contained quest-board presentation"
+    if ($questPopulation.Contains("StopUnsafeManagerRuntimeLaunch(")) {
+        throw "Package quest-row data failures must not become runtime-install failures."
+    }
 
     $researchBegin = Get-SourceSpan $runtimeSource `
         "int BeginPrivateResearch(" `

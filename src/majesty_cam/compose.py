@@ -42,8 +42,11 @@ from .descriptions import (
     DescriptionFormatError,
     DescriptionKey,
     DescriptionMergeResult,
+    DescriptionRecord,
+    DescriptionsDocument,
     merge_descriptions,
     parse_descriptions,
+    serialize_descriptions,
 )
 from .gpl import (
     DefinitionKind,
@@ -51,6 +54,9 @@ from .gpl import (
     ParsedSemanticSource,
     SemanticConflict,
     SemanticItem,
+    SemanticMergeResult,
+    add_controlled_follower_movement_adjustments,
+    add_hero_quest_lifecycle_callbacks,
     add_inventory_death_drop_exclusions,
     add_purchase_bazaar_tail_callbacks,
     add_purchase_equipment_tail_callbacks,
@@ -60,8 +66,10 @@ from .gpl import (
     require_complete_semantic_coverage,
 )
 from .gpl_features import (
+    StockControlledFollowerSpeedSync,
     StockGplmxPurchaseBazaarTail,
     StockGplmxPurchaseEquipmentTail,
+    StockHeroQuestLifecycle,
 )
 from .intent_text import (
     ActivityTextDiscoveryPackage,
@@ -83,9 +91,37 @@ from .package import (
     DescriptionsLoad,
     GplLoad,
     ModPackage,
+    OpaqueLoad,
+    PackagePath,
+    StringsLoad,
     load_package,
     parse_mod_definition,
 )
+from .strings import (
+    StringKey,
+    StringRecord,
+    StringsFormatError,
+    StringsMergeResult,
+    load_effective_stock_strings,
+    load_strings,
+    merge_strings,
+    serialize_string_records,
+)
+from .stock_art import (
+    StockArtError,
+    collapse_art_archives,
+    load_stock_art_lineages,
+)
+from .stock_cam import (
+    STOCK_NAMED_CAM_SECTIONS,
+    StockCamError,
+    load_effective_stock_named_resources,
+)
+from .stock_gpl import (
+    StockGplError,
+    load_verified_stock_semantic_sources,
+)
+from .semantic_diff3 import join_logical_lines, split_logical_lines
 from .runtime_capabilities import (
     PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY,
     RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH,
@@ -110,6 +146,7 @@ from .stock_controller_features import (
     LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY,
     ControllerFeature,
     ControllerFeatureError,
+    StockAp08Mx05QuestBoardPanel,
     StockAp10Ap69SecondaryPanel,
     StockAp41Fl00HostileMonsterFlag,
     StockMx09Ap41RewardPanel,
@@ -127,6 +164,9 @@ from .stock_controller_features import (
 )
 from .stock_controller_registry import (
     CONTROLLER_REGISTRY_RELATIVE_PATH,
+    QUEST_REFRESH_COIN_CONTROL_ID,
+    QUEST_REFRESH_CONTROL_ID,
+    QUEST_REFRESH_PRICE_BINDING_ID,
     STOCK_CONTROLLER_RUNTIME_CAPABILITY,
     ControllerRegistryError,
     ResolvedControllerRegistry,
@@ -134,9 +174,20 @@ from .stock_controller_registry import (
     encode_stock_controller_registry,
     resolve_stock_controller_registry,
 )
-from .strt import StrtDelta, StrtRecord, StrtTable, merge_strt, parse_strt, strt_delta
+from .strt import (
+    StrtAncestryError,
+    StrtDelta,
+    StrtRecord,
+    StrtRowResolution,
+    StrtStockRelativeProof,
+    StrtTable,
+    merge_strt_stock_relative,
+    parse_strt,
+    prove_strt_stock_relative_delta,
+)
 from .tables import (
     BdepDelta,
+    BdepRowResolution,
     TableAncestryError,
     TableFormatError,
     TableMergeConflict,
@@ -174,10 +225,25 @@ _STOCK_COMPOSE_OPTIONAL_INPUTS = (
     # an input state and therefore must be fingerprinted deterministically.
     Path("DataMX/mx_maindata.cam"),
     Path("DataMX/mx_interfacedata.cam"),
+    # Required only when a selected package requests the AP08/MX05 quest-board
+    # recipe. Its presence/hash is still part of every prepared plan so that a
+    # later selection cannot silently consume a different stock template.
+    Path("DataMX/mx_textdata.cam"),
 )
 _STOCK_COMPOSE_XML_DIRECTORIES = (
     Path("SDK/OriginalQuests/Data"),
     Path("SDK/OriginalQuests/DataMX"),
+)
+
+_FIXED_GENERATED_CAM_SECTIONS = {
+    "merged_textdata.cam": (b"SMNU", b"STRT"),
+    "merged_gpltext.cam": (b"STRT",),
+    "merged_miscdata.cam": (b"DATA",),
+    "merged_audio.cam": (b"WAVE",),
+    "merged_sounddesc.cam": (b"DSND",),
+}
+_GENERATED_ART_CAM_NAME = re.compile(
+    r"merged_(?:maindata|interfacedata|art-[0-9]{2,})\.cam"
 )
 
 # These are the exact primary TILE fields of the stock cursor lifecycles exposed
@@ -200,6 +266,40 @@ _SOVEREIGN_TARGET_CURSOR_TEMPLATE = (
 class SelectedMod:
     alias: str
     package: ModPackage
+    # Ordinary Mods remain independently enabled. Their readable text resources
+    # participate only so the generated load-last patch can reconcile collisions.
+    semantic_passthrough: bool = False
+    # ``None`` means all authored CAM records. Ordinary Mods receive an exact
+    # collided-record set during reconciliation so unrelated records remain
+    # owned and loaded solely by their original component.
+    cam_resource_filter: frozenset[tuple[bytes, bytes]] | None = None
+    # Reconciled ordinary components may load the same named CAM key more than
+    # once. Majesty uses the last manifest directive, so a key-only filter
+    # would accidentally resurrect every earlier copy at build time. When
+    # present, this exact source/key set preserves the component's effective
+    # native last-write view.
+    cam_resource_source_filter: frozenset[
+        tuple[bytes, bytes, Path, int, int, int]
+    ] | None = None
+    # Art CAMs are positional archives and cannot be safely reduced to the
+    # named-record filter above. ``None`` retains the historical all-art
+    # behavior for merge inputs, but means no art for semantic passthrough
+    # inputs. Reconciliation must explicitly opt a Standard package's exact
+    # declared CAM paths into the generated load-last patch.
+    art_archive_filter: frozenset[Path] | None = None
+    # ``None`` fingerprints the complete package as before. Reconciled
+    # multi-component packages may instead supply the exact files belonging to
+    # the selected component so the report never attributes sibling content.
+    report_files: tuple[Path, ...] | None = None
+    # Reconciliation may quarantine ambiguous legacy source definitions while
+    # conservatively auditing the compiled target. Keep that exact prepared
+    # semantic view through composition instead of reparsing the raw source
+    # differently at the build boundary.
+    semantic_sources: tuple[ParsedSemanticSource, ...] | None = None
+    # Complete panel FourCC namespace observed before passthrough CAM filtering.
+    # These IDs reserve allocator space without causing the Standard resource
+    # itself to be emitted into the generated profile.
+    reserved_dialog_ids: frozenset[bytes] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -212,6 +312,38 @@ class ScopedSemanticResolution:
     def __post_init__(self) -> None:
         if not self.participant_owners:
             raise ValueError("semantic resolution participants cannot be empty")
+
+
+@dataclass(frozen=True)
+class ScopedNamedResourceResolution:
+    """One chosen named CAM record and the owners whose collision it resolves."""
+
+    entry: CamEntry
+    participant_owners: frozenset[str]
+    selected_owner: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.participant_owners:
+            raise ValueError("named CAM resolution participants cannot be empty")
+        if (
+            self.selected_owner is not None
+            and self.selected_owner not in self.participant_owners
+        ):
+            raise ValueError("selected named CAM owner must be a participant")
+
+
+@dataclass(frozen=True)
+class ScopedArtResourceResolution:
+    """One selected owner for an IMAG key within one stock art lineage."""
+
+    selected_owner: str
+    participant_owners: frozenset[str]
+
+    def __post_init__(self) -> None:
+        if not self.participant_owners:
+            raise ValueError("art resolution participants cannot be empty")
+        if self.selected_owner not in self.participant_owners:
+            raise ValueError("selected art owner must be a participant")
 
 
 @dataclass(frozen=True)
@@ -230,12 +362,29 @@ class CamResource:
 
 
 @dataclass(frozen=True)
+class OpaqueCamSection:
+    """One native Standard-Mod CAM section outside generated namespaces."""
+
+    source: Path
+    extension: bytes
+
+
+@dataclass(frozen=True)
 class PackageInventory:
     selected: SelectedMod
     cams: tuple[Path, ...]
     descriptions: tuple[Path, ...]
     gpl_loads: tuple[GplLoad, ...]
     resources: tuple[CamResource, ...]
+    strings: tuple[Path, ...] = ()
+    semantic_sources: tuple[ParsedSemanticSource, ...] | None = None
+    dataset_bases: tuple[str, ...] = ("Any",)
+    opaque_loads: tuple[OpaqueLoad, ...] = ()
+    opaque_cam_sections: tuple[OpaqueCamSection, ...] = ()
+    # Exact manifest CAM paths eligible for positional art composition. This
+    # deliberately differs from ``cams``, which remains the complete declared
+    # inventory used by reconciliation and diagnostics.
+    art_cams: tuple[Path, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -278,6 +427,25 @@ class GplComposeResult:
     inventory_death_drop_exclusions: tuple[str, ...]
     purchase_equipment_tail_callbacks: tuple[tuple[str, str, str], ...] = ()
     purchase_bazaar_tail_callbacks: tuple[tuple[str, str, str], ...] = ()
+    controlled_follower_speed_sync: tuple[
+        tuple[str, str, str, int, tuple[str, ...]], ...
+    ] = ()
+    hero_quest_lifecycles: tuple[
+        tuple[str, str, tuple[str, ...], str, str, str], ...
+    ] = ()
+
+
+@dataclass(frozen=True)
+class GplFeatureEvidence:
+    lifecycle: str
+    mod_id: str
+    feature_key: str
+    callback_symbol: str
+    movement_rate_modifier_per_tier: int = 0
+    marker_effectors: tuple[str, ...] = ()
+    hero_scripts: tuple[str, ...] = ()
+    reset_callback_symbol: str = ""
+    death_callback_symbol: str = ""
 
 
 @dataclass(frozen=True)
@@ -379,17 +547,78 @@ _SUPPORTED_CAM_SECTIONS = frozenset(
     (b"SMNU", b"STRT", b"DATA", b"IMAG", b"TILE", b"SPLT", b"PALT", b"DSND", b"WAVE")
 )
 _NAMED_SECTIONS = frozenset((b"SMNU", b"STRT", b"IMAG", b"DSND", b"WAVE"))
+_NATIVE_LAST_WRITE_SECTIONS = frozenset(
+    (b"SMNU", b"STRT", b"DATA", b"DSND", b"WAVE")
+)
 _WHOLE_STRT = {
-    b"UNTN": (Path("Data/textdata.cam"), "id"),
-    b"ACTN": (Path("Data/textdata.cam"), "id"),
-    b"QITM": (Path("DataMX/mx_gpltext.cam"), "index"),
-    b"AITX": (Path("DataMX/mx_gpltext.cam"), "index"),
+    b"UNTN": ((("Original", Path("Data/textdata.cam")),), "id"),
+    b"ACTN": ((("Original", Path("Data/textdata.cam")),), "id"),
+    b"QITM": (
+        (
+            ("Original", Path("Data/gpltext.cam")),
+            ("Northern Expansion", Path("DataMX/mx_gpltext.cam")),
+        ),
+        "index",
+    ),
+    b"AITX": (
+        (
+            ("Original", Path("Data/gpltext.cam")),
+            ("Northern Expansion", Path("DataMX/mx_gpltext.cam")),
+        ),
+        "index",
+    ),
     # Help text is addressed by its embedded FourCC ID (for example hAL0 and
     # hPH0), not by the physical append slot used by an individual builder.
-    b"HPTX": (Path("DataMX/mx_gpltext.cam"), "id"),
+    b"HPTX": (
+        (
+            ("Original", Path("Data/gpltext.cam")),
+            ("Northern Expansion", Path("DataMX/mx_gpltext.cam")),
+        ),
+        "id",
+    ),
 }
 _TEXT_WHOLE_ORDER = (b"UNTN", b"ACTN")
 _GPLTEXT_WHOLE_ORDER = (b"QITM", b"AITX", b"HPTX")
+
+
+def _selected_art_archive_paths(
+    selected: SelectedMod,
+    declared_cams: Sequence[Path],
+) -> tuple[Path, ...]:
+    """Resolve the explicit positional-art boundary for one package.
+
+    A merge input keeps the historical behavior of offering every declared
+    CAM to the typed art composer. A semantic-passthrough Standard offers none
+    unless reconciliation names exact declared paths. Unknown or out-of-root
+    selections fail closed instead of silently widening the boundary.
+    """
+
+    requested = selected.art_archive_filter
+    if requested is None:
+        return () if selected.semantic_passthrough else tuple(declared_cams)
+
+    root = selected.package.root.resolve()
+    declared_by_path = {path.resolve(): path for path in declared_cams}
+    normalized: set[Path] = set()
+    for raw_path in requested:
+        path = raw_path if raw_path.is_absolute() else root / raw_path
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise ComposeError(
+                f"{selected.alias}: art archive selection escapes package root: "
+                f"{raw_path}"
+            ) from exc
+        if resolved not in declared_by_path:
+            raise ComposeError(
+                f"{selected.alias}: art archive selection is not a declared CAM: "
+                f"{raw_path}"
+            )
+        normalized.add(resolved)
+    return tuple(
+        path for path in declared_cams if path.resolve() in normalized
+    )
 
 
 def inventory_package(selected: SelectedMod) -> PackageInventory:
@@ -403,10 +632,28 @@ def inventory_package(selected: SelectedMod) -> PackageInventory:
     cam_paths: list[Path] = []
     description_paths: list[Path] = []
     gpl_loads: list[GplLoad] = []
+    string_paths: list[Path] = []
     resources: list[CamResource] = []
+    opaque_loads: list[OpaqueLoad] = []
+    opaque_cam_sections: list[OpaqueCamSection] = []
+    source_filter = (
+        {
+            (section, key, path.resolve(), cam_order, section_order, entry_order)
+            for (
+                section,
+                key,
+                path,
+                cam_order,
+                section_order,
+                entry_order,
+            ) in selected.cam_resource_source_filter
+        }
+        if selected.cam_resource_source_filter is not None
+        else None
+    )
 
     for dataset_index, dataset in enumerate(selected.package.datasets):
-        if dataset.base.casefold() != "any":
+        if dataset.base.casefold() != "any" and not selected.semantic_passthrough:
             raise ComposeError(
                 f"{selected.alias}: Dataset[{dataset_index}] base={dataset.base!r} "
                 "is not supported by the proof-of-concept composer"
@@ -420,11 +667,34 @@ def inventory_package(selected: SelectedMod) -> PackageInventory:
                     archive = read_cam(source)
                     for section_order, section in enumerate(archive.sections):
                         if section.extension not in _SUPPORTED_CAM_SECTIONS:
-                            raise ComposeError(
-                                f"{selected.alias}: unsupported CAM section "
-                                f"{section.extension!r} in {source}"
+                            if not selected.semantic_passthrough:
+                                raise ComposeError(
+                                    f"{selected.alias}: unsupported CAM section "
+                                    f"{section.extension!r} in {source}"
+                                )
+                            opaque_cam_sections.append(
+                                OpaqueCamSection(source, section.extension)
                             )
+                            continue
                         for entry_order, entry in enumerate(section.entries):
+                            resource_identity = (
+                                section.extension,
+                                entry.name[:4],
+                                source.resolve(),
+                                cam_order,
+                                section_order,
+                                entry_order,
+                            )
+                            if (
+                                source_filter is not None
+                                and resource_identity not in source_filter
+                            ) or (
+                                source_filter is None
+                                and selected.cam_resource_filter is not None
+                                and (section.extension, entry.name[:4])
+                                not in selected.cam_resource_filter
+                            ):
+                                continue
                             resources.append(
                                 CamResource(
                                     owner=selected.alias,
@@ -440,22 +710,62 @@ def inventory_package(selected: SelectedMod) -> PackageInventory:
                     description_paths.append(directive.file.absolute_path)
                 elif isinstance(directive, GplLoad):
                     gpl_loads.append(directive)
+                elif isinstance(directive, StringsLoad):
+                    string_paths.append(directive.file.absolute_path)
+                elif isinstance(directive, OpaqueLoad):
+                    if not selected.semantic_passthrough:
+                        raise ComposeError(
+                            f"{selected.alias}: unsupported manifest directive "
+                            f"{directive.tag}"
+                        )
+                    opaque_loads.append(directive)
                 else:  # pragma: no cover - package parser owns this closed union
                     raise ComposeError(
                         f"{selected.alias}: unsupported manifest directive "
                         f"{type(directive).__name__}"
                     )
 
-    if not cam_paths:
+    if not cam_paths and not selected.semantic_passthrough:
         raise ComposeError(f"{selected.alias}: package has no CAM resources")
-    if not gpl_loads:
+    if not gpl_loads and not selected.semantic_passthrough:
         raise ComposeError(f"{selected.alias}: package has no GPL load")
     return PackageInventory(
         selected=selected,
         cams=tuple(cam_paths),
         descriptions=tuple(description_paths),
         gpl_loads=tuple(gpl_loads),
-        resources=tuple(resources),
+        strings=tuple(string_paths),
+        resources=collapse_native_cam_resources(resources),
+        semantic_sources=selected.semantic_sources,
+        dataset_bases=tuple(dataset.base for dataset in selected.package.datasets),
+        art_cams=_selected_art_archive_paths(selected, cam_paths),
+        opaque_loads=tuple(opaque_loads),
+        opaque_cam_sections=tuple(opaque_cam_sections),
+    )
+
+
+def collapse_native_cam_resources(
+    resources: Iterable[CamResource],
+) -> tuple[CamResource, ...]:
+    """Apply one package's native last-write semantics to keyed registries.
+
+    Majesty evaluates a component's CAM directives in manifest order. For a
+    keyed registry, a later record from that same component replaces its
+    earlier value; those records are not independent providers and must never
+    become a manager conflict. Positional art is deliberately excluded and
+    remains under the typed stock-lineage composer.
+    """
+
+    ordered = tuple(resources)
+    last_position: dict[tuple[str, bytes, bytes], int] = {}
+    for index, resource in enumerate(ordered):
+        if resource.section in _NATIVE_LAST_WRITE_SECTIONS:
+            last_position[(resource.owner, resource.section, resource.key)] = index
+    return tuple(
+        resource
+        for index, resource in enumerate(ordered)
+        if resource.section not in _NATIVE_LAST_WRITE_SECTIONS
+        or last_position[(resource.owner, resource.section, resource.key)] == index
     )
 
 
@@ -464,12 +774,33 @@ def merge_named_resources(
     section: bytes,
     *,
     renames: Mapping[tuple[str, bytes], bytes] | None = None,
+    resolutions: Mapping[
+        tuple[bytes, bytes], ScopedNamedResourceResolution
+    ] | None = None,
+    stock_resources: Mapping[tuple[bytes, bytes], bytes] | None = None,
 ) -> tuple[tuple[CamEntry, ...], tuple[NamedMergeSelection, ...]]:
     """Union a named CAM registry using its native four-byte resource key."""
 
     if section not in _NAMED_SECTIONS:
         raise ComposeError(f"section {section!r} is not a supported named registry")
+    resources = tuple(resources)
     rename_map = dict(renames or {})
+    resolution_map = dict(resolutions or {})
+    stock_map = dict(stock_resources or {})
+    # Majesty applies one component's CAM directives in manifest order.  A
+    # later record with the same native key replaces its earlier sibling; it is
+    # not a cross-mod conflict.  Collapse that native view before applying any
+    # manager-owned renames or comparing different owners.
+    last_native_position: dict[tuple[str, bytes], int] = {}
+    for index, resource in enumerate(resources):
+        if resource.section == section:
+            last_native_position[(resource.owner, resource.key)] = index
+    resources = tuple(
+        resource
+        for index, resource in enumerate(resources)
+        if resource.section != section
+        or last_native_position[(resource.owner, resource.key)] == index
+    )
     ordered: list[tuple[bytes, CamEntry, list[str]]] = []
     positions: dict[bytes, int] = {}
     owner_keys: set[tuple[str, bytes]] = set()
@@ -494,6 +825,18 @@ def merge_named_resources(
         entry = resource.entry
         if key != old_key:
             entry = CamEntry(name=key + entry.name[4:], data=entry.data)
+        resolution = resolution_map.get((section, key))
+        if resolution is not None and resource.owner in resolution.participant_owners:
+            if resolution.entry.name[:4] != key:
+                raise ComposeError(
+                    f"named CAM resolution for {section!r}/{key!r} has a mismatched key"
+                )
+            entry = resolution.entry
+        elif stock_map.get((section, key)) == entry.data:
+            # The generated profile loads last. Re-emitting an unchanged stock
+            # record would be an active override that could erase a normally
+            # loaded Standard Mod; ancestry-only records are true no-ops.
+            continue
         existing_position = positions.get(key)
         if existing_position is None:
             positions[key] = len(ordered)
@@ -517,7 +860,342 @@ def merge_named_resources(
         )
         for key, entry, owners in ordered
     )
+    for (resolution_section, key), resolution in resolution_map.items():
+        if resolution_section != section:
+            continue
+        actual_owners = {
+            resource.owner
+            for resource in resources
+            if rename_map.get((resource.owner, resource.key), resource.key) == key
+        }
+        missing = resolution.participant_owners.difference(actual_owners)
+        if missing:
+            raise ComposeError(
+                f"named CAM resolution for {section!r}/{key!r} names absent owners: "
+                + ", ".join(sorted(missing))
+            )
     return entries, selections
+
+
+_MX05_NATIVE_LIST_CONTROL_ID = 0x1388
+_MX05_NATIVE_ACTION_CONTROL_ID = 0x138B
+_MX05_NATIVE_COIN_CONTROL_ID = 0x138C
+_MX05_NATIVE_SCROLL_CONTROL_ID = 0x1392
+_MX05_NATIVE_PRICE_CONTROL_ID = 0x1F46
+
+
+def _split_smnu_records(payload: bytes, *, owner: str, label: str) -> tuple[bytes, ...]:
+    """Split Majesty's DWORD-aligned SMNU stream at literal record sentinels."""
+
+    if not payload or len(payload) % 4:
+        raise ComposeError(f"{owner}: SMNU/{label} is not a DWORD-aligned stream")
+    records: list[bytes] = []
+    start = 0
+    for offset in range(0, len(payload), 4):
+        if payload[offset:offset + 4] != b"\xff\xff\xff\xff":
+            continue
+        records.append(payload[start:offset + 4])
+        start = offset + 4
+    if start != len(payload) or not records or records[-1] != b"\xff\xff\xff\xff":
+        raise ComposeError(f"{owner}: SMNU/{label} has an invalid record boundary")
+    return tuple(records)
+
+
+def _smnu_record_index(
+    records: Sequence[bytes], control_id: int, *, owner: str, label: str
+) -> int:
+    token = struct.pack("<I", control_id)
+    matches = [
+        index
+        for index, record in enumerate(records[:-1])
+        if any(record[offset:offset + 4] == token for offset in range(0, len(record), 4))
+    ]
+    if len(matches) != 1:
+        raise ComposeError(
+            f"{owner}: SMNU/{label} must contain exactly one literal "
+            f"control 0x{control_id:08X}; found {len(matches)}"
+        )
+    return matches[0]
+
+
+def _patch_mx05_record(
+    record: bytes,
+    *,
+    expected_size: int,
+    expected_rect: tuple[int, int, int, int],
+    rectangle: tuple[int, int, int, int],
+    owner: str,
+    label: str,
+    control_offset: int | None = None,
+    control_id: int | None = None,
+    string_patches: Mapping[int, int] | None = None,
+) -> bytes:
+    if (
+        len(record) != expected_size
+        or record[-4:] != b"\xff\xff\xff\xff"
+        or struct.unpack_from("<4I", record, 8) != expected_rect
+    ):
+        raise ComposeError(
+            f"{owner}: stock MX05 {label} record shape has changed"
+        )
+    result = bytearray(record)
+    struct.pack_into("<4I", result, 8, *rectangle)
+    if control_offset is not None and control_id is not None:
+        struct.pack_into("<I", result, control_offset, control_id)
+    for offset, value in (string_patches or {}).items():
+        struct.pack_into("<I", result, offset, value)
+    return bytes(result)
+
+
+def _append_quest_refresh_strings(
+    payload: bytes, *, owner: str, label: str
+) -> tuple[bytes, tuple[int, int, int, int]]:
+    try:
+        table = parse_strt(payload)
+    except ValueError as exc:
+        raise ComposeError(f"{owner}: STRT/{label} is invalid: {exc}") from exc
+    if len(table.records) > 0xFFFB:
+        raise ComposeError(f"{owner}: STRT/{label} has no room for Refresh strings")
+    first = len(table.records)
+    texts = (
+        b"REFRESH",
+        b"Replace all available quests.",
+        b"0",
+        b"Gold required to refresh the quest board.",
+    )
+    records = tuple(table.records) + tuple(
+        StrtRecord(string_id=first + index, text=text)
+        for index, text in enumerate(texts)
+    )
+    return StrtTable(version=table.version, records=records).to_bytes(), (
+        first, first + 1, first + 2, first + 3,
+    )
+
+
+def _materialize_mx05_quest_refresh_row(
+    game_path: Path,
+    payload: bytes,
+    strings: tuple[int, int, int, int],
+    *,
+    owner: str,
+    label: str,
+) -> bytes:
+    """Add a second literal MX05 bottom action row for quest-board Refresh.
+
+    The package supplies an unchanged MX05 panel. The Manager shortens the
+    native list/scrollbar by one stock row, moves the native selected action up
+    by exactly 25 pixels, and appends stock-cloned action/coin/price records at
+    the original bottom coordinates. No AP54 control or parent-panel workaround
+    is accepted or retained.
+    """
+
+    stock_payload = _require_cam_entry(
+        game_path / Path("DataMX/mx_textdata.cam"), b"SMNU", b"MX05"
+    ).data
+    stock = list(_split_smnu_records(stock_payload, owner="stock", label="MX05"))
+    records = list(_split_smnu_records(payload, owner=owner, label=label))
+    ids = (
+        _MX05_NATIVE_LIST_CONTROL_ID,
+        _MX05_NATIVE_ACTION_CONTROL_ID,
+        _MX05_NATIVE_COIN_CONTROL_ID,
+        _MX05_NATIVE_SCROLL_CONTROL_ID,
+        _MX05_NATIVE_PRICE_CONTROL_ID,
+    )
+    stock_indices = {
+        control: _smnu_record_index(stock, control, owner="stock", label="MX05")
+        for control in ids
+    }
+    indices = {
+        control: _smnu_record_index(records, control, owner=owner, label=label)
+        for control in ids
+    }
+    for control in ids:
+        if records[indices[control]] != stock[stock_indices[control]]:
+            raise ComposeError(
+                f"{owner}: SMNU/{label} control 0x{control:08X} is not the "
+                "literal stock MX05 record required for Manager layout"
+            )
+
+    records[indices[_MX05_NATIVE_LIST_CONTROL_ID]] = _patch_mx05_record(
+        stock[stock_indices[_MX05_NATIVE_LIST_CONTROL_ID]],
+        expected_size=0x90, expected_rect=(10, 55, 164, 160),
+        rectangle=(10, 55, 164, 135), owner=owner, label="list",
+    )
+    records[indices[_MX05_NATIVE_SCROLL_CONTROL_ID]] = _patch_mx05_record(
+        stock[stock_indices[_MX05_NATIVE_SCROLL_CONTROL_ID]],
+        expected_size=0x54, expected_rect=(174, 51, 25, 167),
+        rectangle=(174, 51, 25, 142), owner=owner, label="scrollbar",
+    )
+    records[indices[_MX05_NATIVE_COIN_CONTROL_ID]] = _patch_mx05_record(
+        stock[stock_indices[_MX05_NATIVE_COIN_CONTROL_ID]],
+        expected_size=0x74, expected_rect=(33, 219, 16, 17),
+        rectangle=(33, 194, 16, 17), owner=owner, label="selected-action coin",
+    )
+    records[indices[_MX05_NATIVE_ACTION_CONTROL_ID]] = _patch_mx05_record(
+        stock[stock_indices[_MX05_NATIVE_ACTION_CONTROL_ID]],
+        expected_size=0xAC, expected_rect=(51, 219, 103, 21),
+        rectangle=(51, 194, 103, 21), owner=owner, label="selected action",
+    )
+    records[indices[_MX05_NATIVE_PRICE_CONTROL_ID]] = _patch_mx05_record(
+        stock[stock_indices[_MX05_NATIVE_PRICE_CONTROL_ID]],
+        expected_size=0xA8, expected_rect=(115, 222, 39, 16),
+        rectangle=(115, 197, 39, 16), owner=owner, label="selected-action price",
+    )
+
+    refresh_label, refresh_tooltip, refresh_price, refresh_price_tooltip = strings
+    refresh_coin = _patch_mx05_record(
+        stock[stock_indices[_MX05_NATIVE_COIN_CONTROL_ID]],
+        expected_size=0x74, expected_rect=(33, 219, 16, 17),
+        rectangle=(33, 219, 16, 17), owner=owner, label="Refresh coin",
+        control_offset=0x64, control_id=QUEST_REFRESH_COIN_CONTROL_ID,
+        string_patches={0x20: refresh_price_tooltip},
+    )
+    refresh_action = _patch_mx05_record(
+        stock[stock_indices[_MX05_NATIVE_ACTION_CONTROL_ID]],
+        expected_size=0xAC, expected_rect=(51, 219, 103, 21),
+        rectangle=(51, 219, 103, 21), owner=owner, label="Refresh action",
+        control_offset=0x88, control_id=QUEST_REFRESH_CONTROL_ID,
+        string_patches={
+            0x2C: refresh_label,
+            0x30: refresh_label,
+            0x38: refresh_tooltip,
+        },
+    )
+    refresh_price_record = _patch_mx05_record(
+        stock[stock_indices[_MX05_NATIVE_PRICE_CONTROL_ID]],
+        expected_size=0xA8, expected_rect=(115, 222, 39, 16),
+        rectangle=(115, 222, 39, 16), owner=owner, label="Refresh price",
+        control_offset=0x7C, control_id=QUEST_REFRESH_PRICE_BINDING_ID,
+        string_patches={0x1C: refresh_price, 0x24: refresh_price_tooltip},
+    )
+    records[-1:-1] = (refresh_coin, refresh_action, refresh_price_record)
+    result = b"".join(records)
+    for control in (
+        QUEST_REFRESH_CONTROL_ID,
+        QUEST_REFRESH_PRICE_BINDING_ID,
+        QUEST_REFRESH_COIN_CONTROL_ID,
+    ):
+        if result.count(struct.pack("<I", control)) != 1:
+            raise ComposeError(
+                f"{owner}: generated quest-board control 0x{control:08X} is not unique"
+            )
+    return result
+
+
+def _materialize_quest_board_panel_resources(
+    game_path: Path,
+    resources: Sequence[CamResource],
+    *,
+    controller_panels: Sequence[ResolvedControllerPanel],
+    controller_registry: ResolvedControllerRegistry,
+    dialog_resolutions: Sequence[ResolvedBuildingDialog],
+) -> tuple[CamResource, ...]:
+    if not controller_registry.quest_boards:
+        return tuple(resources)
+    panels = {item.qualified_panel_key: item for item in controller_panels}
+    output = list(resources)
+    for board in controller_registry.quest_boards:
+        panel = panels.get(board.panel_key)
+        if panel is None:
+            raise ComposeError(f"quest-board panel mapping is missing: {board.panel_key}")
+        parent = next((
+            item for item in dialog_resolutions
+            if item.owner == panel.owner
+            and int.from_bytes(item.resolved_dialog_id, "little") == board.parent_dialog_id
+        ), None)
+        if parent is None:
+            raise ComposeError(f"quest-board parent mapping is missing: {board.panel_key}")
+        parent_smnu = [
+            resource for resource in output
+            if resource.owner == panel.owner and resource.section == b"SMNU"
+            and resource.key == parent.source_dialog_id
+        ]
+        if len(parent_smnu) != 1:
+            raise ComposeError(f"{panel.owner}: quest-board parent SMNU is missing")
+        parent_values = _smnu_dword_values(
+            parent_smnu[0].entry.data, panel.owner,
+            _display_key(parent.source_dialog_id),
+        )
+        authored = [
+            value for value in (
+                QUEST_REFRESH_CONTROL_ID,
+                QUEST_REFRESH_PRICE_BINDING_ID,
+                QUEST_REFRESH_COIN_CONTROL_ID,
+            ) if value in parent_values
+        ]
+        if authored:
+            raise ComposeError(
+                f"{panel.owner}: remove the obsolete AP54 parent Refresh controls: "
+                + ", ".join(f"0x{value:08X}" for value in authored)
+            )
+
+        child_matches = [
+            (index, resource) for index, resource in enumerate(output)
+            if resource.owner == panel.owner and resource.key == panel.source_dialog_id
+            and resource.section in (b"SMNU", b"STRT")
+        ]
+        child_by_section = {
+            section: [(index, resource) for index, resource in child_matches
+                      if resource.section == section]
+            for section in (b"SMNU", b"STRT")
+        }
+        if any(len(matches) != 1 for matches in child_by_section.values()):
+            raise ComposeError(f"{panel.owner}: quest-board child panel is incomplete")
+        strt_index, strt_resource = child_by_section[b"STRT"][0]
+        strings_payload, string_indices = _append_quest_refresh_strings(
+            strt_resource.entry.data, owner=panel.owner,
+            label=_display_key(panel.source_dialog_id),
+        )
+        smnu_index, smnu_resource = child_by_section[b"SMNU"][0]
+        child_values = _smnu_dword_values(
+            smnu_resource.entry.data, panel.owner,
+            _display_key(panel.source_dialog_id),
+        )
+        if any(value in child_values for value in (
+            QUEST_REFRESH_CONTROL_ID,
+            QUEST_REFRESH_PRICE_BINDING_ID,
+            QUEST_REFRESH_COIN_CONTROL_ID,
+        )):
+            raise ComposeError(
+                f"{panel.owner}: quest-board child must not pre-author Manager Refresh controls"
+            )
+        smnu_payload = _materialize_mx05_quest_refresh_row(
+            game_path, smnu_resource.entry.data, string_indices,
+            owner=panel.owner, label=_display_key(panel.source_dialog_id),
+        )
+        output[strt_index] = replace(
+            strt_resource,
+            entry=CamEntry(name=strt_resource.entry.name, data=strings_payload),
+        )
+        output[smnu_index] = replace(
+            smnu_resource,
+            entry=CamEntry(name=smnu_resource.entry.name, data=smnu_payload),
+        )
+    return tuple(output)
+
+
+def _load_whole_strt_stock_lineage(
+    game_path: Path,
+    key: bytes,
+) -> tuple[StrtTable, tuple[tuple[str, StrtTable], ...]]:
+    """Load every installed stock ancestor for one complete STRT registry.
+
+    The last declared table is Majesty's effective stock value.  Older tables
+    remain valid package ancestries, but never become the output base merely
+    because a legacy mod was authored against them.
+    """
+
+    try:
+        stock_paths, _key_mode = _WHOLE_STRT[key]
+    except KeyError as exc:
+        raise ComposeError(f"unsupported complete STRT registry: {_display_key(key)}") from exc
+    ancestors: list[tuple[str, StrtTable]] = []
+    for label, relative in stock_paths:
+        entry = _require_cam_entry(game_path / relative, b"STRT", key)
+        ancestors.append((label, parse_strt(entry.data)))
+    if not ancestors:  # defensive configuration invariant
+        raise ComposeError(f"no stock ancestry is configured for {_display_key(key)}")
+    return ancestors[-1][1], tuple(ancestors)
 
 
 def merge_text_resources(
@@ -527,10 +1205,32 @@ def merge_text_resources(
     private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
     dialog_resolutions: Sequence[ResolvedBuildingDialog] | None = None,
     controller_panels: Sequence[ResolvedControllerPanel] = (),
+    controller_registry: ResolvedControllerRegistry | None = None,
+    named_resolutions: Mapping[
+        tuple[bytes, bytes], ScopedNamedResourceResolution
+    ] | None = None,
+    strt_resolutions: Mapping[
+        tuple[bytes, int], StrtRowResolution
+    ] | None = None,
+    stock_named_resources: Mapping[tuple[bytes, bytes], bytes] | None = None,
 ) -> TextMergeResult:
     """Merge Majesty's known whole STRT tables and all private panel/name tables."""
 
-    resources = tuple(resource for inv in inventories for resource in inv.resources)
+    resources = collapse_native_cam_resources(
+        resource for inv in inventories for resource in inv.resources
+    )
+    if controller_registry is not None and controller_registry.quest_boards:
+        if dialog_resolutions is None:
+            raise ComposeError(
+                "quest-board materialization requires resolved building dialogs"
+            )
+        resources = _materialize_quest_board_panel_resources(
+            game_path,
+            resources,
+            controller_panels=controller_panels,
+            controller_registry=controller_registry,
+            dialog_resolutions=dialog_resolutions,
+        )
     dialog_renames = _dialog_renames(
         inventories,
         resources,
@@ -540,9 +1240,10 @@ def merge_text_resources(
     rename_map = {(owner, old): new for owner, old, new in dialog_renames}
 
     whole: dict[bytes, StrtMergeSelection] = {}
+    processed_whole_keys: set[bytes] = set()
     whole_resource_ids: set[int] = set()
     detached_activity_texts: tuple[PrivateActivityTextRecord, ...] = ()
-    for key, (stock_relative, key_mode) in _WHOLE_STRT.items():
+    for key, (_stock_paths, key_mode) in _WHOLE_STRT.items():
         variants = [
             resource
             for resource in resources
@@ -559,8 +1260,7 @@ def merge_text_resources(
                 f"complete {_display_key(key)} STRT table appears more than once "
                 f"for selected owner(s): {', '.join(duplicate_owners)}"
             )
-        stock_entry = _require_cam_entry(game_path / stock_relative, b"STRT", key)
-        stock_table = parse_strt(stock_entry.data)
+        stock_table, stock_ancestors = _load_whole_strt_stock_lineage(game_path, key)
         parsed_variants = tuple(
             (resource.owner, parse_strt(resource.entry.data)) for resource in variants
         )
@@ -569,20 +1269,38 @@ def merge_text_resources(
                 stock_table,
                 parsed_variants,
                 private_activity_texts,
+                stock_ancestors=stock_ancestors,
             )
-        merged, deltas = merge_strt(
-            stock_table,
-            parsed_variants,
-            key_mode=key_mode,
-        )
-        whole[key] = StrtMergeSelection(
-            key=key,
-            entry=CamEntry(name=variants[0].entry.name, data=merged.to_bytes()),
-            deltas=deltas,
-        )
+        try:
+            merged, deltas = merge_strt_stock_relative(
+                stock_table,
+                stock_ancestors,
+                parsed_variants,
+                key_mode=key_mode,
+                resolutions={
+                    row_key: resolution
+                    for (table_key, row_key), resolution in (strt_resolutions or {}).items()
+                    if table_key == key
+                },
+            )
+        except StrtAncestryError as exc:
+            raise ComposeError(
+                f"{_display_key(key)} STRT stock ancestry is not safe: {exc}"
+            ) from exc
+        processed_whole_keys.add(key)
+        # A complete stock table is ancestry evidence, not an authored
+        # load-last replacement.  Emit this registry only when at least one
+        # provider has a real stock-relative row delta.  A reviewed choice to
+        # restore stock still has non-empty provider deltas and is retained.
+        if any(delta.changes for delta in deltas):
+            whole[key] = StrtMergeSelection(
+                key=key,
+                entry=CamEntry(name=variants[0].entry.name, data=merged.to_bytes()),
+                deltas=deltas,
+            )
         whole_resource_ids.update(id(resource) for resource in variants)
 
-    if private_activity_texts and b"AITX" not in whole:
+    if private_activity_texts and b"AITX" not in processed_whole_keys:
         raise ComposeError(
             "private activity-text bindings exist but no selected mod provides AITX"
         )
@@ -593,10 +1311,18 @@ def merge_text_resources(
         if resource.section == b"STRT" and id(resource) not in whole_resource_ids
     )
     smnu_entries, smnu_selections = merge_named_resources(
-        resources, b"SMNU", renames=rename_map
+        resources,
+        b"SMNU",
+        renames=rename_map,
+        resolutions=named_resolutions,
+        stock_resources=stock_named_resources,
     )
     private_strt_entries, private_strt_selections = merge_named_resources(
-        private_strt_resources, b"STRT", renames=rename_map
+        private_strt_resources,
+        b"STRT",
+        renames=rename_map,
+        resolutions=named_resolutions,
+        stock_resources=stock_named_resources,
     )
 
     dialog_keys = {entry.name[:4] for entry in smnu_entries}
@@ -643,10 +1369,7 @@ def discover_private_activity_texts(
     name.  A package that cannot prove the stock resolver lifecycle is rejected.
     """
 
-    stock_entry = _require_cam_entry(
-        game_path / _WHOLE_STRT[b"AITX"][0], b"STRT", b"AITX"
-    )
-    stock = parse_strt(stock_entry.data)
+    stock, stock_ancestors = _load_whole_strt_stock_lineage(game_path, b"AITX")
     packages: list[ActivityTextDiscoveryPackage] = []
     for inventory in inventories:
         owner = inventory.selected.alias
@@ -662,8 +1385,17 @@ def discover_private_activity_texts(
         if not variants:
             continue
         table = parse_strt(variants[0].entry.data)
-        _require_complete_aitx_provider(owner, stock, table)
-        delta = strt_delta(stock, table, owner=owner, key_mode="index")
+        try:
+            proof = prove_strt_stock_relative_delta(
+                owner,
+                table,
+                stock,
+                stock_ancestors,
+                key_mode="index",
+            )
+        except StrtAncestryError as exc:
+            raise ComposeError(f"{owner}: AITX stock ancestry is not safe: {exc}") from exc
+        delta = proof.delta
         if not delta.changes:
             continue
         for source_index, record in delta.changes:
@@ -680,15 +1412,7 @@ def discover_private_activity_texts(
                     (source_index, record.text)
                     for source_index, record in delta.changes
                 ),
-                stock_rows=tuple(
-                    (
-                        source_index,
-                        stock.records[source_index].text
-                        if source_index < len(stock.records)
-                        else b"",
-                    )
-                    for source_index, _record in delta.changes
-                ),
+                stock_rows=_private_aitx_ancestor_rows(owner, proof),
                 gpl_sources=tuple(_parse_inventory_gpl_sources(inventory)),
             )
         )
@@ -702,6 +1426,30 @@ def discover_private_activity_texts(
         )
     except IntentTextError as exc:
         raise ComposeError(str(exc)) from exc
+
+
+def _private_aitx_ancestor_rows(
+    owner: str,
+    proof: StrtStockRelativeProof,
+) -> tuple[tuple[int, bytes], ...]:
+    """Return the proven authoring-ancestor row for each private AITX edit."""
+
+    result: list[tuple[int, bytes]] = []
+    for source_index, _record in proof.delta.changes:
+        candidates = {
+            (
+                ancestor.records[source_index].text
+                if source_index < len(ancestor.records)
+                else b""
+            )
+            for _label, ancestor in proof.candidate_ancestors
+        }
+        if len(candidates) != 1:
+            raise ComposeError(
+                f"{owner}: AITX[{source_index}] has ambiguous stock-row ancestry"
+            )
+        result.append((source_index, next(iter(candidates))))
+    return tuple(result)
 
 
 def discover_selected_private_activity_texts(
@@ -780,10 +1528,84 @@ def _load_stock_purchase_bazaar_source(
     return source
 
 
+def _load_stock_controlled_follower_items(
+    game_path: Path,
+) -> tuple[SemanticItem, SemanticItem, SemanticItem]:
+    root = game_path / "SDK" / "OriginalQuests" / "GPLMx" / "TaskModules"
+    paths = (
+        root / "Subtasks" / "mx_Control_Monster.gpl",
+        root / "Characters" / "Monsters" / "mx_Controlled_Monster.gpl",
+    )
+    parsed: list[ParsedSemanticSource] = []
+    for path in paths:
+        if not path.is_file():
+            raise ComposeError(
+                "installed stock GPLMx controlled-monster source is required "
+                f"for follower movement composition: {path}"
+            )
+        source = parse_gpl(_read_source_text(path), str(path))
+        require_complete_semantic_coverage(source)
+        parsed.append(source)
+    return (
+        parsed[0].require(DefinitionKind.FUNCTION, "Control_Monster"),
+        parsed[1].require(DefinitionKind.FUNCTION, "Controlled_Monster_Death"),
+        parsed[1].require(DefinitionKind.FUNCTION, "leader_dead"),
+    )
+
+
+def _load_stock_hero_quest_lifecycle_items(
+    game_path: Path,
+) -> tuple[dict[str, SemanticItem], SemanticItem, SemanticItem]:
+    root = game_path / "SDK" / "OriginalQuests" / "GPLMx"
+    decision_root = root / "DecisionTrees"
+    scripts = (
+        "mx_adept", "mx_barbarian", "mx_cultist", "mx_discord", "mx_dwarf",
+        "mx_elf", "mx_gnome", "mx_healer", "mx_monk", "mx_paladin",
+        "mx_priestess", "mx_ranger", "mx_rogue", "mx_solarus",
+        "mx_warrior", "mx_wizard",
+    )
+    trees: dict[str, SemanticItem] = {}
+    for script in scripts:
+        candidates = list(decision_root.glob(script + ".gpl"))
+        if not candidates:
+            candidates = [
+                path for path in decision_root.glob("*.gpl")
+                if path.stem.casefold() == script
+            ]
+        if len(candidates) != 1:
+            raise ComposeError(
+                f"installed stock hero decision source is missing or ambiguous: {script}"
+            )
+        source = parse_gpl(_read_source_text(candidates[0]), str(candidates[0]))
+        require_complete_semantic_coverage(source)
+        functions = [item for item in source.items if item.kind is DefinitionKind.FUNCTION]
+        if len(functions) != 1:
+            raise ComposeError(
+                f"stock hero decision source must contain exactly one function: {candidates[0]}"
+            )
+        trees[script] = functions[0]
+    reset_path = root / "mx_LowLevel.gpl"
+    death_path = root / "mx_Hero_Deaths.gpl"
+    for path in (reset_path, death_path):
+        if not path.is_file():
+            raise ComposeError(
+                f"installed stock hero lifecycle source is required: {path}"
+            )
+    reset_source = parse_gpl(_read_source_text(reset_path), str(reset_path))
+    death_source = parse_gpl(_read_source_text(death_path), str(death_path))
+    return (
+        trees,
+        reset_source.require(DefinitionKind.FUNCTION, "reset_tasks"),
+        death_source.require(DefinitionKind.FUNCTION, "Unit_Call_Deathscript"),
+    )
+
+
 def _detach_private_activity_texts(
     stock: StrtTable,
     variants: Sequence[tuple[str, StrtTable]],
     bindings: Sequence[PrivateActivityTextBinding],
+    *,
+    stock_ancestors: Sequence[tuple[str, StrtTable]] | None = None,
 ) -> tuple[
     tuple[tuple[str, StrtTable], ...],
     tuple[PrivateActivityTextRecord, ...],
@@ -812,11 +1634,23 @@ def _detach_private_activity_texts(
         runtime_ids.add(binding.runtime_id)
         by_owner.setdefault(binding.owner, []).append(binding)
 
+    if stock_ancestors is None:
+        for owner, table in variants:
+            _require_complete_aitx_provider(owner, stock, table)
+    ancestry = tuple(stock_ancestors or (("installed stock", stock),))
     sanitized: list[tuple[str, StrtTable]] = []
     detached: list[PrivateActivityTextRecord] = []
     for owner, table in variants:
-        _require_complete_aitx_provider(owner, stock, table)
-        delta = strt_delta(stock, table, owner=owner, key_mode="index")
+        try:
+            normalized, deltas = merge_strt_stock_relative(
+                stock,
+                ancestry,
+                ((owner, table),),
+                key_mode="index",
+            )
+        except StrtAncestryError as exc:
+            raise ComposeError(f"{owner}: AITX stock ancestry is not safe: {exc}") from exc
+        delta = deltas[0]
         changed = {index for index, _record in delta.changes}
         declared = {binding.source_index for binding in by_owner.get(owner, ())}
         undeclared = sorted(changed - declared)
@@ -832,7 +1666,7 @@ def _detach_private_activity_texts(
                 f"AITX indices {stale}"
             )
 
-        records = list(table.records)
+        records = list(normalized.records)
         for binding in by_owner.get(owner, ()):
             record = records[binding.source_index]
             expected = binding.expected_text.encode("cp1252")
@@ -875,12 +1709,18 @@ def _require_complete_aitx_provider(
 
 
 def merge_bdep_resource(
-    game_path: Path, inventories: Sequence[PackageInventory]
+    game_path: Path,
+    inventories: Sequence[PackageInventory],
+    *,
+    resolutions: Mapping[str, BdepRowResolution] | None = None,
 ) -> BdepComposeResult:
     resources = [
         resource
-        for inventory in inventories
-        for resource in inventory.resources
+        for resource in collapse_native_cam_resources(
+            resource
+            for inventory in inventories
+            for resource in inventory.resources
+        )
         if resource.section == b"DATA"
     ]
     unsupported = [resource for resource in resources if resource.key != b"BDEP"]
@@ -903,7 +1743,12 @@ def merge_bdep_resource(
             raise ComposeError("selected packages provide no DATA/BDEP resource")
         return BdepComposeResult(
             archive=CamArchive(
-                sections=(CamSection(extension=b"DATA", entries=(effective_stock,)),)
+                # The generated package loads after independently enabled
+                # Standard Mods. Re-emitting effective stock here would undo a
+                # Standard's native BDEP change even though no selected input
+                # asked the composer to own BDEP. An empty DATA registry is a
+                # valid no-op overlay.
+                sections=(CamSection(extension=b"DATA", entries=()),)
             ),
             deltas=(),
         )
@@ -915,9 +1760,17 @@ def merge_bdep_resource(
                 ("Northern Expansion", effective_stock.data),
             ),
             ((resource.owner, resource.entry.data) for resource in resources),
+            resolutions=resolutions,
         )
     except (TableAncestryError, TableFormatError, TableMergeConflict) as exc:
         raise ComposeError(str(exc)) from exc
+    if not any(delta.rows for delta in result.deltas):
+        return BdepComposeResult(
+            archive=CamArchive(
+                sections=(CamSection(extension=b"DATA", entries=()),)
+            ),
+            deltas=result.deltas,
+        )
     entry = CamEntry(name=resources[0].entry.name, data=result.payload)
     archive = CamArchive(
         sections=(CamSection(extension=b"DATA", entries=(entry,)),)
@@ -927,10 +1780,27 @@ def merge_bdep_resource(
 
 def merge_sound_resources(
     inventories: Sequence[PackageInventory],
+    *,
+    named_resolutions: Mapping[
+        tuple[bytes, bytes], ScopedNamedResourceResolution
+    ] | None = None,
+    stock_named_resources: Mapping[tuple[bytes, bytes], bytes] | None = None,
 ) -> tuple[CamArchive, CamArchive, tuple[NamedMergeSelection, ...]]:
-    resources = tuple(resource for inv in inventories for resource in inv.resources)
-    waves, wave_selections = merge_named_resources(resources, b"WAVE")
-    sounds, sound_selections = merge_named_resources(resources, b"DSND")
+    resources = collapse_native_cam_resources(
+        resource for inv in inventories for resource in inv.resources
+    )
+    waves, wave_selections = merge_named_resources(
+        resources,
+        b"WAVE",
+        resolutions=named_resolutions,
+        stock_resources=stock_named_resources,
+    )
+    sounds, sound_selections = merge_named_resources(
+        resources,
+        b"DSND",
+        resolutions=named_resolutions,
+        stock_resources=stock_named_resources,
+    )
     return (
         CamArchive(sections=(CamSection(extension=b"WAVE", entries=waves),)),
         CamArchive(sections=(CamSection(extension=b"DSND", entries=sounds),)),
@@ -943,8 +1813,42 @@ def merge_art_resources(
     inventories: Sequence[PackageInventory],
     *,
     required_stock_interface_imag_ids: Sequence[bytes] = (),
+    art_resolutions: Mapping[
+        tuple[str, bytes], ScopedArtResourceResolution
+    ] | None = None,
 ) -> tuple[ArtDomainComposeResult, ArtDomainComposeResult]:
-    """Compose main and interface art with typed, stock-relative relocation.
+    """Compatibility view of the generalized stock-lineage art composer."""
+
+    results = merge_art_resource_domains(
+        game_path,
+        inventories,
+        required_stock_imag_ids=required_stock_interface_imag_ids,
+        art_resolutions=art_resolutions,
+    )
+    by_domain = {result.domain: result for result in results}
+    lineages = load_stock_art_lineages(game_path)
+    for domain in ("main", "interface"):
+        if domain not in by_domain:
+            lineage = next(
+                (item for item in lineages if item.domain == domain),
+                None,
+            )
+            if lineage is None:
+                raise ComposeError(f"installed stock {domain} art lineage is missing")
+            by_domain[domain] = _stock_art_domain(domain, lineage.effective)
+    return by_domain["main"], by_domain["interface"]
+
+
+def merge_art_resource_domains(
+    game_path: Path,
+    inventories: Sequence[PackageInventory],
+    *,
+    required_stock_imag_ids: Sequence[bytes] = (),
+    art_resolutions: Mapping[
+        tuple[str, bytes], ScopedArtResourceResolution
+    ] | None = None,
+) -> tuple[ArtDomainComposeResult, ...]:
+    """Compose each independent stock art lineage in native-content order.
 
     The first selected owner retains a divergent positional slot. A later
     owner moves the complete contiguous changed run containing that conflict,
@@ -953,72 +1857,70 @@ def merge_art_resources(
     fails closed in ``rewrite_imag_entries``.
     """
 
-    by_domain: dict[str, list[tuple[PackageInventory, Path, CamArchive]]] = {
-        "main": [],
-        "interface": [],
-    }
+    try:
+        lineages = load_stock_art_lineages(game_path)
+    except (OSError, StockArtError, ValueError) as exc:
+        raise ComposeError(f"installed stock art lineages are not safe: {exc}") from exc
+    by_lineage: dict[
+        str,
+        list[tuple[PackageInventory, Path, CamArchive, ArtArchiveAnalysis]],
+    ] = {}
     for inventory in inventories:
-        domain_counts = {"main": 0, "interface": 0}
-        for path in inventory.cams:
-            archive = read_cam(path)
-            extensions = {section.extension for section in archive.sections}
-            if (b"IMAG" in extensions or b"SPLT" in extensions or b"PALT" in extensions) and b"TILE" not in extensions:
-                raise ComposeError(
-                    f"{inventory.selected.alias}: IMAG/palette archive has no "
-                    f"typed TILE section: {path}"
-                )
-            if b"TILE" not in extensions:
-                continue
-            if b"IMAG" not in extensions:
-                raise ComposeError(
-                    f"{inventory.selected.alias}: positional TILE archive has no "
-                    f"auditable IMAG section: {path}"
-                )
-            if b"SPLT" in extensions and b"PALT" in extensions:
-                raise ComposeError(
-                    f"{inventory.selected.alias}: art archive contains both SPLT and PALT: {path}"
-                )
-            domain = "main" if b"SPLT" in extensions else "interface"
-            domain_counts[domain] += 1
-            by_domain[domain].append((inventory, path, archive))
-
-        definition = inventory.selected.package.definition
-        assert definition is not None
-        for domain, count in domain_counts.items():
-            invalid_count = count > 1 if definition.schema_version >= 3 else count != 1
-            if invalid_count:
-                raise ComposeError(
-                    (
-                        f"{inventory.selected.alias}: expected at most one {domain} "
-                        f"art archive; found {count}"
-                        if definition.schema_version >= 3
-                        else f"{inventory.selected.alias}: expected exactly one main and one "
-                        f"interface art archive; found {sum(domain_counts.values())}"
-                    )
-                )
+        semantic_passthrough = getattr(
+            inventory.selected, "semantic_passthrough", False
+        )
+        eligible_art_cams = getattr(inventory, "art_cams", None)
+        if eligible_art_cams is None:
+            eligible_art_cams = (
+                ()
+                if semantic_passthrough
+                else inventory.cams
+            )
+        try:
+            classified = collapse_art_archives(
+                game_path,
+                tuple(eligible_art_cams),
+                owner=inventory.selected.alias,
+            )
+        except (OSError, StockArtError, ValueError) as exc:
+            raise ComposeError(
+                f"{inventory.selected.alias}: positional art cannot be reconciled: {exc}"
+            ) from exc
+        for item in classified:
+            by_lineage.setdefault(item.lineage.lineage_id, []).append(
+                (inventory, item.paths[-1], item.archive, item.analysis)
+            )
 
     results: list[ArtDomainComposeResult] = []
-    for domain in ("main", "interface"):
-        providers = by_domain[domain]
-        stock = _effective_stock_art_ancestor(game_path, domain)
-        filename = "maindata.cam" if domain == "main" else "interfacedata.cam"
-        fallthrough_ancestors = (read_cam(game_path / "Data" / filename),)
-        if not providers:
-            results.append(_stock_art_domain(domain, stock))
-            continue
-        raw_analyses = tuple(
-            analyze_art_archive(
-                stock,
-                archive,
-                mod_id=inventory.selected.alias,
-                fallthrough_ancestors=fallthrough_ancestors,
+    required_lineages = {
+        lineage.lineage_id
+        for required_id in required_stock_imag_ids
+        for lineage in lineages
+        if required_id in lineage.imag_keys
+    }
+    for required_id in required_stock_imag_ids:
+        matches = [lineage for lineage in lineages if required_id in lineage.imag_keys]
+        if len(matches) != 1:
+            raise ComposeError(
+                f"required stock IMAG {_display_key(required_id)} has no unique "
+                "installed art lineage"
             )
-            for inventory, _path, archive in providers
+    selected_lineage_ids = set(by_lineage) | required_lineages
+    for lineage in lineages:
+        if lineage.lineage_id not in selected_lineage_ids:
+            continue
+        providers = by_lineage.get(lineage.lineage_id, [])
+        required = tuple(
+            key for key in required_stock_imag_ids if key in lineage.imag_keys
         )
+        if not providers:
+            results.append(
+                _required_stock_art_domain(lineage.domain, lineage.effective, required)
+            )
+            continue
         prepared_providers: list[tuple[PackageInventory, Path, CamArchive]] = []
         analyses: list[ArtArchiveAnalysis] = []
-        for provider, raw_analysis in zip(providers, raw_analyses):
-            inventory, path, archive = provider
+        for inventory, path, archive, raw_analysis in providers:
             prepared_archive = _strip_unowned_secondary_imag_layers(
                 archive,
                 raw_analysis,
@@ -1028,26 +1930,66 @@ def merge_art_resources(
                 raw_analysis
                 if prepared_archive is archive
                 else analyze_art_archive(
-                    stock,
+                    lineage.effective,
                     prepared_archive,
                     mod_id=inventory.selected.alias,
-                    fallthrough_ancestors=fallthrough_ancestors,
+                    fallthrough_ancestors=lineage.ancestors,
                 )
             )
         result = _compose_art_domain(
-            domain,
-            stock,
+            lineage.lineage_id,
+            lineage.domain,
+            lineage.effective,
             tuple(prepared_providers),
             analyses,
-            fallthrough_ancestors=fallthrough_ancestors,
-            required_stock_imag_ids=(
-                required_stock_interface_imag_ids
-                if domain == "interface"
-                else ()
-            ),
+            fallthrough_ancestors=lineage.ancestors,
+            required_stock_imag_ids=required,
+            art_resolutions=art_resolutions,
         )
         results.append(result)
-    return results[0], results[1]
+    emitted_imag: dict[bytes, str] = {}
+    for result in results:
+        for section in result.archive.sections:
+            if section.extension != b"IMAG":
+                continue
+            for entry in section.entries:
+                key = entry.name.rstrip(b"\0")[:4]
+                previous = emitted_imag.get(key)
+                if previous is not None and previous != result.domain:
+                    raise ComposeError(
+                        f"generated art lineages {previous!r} and {result.domain!r} "
+                        f"both emit global IMAG {_display_key(key)}; Majesty can "
+                        "load only one final named image resource"
+                    )
+                emitted_imag[key] = result.domain
+    return tuple(results)
+
+
+def _required_stock_art_domain(
+    domain: str,
+    stock: CamArchive,
+    required_ids: Sequence[bytes],
+) -> ArtDomainComposeResult:
+    result = _stock_art_domain(domain, stock)
+    images = _materialize_required_stock_imag_entries(
+        (), stock, required_ids, domain=domain
+    )
+    stock_tiles = _require_section(stock, b"TILE")
+    tiles = _blank_positional_section(stock_tiles, len(stock_tiles.entries))
+    _materialize_imag_tile_dependencies(
+        tiles,
+        stock_tiles,
+        images,
+    )
+    sections = [
+        CamSection(
+            b"IMAG",
+            images,
+            padding=_require_section(stock, b"IMAG").padding,
+        ),
+        CamSection(b"TILE", tuple(tiles), padding=stock_tiles.padding),
+    ]
+    return replace(result, archive=CamArchive(tuple(sections)))
 
 
 def _effective_stock_art_ancestor(game_path: Path, domain: str) -> CamArchive:
@@ -1100,13 +2042,30 @@ def _effective_stock_art_ancestor(game_path: Path, domain: str) -> CamArchive:
 
 
 def _stock_art_domain(domain: str, stock: CamArchive) -> ArtDomainComposeResult:
+    """Describe stock lineage while emitting a payload-free art overlay."""
+
     stock_tiles = _require_section(stock, b"TILE")
     stock_palettes = next(
         (section for section in stock.sections if section.extension in {b"SPLT", b"PALT"}), None
     )
+    sparse_archive = CamArchive(
+        sections=tuple(
+            CamSection(
+                extension=section.extension,
+                entries=(),
+                padding=section.padding,
+            )
+            for section in stock.sections
+            if section.extension in {b"IMAG", b"TILE", b"SPLT", b"PALT"}
+        )
+    )
     return ArtDomainComposeResult(
         domain=domain,
-        archive=stock,
+        # No selected provider owns this domain. Keep all stock ancestry in the
+        # allocation report, but let Majesty fall through to the already-loaded
+        # game/Standard resources instead of overwriting them from this
+        # load-last patch.
+        archive=sparse_archive,
         analyses=(),
         tile_collisions=(),
         palette_collisions=(),
@@ -1133,7 +2092,158 @@ def _stock_art_domain(domain: str, stock: CamArchive) -> ArtDomainComposeResult:
     )
 
 
+def _apply_art_resolutions(
+    lineage_id: str,
+    stock: CamArchive,
+    providers: Sequence[tuple[PackageInventory, Path, CamArchive]],
+    analyses: Sequence[ArtArchiveAnalysis],
+    *,
+    fallthrough_ancestors: Sequence[CamArchive],
+    resolutions: Mapping[tuple[str, bytes], ScopedArtResourceResolution],
+) -> tuple[
+    tuple[tuple[PackageInventory, Path, CamArchive], ...],
+    tuple[ArtArchiveAnalysis, ...],
+]:
+    scoped = {
+        key: resolution
+        for (candidate_lineage, key), resolution in resolutions.items()
+        if candidate_lineage == lineage_id
+    }
+    if not scoped:
+        return tuple(providers), tuple(analyses)
+
+    effective_stock_payloads: dict[bytes, set[bytes]] = {}
+    for entry in _require_section(stock, b"IMAG").entries:
+        effective_stock_payloads.setdefault(
+            entry.name.rstrip(b"\0")[:4], set()
+        ).add(entry.data)
+    analysis_by_owner = {analysis.mod_id: analysis for analysis in analyses}
+    owned_by_owner = {
+        owner: _analysis_owned_imag_keys(
+            analysis,
+            effective_stock_image_payloads=effective_stock_payloads,
+        )
+        for owner, analysis in analysis_by_owner.items()
+    }
+    for key, resolution in scoped.items():
+        actual = {
+            owner for owner, keys in owned_by_owner.items() if key in keys
+        }
+        missing = resolution.participant_owners.difference(actual)
+        if missing:
+            raise ComposeError(
+                f"art resolution for {lineage_id}/IMAG/{_display_key(key)} "
+                "names absent owners: " + ", ".join(sorted(missing))
+            )
+        if resolution.selected_owner not in actual:
+            raise ComposeError(
+                f"art resolution for {lineage_id}/IMAG/{_display_key(key)} "
+                "selects an absent owner"
+            )
+
+    output_providers: list[tuple[PackageInventory, Path, CamArchive]] = []
+    output_analyses: list[ArtArchiveAnalysis] = []
+    for inventory, path, archive in providers:
+        owner = inventory.selected.alias
+        analysis = analysis_by_owner[owner]
+        lost_keys = {
+            key
+            for key, resolution in scoped.items()
+            if owner in resolution.participant_owners
+            and owner != resolution.selected_owner
+        }
+        if not lost_keys:
+            output_providers.append((inventory, path, archive))
+            output_analyses.append(analysis)
+            continue
+        if analysis.unreferenced_tile_changes or analysis.unreferenced_palette_changes:
+            raise ComposeError(
+                f"{owner}: art choice for {lineage_id} cannot partition "
+                "unreferenced positional changes safely"
+            )
+
+        refs_by_key: dict[bytes, set[int]] = {}
+        for reference in analysis.imag_references:
+            refs_by_key.setdefault(
+                reference.entry_name.rstrip(b"\0")[:4], set()
+            ).add(reference.tile_index)
+        lost_tiles = {
+            index for key in lost_keys for index in refs_by_key.get(key, ())
+        }
+        retained_tiles = {
+            index
+            for key, indices in refs_by_key.items()
+            if key not in lost_keys
+            for index in indices
+        }
+        removable_tiles = lost_tiles.difference(retained_tiles).intersection(
+            analysis.tile_delta.changed_indices
+        )
+        lost_palettes = {
+            reference.palette_index
+            for reference in analysis.tile_palette_references
+            if reference.tile_index in lost_tiles
+        }
+        retained_palettes = {
+            reference.palette_index
+            for reference in analysis.tile_palette_references
+            if reference.tile_index in retained_tiles
+        }
+        removable_palettes = lost_palettes.difference(retained_palettes)
+        if analysis.palette_delta is not None:
+            removable_palettes.intersection_update(
+                analysis.palette_delta.changed_indices
+            )
+        else:
+            removable_palettes.clear()
+
+        sections: list[CamSection] = []
+        for section in archive.sections:
+            if section.extension == b"IMAG":
+                entries = tuple(
+                    entry
+                    for entry in section.entries
+                    if entry.name.rstrip(b"\0")[:4] not in lost_keys
+                )
+            elif section.extension == b"TILE":
+                entries = tuple(
+                    CamEntry(entry.name, b"") if index in removable_tiles else entry
+                    for index, entry in enumerate(section.entries)
+                )
+            elif (
+                analysis.palette_delta is not None
+                and section.extension == analysis.palette_delta.extension
+            ):
+                entries = tuple(
+                    CamEntry(entry.name, b"")
+                    if index in removable_palettes
+                    else entry
+                    for index, entry in enumerate(section.entries)
+                )
+            else:
+                entries = section.entries
+            sections.append(
+                CamSection(section.extension, entries, padding=section.padding)
+            )
+        filtered = CamArchive(tuple(sections))
+        try:
+            filtered_analysis = analyze_art_archive(
+                stock,
+                filtered,
+                mod_id=owner,
+                fallthrough_ancestors=fallthrough_ancestors,
+            )
+        except (ArtFormatError, ValueError) as exc:
+            raise ComposeError(
+                f"{owner}: selected art result for {lineage_id} is not safe: {exc}"
+            ) from exc
+        output_providers.append((inventory, path, filtered))
+        output_analyses.append(filtered_analysis)
+    return tuple(output_providers), tuple(output_analyses)
+
+
 def _compose_art_domain(
+    lineage_id: str,
     domain: str,
     stock: CamArchive,
     providers: Sequence[tuple[PackageInventory, Path, CamArchive]],
@@ -1141,7 +2251,19 @@ def _compose_art_domain(
     *,
     fallthrough_ancestors: Sequence[CamArchive] = (),
     required_stock_imag_ids: Sequence[bytes] = (),
+    art_resolutions: Mapping[
+        tuple[str, bytes], ScopedArtResourceResolution
+    ] | None = None,
 ) -> ArtDomainComposeResult:
+    providers, analyses = _apply_art_resolutions(
+        lineage_id,
+        stock,
+        providers,
+        analyses,
+        fallthrough_ancestors=fallthrough_ancestors,
+        resolutions=art_resolutions or {},
+    )
+    providers, analyses = _coalesce_identical_art_providers(providers, analyses)
     order = {
         inventory.selected.alias: index
         for index, (inventory, _path, _archive) in enumerate(providers)
@@ -1179,6 +2301,7 @@ def _compose_art_domain(
         analysis.mod_id: analysis.palette_delta
         for analysis in analyses
         if analysis.palette_delta is not None
+        and analysis.palette_delta.changed_indices
     }
     palette_collisions: tuple[PositionalCollision, ...] = ()
     palette_allocation: PositionalAllocationReport | None = None
@@ -1244,20 +2367,33 @@ def _compose_art_domain(
 
     imag_resources: list[CamResource] = []
     imag_reports: list[tuple[str, ImagRelocationReport]] = []
-    stock_image_payloads: dict[bytes, set[bytes]] = {}
+    effective_stock_image_payloads: dict[bytes, set[bytes]] = {}
+    recognized_stock_image_payloads: dict[bytes, set[bytes]] = {}
     for archive in (stock, *fallthrough_ancestors):
         for entry in _require_section(archive, b"IMAG").entries:
-            stock_image_payloads.setdefault(
+            recognized_stock_image_payloads.setdefault(
                 entry.name.rstrip(b"\x00")[:4], set()
             ).add(entry.data)
+    for entry in _require_section(stock, b"IMAG").entries:
+        effective_stock_image_payloads.setdefault(
+            entry.name.rstrip(b"\x00")[:4], set()
+        ).add(entry.data)
     for inventory, path, archive in providers:
         owner = inventory.selected.alias
         mapping = tile_allocation.mapping_for(owner)
-        imag_entries = _require_section(archive, b"IMAG").entries
+        owned_image_keys = _analysis_owned_imag_keys(
+            analysis_by_owner[owner],
+            effective_stock_image_payloads=effective_stock_image_payloads,
+        )
+        imag_entries = tuple(
+            entry
+            for entry in _require_section(archive, b"IMAG").entries
+            if entry.name.rstrip(b"\x00")[:4] in owned_image_keys
+        )
         inherited_entries = tuple(
             entry
             for entry in imag_entries
-            if entry.data in stock_image_payloads.get(
+            if entry.data in recognized_stock_image_payloads.get(
                 entry.name.rstrip(b"\x00")[:4], set()
             )
         )
@@ -1369,8 +2505,33 @@ def _compose_art_domain(
         for resource in imag_resources
         if resource.entry.name.rstrip(b"\x00")[:4] != b"CUR1"
     )
+    # Stock-relative union: an inherited stock IMAG carried only to reach a
+    # provider's positional changes is not a competing named value.  When one
+    # compatible provider owns a custom IMAG payload, retain that payload and
+    # let the other provider's disjoint TILE/palette writes coexist beneath it.
+    custom_payloads_by_key: dict[bytes, set[bytes]] = {}
+    for resource in ordinary_imag_resources:
+        if resource.entry.data not in effective_stock_image_payloads.get(
+            resource.key, set()
+        ):
+            custom_payloads_by_key.setdefault(resource.key, set()).add(
+                resource.entry.data
+            )
+    uniquely_custom_keys = {
+        key
+        for key, payloads in custom_payloads_by_key.items()
+        if len(payloads) == 1
+    }
+    ordinary_imag_resources = tuple(
+        resource
+        for resource in ordinary_imag_resources
+        if resource.key not in uniquely_custom_keys
+        or resource.entry.data
+        not in effective_stock_image_payloads.get(resource.key, set())
+    )
     imag_entries, _imag_selections = merge_named_resources(
-        ordinary_imag_resources, b"IMAG"
+        ordinary_imag_resources,
+        b"IMAG",
     )
     if cursor_resources:
         stock_cursor = next(
@@ -1482,6 +2643,36 @@ def _compose_art_domain(
     )
 
 
+def _coalesce_identical_art_providers(
+    providers: Sequence[tuple[PackageInventory, Path, CamArchive]],
+    analyses: Sequence[ArtArchiveAnalysis],
+) -> tuple[
+    tuple[tuple[PackageInventory, Path, CamArchive], ...],
+    tuple[ArtArchiveAnalysis, ...],
+]:
+    """Keep one copy of an exact effective archive shared by several owners.
+
+    Retained ancestor dependencies are deliberately relocated away from their
+    stock slots. Relocating two byte-identical providers independently would
+    give their otherwise identical IMAG records different rewritten indices
+    and manufacture a named-resource conflict. One representative preserves
+    the complete shared visual result without duplicating its positional run.
+    """
+
+    analysis_by_owner = {analysis.mod_id: analysis for analysis in analyses}
+    seen: list[CamArchive] = []
+    output_providers: list[tuple[PackageInventory, Path, CamArchive]] = []
+    output_analyses: list[ArtArchiveAnalysis] = []
+    for provider in providers:
+        inventory, _path, archive = provider
+        if archive in seen:
+            continue
+        seen.append(archive)
+        output_providers.append(provider)
+        output_analyses.append(analysis_by_owner[inventory.selected.alias])
+    return tuple(output_providers), tuple(output_analyses)
+
+
 def _materialize_required_stock_imag_entries(
     entries: Sequence[CamEntry],
     stock: CamArchive,
@@ -1546,6 +2737,54 @@ def _effective_analysis_tile_entries(
     for change in analysis.tile_delta.changes:
         entries[change.index] = change.entry
     return tuple(entries)
+
+
+def _analysis_owned_imag_keys(
+    analysis: ArtArchiveAnalysis,
+    *,
+    effective_stock_image_payloads: Mapping[bytes, set[bytes]],
+) -> frozenset[bytes]:
+    """Return only IMAG records whose visual result this provider changes.
+
+    A collapsed art archive is an effective native view and therefore contains
+    effective-stock records. Those records are ancestry evidence, not writes
+    for the generated load-last patch. An older ancestor payload is still an
+    authored write when it differs from the effective installed value.
+    An IMAG is owned when its named payload differs from effective stock or
+    when it reaches a package-owned TILE/palette change.
+    """
+
+    keys = {
+        entry.name.rstrip(b"\x00")[:4]
+        for entry in analysis.imag_entries
+        if entry.data
+        not in effective_stock_image_payloads.get(
+            entry.name.rstrip(b"\x00")[:4], set()
+        )
+    }
+    private_tiles = set(analysis.tile_delta.changed_indices).difference(
+        analysis.retained_tile_dependencies
+    )
+    palette = analysis.palette_delta
+    private_palettes = (
+        set(palette.changed_indices).difference(
+            analysis.retained_palette_dependencies
+        )
+        if palette is not None
+        else set()
+    )
+    if private_palettes:
+        private_tiles.update(
+            reference.tile_index
+            for reference in analysis.tile_palette_references
+            if reference.palette_index in private_palettes
+        )
+    keys.update(
+        reference.entry_name.rstrip(b"\x00")[:4]
+        for reference in analysis.imag_references
+        if reference.tile_index in private_tiles
+    )
+    return frozenset(keys)
 
 
 def _materialize_imag_tile_dependencies(
@@ -2028,25 +3267,32 @@ def merge_description_resources(
     inventories: Sequence[PackageInventory],
     *,
     dialog_resolutions: Sequence[ResolvedBuildingDialog] | None = None,
+    controlled_follower_markers: Sequence[str] = (),
+    reserved_description_keys: Iterable[DescriptionKey] = (),
+    reserved_description_names: Iterable[str] = (),
+    resolutions: Mapping[DescriptionKey, DescriptionRecord] | None = None,
 ) -> DescriptionMergeResult:
     """Merge every XML Description and apply only declared building DialogIDs."""
 
     variants: list[tuple[str, bytes]] = []
-    seen_by_owner: dict[str, set[DescriptionKey]] = {}
     for inventory in inventories:
         owner = inventory.selected.alias
-        owner_seen = seen_by_owner.setdefault(owner, set())
+        effective: dict[DescriptionKey, DescriptionRecord] = {}
         for path in inventory.descriptions:
             payload = path.read_bytes()
             document = parse_descriptions(payload, source=str(path))
-            duplicate = owner_seen.intersection(document.index)
-            if duplicate:
-                labels = ", ".join(repr(key) for key in sorted(duplicate))
-                raise ComposeError(
-                    f"{owner}: duplicate Description keys across XML files: {labels}"
-                )
-            owner_seen.update(document.index)
-            variants.append((owner, payload))
+            # Majesty applies a component's Description directives in manifest
+            # order. Later records from that same component replace earlier
+            # records before the component competes with any other owner.
+            effective.update(document.index)
+        if effective:
+            document = DescriptionsDocument(
+                root_tag="Majesty",
+                root_attributes=(),
+                records=tuple(effective.values()),
+                source=f"<{owner} effective native Description load order>",
+            )
+            variants.append((owner, serialize_descriptions(document)))
 
     if not variants and any(
         inventory.selected.package.definition.schema_version < 3
@@ -2110,7 +3356,27 @@ def merge_description_resources(
             matched[marker] = matched.get(marker, 0) + 1
         return element
 
-    result = merge_descriptions(b"<Majesty />", variants, transform=transform)
+    requested_resolutions = dict(resolutions or {})
+    used_resolutions: set[DescriptionKey] = set()
+
+    def resolve(conflict):
+        record = requested_resolutions.get(conflict.key)
+        if record is not None:
+            used_resolutions.add(conflict.key)
+        return record
+
+    result = merge_descriptions(
+        b"<Majesty />",
+        variants,
+        transform=transform,
+        resolve=resolve if requested_resolutions else None,
+    )
+    unused = set(requested_resolutions) - used_resolutions
+    if unused:
+        labels = ", ".join(repr(key) for key in sorted(unused))
+        raise ComposeError(
+            f"Description resolutions do not name real conflicts: {labels}"
+        )
     for owner, definition in definitions.items():
         if definition is None:
             raise ComposeError(f"{owner}: a v1 mod definition is required")
@@ -2120,16 +3386,416 @@ def merge_description_resources(
                     f"{owner}: declared building {building.local_name!r} did not "
                     "match any XML Description"
                 )
-    return result
+    return _add_controlled_follower_marker_descriptions(
+        result,
+        controlled_follower_markers,
+        reserved_description_keys=reserved_description_keys,
+        reserved_description_names=reserved_description_names,
+    )
+
+
+def filter_passthrough_descriptions(
+    result: DescriptionMergeResult,
+    inventories: Sequence[PackageInventory],
+    *,
+    stock_records: Mapping[DescriptionKey, DescriptionRecord] | None = None,
+    forced_keys: Iterable[DescriptionKey] = (),
+) -> DescriptionMergeResult:
+    """Keep only Description records required by the load-last patch.
+
+    Ordinary-Mod-only records stay native unless multiple Standards require a
+    typed merge. Merge records are retained only when their final value differs
+    from installed stock. Generated records and explicitly reviewed resolution
+    keys are always retained; the latter permits a deliberate choice to restore
+    the stock value after an earlier native Standard override.
+    """
+
+    stock = dict(stock_records or {})
+    owners_by_key: dict[DescriptionKey, set[str]] = {}
+    standard_payloads_by_key: dict[DescriptionKey, set[tuple]] = {}
+    standard_owners_by_key: dict[DescriptionKey, set[str]] = {}
+    changed_merge_keys: set[DescriptionKey] = set()
+    for inventory in inventories:
+        owner = inventory.selected.alias
+        effective: dict[DescriptionKey, DescriptionRecord] = {}
+        for path in inventory.descriptions:
+            document = parse_descriptions(path.read_bytes(), source=str(path))
+            # Match merge_description_resources: Majesty applies this owner's
+            # Description directives in manifest order, so only its final
+            # record for a key can affect the native result.
+            effective.update(document.index)
+        for key, record in effective.items():
+            owners_by_key.setdefault(key, set()).add(owner)
+            stock_record = stock.get(key)
+            changed = (
+                stock_record is None
+                or record._fingerprint != stock_record._fingerprint
+            )
+            if changed:
+                if not inventory.selected.semantic_passthrough:
+                    changed_merge_keys.add(key)
+            if inventory.selected.semantic_passthrough:
+                standard_payloads_by_key.setdefault(key, set()).add(
+                    record._fingerprint
+                )
+                standard_owners_by_key.setdefault(key, set()).add(owner)
+
+    final_records = result.document.index
+    explicit_stock_restorations = {
+        key
+        for key in forced_keys
+        if key in final_records
+        and key in stock
+        and final_records[key]._fingerprint == stock[key]._fingerprint
+    }
+    keep = explicit_stock_restorations | changed_merge_keys | (
+        set(final_records) - set(owners_by_key)
+    ) | {
+        key
+        for key, payloads in standard_payloads_by_key.items()
+        if len(standard_owners_by_key.get(key, ())) > 1 and len(payloads) > 1
+    }
+    records = tuple(record for record in result.document.records if record.key in keep)
+    document = DescriptionsDocument(
+        root_tag=result.document.root_tag,
+        root_attributes=result.document.root_attributes,
+        records=records,
+        source="<merged reconciliation patch>",
+    )
+    deltas = tuple(
+        replace(
+            delta,
+            records=tuple(record for record in delta.records if record.key in keep),
+        )
+        for delta in result.deltas
+        if any(record.key in keep for record in delta.records)
+    )
+    return replace(
+        result,
+        document=document,
+        payload=serialize_descriptions(document),
+        deltas=deltas,
+        selections=tuple(
+            selection for selection in result.selections if selection.key in keep
+        ),
+    )
+
+
+def merge_string_resources(
+    inventories: Sequence[PackageInventory],
+    *,
+    resolutions: Mapping[StringKey, StringRecord] | None = None,
+    stock_records: Mapping[StringKey, StringRecord] | None = None,
+) -> StringsMergeResult | None:
+    """Build the one final stock-relative overlay only when reconciliation needs it."""
+
+    variants = []
+    standard_dictionaries: list[frozenset[tuple[StringKey, bytes]]] = []
+    for inventory in inventories:
+        owner_records: dict[StringKey, StringRecord] = {}
+        owner_order: list[StringKey] = []
+        has_valid_strings_load = False
+        for path in inventory.strings:
+            try:
+                document = load_strings(path)
+            except StringsFormatError as exc:
+                if inventory.selected.semantic_passthrough:
+                    # Old ordinary Mods sometimes put a QDD quest-description
+                    # file in <Strings>. The stock Strings XML loader ignores
+                    # its contents; the quest system consumes QDD separately.
+                    continue
+                raise ComposeError(str(exc)) from exc
+            has_valid_strings_load = True
+            for key, record in document.index.items():
+                if key not in owner_records:
+                    owner_order.append(key)
+                # The stock dictionary loader is last-write-wins within one
+                # component, including across several <Strings> files.
+                owner_records[key] = record
+        if has_valid_strings_load:
+            from .strings import StringsDocument
+
+            variants.append(
+                (
+                    inventory.selected.alias,
+                    StringsDocument(
+                        tuple(owner_records[key] for key in owner_order),
+                        f"<{inventory.selected.alias} Strings>",
+                    ),
+                )
+            )
+            if inventory.selected.semantic_passthrough:
+                standard_dictionaries.append(
+                    frozenset(
+                        (key, record.payload)
+                        for key, record in owner_records.items()
+                    )
+                )
+    if not variants:
+        return None
+    stock = dict(stock_records or {})
+    merge_owners = {
+        inventory.selected.alias
+        for inventory in inventories
+        if not inventory.selected.semantic_passthrough
+    }
+    standard_owners = {
+        inventory.selected.alias
+        for inventory in inventories
+        if inventory.selected.semantic_passthrough
+    }
+    candidates_by_key: dict[StringKey, list[tuple[str, StringRecord]]] = {}
+    for owner, document in variants:
+        for record in document.records:
+            candidates_by_key.setdefault(record.key, []).append((owner, record))
+
+    # Majesty replaces the active mod Strings dictionary on each valid load.
+    # Two native Standards therefore cannot preserve different complete
+    # dictionaries through load order, even when their keys are disjoint or
+    # one dictionary is a strict subset of the other.  One generated union is
+    # required whenever at least two selected Standard dictionaries differ.
+    overlay_required = (
+        len(standard_dictionaries) > 1
+        and len(set(standard_dictionaries)) > 1
+    )
+    supplied_resolutions = dict(resolutions or {})
+    for key, candidates in candidates_by_key.items():
+        stock_record = stock.get(key)
+        changed = tuple(
+            (owner, record)
+            for owner, record in candidates
+            if stock_record is None or record.payload != stock_record.payload
+        )
+        if any(owner in merge_owners for owner, _record in changed):
+            overlay_required = True
+            break
+        standard_candidates = tuple(
+            (owner, record)
+            for owner, record in candidates
+            if owner in standard_owners
+        )
+        if (
+            len({owner for owner, _record in standard_candidates}) > 1
+            and len({record.payload for _owner, record in standard_candidates}) > 1
+        ):
+            overlay_required = True
+            break
+        resolution = supplied_resolutions.get(key)
+        if (
+            resolution is not None
+            and stock_record is not None
+            and resolution.payload == stock_record.payload
+        ):
+            overlay_required = True
+            break
+    if not overlay_required:
+        # A lone (or mutually identical) native Standard modification already
+        # loads in the game's normal dependency order. Re-emitting it would
+        # create a needless global Strings overlay in the load-last profile.
+        return None
+    try:
+        result = merge_strings(variants, resolutions=resolutions)
+    except StringsFormatError as exc:
+        raise ComposeError(str(exc)) from exc
+    if result.conflicts:
+        labels = ", ".join(repr(conflict.key) for conflict in result.conflicts)
+        raise ComposeError(f"unresolved Strings conflicts: {labels}")
+    forced = set(supplied_resolutions)
+    records = tuple(
+        record
+        for record in result.records
+        if record.key in forced
+        or record.key not in stock
+        or record.payload != stock[record.key].payload
+    )
+    if not records:
+        return None
+    return replace(
+        result,
+        payload=serialize_string_records(records),
+        records=records,
+    )
+
+
+def _add_controlled_follower_marker_descriptions(
+    result: DescriptionMergeResult,
+    marker_names: Sequence[str],
+    *,
+    reserved_description_keys: Iterable[DescriptionKey],
+    reserved_description_names: Iterable[str],
+) -> DescriptionMergeResult:
+    """Register private follower-state effectors using a stock overlay shape.
+
+    Stock ``vines_icon`` is a persistent, manually checked/deleted effector with
+    no callback. Its overlay is directionless, non-blocking, and hidden from
+    the isometric view. The manager clones that exact lifecycle shape while
+    changing only the private Description ID and Name used by generated GPL.
+    """
+
+    markers = tuple(sorted(set(marker_names), key=str.casefold))
+    if len(markers) != len(tuple(marker_names)):
+        raise ComposeError("controlled-follower marker names must be unique")
+    if not markers:
+        return result
+    for marker in markers:
+        if re.fullmatch(r"MCF[0-9A-F]{12}[1-4]", marker) is None:
+            raise ComposeError(
+                f"invalid generated controlled-follower marker name: {marker!r}"
+            )
+
+    existing_names = {
+        element.get("Name", "").casefold()
+        for record in result.document.records
+        for element in (record.to_element(),)
+        if element.get("Name")
+    }
+    unavailable_names = existing_names | {
+        name.casefold() for name in reserved_description_names if name
+    }
+    duplicate_names = [
+        marker for marker in markers if marker.casefold() in unavailable_names
+    ]
+    if duplicate_names:
+        raise ComposeError(
+            "generated controlled-follower marker Description Name already exists: "
+            + ", ".join(duplicate_names)
+        )
+
+    unavailable = set(reserved_description_keys) | set(result.document.index)
+    available = (
+        f"MF{left}{right}"
+        for left in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        for right in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        if ("Unit", f"MF{left}{right}") not in unavailable
+    )
+    root = ET.Element("Majesty")
+    for marker in markers:
+        try:
+            description_id = next(available)
+        except StopIteration as exc:  # pragma: no cover - 1296 private slots
+            raise ComposeError(
+                "no manager-owned MFxx follower-state Description IDs remain"
+            ) from exc
+        description = ET.SubElement(
+            root,
+            "Description",
+            {
+                "type": "Unit",
+                "subType": "Overlay",
+                "ID": description_id,
+                "Name": marker,
+                "Description": "Majesty Mod Manager follower speed state",
+            },
+        )
+        engine = ET.SubElement(description, "Engine", {"version": "1"})
+        for value in ("Directionless", "DontBlock", "NotVisibleInISOView"):
+            ET.SubElement(engine, "Info", {"value": value})
+        ET.SubElement(engine, "Menu", {"value": "11"})
+        ET.SubElement(engine, "ImageIDBase", {"value": "CRB2"})
+        ET.SubElement(engine, "DefaultSound", {"value": "0"})
+        game = ET.SubElement(description, "Game", {"version": "1"})
+        ET.SubElement(game, "DialogID", {"value": "0"})
+        ET.SubElement(game, "StackPriority", {"value": "0"})
+
+    generated = ET.tostring(root, encoding="utf-8", short_empty_elements=True)
+    merged = merge_descriptions(
+        result.document,
+        (("<CAM Manager controlled-follower state>", generated),),
+    )
+    resolved_names = {
+        element.get("Name")
+        for record in merged.document.records
+        for element in (record.to_element(),)
+        if element.get("subType") == "Overlay"
+    }
+    missing = [marker for marker in markers if marker not in resolved_names]
+    if missing:  # pragma: no cover - guarded by merge_descriptions
+        raise ComposeError(
+            "generated controlled-follower marker descriptions are missing: "
+            + ", ".join(missing)
+        )
+    # ``result.document`` is the stock argument for this second merge, so the
+    # merge helper reports only the newly generated marker records. Preserve
+    # the already selected source records as part of the final output metadata.
+    return replace(
+        merged,
+        deltas=(*result.deltas, *merged.deltas),
+        selections=(*result.selections, *merged.selections),
+    )
 
 
 def analyze_description_stock_deltas(
     game_path: Path,
     inventories: Sequence[PackageInventory],
+    *,
+    descriptions: DescriptionMergeResult | None = None,
 ) -> tuple[DescriptionStockDelta, ...]:
-    """Classify XML records against the effective Original+MX SDK baseline."""
+    """Classify Description records against the effective stock baseline.
+
+    Catalog/preflight callers may omit ``descriptions`` to classify package
+    inputs directly. Composition passes its final filtered result so report and
+    controller evidence describe only records that the load-last profile will
+    actually emit, attributed to the owners selected for those records.
+    """
 
     stock = _load_effective_stock_descriptions(game_path)
+    if descriptions is not None:
+        sources: dict[tuple[str, DescriptionKey], str] = {}
+        owners_by_key: dict[DescriptionKey, list[str]] = {}
+        for inventory in inventories:
+            owner = inventory.selected.alias
+            for path in inventory.descriptions:
+                document = parse_descriptions(path.read_bytes(), source=str(path))
+                relative = path.relative_to(
+                    inventory.selected.package.root
+                ).as_posix()
+                for key in document.index:
+                    sources[(owner, key)] = relative
+                    owners_by_key.setdefault(key, []).append(owner)
+
+        selections = {selection.key: selection for selection in descriptions.selections}
+        missing = set(descriptions.document.index) - set(selections)
+        if missing:
+            labels = ", ".join(repr(key) for key in sorted(missing))
+            raise ComposeError(
+                "final Description output is missing selected-owner metadata: "
+                + labels
+            )
+
+        result: list[DescriptionStockDelta] = []
+        for record in descriptions.document.records:
+            selection = selections[record.key]
+            owners = selection.owners
+            if owners == ("<resolution>",):
+                # A stock-relative three-way result is manager-authored but is
+                # jointly attributable to the source owners whose records it
+                # reconciles. Keep their controller evidence attached.
+                owners = tuple(dict.fromkeys(owners_by_key.get(record.key, ())))
+                if not owners:
+                    owners = selection.owners
+            stock_item = stock.get(record.key)
+            if stock_item is None:
+                kind = "addition"
+                stock_source = None
+            else:
+                stock_record, stock_source = stock_item
+                kind = (
+                    "identical_stock"
+                    if record._fingerprint == stock_record._fingerprint
+                    else "stock_override"
+                )
+            for owner in owners:
+                result.append(
+                    DescriptionStockDelta(
+                        owner=owner,
+                        key=record.key,
+                        kind=kind,
+                        mod_source=sources.get((owner, record.key), "<generated>"),
+                        stock_source=stock_source,
+                    )
+                )
+        return tuple(result)
+
     result: list[DescriptionStockDelta] = []
     for inventory in inventories:
         owner = inventory.selected.alias
@@ -2295,7 +3961,8 @@ def validate_controller_stock_evidence(
         panel_owners[item.qualified_panel_key] = item.owner
     registry_panel_keys = {
         item.panel_key for item in (*registry.panels, *registry.reward_panels,
-                                    *registry.occupant_action_panels)
+                                    *registry.occupant_action_panels,
+                                    *registry.quest_boards)
     }
     if registry_panel_keys != set(panel_owners):
         raise ComposeError(
@@ -2697,12 +4364,14 @@ def _validate_controller_panel_controls(
     owner: str,
     parent_label: str,
     child_label: str,
+    allow_manager_generated_refresh: bool = False,
 ) -> None:
     parent_values = _smnu_dword_values(parent_payload, owner, parent_label)
     child_values = _smnu_dword_values(child_payload, owner, child_label)
     panel = next((
         item for item in (*registry.panels, *registry.reward_panels,
-                          *registry.occupant_action_panels)
+                          *registry.occupant_action_panels,
+                          *registry.quest_boards)
         if item.panel_key == panel_key
     ), None)
     if panel is None:  # pragma: no cover - registry/panel ownership equality guards it
@@ -2712,10 +4381,63 @@ def _validate_controller_panel_controls(
         ("secondary-panel open_command_id", panel.open_command_id),
     ]
     child_requirements: list[tuple[str, int]] = []
+    # These are the controls stored literally in stock SMNU/MX05.  Other
+    # controls used by the MX05 constructor/command paths are created or
+    # resolved by code and therefore cannot be required as package-authored
+    # SMNU evidence.  Both MX05-derived feature recipes share this exact
+    # stock-resource boundary.
+    mx05_authored_controls = (
+        0x1388, 0x138B, 0x138C, 0x1392, 0x1F40,
+        0x1F41, 0x1F45, 0x1F46, 0x1F4D,
+    )
     if panel in registry.occupant_action_panels:
         child_requirements.extend((f"MX05 stock control {value:#x}", value)
-                                  for value in (0x1388, 0x138B, 0x1F46, 0x1F45,
-                                                0x1F4D, 0x1392, 0x1F41, 0x1F40))
+                                  for value in mx05_authored_controls)
+    if panel in registry.quest_boards:
+        child_requirements.extend((f"MX05 stock control {value:#x}", value)
+                                  for value in mx05_authored_controls)
+        # Refresh is a Manager-generated clone of MX05's literal child action,
+        # coin and price records. Packages must not author those controls in
+        # either panel (including the retired AP54 parent workaround).
+        refresh_controls = (
+            panel.refresh_control_id,
+            panel.refresh_price_binding_id,
+            QUEST_REFRESH_COIN_CONTROL_ID,
+        )
+        authored_refresh = [
+            value
+            for value in refresh_controls
+            if value in parent_values or value in child_values
+        ]
+        if authored_refresh and not allow_manager_generated_refresh:
+            raise ComposeError(
+                f"{owner}: quest-board Refresh controls are Manager-generated; "
+                "remove package-authored AP54/duplicate controls "
+                + ", ".join(f"0x{value:08X}" for value in authored_refresh)
+            )
+        if allow_manager_generated_refresh:
+            parent_refresh = [
+                value for value in refresh_controls if value in parent_values
+            ]
+            missing_child = [
+                value for value in refresh_controls if value not in child_values
+            ]
+            if parent_refresh or missing_child:
+                details = []
+                if parent_refresh:
+                    details.append(
+                        "unexpected parent controls "
+                        + ", ".join(f"0x{value:08X}" for value in parent_refresh)
+                    )
+                if missing_child:
+                    details.append(
+                        "missing child controls "
+                        + ", ".join(f"0x{value:08X}" for value in missing_child)
+                    )
+                raise ComposeError(
+                    f"{owner}: generated quest-board Refresh row is invalid: "
+                    + "; ".join(details)
+                )
     for meter in registry.meters:
         if meter.panel_key == panel_key:
             child_requirements.extend((
@@ -2830,8 +4552,15 @@ def merge_gpl_resources(
     inventory_death_drop_exclusions: Sequence[str] = (),
     private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
     stock_integer_expression_sources: Sequence[ParsedSemanticSource] = (),
+    stock_semantic_sources: Sequence[ParsedSemanticSource] = (),
     stock_purchase_equipment_source: ParsedSemanticSource | None = None,
     stock_purchase_bazaar_source: ParsedSemanticSource | None = None,
+    stock_control_monster: SemanticItem | None = None,
+    stock_controlled_monster_death: SemanticItem | None = None,
+    stock_leader_dead: SemanticItem | None = None,
+    stock_hero_trees: Mapping[str, SemanticItem] | None = None,
+    stock_reset_tasks: SemanticItem | None = None,
+    stock_unit_death: SemanticItem | None = None,
 ) -> GplComposeResult:
     parsed_by_owner: dict[str, list[ParsedSemanticSource]] = {}
     for inventory in inventories:
@@ -2839,6 +4568,50 @@ def merge_gpl_resources(
         parsed_by_owner.setdefault(owner, []).extend(
             _parse_inventory_gpl_sources(inventory)
         )
+
+    variants_by_key: dict[tuple[DefinitionKind, str], list[tuple[str, str]]] = {}
+    standard_payloads_by_key: dict[
+        tuple[DefinitionKind, str], set[str]
+    ] = {}
+    standard_owners_by_key: dict[
+        tuple[DefinitionKind, str], set[str]
+    ] = {}
+    required_patch_keys: set[tuple[DefinitionKind, str]] = set()
+    passthrough_aliases = {
+        inventory.selected.alias
+        for inventory in inventories
+        if getattr(inventory.selected, "semantic_passthrough", False)
+    }
+    stock_items = {
+        item.key: item
+        for source in stock_semantic_sources
+        for item in source.items
+    }
+    requested = {
+        (DefinitionKind(kind), name.casefold()): owner
+        for (kind, name), owner in (resolution_owners or {}).items()
+    }
+    for owner, sources in parsed_by_owner.items():
+        for source in sources:
+            for item in source.items:
+                variants_by_key.setdefault(item.key, []).append((owner, item.text))
+                stock_item = stock_items.get(item.key)
+                changed = (
+                    stock_item is None
+                    or join_logical_lines(split_logical_lines(item.text))
+                    != join_logical_lines(split_logical_lines(stock_item.text))
+                )
+                if owner not in passthrough_aliases and changed:
+                    required_patch_keys.add(item.key)
+                if owner in passthrough_aliases:
+                    standard_payloads_by_key.setdefault(item.key, set()).add(
+                        join_logical_lines(split_logical_lines(item.text))
+                    )
+                    standard_owners_by_key.setdefault(item.key, set()).add(owner)
+    required_patch_keys.update(
+        key for key, payloads in standard_payloads_by_key.items()
+        if len(payloads) > 1 and len(standard_owners_by_key.get(key, ())) > 1
+    )
 
     integer_expression_environment = collect_integer_expression_environment(
         (
@@ -2851,6 +4624,16 @@ def merge_gpl_resources(
         )
     )
 
+    private_rewrite_items_before: dict[
+        tuple[str, tuple[DefinitionKind, str]], list[str]
+    ] = {}
+    for owner, sources in parsed_by_owner.items():
+        for source in sources:
+            for item in source.items:
+                private_rewrite_items_before.setdefault(
+                    (owner, item.key), []
+                ).append(item.text)
+
     try:
         parsed_by_owner = rewrite_private_activity_text_resolver_calls(
             parsed_by_owner,
@@ -2860,11 +4643,78 @@ def merge_gpl_resources(
     except IntentTextError as exc:
         raise ComposeError(str(exc)) from exc
 
-    initial = merge_sources([], parsed_by_owner)
-    requested = {
-        (DefinitionKind(kind), name.casefold()): owner
-        for (kind, name), owner in (resolution_owners or {}).items()
+    private_rewrite_items_after: dict[
+        tuple[str, tuple[DefinitionKind, str]], list[str]
+    ] = {}
+    for owner, sources in parsed_by_owner.items():
+        for source in sources:
+            for item in source.items:
+                private_rewrite_items_after.setdefault(
+                    (owner, item.key), []
+                ).append(item.text)
+    required_patch_keys.update(
+        key
+        for owner, key in (
+            set(private_rewrite_items_before) | set(private_rewrite_items_after)
+        )
+        if private_rewrite_items_before.get((owner, key))
+        != private_rewrite_items_after.get((owner, key))
+    )
+
+    # The low-level semantic merger deliberately compares exact source text,
+    # while Majesty accepts LF and CRLF identically. Canonicalize every parsed
+    # item to logical lines before exact merging so physically different but
+    # gameplay-identical providers co-own one value without a false conflict
+    # or an unnecessary explicit load-last resolution.
+    parsed_by_owner = {
+        owner: [
+            replace(
+                source,
+                items=tuple(
+                    replace(
+                        item,
+                        text=join_logical_lines(split_logical_lines(item.text)),
+                    )
+                    for item in source.items
+                ),
+            )
+            for source in sources
+        ]
+        for owner, sources in parsed_by_owner.items()
     }
+    # Full legacy source trees commonly repeat definitions identical to the
+    # installed game. They are ancestry, not load-last candidates. Ordinary
+    # Merge copies are removed before conflict resolution so one native
+    # Standard change remains native. Stock-valued Standard candidates stay
+    # only when two Standards actually compete and native order must be
+    # reconciled.
+    parsed_by_owner = {
+        owner: [
+            replace(
+                source,
+                items=tuple(
+                    item
+                    for item in source.items
+                    if (
+                        item.key not in stock_items
+                        or item.text
+                        != join_logical_lines(
+                            split_logical_lines(stock_items[item.key].text)
+                        )
+                        or (
+                            owner in passthrough_aliases
+                            and len(standard_owners_by_key.get(item.key, ())) > 1
+                        )
+                        or requested.get(item.key) == owner
+                    )
+                ),
+            )
+            for source in sources
+        ]
+        for owner, sources in parsed_by_owner.items()
+    }
+
+    initial = merge_sources([], parsed_by_owner)
     explicit: dict[tuple[DefinitionKind, str], SemanticItem] = {}
     explicit_scopes: dict[tuple[DefinitionKind, str], frozenset[str]] = {}
     for (kind, name), resolution in (semantic_resolutions or {}).items():
@@ -2955,17 +4805,44 @@ def merge_gpl_resources(
         raise ComposeError(
             f"GPL semantic resolutions do not name real conflicts: {labels}"
         )
+    for key in set(requested) | set(explicit):
+        selected = resolutions.get(key)
+        stock_item = stock_items.get(key)
+        if (
+            selected is not None
+            and stock_item is not None
+            and join_logical_lines(split_logical_lines(selected.text))
+            == join_logical_lines(split_logical_lines(stock_item.text))
+        ):
+            # A reviewed stock restoration is itself a load-last edit. A
+            # non-stock resolution which merely selects one lone Standard
+            # change over package-carried stock ancestry remains native.
+            required_patch_keys.add(key)
     final = merge_sources([], parsed_by_owner, resolutions or None)
     final.require_clean()
+    before_generated_features = {item.key: item.text for item in final.items}
     final = add_inventory_death_drop_exclusions(
         final,
         inventory_death_drop_exclusions,
         source_name="<CAM Manager stock death-drop composition>",
     )
     gpl_callback_evidence = validate_gpl_feature_evidence(inventories)
-    purchase_callbacks = [item[1:] for item in gpl_callback_evidence if item[0] == "equipment"]
-    bazaar_callbacks = [item[1:] for item in gpl_callback_evidence if item[0] == "bazaar"]
-    callback_symbols = [item[2] for item in purchase_callbacks]
+    purchase_callbacks = [
+        item for item in gpl_callback_evidence if item.lifecycle == "equipment"
+    ]
+    bazaar_callbacks = [
+        item for item in gpl_callback_evidence if item.lifecycle == "bazaar"
+    ]
+    movement_hooks = [
+        item
+        for item in gpl_callback_evidence
+        if item.lifecycle == "controlled_follower_speed_sync"
+    ]
+    hero_quest_hooks = [
+        item for item in gpl_callback_evidence
+        if item.lifecycle == "hero_quest"
+    ]
+    callback_symbols = [item.callback_symbol for item in purchase_callbacks]
     if purchase_callbacks:
         stock_item = None
         if stock_purchase_equipment_source is not None:
@@ -2990,9 +4867,54 @@ def merge_gpl_resources(
         try:
             final = add_purchase_bazaar_tail_callbacks(
                 final,
-                [item[2] for item in bazaar_callbacks],
+                [item.callback_symbol for item in bazaar_callbacks],
                 stock_purchase_bazaar=stock_item,
                 source_name="<CAM Manager stock Purchase_Bazaar tail composition>",
+            )
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+    if movement_hooks:
+        try:
+            final = add_controlled_follower_movement_adjustments(
+                final,
+                (
+                    (
+                        item.callback_symbol,
+                        item.movement_rate_modifier_per_tier,
+                        item.marker_effectors,
+                    )
+                    for item in movement_hooks
+                ),
+                stock_control_monster=stock_control_monster,
+                stock_controlled_monster_death=stock_controlled_monster_death,
+                stock_leader_dead=stock_leader_dead,
+                source_name=(
+                    "<CAM Manager stock controlled-follower movement composition>"
+                ),
+            )
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+    if hero_quest_hooks:
+        if stock_hero_trees is None:
+            raise ComposeError(
+                "hero-quest lifecycle requires installed stock hero decision sources"
+            )
+        try:
+            final = add_hero_quest_lifecycle_callbacks(
+                final,
+                (
+                    (
+                        item.hero_scripts,
+                        item.callback_symbol,
+                        item.reset_callback_symbol,
+                        item.death_callback_symbol,
+                    )
+                    for item in hero_quest_hooks
+                ),
+                stock_hero_trees=stock_hero_trees,
+                stock_reset_tasks=stock_reset_tasks,
+                stock_unit_death=stock_unit_death,
+                source_name="<CAM Manager stock hero-quest lifecycle composition>",
             )
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
@@ -3003,14 +4925,52 @@ def merge_gpl_resources(
             )
         except IntentTextError as exc:
             raise ComposeError(str(exc)) from exc
+    after_generated_features = {item.key: item.text for item in final.items}
+    required_patch_keys.update(
+        key
+        for key, text in after_generated_features.items()
+        if before_generated_features.get(key) != text
+    )
+    if passthrough_aliases or stock_semantic_sources:
+        final = SemanticMergeResult(
+            tuple(item for item in final.items if item.key in required_patch_keys),
+            final.conflicts,
+        )
     return GplComposeResult(
         source_set=final.emit_project_source_set(),
         conflicts=initial.conflicts,
         resolution_owners=tuple(used),
         resolution_sources=tuple(used_sources),
         inventory_death_drop_exclusions=tuple(inventory_death_drop_exclusions),
-        purchase_equipment_tail_callbacks=tuple(purchase_callbacks),
-        purchase_bazaar_tail_callbacks=tuple(bazaar_callbacks),
+        purchase_equipment_tail_callbacks=tuple(
+            (item.mod_id, item.feature_key, item.callback_symbol)
+            for item in purchase_callbacks
+        ),
+        purchase_bazaar_tail_callbacks=tuple(
+            (item.mod_id, item.feature_key, item.callback_symbol)
+            for item in bazaar_callbacks
+        ),
+        controlled_follower_speed_sync=tuple(
+            (
+                item.mod_id,
+                item.feature_key,
+                item.callback_symbol,
+                item.movement_rate_modifier_per_tier,
+                item.marker_effectors,
+            )
+            for item in movement_hooks
+        ),
+        hero_quest_lifecycles=tuple(
+            (
+                item.mod_id,
+                item.feature_key,
+                item.hero_scripts,
+                item.callback_symbol,
+                item.reset_callback_symbol,
+                item.death_callback_symbol,
+            )
+            for item in hero_quest_hooks
+        ),
     )
 
 
@@ -3030,12 +4990,46 @@ def _require_boolean_agent_callback_signature(
         )
 
 
+def _require_boolean_two_agent_callback_signature(
+    text: str, symbol: str, label: str
+) -> None:
+    from .gpl import _mask_non_code
+
+    argument = r"agent\s+[A-Za-z_][A-Za-z0-9_]*"
+    pattern = (
+        r"\s*function\s+" + re.escape(symbol)
+        + r"\s*\(\s*" + argument + r"\s*,\s*" + argument + r"\s*\)"
+        + r"\s+is\s+boolean\s*declare\b"
+    )
+    if re.match(pattern, _mask_non_code(text), re.IGNORECASE) is None:
+        raise ComposeError(
+            f"{label} {symbol!r} must use the stock signature "
+            "(agent leader, agent follower) is boolean"
+        )
+
+
+def _require_void_agent_callback_signature(text: str, symbol: str, label: str) -> None:
+    from .gpl import _mask_non_code
+
+    pattern = (
+        r"\s*function\s+" + re.escape(symbol)
+        + r"\s*\(\s*agent\s+[A-Za-z_][A-Za-z0-9_]*\s*\)"
+        + r"\s*(?:declare|begin)\b"
+    )
+    if re.match(pattern, _mask_non_code(text), re.IGNORECASE) is None:
+        raise ComposeError(
+            f"{label} {symbol!r} must use the stock signature (agent)"
+        )
+
+
 def validate_gpl_feature_evidence(
     inventories: Sequence[PackageInventory],
-) -> tuple[tuple[str, str, str, str], ...]:
+    *,
+    game_path: Path | None = None,
+) -> tuple[GplFeatureEvidence, ...]:
     """Validate and deterministically order source-composed GPL callbacks."""
 
-    callbacks: list[tuple[str, str, str, str]] = []
+    callbacks: list[GplFeatureEvidence] = []
     seen_symbols: dict[tuple[str, str], str] = {}
     for inventory in inventories:
         package = getattr(inventory.selected, "package", None)
@@ -3056,58 +5050,269 @@ def validate_gpl_feature_evidence(
         for feature in definition.runtime_features:
             if not isinstance(
                 feature,
-                (StockGplmxPurchaseEquipmentTail, StockGplmxPurchaseBazaarTail),
+                (
+                    StockGplmxPurchaseEquipmentTail,
+                    StockGplmxPurchaseBazaarTail,
+                    StockControlledFollowerSpeedSync,
+                    StockHeroQuestLifecycle,
+                ),
             ):
                 continue
-            lifecycle = (
-                "equipment"
-                if isinstance(feature, StockGplmxPurchaseEquipmentTail)
-                else "bazaar"
-            )
-            matches = [
-                item
-                for item in functions
-                if item.name.casefold() == feature.callback_symbol.casefold()
-            ]
-            if len(matches) != 1:
-                raise ComposeError(
-                    f"{inventory.selected.alias}: Purchase_{lifecycle.title()} tail callback "
-                    f"{feature.callback_symbol!r} requires exactly one package-owned "
-                    f"GPL function; found {len(matches)}"
-                )
-            _require_boolean_agent_callback_signature(
-                matches[0].text,
-                feature.callback_symbol,
-                f"Purchase_{lifecycle.title()} tail callback",
-            )
-            symbol_key = (lifecycle, feature.callback_symbol.casefold())
-            previous = seen_symbols.get(symbol_key)
-            if previous is not None:
-                raise ComposeError(
-                    f"Purchase_{lifecycle.title()} tail callback symbol "
-                    f"{feature.callback_symbol!r} is owned by both {previous} "
-                    f"and {inventory.selected.alias}"
-                )
-            seen_symbols[symbol_key] = inventory.selected.alias
-            callbacks.append(
+            if isinstance(feature, StockGplmxPurchaseEquipmentTail):
+                lifecycle = "equipment"
+                feature_key = feature.callback_key
+                callback_symbol = feature.callback_symbol
+            elif isinstance(feature, StockGplmxPurchaseBazaarTail):
+                lifecycle = "bazaar"
+                feature_key = feature.callback_key
+                callback_symbol = feature.callback_symbol
+            else:
+                if isinstance(feature, StockControlledFollowerSpeedSync):
+                    lifecycle = "controlled_follower_speed_sync"
+                    feature_key = feature.feature_key
+                    callback_symbol = feature.eligibility_callback_symbol
+                else:
+                    lifecycle = "hero_quest"
+                    feature_key = feature.feature_key
+                    callback_symbol = feature.decision_callback_symbol
+            required_symbols = (
                 (
-                    lifecycle,
-                    _normalized_mod_uuid(package.mod_id),
-                    feature.callback_key,
-                    feature.callback_symbol,
+                    feature.decision_callback_symbol,
+                    feature.reset_callback_symbol,
+                    feature.death_callback_symbol,
+                )
+                if isinstance(feature, StockHeroQuestLifecycle)
+                else (callback_symbol,)
+            )
+            matches_by_symbol = {
+                symbol: [
+                    item for item in functions
+                    if item.name.casefold() == symbol.casefold()
+                ]
+                for symbol in required_symbols
+            }
+            invalid = [symbol for symbol, matches in matches_by_symbol.items() if len(matches) != 1]
+            if invalid:
+                label = (
+                    "Controlled-follower speed-sync eligibility callback"
+                    if isinstance(feature, StockControlledFollowerSpeedSync)
+                    else (
+                        "Hero-quest lifecycle callback"
+                        if isinstance(feature, StockHeroQuestLifecycle)
+                        else f"Purchase_{lifecycle.title()} tail callback"
+                    )
+                )
+                raise ComposeError(
+                    f"{inventory.selected.alias}: {label} "
+                    f"{invalid[0]!r} requires exactly one package-owned GPL function; "
+                    f"found {len(matches_by_symbol[invalid[0]])}"
+                )
+            if isinstance(feature, StockControlledFollowerSpeedSync):
+                _require_boolean_two_agent_callback_signature(
+                    matches_by_symbol[callback_symbol][0].text,
+                    callback_symbol,
+                    "Controlled-follower speed-sync eligibility callback",
+                )
+            elif isinstance(feature, StockHeroQuestLifecycle):
+                _require_boolean_agent_callback_signature(
+                    matches_by_symbol[feature.decision_callback_symbol][0].text,
+                    feature.decision_callback_symbol,
+                    "Hero-quest decision callback",
+                )
+                _require_void_agent_callback_signature(
+                    matches_by_symbol[feature.reset_callback_symbol][0].text,
+                    feature.reset_callback_symbol,
+                    "Hero-quest reset callback",
+                )
+                _require_void_agent_callback_signature(
+                    matches_by_symbol[feature.death_callback_symbol][0].text,
+                    feature.death_callback_symbol,
+                    "Hero-quest death callback",
+                )
+            else:
+                _require_boolean_agent_callback_signature(
+                    matches_by_symbol[callback_symbol][0].text,
+                    callback_symbol,
+                    f"Purchase_{lifecycle.title()} tail callback",
+                )
+            for symbol in required_symbols:
+                symbol_key = (lifecycle, symbol.casefold())
+                previous = seen_symbols.get(symbol_key)
+                if previous is not None:
+                    raise ComposeError(
+                        f"{lifecycle.replace('_', ' ').title()} callback symbol "
+                        f"{symbol!r} is owned by both {previous} "
+                        f"and {inventory.selected.alias}"
+                    )
+                seen_symbols[symbol_key] = inventory.selected.alias
+            mod_id = _normalized_mod_uuid(package.mod_id)
+            markers = (
+                _controlled_follower_markers(mod_id, feature_key)
+                if isinstance(feature, StockControlledFollowerSpeedSync)
+                else ()
+            )
+            callbacks.append(
+                GplFeatureEvidence(
+                    lifecycle=lifecycle,
+                    mod_id=mod_id,
+                    feature_key=feature_key,
+                    callback_symbol=callback_symbol,
+                    movement_rate_modifier_per_tier=(
+                        feature.movement_rate_modifier_per_tier
+                        if isinstance(feature, StockControlledFollowerSpeedSync)
+                        else 0
+                    ),
+                    marker_effectors=markers,
+                    hero_scripts=(
+                        feature.hero_scripts
+                        if isinstance(feature, StockHeroQuestLifecycle)
+                        else ()
+                    ),
+                    reset_callback_symbol=(
+                        feature.reset_callback_symbol
+                        if isinstance(feature, StockHeroQuestLifecycle)
+                        else ""
+                    ),
+                    death_callback_symbol=(
+                        feature.death_callback_symbol
+                        if isinstance(feature, StockHeroQuestLifecycle)
+                        else ""
+                    ),
                 )
             )
     callbacks.sort(
-        key=lambda item: (item[0], item[1], item[2].casefold(), item[3].casefold())
+        key=lambda item: (
+            item.lifecycle,
+            item.mod_id,
+            item.feature_key.casefold(),
+            item.callback_symbol.casefold(),
+        )
     )
+    movement = [
+        item
+        for item in callbacks
+        if item.lifecycle == "controlled_follower_speed_sync"
+    ]
+    if movement and game_path is not None:
+        parsed_by_owner = {
+            inventory.selected.alias: _parse_inventory_gpl_sources(inventory)
+            for inventory in inventories
+        }
+        initial = merge_sources([], parsed_by_owner)
+        protected_functions = {
+            "control_monster",
+            "controlled_monster_death",
+            "leader_dead",
+            *(item.callback_symbol.casefold() for item in movement),
+        }
+        unrelated_resolutions = {
+            conflict.key: min(
+                conflict.variants,
+                key=lambda variant: (
+                    variant.side_name.casefold(),
+                    variant.item.source_name.casefold(),
+                    variant.item.text,
+                ),
+            ).item
+            for conflict in initial.conflicts
+            if not (
+                conflict.key[0] is DefinitionKind.FUNCTION
+                and conflict.key[1] in protected_functions
+            )
+        }
+        # This preflight proves only the generated controlled-follower lifecycle.
+        # Other GPL conflicts are validated and resolved by the normal build plan;
+        # they must not make an independent runtime feature appear unsupported.
+        # Conflicts in a lifecycle function or declared callback stay unresolved
+        # here and therefore fail closed below.
+        merged = merge_sources([], parsed_by_owner, unrelated_resolutions or None)
+        merged.require_clean()
+        control, death, leader_dead = _load_stock_controlled_follower_items(
+            game_path
+        )
+        try:
+            add_controlled_follower_movement_adjustments(
+                merged,
+                (
+                    (
+                        item.callback_symbol,
+                        item.movement_rate_modifier_per_tier,
+                        item.marker_effectors,
+                    )
+                    for item in movement
+                ),
+                stock_control_monster=control,
+                stock_controlled_monster_death=death,
+                stock_leader_dead=leader_dead,
+            )
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+    hero_quest = [item for item in callbacks if item.lifecycle == "hero_quest"]
+    if hero_quest and game_path is not None:
+        parsed_by_owner = {
+            inventory.selected.alias: _parse_inventory_gpl_sources(inventory)
+            for inventory in inventories
+        }
+        initial = merge_sources([], parsed_by_owner)
+        protected = {
+            "reset_tasks", "unit_call_deathscript",
+            *(item.callback_symbol.casefold() for item in hero_quest),
+            *(item.reset_callback_symbol.casefold() for item in hero_quest),
+            *(item.death_callback_symbol.casefold() for item in hero_quest),
+        }
+        unrelated = {
+            conflict.key: min(
+                conflict.variants,
+                key=lambda variant: (
+                    variant.side_name.casefold(), variant.item.source_name.casefold(),
+                    variant.item.text,
+                ),
+            ).item
+            for conflict in initial.conflicts
+            if not (
+                conflict.key[0] is DefinitionKind.FUNCTION
+                and conflict.key[1] in protected
+            )
+        }
+        merged = merge_sources([], parsed_by_owner, unrelated or None)
+        merged.require_clean()
+        trees, reset_item, death_item = _load_stock_hero_quest_lifecycle_items(game_path)
+        try:
+            add_hero_quest_lifecycle_callbacks(
+                merged,
+                (
+                    (
+                        item.hero_scripts, item.callback_symbol,
+                        item.reset_callback_symbol, item.death_callback_symbol,
+                    )
+                    for item in hero_quest
+                ),
+                stock_hero_trees=trees,
+                stock_reset_tasks=reset_item,
+                stock_unit_death=death_item,
+            )
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
     return tuple(callbacks)
+
+
+def _controlled_follower_markers(
+    mod_id: str, feature_key: str
+) -> tuple[str, str, str, str]:
+    digest = hashlib.sha256(
+        f"{mod_id}|{feature_key.casefold()}".encode("ascii")
+    ).hexdigest().upper()
+    return tuple("MCF" + digest[:12] + str(tier) for tier in range(1, 5))
 
 
 def _parse_inventory_gpl_sources(
     inventory: PackageInventory,
 ) -> list[ParsedSemanticSource]:
+    semantic_sources = getattr(inventory, "semantic_sources", None)
+    if semantic_sources is not None:
+        return list(semantic_sources)
     owner = inventory.selected.alias
-    parsed: list[ParsedSemanticSource] = []
+    effective: dict[tuple[DefinitionKind, str], SemanticItem] = {}
     for load in inventory.gpl_loads:
         for source_path in load.sources:
             path = source_path.absolute_path
@@ -3128,8 +5333,20 @@ def _parse_inventory_gpl_sources(
                     f"{owner}: GPL source has unparsed content the composer "
                     f"cannot preserve: {path}: {exc}"
                 ) from exc
-            parsed.append(source)
-    return parsed
+            # GPL targets are loaded in manifest order. Reusing a physical
+            # source later is a real last-write directive, not a duplicate to
+            # discard, so replay every occurrence into the effective view.
+            for item in source.items:
+                effective[item.key] = item
+    if not effective:
+        return []
+    return [
+        ParsedSemanticSource(
+            source_name=f"<{owner} effective native GPL load order>",
+            text="",
+            items=tuple(effective.values()),
+        )
+    ]
 
 
 def compile_gpl(
@@ -3181,7 +5398,7 @@ def snapshot_stock_compose_inputs(game_path: Path) -> tuple[StockComposeInput, .
 
     The fixed CAM/compiler/defines inputs are required.  Both stock Description
     directories are required and every direct ``*.xml`` child is included, so
-    adding or deleting a stock Description document changes the snapshot.  A
+    adding or deleting a stock Description document changes the snapshot.  The
     symlink anywhere below the resolved game root is rejected rather than
     silently following a mutable external target.
     """
@@ -3396,8 +5613,13 @@ def resolve_runtime_feature_registry(
     for owner, feature in claims:
         if isinstance(feature, NameGeneratorFeature):
             key = ("name-generator", feature.generator_id)
-        else:
+        elif isinstance(feature, EnchantmentRowFeature):
             key = ("enchantment-row", feature.overlay_id)
+        else:  # Keep unrelated schema-v3 feature families out of MMFR.
+            raise ComposeError(
+                "runtime feature registry received an unsupported feature family: "
+                f"{type(feature).__name__}"
+            )
         prior = owners.get(key)
         if prior is not None and prior[0] != owner:
             raise ComposeError(
@@ -3515,6 +5737,7 @@ def resolve_controller_registry(
     runtime_capabilities: Sequence[str] = (),
     *,
     building_dialogs: Sequence[ResolvedBuildingDialog] | None = None,
+    reserved_dialog_ids: Sequence[bytes] = (),
 ) -> ControllerComposeResult:
     """Resolve package-local stock-controller recipes into manager-owned MMCR.
 
@@ -3526,7 +5749,10 @@ def resolve_controller_registry(
     """
 
     if building_dialogs is None:
-        building_dialogs = resolve_building_dialogs(inventories)
+        building_dialogs = resolve_building_dialogs(
+            inventories,
+            reserved_dialog_ids=reserved_dialog_ids,
+        )
     building_by_owner = {
         (item.owner, item.local_name): item for item in building_dialogs
     }
@@ -3598,7 +5824,7 @@ def resolve_controller_registry(
     mappings: dict[tuple[str, str, str], ControllerKeyMapping] = {}
     qualified_origins: dict[str, tuple[str, str]] = {}
     panel_types = (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
-                   StockMx04Mx05OccupantActionPanel)
+                   StockMx04Mx05OccupantActionPanel, StockAp08Mx05QuestBoardPanel)
     raw_panels: dict[str, tuple[PackageInventory, ControllerFeature]] = {}
     raw_toggles: dict[str, tuple[PackageInventory, StockMx22BuildingOpenToggle]] = {}
     flag_prototypes: dict[str, str] = {}
@@ -3687,7 +5913,16 @@ def resolve_controller_registry(
         for resource in inventory.resources
         if len(resource.key) == 4
     }
+    reserved_dialogs.update(
+        dialog_id
+        for inventory in inventories
+        for dialog_id in getattr(inventory.selected, "reserved_dialog_ids", ())
+        if len(dialog_id) == 4
+    )
     reserved_dialogs.update(item.resolved_dialog_id for item in building_dialogs)
+    reserved_dialogs.update(
+        dialog_id for dialog_id in reserved_dialog_ids if len(dialog_id) == 4
+    )
     available = (
         f"CG{left}{right}".encode("ascii")
         for left in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -3706,7 +5941,8 @@ def resolve_controller_registry(
     ]
     for feature in panel_features:
         inventory, raw = raw_panels[feature.panel_key]
-        if isinstance(feature, StockMx04Mx05OccupantActionPanel):
+        if isinstance(feature, (StockMx04Mx05OccupantActionPanel,
+                                StockAp08Mx05QuestBoardPanel)):
             definition = inventory.selected.package.definition
             occupant_parent_bases[feature.panel_key] = next(
                 b.controller_base for b in definition.custom_buildings
@@ -3808,6 +6044,7 @@ def resolve_controller_registry(
 
 
 _CONTROLLER_FEATURE_CLASSES = (
+    StockAp08Mx05QuestBoardPanel,
     StockMx04Mx05OccupantActionPanel,
     StockMx22BuildingOpenToggle,
     StockAp10Ap69SecondaryPanel,
@@ -3861,7 +6098,8 @@ def _qualify_controller_feature(feature: ControllerFeature, qualify) -> Controll
             panel_key=panel,
             parent_building=qualify("parent_building", feature.parent_building),
         )
-    if isinstance(feature, (StockMx09Ap41RewardPanel, StockMx04Mx05OccupantActionPanel)):
+    if isinstance(feature, (StockMx09Ap41RewardPanel, StockMx04Mx05OccupantActionPanel,
+                            StockAp08Mx05QuestBoardPanel)):
         return replace(
             feature,
             panel_key=panel,
@@ -4009,7 +6247,11 @@ def _require_controller_feature_evidence(
                     f"building_family_id {feature.building_family_id!r} is not "
                     "owned exclusively by matching parent Building Descriptions"
                 )
-        elif isinstance(feature, (StockMx09Ap41RewardPanel, StockMx04Mx05OccupantActionPanel)):
+        elif isinstance(feature, (
+            StockMx09Ap41RewardPanel,
+            StockMx04Mx05OccupantActionPanel,
+            StockAp08Mx05QuestBoardPanel,
+        )):
             parent = declared_buildings.get(feature.parent_building)
             if parent is None:
                 raise ComposeError(
@@ -4048,6 +6290,45 @@ def _require_controller_feature_evidence(
                                 if item.kind is DefinitionKind.FUNCTION and item.name.casefold() == symbol.casefold())
                     _require_occupant_callback_signature(
                         item.text, symbol, symbol == feature.cost_callback_symbol
+                    )
+            elif isinstance(feature, StockAp08Mx05QuestBoardPanel):
+                if (
+                    parent.controller_base,
+                    parent.panel_resource_template,
+                ) != ("AP08", "AP08"):
+                    raise ComposeError(
+                        "quest-board panels use Majesty's stock AP08 quest-"
+                        "building lifecycle and require an AP08/AP08 parent"
+                    )
+                callbacks = (
+                    (feature.list_source_callback_symbol, ("agent", "integer"), "agent"),
+                    (feature.revision_callback_symbol, ("agent",), "integer"),
+                    (feature.offer_name_callback_symbol, ("agent", "integer"), "string"),
+                    (feature.offer_goal_callback_symbol, ("agent", "integer"), "string"),
+                    (feature.offer_reward_callback_symbol, ("agent", "integer"), "integer"),
+                    (feature.selected_cost_callback_symbol, ("agent",), "integer"),
+                    (feature.selected_action_callback_symbol, ("agent",), "boolean"),
+                    (feature.refresh_cost_callback_symbol, ("agent",), "integer"),
+                    (feature.can_refresh_callback_symbol, ("agent",), "boolean"),
+                    (feature.refresh_callback_symbol, ("agent",), "boolean"),
+                )
+                for symbol, parameters, result_type in callbacks:
+                    matches = gpl_functions.get(symbol.casefold(), ())
+                    if len(matches) != 1:
+                        raise ComposeError(
+                            f"{inventory.selected.alias}: quest-board callback "
+                            f"{symbol!r} requires exactly one package-owned GPL "
+                            f"function; found {len(matches)}"
+                        )
+                    item = next(
+                        item
+                        for source in callback_sources
+                        for item in source.items
+                        if item.kind is DefinitionKind.FUNCTION
+                        and item.name.casefold() == symbol.casefold()
+                    )
+                    _require_quest_board_callback_signature(
+                        item.text, symbol, parameters, result_type
                     )
         elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
             matches = [
@@ -4114,6 +6395,33 @@ def _require_occupant_callback_signature(text: str, symbol: str, cost: bool) -> 
         raise ComposeError(f"occupant callback {symbol!r} must use the stock signature {expected}")
 
 
+def _require_quest_board_callback_signature(
+    text: str,
+    symbol: str,
+    parameter_types: Sequence[str],
+    result_type: str,
+) -> None:
+    """Require the bounded native evaluator ABI used by the quest board."""
+
+    from .gpl import _mask_non_code
+
+    parameters = r"\s*,\s*".join(
+        re.escape(kind) + r"\s+[A-Za-z_][A-Za-z0-9_]*"
+        for kind in parameter_types
+    )
+    pattern = (
+        r"\s*function\s+" + re.escape(symbol)
+        + r"\s*\(\s*" + parameters + r"\s*\)"
+        + r"\s+is\s+" + re.escape(result_type)
+        + r"\s*(?:declare|begin)\b"
+    )
+    if re.match(pattern, _mask_non_code(text), re.IGNORECASE) is None:
+        expected = f"({', '.join(parameter_types)}) is {result_type}"
+        raise ComposeError(
+            f"quest-board callback {symbol!r} must use signature {expected}"
+        )
+
+
 def _require_v3_panel_declaration_completeness(
     inventory: PackageInventory,
     controller_features: Sequence[ControllerFeature],
@@ -4145,11 +6453,97 @@ def _require_v3_panel_declaration_completeness(
             )
     for feature in controller_features:
         if isinstance(feature, (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
-                                StockMx04Mx05OccupantActionPanel)):
+                                StockMx04Mx05OccupantActionPanel,
+                                StockAp08Mx05QuestBoardPanel)):
             declare(
                 feature.source_dialog_id.encode("ascii"),
                 f"secondary panel {feature.panel_key!r}",
             )
+
+
+def prepare_final_gpl_resources(
+    game_path: Path,
+    inventories: Sequence[PackageInventory],
+    *,
+    resolution_owners: Mapping[tuple[DefinitionKind | str, str], str] | None = None,
+    semantic_resolutions: Mapping[
+        tuple[DefinitionKind | str, str],
+        SemanticItem | ScopedSemanticResolution,
+    ] | None = None,
+    inventory_death_drop_exclusions: Sequence[str] = (),
+    private_activity_texts: Sequence[PrivateActivityTextBinding] = (),
+) -> GplComposeResult:
+    """Build the exact final GPL source set used by both Prepare and Build."""
+
+    stock_semantic_sources: Sequence[ParsedSemanticSource] = ()
+    if any(inventory.selected.semantic_passthrough for inventory in inventories):
+        try:
+            stock_semantic_sources = load_verified_stock_semantic_sources(game_path)[0]
+        except (OSError, StockGplError, ValueError) as exc:
+            raise ComposeError(
+                "installed stock GPL source could not be proven against the bytecode "
+                f"Majesty actually loads: {exc}"
+            ) from exc
+
+    has_purchase_tail = any(
+        isinstance(feature, StockGplmxPurchaseEquipmentTail)
+        for inventory in inventories
+        for feature in inventory.selected.package.definition.runtime_features
+    )
+    has_bazaar_tail = any(
+        isinstance(feature, StockGplmxPurchaseBazaarTail)
+        for inventory in inventories
+        for feature in inventory.selected.package.definition.runtime_features
+    )
+    has_controlled_follower_movement = any(
+        isinstance(feature, StockControlledFollowerSpeedSync)
+        for inventory in inventories
+        for feature in inventory.selected.package.definition.runtime_features
+    )
+    controlled_follower_stock_items = (
+        _load_stock_controlled_follower_items(game_path)
+        if has_controlled_follower_movement
+        else (None, None, None)
+    )
+    has_hero_quest_lifecycle = any(
+        isinstance(feature, StockHeroQuestLifecycle)
+        for inventory in inventories
+        for feature in inventory.selected.package.definition.runtime_features
+    )
+    hero_quest_stock_items = (
+        _load_stock_hero_quest_lifecycle_items(game_path)
+        if has_hero_quest_lifecycle
+        else (None, None, None)
+    )
+    return merge_gpl_resources(
+        inventories,
+        resolution_owners=resolution_owners,
+        semantic_resolutions=semantic_resolutions,
+        inventory_death_drop_exclusions=inventory_death_drop_exclusions,
+        private_activity_texts=private_activity_texts,
+        stock_semantic_sources=stock_semantic_sources,
+        stock_integer_expression_sources=(
+            (_load_stock_activity_text_expression_source(game_path),)
+            if private_activity_texts
+            else ()
+        ),
+        stock_purchase_equipment_source=(
+            _load_stock_purchase_equipment_source(game_path)
+            if has_purchase_tail
+            else None
+        ),
+        stock_purchase_bazaar_source=(
+            _load_stock_purchase_bazaar_source(game_path)
+            if has_bazaar_tail
+            else None
+        ),
+        stock_control_monster=controlled_follower_stock_items[0],
+        stock_controlled_monster_death=controlled_follower_stock_items[1],
+        stock_leader_dead=controlled_follower_stock_items[2],
+        stock_hero_trees=hero_quest_stock_items[0],
+        stock_reset_tasks=hero_quest_stock_items[1],
+        stock_unit_death=hero_quest_stock_items[2],
+    )
 
 
 def compose_package(
@@ -4165,6 +6559,21 @@ def compose_package(
         tuple[DefinitionKind | str, str],
         SemanticItem | ScopedSemanticResolution,
     ] | None = None,
+    description_resolutions: Mapping[DescriptionKey, DescriptionRecord] | None = None,
+    string_resolutions: Mapping[StringKey, StringRecord] | None = None,
+    named_cam_resolutions: Mapping[
+        tuple[bytes, bytes], ScopedNamedResourceResolution
+    ] | None = None,
+    art_resolutions: Mapping[
+        tuple[str, bytes], ScopedArtResourceResolution
+    ] | None = None,
+    strt_resolutions: Mapping[
+        tuple[bytes, int], StrtRowResolution
+    ] | None = None,
+    bdep_resolutions: Mapping[str, BdepRowResolution] | None = None,
+    reserved_dialog_ids: Sequence[bytes] = (),
+    reserved_description_keys: Sequence[DescriptionKey] = (),
+    reserved_description_names: Sequence[str] = (),
     inventory_death_drop_exclusions: Sequence[str] = (),
     runtime_capabilities: Sequence[str] = (),
     private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
@@ -4201,11 +6610,35 @@ def compose_package(
     output_root.parent.mkdir(parents=True, exist_ok=True)
 
     inventories = tuple(inventory_package(selected) for selected in selected_mods)
-    dialog_resolutions = resolve_building_dialogs(inventories)
+    has_named_cam_resources = any(
+        resource.section in STOCK_NAMED_CAM_SECTIONS
+        for inventory in inventories
+        for resource in inventory.resources
+    )
+    try:
+        stock_named_resources = (
+            load_effective_stock_named_resources(game_path)[0]
+            if has_named_cam_resources
+            else {}
+        )
+        stock_string_records = (
+            load_effective_stock_strings(game_path)[0].index
+            if any(inventory.strings for inventory in inventories)
+            else {}
+        )
+    except (OSError, StockCamError, StringsFormatError, ValueError) as exc:
+        raise ComposeError(
+            f"installed stock resource ancestry is not safe: {exc}"
+        ) from exc
+    dialog_resolutions = resolve_building_dialogs(
+        inventories,
+        reserved_dialog_ids=reserved_dialog_ids,
+    )
     controller_result = resolve_controller_registry(
         inventories,
         runtime_capabilities,
         building_dialogs=dialog_resolutions,
+        reserved_dialog_ids=reserved_dialog_ids,
     )
     controller_registry_payload = encode_stock_controller_registry(
         controller_result.registry
@@ -4235,23 +6668,80 @@ def compose_package(
         private_activity_texts=private_activity_texts,
         dialog_resolutions=dialog_resolutions,
         controller_panels=controller_result.panels,
+        controller_registry=controller_result.registry,
+        named_resolutions=named_cam_resolutions,
+        strt_resolutions=strt_resolutions,
+        stock_named_resources=stock_named_resources,
     )
-    bdep_result = merge_bdep_resource(game_path, inventories)
-    main_art, interface_art = merge_art_resources(
+    bdep_result = merge_bdep_resource(
         game_path,
         inventories,
-        required_stock_interface_imag_ids=(
+        resolutions=bdep_resolutions,
+    )
+    art_results = merge_art_resource_domains(
+        game_path,
+        inventories,
+        required_stock_imag_ids=(
             (b"IX93",)
             if runtime_feature_registry.enchantment_rows
             else ()
         ),
+        art_resolutions=art_resolutions,
     )
-    audio_archive, sound_archive, sound_selections = merge_sound_resources(inventories)
+    audio_archive, sound_archive, sound_selections = merge_sound_resources(
+        inventories,
+        named_resolutions=named_cam_resolutions,
+        stock_named_resources=stock_named_resources,
+    )
+    controlled_follower_markers = tuple(
+        sorted(
+            (
+                marker
+                for inventory in inventories
+                for feature in inventory.selected.package.definition.runtime_features
+                if isinstance(feature, StockControlledFollowerSpeedSync)
+                for marker in _controlled_follower_markers(
+                    _normalized_mod_uuid(inventory.selected.package.mod_id),
+                    feature.feature_key,
+                )
+            ),
+            key=str.casefold,
+        )
+    )
+    stock_description_keys = (
+        tuple(
+            set(_load_effective_stock_descriptions(game_path))
+            | set(reserved_description_keys)
+        )
+        if controlled_follower_markers
+        else ()
+    )
     descriptions = merge_description_resources(
-        inventories, dialog_resolutions=dialog_resolutions
+        inventories,
+        dialog_resolutions=dialog_resolutions,
+        controlled_follower_markers=controlled_follower_markers,
+        reserved_description_keys=stock_description_keys,
+        reserved_description_names=reserved_description_names,
+        resolutions=description_resolutions,
+    )
+    descriptions = filter_passthrough_descriptions(
+        descriptions,
+        inventories,
+        stock_records={
+            key: value[0]
+            for key, value in _load_effective_stock_descriptions(game_path).items()
+        },
+        forced_keys=(description_resolutions or {}),
+    )
+    strings = merge_string_resources(
+        inventories,
+        resolutions=string_resolutions,
+        stock_records=stock_string_records,
     )
     description_stock_deltas = analyze_description_stock_deltas(
-        game_path, inventories
+        game_path,
+        inventories,
+        descriptions=descriptions,
     )
     validate_controller_stock_evidence(
         game_path,
@@ -4262,37 +6752,13 @@ def compose_package(
         runtime_feature_registry=runtime_feature_registry,
         description_stock_deltas=description_stock_deltas,
     )
-    has_purchase_tail = any(
-        isinstance(feature, StockGplmxPurchaseEquipmentTail)
-        for inventory in inventories
-        for feature in inventory.selected.package.definition.runtime_features
-    )
-    has_bazaar_tail = any(
-        isinstance(feature, StockGplmxPurchaseBazaarTail)
-        for inventory in inventories
-        for feature in inventory.selected.package.definition.runtime_features
-    )
-    gpl = merge_gpl_resources(
+    gpl = prepare_final_gpl_resources(
+        game_path,
         inventories,
         resolution_owners=resolution_owners,
         semantic_resolutions=semantic_resolutions,
         inventory_death_drop_exclusions=inventory_death_drop_exclusions,
         private_activity_texts=private_activity_texts,
-        stock_integer_expression_sources=(
-            (_load_stock_activity_text_expression_source(game_path),)
-            if private_activity_texts
-            else ()
-        ),
-        stock_purchase_equipment_source=(
-            _load_stock_purchase_equipment_source(game_path)
-            if has_purchase_tail
-            else None
-        ),
-        stock_purchase_bazaar_source=(
-            _load_stock_purchase_bazaar_source(game_path)
-            if has_bazaar_tail
-            else None
-        ),
     )
 
     output_mod_id = _generated_mod_id(selected_mods, profile_slug)
@@ -4315,12 +6781,26 @@ def compose_package(
     try:
         data_directory = staging / "Data"
         data_directory.mkdir()
+        art_outputs = tuple(
+            (
+                (
+                    "merged_maindata.cam"
+                    if result.domain == "main"
+                    else (
+                        "merged_interfacedata.cam"
+                        if result.domain == "interface"
+                        else f"merged_{result.domain}.cam"
+                    )
+                ),
+                result.archive,
+            )
+            for result in art_results
+        )
         cam_outputs = (
             ("merged_textdata.cam", text_result.text_archive),
             ("merged_gpltext.cam", text_result.gpltext_archive),
             ("merged_miscdata.cam", bdep_result.archive),
-            ("merged_maindata.cam", main_art.archive),
-            ("merged_interfacedata.cam", interface_art.archive),
+            *art_outputs,
             ("merged_audio.cam", audio_archive),
             ("merged_sounddesc.cam", sound_archive),
         )
@@ -4328,6 +6808,11 @@ def compose_package(
             (data_directory / filename).write_bytes(archive.to_bytes())
         descriptions_path = data_directory / "merged_descriptions.xml"
         descriptions_path.write_bytes(descriptions.payload)
+        strings_paths: list[Path] = []
+        if strings is not None:
+            strings_path = data_directory / "merged_strings.xml"
+            strings_path.write_bytes(strings.payload)
+            strings_paths.append(strings_path)
 
         compiled = compile_gpl(
             gpl.source_set,
@@ -4347,6 +6832,7 @@ def compose_package(
                 display_name=actual_display_name,
                 cam_filenames=tuple(filename for filename, _archive in cam_outputs),
                 description_filename=descriptions_path.name,
+                strings_filenames=tuple(path.name for path in strings_paths),
                 source_set=gpl.source_set,
             )
         )
@@ -4379,8 +6865,7 @@ def compose_package(
             game_path=game_path,
             text_result=text_result,
             bdep_result=bdep_result,
-            main_art=main_art,
-            interface_art=interface_art,
+            art_results=art_results,
             sound_selections=sound_selections,
             descriptions=descriptions,
             description_stock_deltas=description_stock_deltas,
@@ -4429,6 +6914,7 @@ def _controller_record_count(registry: ResolvedControllerRegistry) -> int:
             registry.occupant_action_panels,
             registry.hostile_monster_flags,
             registry.building_open_toggles,
+            registry.quest_boards,
         )
     )
 
@@ -4472,24 +6958,108 @@ def _derive_runtime_capabilities(
         raise ComposeError(f"invalid runtime capability requirements: {exc}") from exc
 
 
-def validate_composed_package(root: Path) -> Mapping[str, object]:
-    """Reparse every emitted resource and verify the generated load graph."""
+def _validate_generated_cam_outputs(
+    cam_paths: Sequence[PackagePath],
+) -> tuple[list[dict[str, object]], int]:
+    normalized_paths = tuple(
+        path.relative_path.replace("\\", "/").casefold() for path in cam_paths
+    )
+    duplicates = sorted(
+        path for path in set(normalized_paths) if normalized_paths.count(path) > 1
+    )
+    if duplicates:
+        raise ComposeError(
+            "generated package contains duplicate CAM path(s): "
+            + ", ".join(duplicates)
+        )
 
-    package = load_package(root)
-    if len(package.datasets) != 1 or len(package.datasets[0].loads) != 1:
-        raise ComposeError("generated package does not contain one Any/Load graph")
-    load = package.datasets[0].loads[0]
-    if package.datasets[0].base.casefold() != "any":
-        raise ComposeError("generated package Dataset base is not Any")
-    if len(load.cams) != 7:
-        raise ComposeError(f"generated package has {len(load.cams)} CAMs, expected 7")
-    cam_summaries = []
+    names_by_path: dict[str, str] = {}
+    for path, normalized in zip(cam_paths, normalized_paths):
+        if normalized.count("/") != 1 or not normalized.startswith("data/"):
+            raise ComposeError(
+                "generated CAM is not directly under Data: "
+                f"{path.relative_path}"
+            )
+        names_by_path[normalized] = normalized.removeprefix("data/")
+
+    present_names = set(names_by_path.values())
+    missing = sorted(set(_FIXED_GENERATED_CAM_SECTIONS) - present_names)
+    if missing:
+        raise ComposeError(
+            "generated package is missing required CAM role(s): "
+            + ", ".join(missing)
+        )
+
+    cam_summaries: list[dict[str, object]] = []
     palette_reference_count = 0
-    for path in load.cams:
+    for path, normalized in zip(cam_paths, normalized_paths):
+        filename = names_by_path[normalized]
+        fixed_sections = _FIXED_GENERATED_CAM_SECTIONS.get(filename)
+        is_art = fixed_sections is None
+        if is_art and _GENERATED_ART_CAM_NAME.fullmatch(filename) is None:
+            raise ComposeError(
+                f"unsupported generated art CAM filename: {path.relative_path}"
+            )
+
         original = path.absolute_path.read_bytes()
         archive = read_cam(original)
         if archive.to_bytes() != original:
-            raise ComposeError(f"generated CAM is not byte-stable: {path.relative_path}")
+            raise ComposeError(
+                f"generated CAM is not byte-stable: {path.relative_path}"
+            )
+        extensions = tuple(section.extension for section in archive.sections)
+        duplicate_extensions = sorted(
+            extension
+            for extension in set(extensions)
+            if extensions.count(extension) > 1
+        )
+        if duplicate_extensions:
+            labels = ", ".join(
+                value.decode("ascii", errors="replace")
+                for value in duplicate_extensions
+            )
+            raise ComposeError(
+                f"generated CAM contains duplicate section(s) {labels}: "
+                f"{path.relative_path}"
+            )
+        if fixed_sections is not None and extensions != fixed_sections:
+            expected = ", ".join(
+                extension.decode("ascii") for extension in fixed_sections
+            )
+            actual = ", ".join(
+                extension.decode("ascii", errors="replace")
+                for extension in extensions
+            )
+            raise ComposeError(
+                f"generated {filename} CAM role has sections [{actual}], "
+                f"expected [{expected}]"
+            )
+        if is_art:
+            if (
+                len(extensions) not in {2, 3}
+                or extensions[:2] != (b"IMAG", b"TILE")
+            ):
+                raise ComposeError(
+                    "generated art CAM must begin with exactly IMAG and TILE: "
+                    f"{path.relative_path}"
+                )
+            if len(extensions) == 3 and extensions[2] not in {b"SPLT", b"PALT"}:
+                raise ComposeError(
+                    "generated art CAM has unsupported section "
+                    f"{extensions[2].decode('ascii', errors='replace')}: "
+                    f"{path.relative_path}"
+                )
+            if filename == "merged_maindata.cam" and b"PALT" in extensions:
+                raise ComposeError(
+                    "generated main art CAM cannot contain PALT: "
+                    f"{path.relative_path}"
+                )
+            if filename != "merged_maindata.cam" and b"SPLT" in extensions:
+                raise ComposeError(
+                    "generated non-main art CAM cannot contain SPLT: "
+                    f"{path.relative_path}"
+                )
+
         sections_by_extension = {
             section.extension: section for section in archive.sections
         }
@@ -4518,7 +7088,8 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
                 )
                 if palette_section.padding != expected_palette_padding:
                     raise ComposeError(
-                        f"generated {palette_section.extension.decode('ascii')} section lost its stock positional flag: "
+                        f"generated {palette_section.extension.decode('ascii')} "
+                        "section lost its stock positional flag: "
                         f"{path.relative_path}"
                     )
                 palette_reference_count += len(
@@ -4534,12 +7105,29 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
                     {
                         "extension": section.display_extension,
                         "entries": len(section.entries),
-                        "payload_entries": sum(bool(entry.data) for entry in section.entries),
+                        "payload_entries": sum(
+                            bool(entry.data) for entry in section.entries
+                        ),
                     }
                     for section in archive.sections
                 ],
             }
         )
+    return cam_summaries, palette_reference_count
+
+
+def validate_composed_package(root: Path) -> Mapping[str, object]:
+    """Reparse every emitted resource and verify the generated load graph."""
+
+    package = load_package(root)
+    if len(package.datasets) != 1 or len(package.datasets[0].loads) != 1:
+        raise ComposeError("generated package does not contain one Any/Load graph")
+    load = package.datasets[0].loads[0]
+    if package.datasets[0].base.casefold() != "any":
+        raise ComposeError("generated package Dataset base is not Any")
+    cam_summaries, palette_reference_count = _validate_generated_cam_outputs(
+        load.cams
+    )
     if len(load.descriptions) != 1:
         raise ComposeError("generated package does not contain one Description document")
     document = parse_descriptions(
@@ -4552,14 +7140,22 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
     if gpl_load.target.absolute_path.stat().st_size == 0:
         raise ComposeError("generated GPL target is empty")
     parsed_sources = 0
+    controlled_follower_marker_references: set[str] = set()
     for source in gpl_load.sources:
         text = _read_source_text(source.absolute_path)
+        controlled_follower_marker_references.update(
+            re.findall(r"\bMCF[0-9A-F]{12}[1-4]\b", text)
+        )
         if source.absolute_path.suffix.casefold() == ".gpl":
             parsed_sources += len(parse_gpl(text, source.relative_path).items)
         elif source.absolute_path.suffix.casefold() == ".dat":
             parsed_sources += len(parse_dat(text, source.relative_path).items)
         else:
             raise ComposeError(f"generated GPL source has unsupported type: {source.relative_path}")
+    _validate_generated_controlled_follower_marker_descriptions(
+        document,
+        controlled_follower_marker_references,
+    )
     registry_path = root / Path(INTENT_REGISTRY_RELATIVE_PATH)
     if not registry_path.is_file():
         raise ComposeError(
@@ -4679,8 +7275,66 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
         "runtime_controller_record_count": _controller_record_count(
             controller_registry
         ),
+        "controlled_follower_marker_count": len(
+            controlled_follower_marker_references
+        ),
         "resolved_external_palette_references": palette_reference_count,
     }
+
+
+def _validate_generated_controlled_follower_marker_descriptions(
+    document,
+    referenced_markers: set[str],
+) -> None:
+    marker_descriptions: dict[str, ET.Element] = {}
+    for record in document.records:
+        element = record.to_element()
+        name = element.get("Name", "")
+        if re.fullmatch(r"MCF[0-9A-F]{12}[1-4]", name):
+            if name in marker_descriptions:  # pragma: no cover - Description parser
+                raise ComposeError(
+                    f"generated controlled-follower marker {name!r} is duplicated"
+                )
+            marker_descriptions[name] = element
+    if set(marker_descriptions) != referenced_markers:
+        missing = sorted(referenced_markers - set(marker_descriptions))
+        orphaned = sorted(set(marker_descriptions) - referenced_markers)
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if orphaned:
+            details.append("unreferenced " + ", ".join(orphaned))
+        raise ComposeError(
+            "generated controlled-follower GPL and marker Descriptions disagree: "
+            + "; ".join(details)
+        )
+    for name, element in marker_descriptions.items():
+        info = [item.get("value") for item in element.findall("./Engine/Info")]
+        image = element.find("./Engine/ImageIDBase")
+        sound = element.find("./Engine/DefaultSound")
+        dialog = element.find("./Game/DialogID")
+        priority = element.find("./Game/StackPriority")
+        if not (
+            element.get("type") == "Unit"
+            and element.get("subType") == "Overlay"
+            and re.fullmatch(r"MF[A-Z0-9]{2}", element.get("ID", ""))
+            and info == ["Directionless", "DontBlock", "NotVisibleInISOView"]
+            and element.find("./Engine/Menu") is not None
+            and element.find("./Engine/Menu").get("value") == "11"
+            and image is not None
+            and image.get("value") == "CRB2"
+            and element.find("./Engine/Script") is None
+            and sound is not None
+            and sound.get("value") == "0"
+            and dialog is not None
+            and dialog.get("value") == "0"
+            and priority is not None
+            and priority.get("value") == "0"
+        ):
+            raise ComposeError(
+                f"generated controlled-follower marker {name!r} does not "
+                "preserve the recognized stock marker overlay shape"
+            )
 
 
 def _require_generated_dialog_pair(
@@ -4815,7 +7469,11 @@ def _validate_generated_runtime_evidence(
             child_label=_display_key(child),
         )
 
-    for panel in (*controller_registry.reward_panels, *controller_registry.occupant_action_panels):
+    for panel in (
+        *controller_registry.reward_panels,
+        *controller_registry.occupant_action_panels,
+        *controller_registry.quest_boards,
+    ):
         parent = panel.parent_dialog_id.to_bytes(4, "little")
         child = panel.child_dialog_id.to_bytes(4, "little")
         if parent not in building_dialogs or child in building_dialogs or child == parent:
@@ -4833,6 +7491,7 @@ def _validate_generated_runtime_evidence(
             owner="generated",
             parent_label=_display_key(parent),
             child_label=_display_key(child),
+            allow_manager_generated_refresh=True,
         )
 
     for panel in controller_registry.occupant_action_panels:
@@ -4842,6 +7501,31 @@ def _validate_generated_runtime_evidence(
             _require_occupant_callback_signature(
                 gpl_function_texts[symbol.casefold()], symbol,
                 symbol == panel.cost_callback_symbol,
+            )
+    for panel in controller_registry.quest_boards:
+        callbacks = (
+            (panel.list_source_callback_symbol, ("agent", "integer"), "agent"),
+            (panel.revision_callback_symbol, ("agent",), "integer"),
+            (panel.offer_name_callback_symbol, ("agent", "integer"), "string"),
+            (panel.offer_goal_callback_symbol, ("agent", "integer"), "string"),
+            (panel.offer_reward_callback_symbol, ("agent", "integer"), "integer"),
+            (panel.selected_cost_callback_symbol, ("agent",), "integer"),
+            (panel.selected_action_callback_symbol, ("agent",), "boolean"),
+            (panel.refresh_cost_callback_symbol, ("agent",), "integer"),
+            (panel.can_refresh_callback_symbol, ("agent",), "boolean"),
+            (panel.refresh_callback_symbol, ("agent",), "boolean"),
+        )
+        for symbol, parameters, result_type in callbacks:
+            if gpl_functions.get(symbol.casefold(), 0) != 1:
+                raise ComposeError(
+                    f"generated quest-board callback {symbol!r} must exist "
+                    "exactly once"
+                )
+            _require_quest_board_callback_signature(
+                gpl_function_texts[symbol.casefold()],
+                symbol,
+                parameters,
+                result_type,
             )
     for toggle in controller_registry.building_open_toggles:
         parent = toggle.parent_dialog_id.to_bytes(4, "little")
@@ -4996,6 +7680,7 @@ def _build_manifest(
     cam_filenames: Sequence[str],
     description_filename: str,
     source_set: GplProjectSourceSet,
+    strings_filenames: Sequence[str] = (),
 ) -> bytes:
     root = ET.Element("Majesty")
     mod = ET.SubElement(root, "Mod", {"id": mod_id})
@@ -5014,6 +7699,8 @@ def _build_manifest(
     ET.SubElement(load, "Descriptions").text = (
         f"Data\\{description_filename}"
     )
+    for strings_filename in strings_filenames:
+        ET.SubElement(load, "Strings").text = f"Data\\{strings_filename}"
     gpl = ET.SubElement(load, "GPL")
     ET.SubElement(gpl, "Target").text = "Data\\Merged.bcd"
     if source_set.dat_filename is not None:
@@ -5036,8 +7723,7 @@ def _build_report(
     game_path: Path,
     text_result: TextMergeResult,
     bdep_result: BdepComposeResult,
-    main_art: ArtDomainComposeResult,
-    interface_art: ArtDomainComposeResult,
+    art_results: Sequence[ArtDomainComposeResult],
     sound_selections: Sequence[NamedMergeSelection],
     descriptions: DescriptionMergeResult,
     description_stock_deltas: Sequence[DescriptionStockDelta],
@@ -5055,12 +7741,11 @@ def _build_report(
     for selected in selected_mods:
         files = [
             {
-                "path": path.relative_to(selected.package.root).as_posix(),
+                "path": relative_path.as_posix(),
                 "size": path.stat().st_size,
                 "sha256": _sha256(path),
             }
-            for path in sorted(selected.package.root.rglob("*"))
-            if path.is_file()
+            for relative_path, path in _selected_report_files(selected)
         ]
         selected_payload.append(
             {
@@ -5317,11 +8002,36 @@ def _build_report(
                         gpl.purchase_bazaar_tail_callbacks
                     )
                 ],
+                "controlled_follower_speed_sync": [
+                    {
+                        "source_mod_id": mod_id,
+                        "feature_key": feature_key,
+                        "eligibility_callback_symbol": callback_symbol,
+                        "movement_rate_modifier_per_tier": modifier,
+                        "marker_effectors": list(markers),
+                    }
+                    for mod_id, feature_key, callback_symbol, modifier, markers in (
+                        gpl.controlled_follower_speed_sync
+                    )
+                ],
+                "hero_quest_lifecycles": [
+                    {
+                        "source_mod_id": mod_id,
+                        "feature_key": feature_key,
+                        "hero_scripts": list(hero_scripts),
+                        "decision_callback_symbol": decision,
+                        "reset_callback_symbol": reset,
+                        "death_callback_symbol": death,
+                    }
+                    for mod_id, feature_key, hero_scripts, decision, reset, death in (
+                        gpl.hero_quest_lifecycles
+                    )
+                ],
                 "compiled_bcd_size": compiled.size,
             },
             "art": {
-                "main": _art_report_payload(main_art),
-                "interface": _art_report_payload(interface_art),
+                result.domain: _art_report_payload(result)
+                for result in art_results
             },
         },
         "validation": dict(validation),
@@ -5335,6 +8045,38 @@ def _build_report(
             if path.is_file() and path.name != "CAM-MERGE-REPORT.json"
         ],
     }
+
+
+def _selected_report_files(selected: SelectedMod) -> tuple[tuple[Path, Path], ...]:
+    """Return stable ``(relative, absolute)`` report inputs for one selection."""
+
+    root = selected.package.root.resolve()
+    if selected.report_files is None:
+        candidates = tuple(path for path in root.rglob("*") if path.is_file())
+    else:
+        candidates = tuple(selected.report_files)
+
+    exact: dict[Path, Path] = {}
+    for raw_path in candidates:
+        path = raw_path if raw_path.is_absolute() else root / raw_path
+        resolved = path.resolve()
+        try:
+            relative = resolved.relative_to(root)
+        except ValueError as exc:
+            raise ComposeError(
+                f"{selected.alias}: report input escapes package root: {raw_path}"
+            ) from exc
+        if not resolved.is_file():
+            raise ComposeError(
+                f"{selected.alias}: report input is not a file: {raw_path}"
+            )
+        exact.setdefault(relative, resolved)
+    return tuple(
+        sorted(
+            exact.items(),
+            key=lambda item: (item[0].as_posix().casefold(), item[0].as_posix()),
+        )
+    )
 
 
 def _art_report_payload(result: ArtDomainComposeResult) -> dict:
@@ -5412,6 +8154,8 @@ def _aggregate_fingerprint(files: Sequence[Mapping[str, object]]) -> str:
 
 def resolve_building_dialogs(
     inventories: Sequence[PackageInventory],
+    *,
+    reserved_dialog_ids: Sequence[bytes] = (),
 ) -> tuple[ResolvedBuildingDialog, ...]:
     """Resolve legacy explicit IDs and allocate v3 building IDs deterministically.
 
@@ -5424,11 +8168,22 @@ def resolve_building_dialogs(
 
     resources = tuple(resource for inventory in inventories for resource in inventory.resources)
     claimed_targets: dict[bytes, str] = {}
-    reserved_targets = {
-        resource.key
-        for resource in resources
-        if re.fullmatch(rb"CG[A-Z0-9]{2}", resource.key)
-    }
+    reserved_target_owners: dict[bytes, set[str]] = {}
+    for resource in resources:
+        if re.fullmatch(rb"CG[A-Z0-9]{2}", resource.key):
+            reserved_target_owners.setdefault(resource.key, set()).add(resource.owner)
+    for inventory in inventories:
+        for dialog_id in getattr(inventory.selected, "reserved_dialog_ids", ()):
+            if re.fullmatch(rb"CG[A-Z0-9]{2}", dialog_id):
+                reserved_target_owners.setdefault(dialog_id, set()).add(
+                    inventory.selected.alias
+                )
+    for dialog_id in reserved_dialog_ids:
+        if re.fullmatch(rb"CG[A-Z0-9]{2}", dialog_id):
+            reserved_target_owners.setdefault(dialog_id, set()).add(
+                "selected native Standard content"
+            )
+    reserved_targets = set(reserved_target_owners)
     pending_v3: list[tuple[str, str, str, bytes]] = []
     resolved: list[ResolvedBuildingDialog] = []
 
@@ -5504,6 +8259,15 @@ def resolve_building_dialogs(
             if len(target) != 4 or len(controller) != 4:
                 raise ComposeError(
                     f"{selected.alias}: dialog_id and controller_base must be FourCCs"
+                )
+            other_reservation_owners = reserved_target_owners.get(target, set()).difference(
+                (selected.alias,)
+            )
+            if other_reservation_owners:
+                raise ComposeError(
+                    f"{selected.alias}: fixed dialog ID {_display_key(target)} is "
+                    "already used by selected content from "
+                    + ", ".join(sorted(other_reservation_owners))
                 )
             previous = claimed_targets.get(target)
             if previous is not None and previous != selected.alias:
@@ -5810,6 +8574,8 @@ __all__ = [
     "ResolvedControllerToggle",
     "SelectedMod",
     "ScopedSemanticResolution",
+    "ScopedNamedResourceResolution",
+    "ScopedArtResourceResolution",
     "StockComposeInput",
     "StrtMergeSelection",
     "TextMergeResult",
@@ -5819,6 +8585,7 @@ __all__ = [
     "discover_private_activity_texts",
     "discover_selected_private_activity_texts",
     "inventory_package",
+    "collapse_native_cam_resources",
     "merge_bdep_resource",
     "merge_art_resources",
     "merge_description_resources",

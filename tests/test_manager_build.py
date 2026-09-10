@@ -1075,13 +1075,17 @@ class ManagerBuildPlanTests(unittest.TestCase):
                     catalog, {OTHER_ID: True}, registry=registry, game_path=game
                 )
 
-            self.assertEqual(len(first.stock_compose_inputs), 12)
+            self.assertEqual(len(first.stock_compose_inputs), 13)
             self.assertEqual(
                 dict(first.stock_compose_inputs)["DataMX/mx_maindata.cam"],
                 "absent",
             )
             self.assertEqual(
                 dict(first.stock_compose_inputs)["DataMX/mx_interfacedata.cam"],
+                "absent",
+            )
+            self.assertEqual(
+                dict(first.stock_compose_inputs)["DataMX/mx_textdata.cam"],
                 "absent",
             )
             self.assertNotEqual(first.fingerprint, changed.fingerprint)

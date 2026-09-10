@@ -20,12 +20,16 @@ from majesty_cam.package import (
     load_mod_definition,
     load_package,
     parse_mod_definition,
+    _validate_definition_object,
 )
 from majesty_cam.gpl_features import (
+    StockControlledFollowerSpeedSync,
+    StockHeroQuestLifecycle,
     StockGplmxPurchaseBazaarTail,
     StockGplmxPurchaseEquipmentTail,
 )
 from majesty_cam.stock_controller_features import (
+    StockAp08Mx05QuestBoardPanel,
     StockMx22BuildingOpenToggle,
     StockAp69SovereignTargetAction,
     controller_feature_mapping,
@@ -37,6 +41,40 @@ MOD_ID = "{42ba4603-2b13-446d-a2a4-6cf3a55ddac3}"
 
 
 class PackageTests(unittest.TestCase):
+    def test_definition_v3_parses_bounded_quest_board(self):
+        value = {
+            "schema_version": 3,
+            "mod_id": MOD_ID,
+            "internal_name": "QuestBoardExample",
+            "display_name": "Quest Board Example",
+            "custom_buildings": [{
+                "local_name": "QuestGuild",
+                "controller_base": "AP08",
+                "panel_resource_template": "AP08",
+            }],
+            "runtime_features": [{
+                "type": "stock.ap08-mx05-quest-list-panel.v1",
+                "panel_key": "quests",
+                "parent_building": "QuestGuild",
+                "source_dialog_id": "QB01",
+                "open_command_id": 29001,
+                "list_source_callback_symbol": "QB_At",
+                "revision_callback_symbol": "QB_Revision",
+                "offer_name_callback_symbol": "QB_Name",
+                "offer_goal_callback_symbol": "QB_Goal",
+                "offer_reward_callback_symbol": "QB_Reward",
+                "selected_cost_callback_symbol": "QB_SelectedCost",
+                "selected_action_callback_symbol": "QB_Reject",
+                "refresh_cost_callback_symbol": "QB_Cost",
+                "can_refresh_callback_symbol": "QB_CanRefresh",
+                "refresh_callback_symbol": "QB_Refresh",
+            }],
+        }
+        parsed = parse_mod_definition(value)
+        board = parsed.runtime_features[0]
+        self.assertIsInstance(board, StockAp08Mx05QuestBoardPanel)
+        self.assertEqual(board.list_source_callback_symbol, "QB_At")
+
     def test_definition_v3_parses_generic_toggle_and_purchase_tail(self):
         value = {
             "schema_version": 3,
@@ -68,6 +106,20 @@ class PackageTests(unittest.TestCase):
                     "callback_key": "late-rental-check",
                     "callback_symbol": "Private_Late_Rental_Check",
                 },
+                {
+                    "type": "stock.controlled-follower-speed-sync.v1",
+                    "feature_key": "rental-speed",
+                    "eligibility_callback_symbol": "Private_Rental_Speed_Applies",
+                    "movement_rate_modifier_per_tier": -100,
+                },
+                {
+                    "type": "stock.hero-quest-lifecycle.v1",
+                    "feature_key": "guild-quests",
+                    "hero_scripts": ["mx_ranger", "mx_adept"],
+                    "decision_callback_symbol": "Guild_Quest_Decide",
+                    "reset_callback_symbol": "Guild_Quest_Reset",
+                    "death_callback_symbol": "Guild_Quest_Death",
+                },
             ],
         }
 
@@ -77,6 +129,13 @@ class PackageTests(unittest.TestCase):
         self.assertIsInstance(parsed.runtime_features[1], StockGplmxPurchaseEquipmentTail)
         self.assertEqual(parsed.runtime_features[1].callback_symbol, "Private_Rental_Check")
         self.assertIsInstance(parsed.runtime_features[2], StockGplmxPurchaseBazaarTail)
+        self.assertIsInstance(parsed.runtime_features[3], StockControlledFollowerSpeedSync)
+        self.assertEqual(
+            parsed.runtime_features[3].movement_rate_modifier_per_tier, -100
+        )
+        self.assertIsInstance(parsed.runtime_features[4], StockHeroQuestLifecycle)
+        self.assertEqual(parsed.runtime_features[4].hero_scripts, ("mx_adept", "mx_ranger"))
+        self.assertEqual(_validate_definition_object(parsed), parsed)
 
     def test_loads_manifest_and_default_definition_in_declared_order(self):
         with TemporaryDirectory() as tmp:

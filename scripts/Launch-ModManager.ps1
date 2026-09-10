@@ -9,11 +9,10 @@ try {
     }
 
     # Setup installs this checkout editable into the private environment, so the
-    # elevated child does not depend on a transient PYTHONPATH crossing UAC.
+    # GUI can start directly without a transient PYTHONPATH or blanket UAC.
     Start-Process -FilePath $pythonw `
         -ArgumentList @("-m", "majesty_cam.manager.app") `
         -WorkingDirectory $repoRoot `
-        -Verb RunAs `
         -WindowStyle Hidden
 }
 catch {

@@ -18,6 +18,7 @@ from typing import Callable, Sequence
 import xml.etree.ElementTree as ET
 
 from .._subprocess import no_console_window_options
+from .elevation import directory_requires_elevation, run_elevated_hidden
 from .paths import default_documents_root
 
 
@@ -313,6 +314,7 @@ class QolCatalogSnapshot:
 
 
 Runner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
+ElevationProbe = Callable[[Path], bool]
 
 
 class QolService:
@@ -327,6 +329,8 @@ class QolService:
         specs: Sequence[QolPatchSpec] = QOL_PATCHES,
         powershell_executable: str = "powershell.exe",
         runner: Runner | None = None,
+        elevated_runner: Runner | None = None,
+        elevation_probe: ElevationProbe | None = None,
     ) -> None:
         self.repo_root = repo_root.resolve(strict=False)
         self.game_executable = game_executable.resolve(strict=False)
@@ -334,6 +338,8 @@ class QolService:
         self.specs = tuple(specs)
         self.powershell_executable = powershell_executable
         self._runner = runner or self._run_command
+        self._elevated_runner = elevated_runner or run_elevated_hidden
+        self._elevation_probe = elevation_probe or directory_requires_elevation
 
     def inspect(self) -> QolCatalogSnapshot:
         branch = detect_majesty_branch(self.game_executable)
@@ -403,7 +409,20 @@ class QolService:
                 f"{spec.name} canonical {verb} is unavailable."
             )
 
-        completed = self._runner(self._command(spec, script))
+        command = self._command(spec, script)
+        try:
+            if (
+                not spec.preference_only
+                and self._elevation_probe(self.game_executable.parent)
+            ):
+                completed = self._elevated_runner(command)
+            else:
+                completed = self._runner(command)
+        except (OSError, subprocess.SubprocessError) as exc:
+            action = "install" if install else "remove"
+            raise QolServiceError(
+                f"Could not {action} {spec.name}: {exc}"
+            ) from exc
         output = _combined_output(completed)
         if completed.returncode != 0:
             action = "apply" if install else "remove"

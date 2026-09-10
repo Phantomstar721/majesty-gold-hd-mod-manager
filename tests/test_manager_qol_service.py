@@ -219,6 +219,82 @@ class QolServiceTests(unittest.TestCase):
             self.assertEqual(len(runner.commands), 1)
             self.assertNotIn("-DryRun", runner.commands[0])
 
+    def test_protected_game_mutation_elevates_only_the_exact_action(self):
+        spec = _test_spec()
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            merger = root / "merger"
+            executable = root / "game" / "MajestyHD.exe"
+            executable.parent.mkdir()
+            _write_synthetic_exe(executable, PUBLIC_BRANCH)
+            payload = merger / "payload" / "qol" / spec.payload_slug
+            payload.mkdir(parents=True)
+            (payload / spec.install_script_name).write_text("", encoding="utf-8")
+            (payload / spec.remove_script_name).write_text("", encoding="utf-8")
+            normal = _StatefulRunner(spec)
+            elevated = _StatefulRunner(spec)
+            service = QolService(
+                repo_root=merger,
+                game_executable=executable,
+                specs=(spec,),
+                runner=normal,
+                elevated_runner=elevated,
+                elevation_probe=lambda _path: True,
+            )
+
+            current = service.inspect_patch(spec.key)
+            service.apply(spec.key, current=current)
+
+            self.assertEqual(len(normal.commands), 1)
+            self.assertIn("-DryRun", normal.commands[0])
+            self.assertEqual(len(elevated.commands), 1)
+            self.assertNotIn("-DryRun", elevated.commands[0])
+            self.assertIn("-GamePath", elevated.commands[0])
+
+    def test_profile_preference_mutation_never_elevates(self):
+        spec = QolPatchSpec(
+            key="skip",
+            name="Skip Intro",
+            description="test",
+            repository="skip-repo",
+            bundle_directory="Skip",
+            payload_slug="skip",
+            install_script_name="Install.ps1",
+            remove_script_name="Remove.ps1",
+            preference_only=True,
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            merger = root / "merger"
+            payload = merger / "payload" / "qol" / "skip"
+            payload.mkdir(parents=True)
+            (payload / "Install.ps1").write_text("", encoding="utf-8")
+            (payload / "Remove.ps1").write_text("", encoding="utf-8")
+            prefs = root / "MajXPrefs"
+            normal_commands = []
+
+            def normal(command):
+                normal_commands.append(list(command))
+                return subprocess.CompletedProcess(command, 0, "installed", "")
+
+            def must_not_elevate(_command):
+                raise AssertionError("a per-user preference requested elevation")
+
+            service = QolService(
+                repo_root=merger,
+                game_executable=root / "missing" / "MajestyHD.exe",
+                prefs_path=prefs,
+                specs=(spec,),
+                runner=normal,
+                elevated_runner=must_not_elevate,
+                elevation_probe=lambda _path: True,
+            )
+
+            service.apply("skip")
+
+            self.assertEqual(len(normal_commands), 1)
+            self.assertIn("-PrefsPath", normal_commands[0])
+
     def test_executable_patch_is_not_run_for_an_unsupported_branch(self):
         spec = _test_spec()
         with TemporaryDirectory() as tmp:

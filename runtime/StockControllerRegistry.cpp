@@ -45,6 +45,9 @@ constexpr std::uint32_t kProvenSovereignVisualTemplate = 0x00001133u;
 constexpr std::uint32_t kProvenSovereignTargetTemplate = 0x00001132u;
 constexpr std::uint32_t kProvenSovereignTargetMode = 0x33327053u;  // Sp23
 constexpr std::uint32_t kProvenSovereignTargetLevel = 3u;
+constexpr std::uint32_t kQuestRefreshControlId = 0x00007102u;
+constexpr std::uint32_t kQuestRefreshPriceBindingId = 0x00007103u;
+constexpr std::uint32_t kQuestRefreshCoinControlId = 0x00007104u;
 
 bool IsStockAp99ControlId(std::uint32_t value) {
     return value >= kFirstStockAp99ControlId &&
@@ -562,6 +565,34 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
         parentCommands.insert({item.parentDialogId, item.openCommandId});
         parentCommands.insert({item.parentDialogId, item.closeCommandId});
     }
+    std::set<std::string> questKeys;
+    for (const auto& item : registry.questBoards) {
+        std::uint32_t questControls[3] = {
+            item.refreshControlId, item.refreshPriceBindingId,
+            item.refreshControlId + 2u,
+        };
+        if (panels.count(item.panelKey) || rewardPanelKeys.count(item.panelKey) ||
+            occupantKeys.count(item.panelKey) || !questKeys.insert(item.panelKey).second ||
+            !childDialogs.insert(item.childDialogId).second ||
+            !parentCommands.insert({item.parentDialogId, item.openCommandId}).second ||
+            !ClaimControls(&controls, item.panelKey, questControls, 3) ||
+            !callbacks.insert(FoldAsciiCase(item.listSourceCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.revisionCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.offerNameCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.offerGoalCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.offerRewardCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.selectedCostCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.selectedActionCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.refreshCostCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.canRefreshCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.refreshCallbackSymbol)).second)
+            return Fail(error, "MMCR quest-board identity is duplicated");
+        parentDialogs.insert(item.parentDialogId);
+        const auto prior = parentBases.find(item.parentDialogId);
+        if (prior != parentBases.end() && prior->second != item.parentControllerBase)
+            return Fail(error, "MMCR quest-board parent controller conflicts");
+        parentBases[item.parentDialogId] = item.parentControllerBase;
+    }
     for (const auto child : childDialogs) {
         if (parentDialogs.count(child)) return Fail(error, "MMCR child dialog collides with a parent dialog");
     }
@@ -571,6 +602,7 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
 }  // namespace
 
 void Registry::Clear() {
+    questBoards.clear();
     buildingOpenToggles.clear();
     occupantActionPanels.clear();
     panels.clear();
@@ -723,6 +755,35 @@ const OccupantActionPanelRecord* Registry::FindOccupantPanelByCommand(std::uint3
     return nullptr;
 }
 
+const QuestBoardRecord* Registry::FindQuestBoardByChild(std::uint32_t id) const {
+    for (const auto& item : questBoards) {
+        if (item.childDialogId == id) return &item;
+    }
+    return nullptr;
+}
+
+const QuestBoardRecord* Registry::FindQuestBoardByParent(std::uint32_t id) const {
+    for (const auto& item : questBoards) {
+        if (item.parentDialogId == id) return &item;
+    }
+    return nullptr;
+}
+
+const QuestBoardRecord* Registry::FindQuestBoardByCommand(
+    std::uint32_t id, bool* refresh) const {
+    for (const auto& item : questBoards) {
+        if (item.selectedActionCommandId == id) {
+            if (refresh != nullptr) *refresh = false;
+            return &item;
+        }
+        if (item.refreshCommandId == id) {
+            if (refresh != nullptr) *refresh = true;
+            return &item;
+        }
+    }
+    return nullptr;
+}
+
 const BuildingOpenToggleRecord* Registry::FindBuildingOpenToggleByParent(
     std::uint32_t id) const {
     for (const auto& item : buildingOpenToggles) {
@@ -750,19 +811,22 @@ bool ParseRegistry(
         return Fail(error, "MMCR registry magic is invalid");
     }
     std::uint32_t version = 0;
-    std::uint32_t counts[11] = {};
+    std::uint32_t counts[12] = {};
     if (!reader.ReadU32(&version)) return Fail(error, "MMCR header is truncated");
-    if (version != 2 && version != 3 && version != kRegistryVersion) return Fail(error, "MMCR version is unsupported");
-    const std::size_t countSize = version == 4 ? 11u : version == 3 ? 10u : 9u;
+    if (version < 2 || version > kRegistryVersion) return Fail(error, "MMCR version is unsupported");
+    const std::size_t countSize = version >= 5 ? 12u : version == 4 ? 11u : version == 3 ? 10u : 9u;
     for (std::size_t index = 0; index < countSize; ++index) {
         if (!reader.ReadU32(&counts[index])) return Fail(error, "MMCR header is truncated");
     }
     if (version == 3 && counts[9] == 0) return Fail(error, "MMCR v3 without occupant panels is noncanonical");
     if (version == 4 && counts[10] == 0) return Fail(error, "MMCR v4 without building toggles is noncanonical");
+    if (version == 5) return Fail(error, "MMCR v5 fixed-row quest boards are unsupported; rebuild with the current Manager");
+    if (version == 6) return Fail(error, "MMCR v6 quest rows lack private display callbacks; rebuild with the current Manager");
+    if (version == 7 && counts[11] == 0) return Fail(error, "MMCR v7 without quest lists is noncanonical");
     std::uint64_t total = 0;
-    for (std::size_t index = 0; index < 11; ++index) total += counts[index];
+    for (std::size_t index = 0; index < 12; ++index) total += counts[index];
     if (total > kMaximumRecordCount ||
-        static_cast<std::uint64_t>(counts[0]) + counts[7] + counts[9] > kMaximumPanelCount) {
+        static_cast<std::uint64_t>(counts[0]) + counts[7] + counts[9] + counts[11] > kMaximumPanelCount) {
         return Fail(error, "MMCR record count is outside supported bounds");
     }
 
@@ -778,6 +842,7 @@ bool ParseRegistry(
     parsed.hostileMonsterFlags.reserve(counts[8]);
     parsed.occupantActionPanels.reserve(counts[9]);
     parsed.buildingOpenToggles.reserve(counts[10]);
+    parsed.questBoards.reserve(counts[11]);
 
     for (std::uint32_t index = 0; index < counts[0]; ++index) {
         SecondaryPanelRecord item = {};
@@ -1088,6 +1153,40 @@ bool ParseRegistry(
             return Fail(error, "MMCR building open toggle is invalid or noncanonical");
         }
         parsed.buildingOpenToggles.push_back(std::move(item));
+    }
+    for (std::uint32_t index = 0; index < counts[11]; ++index) {
+        QuestBoardRecord item = {};
+        if (!reader.ReadLogical(&item.panelKey) ||
+            !reader.ReadU32(&item.parentDialogId) || !reader.ReadU32(&item.childDialogId) ||
+            !reader.ReadU32(&item.openCommandId))
+            return Fail(error, "MMCR quest-board header is truncated");
+        if (!reader.ReadU32(&item.selectedActionCommandId) ||
+            !reader.ReadU32(&item.refreshCommandId) ||
+            !reader.ReadU32(&item.refreshControlId) ||
+            !reader.ReadU32(&item.refreshPriceBindingId))
+            return Fail(error, "MMCR quest-board controls are truncated");
+        if (!reader.ReadSymbol(&item.listSourceCallbackSymbol) ||
+            !reader.ReadSymbol(&item.revisionCallbackSymbol) ||
+            !reader.ReadSymbol(&item.offerNameCallbackSymbol) ||
+            !reader.ReadSymbol(&item.offerGoalCallbackSymbol) ||
+            !reader.ReadSymbol(&item.offerRewardCallbackSymbol) ||
+            !reader.ReadSymbol(&item.selectedCostCallbackSymbol) ||
+            !reader.ReadSymbol(&item.selectedActionCallbackSymbol) ||
+            !reader.ReadSymbol(&item.refreshCostCallbackSymbol) ||
+            !reader.ReadSymbol(&item.canRefreshCallbackSymbol) || !reader.ReadSymbol(&item.refreshCallbackSymbol) ||
+            !reader.ReadU32(&item.parentControllerBase) || !IsPrintableFourCC(item.parentDialogId) ||
+            !IsPrintableFourCC(item.childDialogId) || item.openCommandId == 0 ||
+            item.refreshControlId != kQuestRefreshControlId ||
+            item.refreshPriceBindingId != kQuestRefreshPriceBindingId ||
+            item.refreshControlId + 2u != kQuestRefreshCoinControlId ||
+            item.parentControllerBase != 0x38305041u)
+            return Fail(error, "MMCR quest-board record is invalid");
+        const std::uint32_t commandBase = 0x20000u + index * 2u;
+        if (item.selectedActionCommandId != commandBase ||
+            item.refreshCommandId != commandBase + 1u ||
+            (!parsed.questBoards.empty() && parsed.questBoards.back().panelKey >= item.panelKey))
+            return Fail(error, "MMCR quest-board record is noncanonical");
+        parsed.questBoards.push_back(std::move(item));
     }
     if (reader.cursor() != size) return Fail(error, "MMCR registry contains trailing bytes");
     if (!ValidateComposition(parsed, error)) return false;

@@ -143,6 +143,27 @@ class StockMx04Mx05OccupantActionPanel:
 
 
 @dataclass(frozen=True)
+class StockAp08Mx05QuestBoardPanel:
+    """An MX05-native selectable list of package-owned quest agents."""
+
+    panel_key: str
+    parent_building: str
+    source_dialog_id: str
+    open_command_id: int
+    list_source_callback_symbol: str
+    revision_callback_symbol: str
+    offer_name_callback_symbol: str
+    offer_goal_callback_symbol: str
+    offer_reward_callback_symbol: str
+    selected_cost_callback_symbol: str
+    selected_action_callback_symbol: str
+    refresh_cost_callback_symbol: str
+    can_refresh_callback_symbol: str
+    refresh_callback_symbol: str
+    type: str = "stock.ap08-mx05-quest-list-panel.v1"
+
+
+@dataclass(frozen=True)
 class StockMx22BuildingOpenToggle:
     """MX22's persistent per-building open/closed state and paired controls."""
 
@@ -283,6 +304,7 @@ class StockAp69SovereignTargetAction:
 ControllerFeature = Union[
     StockMx22BuildingOpenToggle,
     StockMx04Mx05OccupantActionPanel,
+    StockAp08Mx05QuestBoardPanel,
     StockAp10Ap69SecondaryPanel,
     StockMx09Ap41RewardPanel,
     StockAp41Fl00HostileMonsterFlag,
@@ -298,6 +320,7 @@ ControllerFeature = Union[
 _FEATURE_TYPES = {
     "stock.mx22-building-open-toggle.v1": StockMx22BuildingOpenToggle,
     "stock.mx04-mx05-occupant-action-panel.v1": StockMx04Mx05OccupantActionPanel,
+    "stock.ap08-mx05-quest-list-panel.v1": StockAp08Mx05QuestBoardPanel,
     "stock.ap10-ap69-secondary-panel.v1": StockAp10Ap69SecondaryPanel,
     "stock.mx09-ap41-reward-panel.v1": StockMx09Ap41RewardPanel,
     "stock.ap41-fl00-hostile-monster-flag.v1": StockAp41Fl00HostileMonsterFlag,
@@ -630,7 +653,8 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
         _fourcc(feature.source_dialog_id, "source_dialog_id")
         _family_id(feature.building_family_id, "building_family_id")
         _control(feature.open_command_id, "open_command_id")
-    elif isinstance(feature, (StockMx09Ap41RewardPanel, StockMx04Mx05OccupantActionPanel)):
+    elif isinstance(feature, (StockMx09Ap41RewardPanel, StockMx04Mx05OccupantActionPanel,
+                              StockAp08Mx05QuestBoardPanel)):
         _logical(feature.parent_building, "parent_building")
         _fourcc(feature.source_dialog_id, "source_dialog_id")
         _control(feature.open_command_id, "open_command_id")
@@ -639,6 +663,23 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
             _gpl_symbol(feature.action_callback_symbol)
             if feature.cost_callback_symbol.casefold() == feature.action_callback_symbol.casefold():
                 raise ControllerFeatureError("occupant cost and action callbacks must be distinct")
+        elif isinstance(feature, StockAp08Mx05QuestBoardPanel):
+            symbols = (
+                feature.list_source_callback_symbol,
+                feature.revision_callback_symbol,
+                feature.offer_name_callback_symbol,
+                feature.offer_goal_callback_symbol,
+                feature.offer_reward_callback_symbol,
+                feature.selected_cost_callback_symbol,
+                feature.selected_action_callback_symbol,
+                feature.refresh_cost_callback_symbol,
+                feature.can_refresh_callback_symbol,
+                feature.refresh_callback_symbol,
+            )
+            for symbol in symbols:
+                _gpl_symbol(symbol)
+            if len({symbol.casefold() for symbol in symbols}) != len(symbols):
+                raise ControllerFeatureError("quest-list callback symbols must be distinct")
     elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
         _logical(feature.action_key, "action_key")
         _fourcc(feature.private_mode, "private_mode")
@@ -872,7 +913,7 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
 
 def _validate_composition(features: Sequence[ControllerFeature]) -> None:
     panel_types = (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
-                   StockMx04Mx05OccupantActionPanel)
+                   StockMx04Mx05OccupantActionPanel, StockAp08Mx05QuestBoardPanel)
     panels = {
         item.panel_key: item
         for item in features
@@ -950,8 +991,24 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
     for feature in features:
         if isinstance(feature, StockMx22BuildingOpenToggle):
             continue
-        if isinstance(feature, StockMx04Mx05OccupantActionPanel):
-            for symbol in (feature.cost_callback_symbol, feature.action_callback_symbol):
+        if isinstance(feature, (StockMx04Mx05OccupantActionPanel, StockAp08Mx05QuestBoardPanel)):
+            symbols = (
+                (feature.cost_callback_symbol, feature.action_callback_symbol)
+                if isinstance(feature, StockMx04Mx05OccupantActionPanel)
+                else (
+                    feature.list_source_callback_symbol,
+                    feature.revision_callback_symbol,
+                    feature.offer_name_callback_symbol,
+                    feature.offer_goal_callback_symbol,
+                    feature.offer_reward_callback_symbol,
+                    feature.selected_cost_callback_symbol,
+                    feature.selected_action_callback_symbol,
+                    feature.refresh_cost_callback_symbol,
+                    feature.can_refresh_callback_symbol,
+                    feature.refresh_callback_symbol,
+                )
+            )
+            for symbol in symbols:
                 if symbol.casefold() in callbacks:
                     raise ControllerFeatureError("duplicate private GPL callback symbol")
                 callbacks.add(symbol.casefold())
@@ -1310,6 +1367,7 @@ __all__ = [
     "LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY",
     "MAX_CONTROLLER_FEATURES",
     "StockAp10Ap69SecondaryPanel",
+    "StockAp08Mx05QuestBoardPanel",
     "StockAp17UpgradeResearchGate",
     "StockAp22ResourceMeter",
     "StockAp24RageCommandAction",
@@ -1317,6 +1375,8 @@ __all__ = [
     "StockAp69SovereignTargetAction",
     "StockAp99ResearchRow",
     "StockMx22BuildingOpenToggle",
+    "StockMx04Mx05OccupantActionPanel",
+    "StockMx09Ap41RewardPanel",
     "UpgradeRequirement",
     "controller_feature_mapping",
     "decode_controller_features",

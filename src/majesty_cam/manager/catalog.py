@@ -1580,6 +1580,8 @@ def _deduplicate_entries(
 
 
 def _is_generated_package(package_root: Path) -> bool:
+    if package_root.name.casefold().startswith(".manager-merged-"):
+        return True
     try:
         generated_names = {
             "cam-merge-report.json",

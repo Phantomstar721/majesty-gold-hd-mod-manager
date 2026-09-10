@@ -19,6 +19,7 @@ from majesty_cam.runtime_features import (
     normalize_runtime_features,
     write_runtime_feature_registry,
 )
+from majesty_cam.gpl_features import StockHeroQuestLifecycle
 from majesty_cam.cam import CamEntry, pad_name
 from majesty_cam.compose import (
     CamResource,
@@ -30,6 +31,27 @@ from majesty_cam.compose import (
 
 
 class RuntimeFeatureRegistryTests(unittest.TestCase):
+    def test_hero_quest_lifecycle_never_enters_overlay_registry(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            description = root / "description.xml"
+            description.write_text("<Majesty/>", encoding="utf-8")
+            lifecycle = StockHeroQuestLifecycle(
+                feature_key="quests",
+                hero_scripts=("mx_ranger",),
+                decision_callback_symbol="Quest_Decide",
+                reset_callback_symbol="Quest_Reset",
+                death_callback_symbol="Quest_Death",
+            )
+            inventory = _feature_inventory(
+                "quest-owner", root, description, (lifecycle,)
+            )
+
+            self.assertEqual(
+                resolve_runtime_feature_registry((inventory,)),
+                RuntimeFeatureRegistry(),
+            )
+
     def test_round_trip_is_deterministic_and_cp1252_exact(self):
         features = (
             EnchantmentRowFeature("ZZ99", "Crème brûlée"),

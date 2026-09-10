@@ -17,7 +17,7 @@ from majesty_cam.art import (
     find_positional_collisions,
     parse_stock_imag_tile_references,
 )
-from majesty_cam.cam import CamArchive, CamEntry, CamSection, pad_name
+from majesty_cam.cam import CamArchive, CamEntry, CamSection, pad_name, read_cam
 from majesty_cam.compose import (
     CamResource,
     ComposeError,
@@ -42,7 +42,11 @@ from majesty_cam.compose import (
     _strip_unowned_secondary_imag_layers,
     _prove_private_cursor_set_clone,
     _select_later_conflict_runs,
+    _selected_art_archive_paths,
+    _selected_report_files,
+    _validate_generated_cam_outputs,
     compose_package,
+    inventory_package,
     merge_art_resources,
     merge_bdep_resource,
     merge_description_resources,
@@ -54,7 +58,13 @@ from majesty_cam.compose import (
     validate_controller_stock_evidence,
 )
 from majesty_cam.gpl import GplProjectSourceSet, parse_gpl
-from majesty_cam.package import CustomBuildingDefinition, ModDefinition
+from majesty_cam.intent_text import PrivateActivityTextBinding
+from majesty_cam.package import (
+    CamLoad,
+    CustomBuildingDefinition,
+    ModDefinition,
+    PackagePath,
+)
 from majesty_cam.runtime_capabilities import (
     PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY,
     decode_runtime_capability_manifest,
@@ -96,6 +106,45 @@ def positional(extension, payloads):
             for index, data in enumerate(payloads)
         ),
     )
+
+
+def _generated_cam_paths(root, art_specs=()):
+    specs = (
+        ("merged_textdata.cam", (b"SMNU", b"STRT")),
+        ("merged_gpltext.cam", (b"STRT",)),
+        ("merged_miscdata.cam", (b"DATA",)),
+        ("merged_audio.cam", (b"WAVE",)),
+        ("merged_sounddesc.cam", (b"DSND",)),
+        *art_specs,
+    )
+    data = root / "Data"
+    data.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for filename, extensions in specs:
+        path = data / filename
+        archive = CamArchive(
+            tuple(
+                CamSection(
+                    extension,
+                    (),
+                    padding=(
+                        b"\x01\x00\x00\x00"
+                        if extension in {b"TILE", b"SPLT"}
+                        else b"\x00\x00\x00\x00"
+                    ),
+                )
+                for extension in extensions
+            )
+        )
+        path.write_bytes(archive.to_bytes())
+        paths.append(
+            PackagePath(
+                f"Data\\{filename}",
+                f"Data/{filename}",
+                path,
+            )
+        )
+    return tuple(paths)
 
 
 def cursor_entry(sets):
@@ -284,6 +333,222 @@ class TacticalCursorMergeTests(unittest.TestCase):
         self.assertEqual(set_ids, (1000, 1038, 1039))
 
 
+class PassthroughCompositionBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def _art_archive() -> CamArchive:
+        return CamArchive(
+            sections=(
+                CamSection(b"IMAG", ()),
+                positional(b"TILE", (b"private-art",)),
+            )
+        )
+
+    @staticmethod
+    def _stock_art(root: Path) -> None:
+        data = root / "Data"
+        data.mkdir(parents=True)
+        data_mx = root / "DataMX"
+        data_mx.mkdir()
+        (data / "MajestyDatasetDefinitions.xml").write_text(
+            "<Majesty><DataConfiguration><Dataset><Load>"
+            "<CAM>interfacedata.cam</CAM><CAM>maindata.cam</CAM>"
+            "</Load></Dataset></DataConfiguration></Majesty>",
+            encoding="utf-8",
+        )
+        (data_mx / "MajestyExpansionDatasetDefinitions.xml").write_text(
+            "<Majesty><DataConfiguration><Dataset><Load />"
+            "</Dataset></DataConfiguration></Majesty>",
+            encoding="utf-8",
+        )
+        (data / "interfacedata.cam").write_bytes(
+            CamArchive(
+                sections=(
+                    CamSection(b"IMAG", (CamEntry(pad_name(b"CUR1"), b"cursor"),)),
+                    positional(b"TILE", (b"stock-art",)),
+                )
+            ).to_bytes()
+        )
+        (data / "maindata.cam").write_bytes(
+            CamArchive(
+                sections=(
+                    CamSection(b"IMAG", (CamEntry(pad_name(b"MAIN"), b"main"),)),
+                    positional(b"TILE", (b"stock-main-0", b"stock-main-1")),
+                    positional(b"SPLT", (b"palette",)),
+                )
+            ).to_bytes()
+        )
+
+    @staticmethod
+    def _standard_inventory(
+        root: Path,
+        *,
+        art_archive_filter=None,
+    ) -> tuple[PackageInventory, Path]:
+        data = root / "Data"
+        data.mkdir(parents=True)
+        art = data / "standard-art.cam"
+        art.write_bytes(
+            PassthroughCompositionBoundaryTests._art_archive().to_bytes()
+        )
+        package = SimpleNamespace(
+            root=root,
+            definition=SimpleNamespace(schema_version=3),
+            datasets=(
+                SimpleNamespace(
+                    base="Any",
+                    loads=(
+                        SimpleNamespace(
+                            directives=(
+                                CamLoad(
+                                    PackagePath(
+                                        declared_path="Data\\standard-art.cam",
+                                        relative_path="Data/standard-art.cam",
+                                        absolute_path=art,
+                                    )
+                                ),
+                            )
+                        ),
+                    ),
+                ),
+            ),
+        )
+        selected = SelectedMod(
+            "standard",
+            package,
+            semantic_passthrough=True,
+            art_archive_filter=art_archive_filter,
+        )
+        return inventory_package(selected), art
+
+    def test_passthrough_art_is_excluded_until_exact_archive_is_opted_in(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            game = root / "game"
+            package_root = root / "standard"
+            self._stock_art(game)
+            inventory, art = self._standard_inventory(package_root)
+
+            self.assertEqual(inventory.cams, (art,))
+            self.assertEqual(inventory.art_cams, ())
+
+            def reject_standard_art(path):
+                if Path(path).resolve() == art.resolve():
+                    raise AssertionError("passthrough art crossed composition boundary")
+                return read_cam(path)
+
+            with patch(
+                "majesty_cam.compose.read_cam", side_effect=reject_standard_art
+            ):
+                main, interface = merge_art_resources(game, (inventory,))
+
+            self.assertEqual(main.analyses, ())
+            self.assertEqual(interface.analyses, ())
+            self.assertTrue(
+                all(not section.entries for section in main.archive.sections)
+            )
+            self.assertTrue(
+                all(not section.entries for section in interface.archive.sections)
+            )
+            self.assertEqual(main.report.tile_allocation.stock_count, 2)
+            self.assertEqual(interface.report.tile_allocation.stock_count, 1)
+
+    def test_explicit_passthrough_art_archive_is_consumed(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            game = root / "game"
+            package_root = root / "standard"
+            self._stock_art(game)
+            inventory, art = self._standard_inventory(
+                package_root,
+                art_archive_filter=frozenset((Path("Data/standard-art.cam"),)),
+            )
+
+            self.assertEqual(inventory.art_cams, (art,))
+
+            def observe_standard_art(path):
+                if Path(path).resolve() == art.resolve():
+                    raise AssertionError("explicit archive reached art composer")
+                return read_cam(path)
+
+            with self.assertRaisesRegex(
+                AssertionError, "explicit archive reached art composer"
+            ), patch("majesty_cam.stock_art.read_cam", side_effect=observe_standard_art):
+                merge_art_resources(game, (inventory,))
+
+    def test_normal_merge_art_default_remains_all_declared_archives(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "Data" / "first.cam"
+            second = root / "Data" / "second.cam"
+            selected = SelectedMod(
+                "merge",
+                SimpleNamespace(root=root),
+            )
+
+            self.assertEqual(
+                _selected_art_archive_paths(selected, (first, second)),
+                (first, second),
+            )
+
+    def test_art_filter_rejects_undeclared_or_external_paths(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            declared = root / "Data" / "declared.cam"
+            unknown = SelectedMod(
+                "standard",
+                SimpleNamespace(root=root),
+                semantic_passthrough=True,
+                art_archive_filter=frozenset((Path("Data/other.cam"),)),
+            )
+            with self.assertRaisesRegex(ComposeError, "not a declared CAM"):
+                _selected_art_archive_paths(unknown, (declared,))
+
+            external = SelectedMod(
+                "standard",
+                SimpleNamespace(root=root),
+                semantic_passthrough=True,
+                art_archive_filter=frozenset((root.parent / "outside.cam",)),
+            )
+            with self.assertRaisesRegex(ComposeError, "escapes package root"):
+                _selected_art_archive_paths(external, (declared,))
+
+    def test_exact_report_files_exclude_sibling_component_content(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chosen = root / "Data" / "chosen.cam"
+            sibling = root / "Data" / "sibling.cam"
+            chosen.parent.mkdir()
+            chosen.write_bytes(b"chosen")
+            sibling.write_bytes(b"sibling")
+            selected = SelectedMod(
+                "standard",
+                SimpleNamespace(root=root),
+                semantic_passthrough=True,
+                report_files=(Path("Data/chosen.cam"), chosen),
+            )
+
+            files = _selected_report_files(selected)
+
+            self.assertEqual(files, ((Path("Data/chosen.cam"), chosen.resolve()),))
+
+    def test_exact_report_files_reject_content_outside_package(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_root = root / "package"
+            package_root.mkdir()
+            outside = root / "outside-component.cam"
+            outside.write_bytes(b"outside")
+            selected = SelectedMod(
+                "standard",
+                SimpleNamespace(root=package_root),
+                semantic_passthrough=True,
+                report_files=(outside,),
+            )
+
+            with self.assertRaisesRegex(ComposeError, "escapes package root"):
+                _selected_report_files(selected)
+
+
 class EffectiveArtDependencyTests(unittest.TestCase):
     def test_runtime_presenter_materializes_its_exact_stock_imag(self):
         stock_entry = CamEntry(
@@ -354,17 +619,34 @@ class NamedComposeTests(unittest.TestCase):
         self.assertEqual([entry.name[:4] for entry in entries], [b"CGPH", b"CGAL"])
         self.assertEqual(selections[1].owners, ("alchemist", "other"))
 
-    def test_named_union_rejects_divergence_and_duplicate_owner(self):
+    def test_named_union_rejects_cross_owner_divergence(self):
         with self.assertRaisesRegex(ComposeError, "conflicting SMNU"):
             merge_named_resources(
                 (resource("a", b"SAME", b"one"), resource("b", b"SAME", b"two")),
                 b"SMNU",
             )
-        with self.assertRaisesRegex(ComposeError, "duplicate SMNU"):
-            merge_named_resources(
-                (resource("a", b"SAME", b"one"), resource("a", b"SAME", b"one", 1)),
-                b"SMNU",
-            )
+
+    def test_named_union_applies_same_owner_native_last_write(self):
+        entries, selections = merge_named_resources(
+            (
+                resource("a", b"SAME", b"older"),
+                resource("a", b"SAME", b"newer", 1),
+            ),
+            b"SMNU",
+        )
+
+        self.assertEqual(tuple(entry.data for entry in entries), (b"newer",))
+        self.assertEqual(selections[0].owners, ("a",))
+
+    def test_named_union_omits_ancestry_only_stock_copy(self):
+        entries, selections = merge_named_resources(
+            (resource("copy", b"SAME", b"installed stock"),),
+            b"SMNU",
+            stock_resources={(b"SMNU", b"SAME"): b"installed stock"},
+        )
+
+        self.assertEqual(entries, ())
+        self.assertEqual(selections, ())
 
 
 class PositionalComposeTests(unittest.TestCase):
@@ -522,6 +804,66 @@ class ScopedGplResolutionTests(unittest.TestCase):
         self.assertIn("return 3", resolved_variant.source_set.gpl_text)
 
 
+class PassthroughGplRewriteTests(unittest.TestCase):
+    def test_private_aitx_relocation_emits_rewritten_standard_only_caller(self):
+        merge_source = parse_gpl(
+            "function Merge_Only() is integer\n"
+            "begin\nreturn 1;\nend\n",
+            "merge.gpl",
+        )
+        standard_source = parse_gpl(
+            "function Standard_Only(agent ThisAgent) is\n"
+            "begin\n"
+            "    $SpecifyIntent(ThisAgent, 741);\n"
+            "end\n",
+            "standard.gpl",
+        )
+        inventories = (
+            SimpleNamespace(
+                selected=SimpleNamespace(
+                    alias="merge",
+                    semantic_passthrough=False,
+                )
+            ),
+            SimpleNamespace(
+                selected=SimpleNamespace(
+                    alias="standard",
+                    semantic_passthrough=True,
+                )
+            ),
+        )
+        sources = {
+            "merge": merge_source,
+            "standard": standard_source,
+        }
+        binding = PrivateActivityTextBinding(
+            owner="standard",
+            source_mod_id="{00000000-0000-0000-0000-000000000741}",
+            source_index=741,
+            expressions=(),
+            expected_text="Standard private activity",
+            runtime_id=0x60000741,
+        )
+
+        with patch(
+            "majesty_cam.compose._parse_inventory_gpl_sources",
+            side_effect=lambda inventory: [sources[inventory.selected.alias]],
+        ):
+            result = merge_gpl_resources(
+                inventories,
+                private_activity_texts=(binding,),
+            )
+
+        self.assertIn("Merge_Only", result.source_set.gpl_text)
+        self.assertIn("Standard_Only", result.source_set.gpl_text)
+        self.assertIn(binding.generated_expression, result.source_set.gpl_text)
+        self.assertNotIn("$SpecifyIntent(ThisAgent, 741)", result.source_set.gpl_text)
+        self.assertIn(
+            f"$SpecifyIntent(ThisAgent, {binding.generated_expression})",
+            result.source_set.gpl_text,
+        )
+
+
 class ProfileIdentityTests(unittest.TestCase):
     def test_private_text_runtime_capability_is_derived_not_caller_asserted(self):
         other = "freestyle-cam-rebind.v1"
@@ -671,7 +1013,136 @@ class ProfileIdentityTests(unittest.TestCase):
         )
 
 
+class GeneratedCamOutputValidationTests(unittest.TestCase):
+    def test_accepts_any_number_of_well_formed_art_family_outputs(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cams = _generated_cam_paths(
+                root,
+                (
+                    ("merged_maindata.cam", (b"IMAG", b"TILE", b"SPLT")),
+                    ("merged_interfacedata.cam", (b"IMAG", b"TILE", b"PALT")),
+                    ("merged_art-03.cam", (b"IMAG", b"TILE")),
+                ),
+            )
+
+            summaries, palette_references = _validate_generated_cam_outputs(cams)
+
+            self.assertEqual(len(summaries), 8)
+            self.assertEqual(palette_references, 0)
+
+    def test_rejects_missing_fixed_cam_role(self):
+        with TemporaryDirectory() as tmp:
+            cams = tuple(
+                path
+                for path in _generated_cam_paths(Path(tmp))
+                if not path.relative_path.endswith("merged_audio.cam")
+            )
+
+            with self.assertRaisesRegex(
+                ComposeError,
+                "missing required CAM role.*merged_audio.cam",
+            ):
+                _validate_generated_cam_outputs(cams)
+
+    def test_rejects_unrecognized_or_malformed_art_output(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.subTest("filename"):
+                cams = _generated_cam_paths(
+                    root,
+                    (("merged_bonus.cam", (b"IMAG", b"TILE")),),
+                )
+                with self.assertRaisesRegex(
+                    ComposeError,
+                    "unsupported generated art CAM filename",
+                ):
+                    _validate_generated_cam_outputs(cams)
+
+            with self.subTest("sections"):
+                cams = _generated_cam_paths(
+                    root,
+                    (("merged_art-03.cam", (b"IMAG", b"STRT")),),
+                )
+                with self.assertRaisesRegex(
+                    ComposeError,
+                    "must begin with exactly IMAG and TILE",
+                ):
+                    _validate_generated_cam_outputs(cams)
+
+    def test_rejects_duplicate_cam_paths_and_sections(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cams = _generated_cam_paths(root)
+            with self.assertRaisesRegex(ComposeError, "duplicate CAM path"):
+                _validate_generated_cam_outputs((*cams, cams[0]))
+
+            cams = _generated_cam_paths(
+                root,
+                (("merged_art-03.cam", (b"IMAG", b"TILE", b"TILE")),),
+            )
+            with self.assertRaisesRegex(ComposeError, "duplicate section.*TILE"):
+                _validate_generated_cam_outputs(cams)
+
+
 class DeclarativeDialogTests(unittest.TestCase):
+    def test_v3_dialog_allocation_honors_external_scoped_standard_reservation(self):
+        with TemporaryDirectory() as tmp:
+            merge = _v3_dialog_inventory(
+                Path(tmp),
+                alias="merge",
+                mod_id="{00000000-0000-0000-0000-000000000001}",
+                local_name="MergeGuild",
+                source=b"AP10",
+            )
+
+            resolved = resolve_building_dialogs(
+                (merge,),
+                reserved_dialog_ids=(b"CG00",),
+            )
+
+            self.assertEqual(resolved[0].resolved_dialog_id, b"CG01")
+
+    def test_v3_dialog_allocation_reserves_native_standard_panel_ids(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            merge = _v3_dialog_inventory(
+                root,
+                alias="merge",
+                mod_id="{00000000-0000-0000-0000-000000000001}",
+                local_name="MergeGuild",
+                source=b"AP10",
+            )
+            standard_definition = ModDefinition(
+                schema_version=3,
+                mod_id="{00000000-0000-0000-0000-000000000002}",
+                internal_name="LegacyStandard",
+                display_name="Legacy Standard",
+                custom_buildings=(),
+                runtime_capabilities=(),
+            )
+            standard_selected = SelectedMod(
+                "standard",
+                SimpleNamespace(
+                    definition=standard_definition,
+                    mod_id=standard_definition.mod_id,
+                ),
+                semantic_passthrough=True,
+                cam_resource_filter=frozenset(),
+                reserved_dialog_ids=frozenset((b"CG00",)),
+            )
+            standard = SimpleNamespace(
+                selected=standard_selected,
+                resources=(),
+                descriptions=(),
+            )
+
+            resolved = resolve_building_dialogs((merge, standard))
+
+            self.assertEqual(resolved[0].source_dialog_id, b"AP10")
+            self.assertEqual(resolved[0].resolved_dialog_id, b"CG01")
+            self.assertEqual(standard.resources, ())
+
     def test_v2_explicit_dialog_id_and_controller_fallback_are_preserved(self):
         definition = ModDefinition(
             schema_version=2,
@@ -702,6 +1173,51 @@ class DeclarativeDialogTests(unittest.TestCase):
 
         self.assertEqual(resolved[0].source_dialog_id, b"AP10")
         self.assertEqual(resolved[0].resolved_dialog_id, b"CGFX")
+
+    def test_v2_fixed_dialog_cannot_overwrite_native_standard_reservation(self):
+        definition = ModDefinition(
+            schema_version=2,
+            mod_id="{00000000-0000-0000-0000-000000000001}",
+            internal_name="LegacyFixture",
+            display_name="Legacy Fixture",
+            custom_buildings=(
+                CustomBuildingDefinition(
+                    local_name="LegacyGuild",
+                    dialog_id="CG00",
+                    controller_base="AP10",
+                    panel_resource_template="AP10",
+                ),
+            ),
+            runtime_capabilities=(),
+        )
+        legacy = SimpleNamespace(
+            selected=SelectedMod(
+                "legacy",
+                SimpleNamespace(definition=definition, mod_id=definition.mod_id),
+            ),
+            descriptions=(),
+            resources=(resource("legacy", b"AP10", b"legacy-panel"),),
+            cams=(),
+        )
+        standard_definition = replace(definition, custom_buildings=())
+        standard = SimpleNamespace(
+            selected=SelectedMod(
+                "standard",
+                SimpleNamespace(
+                    definition=standard_definition,
+                    mod_id="{00000000-0000-0000-0000-000000000002}",
+                ),
+                semantic_passthrough=True,
+                cam_resource_filter=frozenset(),
+                reserved_dialog_ids=frozenset((b"CG00",)),
+            ),
+            descriptions=(),
+            resources=(),
+            cams=(),
+        )
+
+        with self.assertRaisesRegex(ComposeError, "fixed dialog ID CG00"):
+            resolve_building_dialogs((legacy, standard))
 
     def test_v3_dialog_allocation_is_stable_rewrites_panel_and_description(self):
         with TemporaryDirectory() as tmp:
@@ -911,7 +1427,7 @@ class DeclarativeDialogTests(unittest.TestCase):
             with self.assertRaisesRegex(ComposeError, "share source DialogID AP10"):
                 resolve_building_dialogs((inventory,))
 
-    def test_nonbuilding_packages_use_stock_fallbacks_and_empty_descriptions(self):
+    def test_nonbuilding_packages_emit_noop_data_and_art_overlays(self):
         with TemporaryDirectory() as tmp:
             game = Path(tmp)
             (game / "Data").mkdir()
@@ -935,10 +1451,24 @@ class DeclarativeDialogTests(unittest.TestCase):
                 )
             )
             interface = CamArchive(
-                sections=(positional(b"IMAG", []), positional(b"TILE", [b"tile"])),
+                sections=(
+                    CamSection(b"IMAG", (CamEntry(pad_name(b"CUR1"), b"cursor"),)),
+                    positional(b"TILE", [b"tile"]),
+                ),
             )
             (game / "Data" / "maindata.cam").write_bytes(main.to_bytes())
             (game / "Data" / "interfacedata.cam").write_bytes(interface.to_bytes())
+            (game / "Data" / "MajestyDatasetDefinitions.xml").write_text(
+                "<Majesty><DataConfiguration><Dataset><Load>"
+                "<CAM>interfacedata.cam</CAM><CAM>maindata.cam</CAM>"
+                "</Load></Dataset></DataConfiguration></Majesty>",
+                encoding="utf-8",
+            )
+            (game / "DataMX" / "MajestyExpansionDatasetDefinitions.xml").write_text(
+                "<Majesty><DataConfiguration><Dataset><Load />"
+                "</Dataset></DataConfiguration></Majesty>",
+                encoding="utf-8",
+            )
             inventory = SimpleNamespace(
                 selected=SimpleNamespace(
                     alias="data-only",
@@ -963,10 +1493,91 @@ class DeclarativeDialogTests(unittest.TestCase):
             descriptions = merge_description_resources((inventory,))
 
             self.assertEqual(bdep_result.deltas, ())
-            self.assertEqual(bdep_result.archive.sections[0].entries[0].data, bdep.data)
-            self.assertEqual(main_result.archive.to_bytes(), main.to_bytes())
-            self.assertEqual(interface_result.archive.to_bytes(), interface.to_bytes())
+            self.assertEqual(bdep_result.archive.sections[0].extension, b"DATA")
+            self.assertEqual(bdep_result.archive.sections[0].entries, ())
+            self.assertEqual(
+                read_cam(bdep_result.archive.to_bytes()).to_bytes(),
+                bdep_result.archive.to_bytes(),
+            )
+            self.assertTrue(
+                all(not section.entries for section in main_result.archive.sections)
+            )
+            self.assertTrue(
+                all(
+                    not section.entries
+                    for section in interface_result.archive.sections
+                )
+            )
+            self.assertEqual(main_result.report.tile_allocation.stock_count, 1)
+            self.assertEqual(main_result.report.tile_allocation.final_count, 1)
+            self.assertEqual(
+                main_result.report.palette_allocation.stock_count, 1
+            )
+            self.assertEqual(
+                interface_result.report.tile_allocation.stock_count, 1
+            )
+            self.assertEqual(
+                interface_result.report.tile_allocation.final_count, 1
+            )
+            self.assertNotEqual(main_result.archive.to_bytes(), main.to_bytes())
+            self.assertNotEqual(
+                interface_result.archive.to_bytes(), interface.to_bytes()
+            )
+            for result in (main_result, interface_result):
+                payload = result.archive.to_bytes()
+                self.assertEqual(read_cam(payload).to_bytes(), payload)
             self.assertEqual(descriptions.document.records, ())
+
+    def test_controlled_follower_markers_are_registered_as_stock_shaped_overlays(self):
+        inventory = SimpleNamespace(
+            selected=SimpleNamespace(
+                alias="follower-owner",
+                package=SimpleNamespace(
+                    definition=ModDefinition(
+                        schema_version=3,
+                        mod_id="{00000000-0000-0000-0000-000000000003}",
+                        internal_name="FollowerOwner",
+                        display_name="Follower Owner",
+                        custom_buildings=(),
+                        runtime_features=(),
+                    )
+                ),
+            ),
+            resources=(),
+            cams=(),
+            descriptions=(),
+        )
+        markers = ("MCF0123456789AB1", "MCF0123456789AB2")
+
+        result = merge_description_resources(
+            (inventory,),
+            controlled_follower_markers=markers,
+            reserved_description_keys=(("Unit", "MF00"),),
+        )
+
+        overlays = {
+            record.to_element().get("Name"): record.to_element()
+            for record in result.document.records
+        }
+        self.assertEqual(set(overlays), set(markers))
+        self.assertEqual(
+            {element.get("ID") for element in overlays.values()},
+            {"MF01", "MF02"},
+        )
+        for marker in markers:
+            element = overlays[marker]
+            self.assertEqual(element.get("subType"), "Overlay")
+            self.assertEqual(
+                [item.get("value") for item in element.findall("./Engine/Info")],
+                ["Directionless", "DontBlock", "NotVisibleInISOView"],
+            )
+            self.assertEqual(
+                element.find("./Engine/ImageIDBase").get("value"), "CRB2"
+            )
+            self.assertEqual(
+                element.find("./Game/StackPriority").get("value"), "0"
+            )
+            self.assertIsNone(element.find("./Engine/Script"))
 
     def test_bdep_merge_uses_proven_original_ancestry_without_reverting_mx(self):
         with TemporaryDirectory() as tmp:
@@ -1099,6 +1710,51 @@ class ControllerComposeTests(unittest.TestCase):
                 len({item.resolved_child_dialog_id for item in forward.panels}),
                 2,
             )
+
+    def test_controller_child_allocation_reserves_native_standard_panel_ids(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inventory = _v3_controller_inventory(
+                root,
+                alias="fixture",
+                mod_id="{00000000-0000-0000-0000-000000000001}",
+                local_name="FixtureGuild",
+                building_source=b"B001",
+                family="FX",
+            )
+            inventory.selected = replace(
+                inventory.selected,
+                reserved_dialog_ids=frozenset((b"CG01",)),
+            )
+
+            result = resolve_controller_registry((inventory,))
+
+            self.assertEqual(result.panels[0].resolved_parent_dialog_id, b"CG00")
+            self.assertEqual(result.panels[0].resolved_child_dialog_id, b"CG02")
+
+    def test_controller_child_allocation_honors_external_scoped_reservation(self):
+        with TemporaryDirectory() as tmp:
+            inventory = _v3_controller_inventory(
+                Path(tmp),
+                alias="fixture",
+                mod_id="{00000000-0000-0000-0000-000000000001}",
+                local_name="FixtureGuild",
+                building_source=b"B001",
+                family="FX",
+            )
+            dialogs = resolve_building_dialogs(
+                (inventory,),
+                reserved_dialog_ids=(b"CG01",),
+            )
+
+            result = resolve_controller_registry(
+                (inventory,),
+                building_dialogs=dialogs,
+                reserved_dialog_ids=(b"CG01",),
+            )
+
+            self.assertEqual(result.panels[0].resolved_parent_dialog_id, b"CG00")
+            self.assertEqual(result.panels[0].resolved_child_dialog_id, b"CG02")
 
     def test_global_runtime_identifiers_still_conflict(self):
         with TemporaryDirectory() as tmp:

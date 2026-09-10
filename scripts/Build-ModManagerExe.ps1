@@ -78,7 +78,7 @@ $arguments = @(
     # Keep the bundled runtime and patch scripts beside the executable for the
     # entire game session.  A one-file build extracts them to a temporary
     # directory that can disappear if the manager window closes after launch.
-    "--noconfirm", "--clean", "--onedir", "--windowed", "--uac-admin", "--noupx",
+    "--noconfirm", "--clean", "--onedir", "--windowed", "--noupx",
     "--name", "Majesty Mod Manager",
     "--icon", $managerIcon,
     "--distpath", $OutputDir,
