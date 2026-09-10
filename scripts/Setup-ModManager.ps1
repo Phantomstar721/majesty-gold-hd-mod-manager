@@ -24,8 +24,30 @@ $requiredPayloadFiles = @(
     "payload\mods\CustomGuildPhantomsHauntExpanded\CustomGuildPhantomsHaunt.mmxml"
 )
 
-if (-not (Test-Path -LiteralPath $workspacePython -PathType Leaf)) {
-    throw "Workspace Python was not found: $workspacePython"
+$pythonCommand = ""
+$pythonArguments = @()
+if (Test-Path -LiteralPath $workspacePython -PathType Leaf) {
+    $pythonCommand = $workspacePython
+}
+else {
+    $pyLauncher = Get-Command "py.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $pyLauncher) {
+        $pythonCommand = $pyLauncher.Source
+        $pythonArguments = @("-3")
+    }
+    else {
+        $systemPython = Get-Command "python.exe" -ErrorAction SilentlyContinue
+        if ($null -ne $systemPython) {
+            $pythonCommand = $systemPython.Source
+        }
+    }
+}
+if (-not $pythonCommand) {
+    throw "Python 3.9 or newer was not found. Install Python, then run Setup again."
+}
+& $pythonCommand @pythonArguments -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)"
+if ($LASTEXITCODE -ne 0) {
+    throw "The available Python is older than 3.9. Install Python 3.9 or newer, then run Setup again."
 }
 $payloadCurrent = (Test-Path -LiteralPath $payloadMarker -PathType Leaf) -and `
     ((Get-Content -LiteralPath $payloadMarker -Raw).Trim() -eq "schema=3")
@@ -44,10 +66,15 @@ if (-not $payloadCurrent) {
     }
 }
 if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
-    & $workspacePython -m venv $venvRoot
+    & $pythonCommand @pythonArguments -m venv $venvRoot
     if ($LASTEXITCODE -ne 0) {
         throw "Could not create the Majesty Mod Manager environment."
     }
+}
+
+& $venvPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)"
+if ($LASTEXITCODE -ne 0) {
+    throw "The existing .venv uses Python older than 3.9. Remove that environment and run Setup again."
 }
 
 & $venvPython -m pip install --disable-pip-version-check --upgrade pip

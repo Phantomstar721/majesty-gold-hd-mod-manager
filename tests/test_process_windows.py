@@ -39,7 +39,6 @@ from majesty_cam.stock_controller_registry import (
     resolve_stock_controller_registry,
 )
 from majesty_cam.manager.paths import ManagerPaths
-from majesty_cam.manager.qol import inspect_qol_patch
 
 
 MOD_ID = "48CDD934-B338-4373-A4A4-A99A8E7F917F"
@@ -67,6 +66,39 @@ class WindowsProcessOptionsTests(unittest.TestCase):
 
 
 class ManagerProcessWiringTests(unittest.TestCase):
+    def test_launch_fallback_uses_the_registry_driven_required_helper_service(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = _manager_paths(root)
+            for path in (
+                paths.game_executable,
+                paths.runtime_launcher,
+                paths.runtime_dll,
+            ):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fixture")
+
+            with patch(
+                "majesty_cam.manager.launch.QolService"
+            ) as service_type, patch(
+                "majesty_cam.manager.launch.subprocess.Popen",
+                return_value=SimpleNamespace(pid=4321),
+            ):
+                launch_majesty(
+                    paths,
+                    [MOD_ID],
+                    ensure_qol=True,
+                    capability_manifest=_capability_manifest(root),
+                    runtime_feature_registry=_feature_registry(root),
+                    controller_registry=_controller_registry(root),
+                )
+
+            service_type.assert_called_once_with(
+                repo_root=paths.repo_root,
+                game_executable=paths.game_executable,
+            )
+            service_type.return_value.ensure_required.assert_called_once_with()
+
     def test_gpl_compiler_is_headless_without_changing_capture_contract(self):
         source_set = GplProjectSourceSet(
             project_text='source="Merged.gpl"\n',
@@ -103,40 +135,6 @@ class ManagerProcessWiringTests(unittest.TestCase):
         self.assertIs(kwargs["startupinfo"], window_options["startupinfo"])
         self.assertEqual(kwargs["creationflags"], window_options["creationflags"])
         self.assertEqual(result.stdout, "compiler output")
-
-    def test_legacy_qol_installer_is_headless_and_still_captures_errors(self):
-        completed = subprocess.CompletedProcess(
-            [], 0, stdout="already installed", stderr="diagnostic"
-        )
-        window_options = {"creationflags": 0x08000000, "startupinfo": object()}
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            installer = root / "Install.ps1"
-            installer.write_text("", encoding="utf-8")
-            game = root / "game"
-            game.mkdir()
-            with patch(
-                "majesty_cam.manager.qol.no_console_window_options",
-                return_value=window_options,
-            ) as options, patch(
-                "majesty_cam.manager.qol.subprocess.run",
-                return_value=completed,
-            ) as run:
-                status = inspect_qol_patch(
-                    name="Fixture",
-                    installer=installer,
-                    game_path=game,
-                    installed_phrase="already installed",
-                )
-
-        options.assert_called_once_with()
-        kwargs = run.call_args.kwargs
-        self.assertTrue(kwargs["capture_output"])
-        self.assertEqual(kwargs["timeout"], 45)
-        self.assertIs(kwargs["startupinfo"], window_options["startupinfo"])
-        self.assertEqual(kwargs["creationflags"], window_options["creationflags"])
-        self.assertTrue(status.installed)
-        self.assertIn("diagnostic", status.detail)
 
     def test_runtime_launcher_is_headless_but_game_command_is_unchanged(self):
         window_options = {"creationflags": 0x08000000, "startupinfo": object()}

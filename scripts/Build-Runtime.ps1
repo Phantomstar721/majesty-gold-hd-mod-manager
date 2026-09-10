@@ -1,5 +1,7 @@
 param(
     [string]$OutputRoot = ".\artifacts\runtime",
+    [string]$MsvcToolRoot = "",
+    [string]$WindowsSdkRoot = "",
     [switch]$FreestyleDiagnosticParity,
     [switch]$FreestyleDiagnosticNamedRetention,
     [switch]$SiegeCrashDiagnostic
@@ -13,33 +15,92 @@ $output = if ([IO.Path]::IsPathRooted($OutputRoot)) {
 } else {
     Join-Path $repoRoot $OutputRoot
 }
-$toolRoot = "C:\Program Files (x86)\Microsoft Visual Studio\2017\BuildTools\VC\Tools\MSVC\14.16.27023"
+function Find-MsvcToolRoot {
+    param([string]$RequestedRoot)
+
+    if ($RequestedRoot) {
+        $candidate = [IO.Path]::GetFullPath($RequestedRoot)
+        if (Test-Path -LiteralPath (Join-Path $candidate "bin\Hostx86\x86\cl.exe") -PathType Leaf) {
+            return $candidate
+        }
+        throw "The requested x86 MSVC tool root is invalid: $candidate"
+    }
+
+    $programFilesX86 = [Environment]::GetFolderPath("ProgramFilesX86")
+    $installations = @()
+    $vswhere = Join-Path $programFilesX86 "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
+        $found = & $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if ($LASTEXITCODE -eq 0) {
+            $installations += @($found | Where-Object { $_ })
+        }
+    }
+    $visualStudioRoot = Join-Path $programFilesX86 "Microsoft Visual Studio"
+    if (Test-Path -LiteralPath $visualStudioRoot -PathType Container) {
+        foreach ($year in Get-ChildItem -LiteralPath $visualStudioRoot -Directory) {
+            foreach ($edition in Get-ChildItem -LiteralPath $year.FullName -Directory) {
+                $installations += $edition.FullName
+            }
+        }
+    }
+    $candidates = @()
+    foreach ($installation in $installations | Select-Object -Unique) {
+        $versions = Join-Path $installation "VC\Tools\MSVC"
+        if (-not (Test-Path -LiteralPath $versions -PathType Container)) {
+            continue
+        }
+        foreach ($candidate in Get-ChildItem -LiteralPath $versions -Directory) {
+            if (Test-Path -LiteralPath (Join-Path $candidate.FullName "bin\Hostx86\x86\cl.exe") -PathType Leaf) {
+                $candidates += $candidate
+            }
+        }
+    }
+    $selected = $candidates |
+        Sort-Object @{ Expression = { [version]$_.Name }; Descending = $true } |
+        Select-Object -First 1
+    if ($null -ne $selected) {
+        return $selected.FullName
+    }
+    throw "An x86 Visual C++ compiler was not found. Install the Visual Studio C++ build tools."
+}
+
+$toolRoot = Find-MsvcToolRoot $MsvcToolRoot
 $compiler = Join-Path $toolRoot "bin\Hostx86\x86\cl.exe"
 $include = Join-Path $toolRoot "include"
-$windowsSdk = "C:\Program Files (x86)\Windows Kits\10"
-$sdkIncludeVersion = Get-ChildItem (Join-Path $windowsSdk "Include") -Directory |
-    Sort-Object Name -Descending | Select-Object -First 1
-$sdkLibVersion = Get-ChildItem (Join-Path $windowsSdk "Lib") -Directory |
-    Sort-Object Name -Descending | Select-Object -First 1
+$windowsSdk = if ($WindowsSdkRoot) {
+    [IO.Path]::GetFullPath($WindowsSdkRoot)
+} else {
+    Join-Path ([Environment]::GetFolderPath("ProgramFilesX86")) "Windows Kits\10"
+}
+$sdkVersion = Get-ChildItem (Join-Path $windowsSdk "Include") -Directory |
+    Sort-Object Name -Descending |
+    Where-Object {
+        (Test-Path -LiteralPath (Join-Path $_.FullName "ucrt") -PathType Container) -and
+        (Test-Path -LiteralPath (Join-Path $_.FullName "shared") -PathType Container) -and
+        (Test-Path -LiteralPath (Join-Path $_.FullName "um") -PathType Container) -and
+        (Test-Path -LiteralPath (Join-Path $windowsSdk "Lib\$($_.Name)\ucrt\x86") -PathType Container) -and
+        (Test-Path -LiteralPath (Join-Path $windowsSdk "Lib\$($_.Name)\um\x86") -PathType Container)
+    } |
+    Select-Object -First 1
 
 if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
     throw "x86 MSVC compiler was not found: $compiler"
 }
-if ($null -eq $sdkIncludeVersion -or $null -eq $sdkLibVersion) {
-    throw "Windows SDK include/lib directories were not found."
+if ($null -eq $sdkVersion) {
+    throw "A complete x86 Windows 10 SDK include/lib version was not found under $windowsSdk."
 }
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 
 $commonIncludes = @(
     "/I$include",
-    "/I$($sdkIncludeVersion.FullName)\ucrt",
-    "/I$($sdkIncludeVersion.FullName)\shared",
-    "/I$($sdkIncludeVersion.FullName)\um"
+    "/I$($sdkVersion.FullName)\ucrt",
+    "/I$($sdkVersion.FullName)\shared",
+    "/I$($sdkVersion.FullName)\um"
 )
 $commonLibPaths = @(
     "/LIBPATH:$toolRoot\lib\x86",
-    "/LIBPATH:$($sdkLibVersion.FullName)\ucrt\x86",
-    "/LIBPATH:$($sdkLibVersion.FullName)\um\x86"
+    "/LIBPATH:$windowsSdk\Lib\$($sdkVersion.Name)\ucrt\x86",
+    "/LIBPATH:$windowsSdk\Lib\$($sdkVersion.Name)\um\x86"
 )
 
 $runtimeDefines = @()

@@ -1580,7 +1580,9 @@ def _deduplicate_entries(
 
 
 def _is_generated_package(package_root: Path) -> bool:
-    if package_root.name.casefold().startswith(".manager-merged-"):
+    if package_root.name.casefold().startswith(
+        (".manager-merged-", ".majestymodmanager-build-")
+    ):
         return True
     try:
         generated_names = {

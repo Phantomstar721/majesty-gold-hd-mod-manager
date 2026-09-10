@@ -1,4 +1,6 @@
 from pathlib import Path
+import os
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
@@ -49,9 +51,11 @@ class StartupCacheTests(unittest.TestCase):
             for path in (mods, quests, workshop):
                 path.mkdir()
             package = mods / "Fixture"
-            package.mkdir()
-            payload = package / "content.gpl"
+            (package / "GPL").mkdir(parents=True)
+            payload = package / "GPL" / "content.gpl"
             payload.write_text("function One() begin end", encoding="ascii")
+            manifest = package / "fixture.mmxml"
+            _write_standard_manifest(manifest, MOD_ID, "GPL/content.gpl")
             entry = CatalogEntry(
                 content_id=MOD_ID,
                 raw_content_id=MOD_ID,
@@ -59,7 +63,7 @@ class StartupCacheTests(unittest.TestCase):
                 kind=CatalogKind.STANDARD,
                 source=CatalogSource.LOCAL_MODS,
                 package_root=package,
-                manifest_path=package / "fixture.mmxml",
+                manifest_path=manifest,
                 has_cam=False,
                 merge_ready=False,
                 content_definitions=(("function:one", "abc"),),
@@ -249,7 +253,10 @@ class StartupCacheTests(unittest.TestCase):
             with patch(
                 "majesty_cam.manager.controller.scan_catalog", side_effect=fake_scan
             ), patch(
-                "majesty_cam.manager.controller.catalog_merge_preflight",
+                "majesty_cam.manager.controller.prepare_merge_package",
+                return_value=object(),
+            ) as prepare, patch(
+                "majesty_cam.manager.controller.prepared_catalog_merge_preflight",
                 return_value=(issue,),
             ) as deep:
                 first = ManagerController(
@@ -265,6 +272,149 @@ class StartupCacheTests(unittest.TestCase):
                     second.scan(inspect_qol=False, force_refresh=True)
 
             self.assertEqual(deep.call_count, 2)
+            self.assertEqual(prepare.call_count, 2)
+
+    def test_catalog_signature_ignores_unrelated_package_media(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            mods, quests, workshop = _catalog_roots(root)
+            package = mods / "Fixture"
+            (package / "GPL").mkdir(parents=True)
+            (package / "GPL" / "content.gpl").write_text("one", encoding="ascii")
+            _write_standard_manifest(package / "fixture.mmxml", MOD_ID, "GPL/content.gpl")
+            media = package / "screenshots"
+            media.mkdir()
+            screenshot = media / "preview.png"
+            screenshot.write_bytes(b"first")
+
+            before = catalog_input_signature(
+                local_mods_root=mods,
+                local_quests_root=quests,
+                workshop_roots=(workshop,),
+                registry=CompatibilityRegistry(specs={}),
+            )
+            screenshot.write_bytes(b"different screenshot bytes")
+            after = catalog_input_signature(
+                local_mods_root=mods,
+                local_quests_root=quests,
+                workshop_roots=(workshop,),
+                registry=CompatibilityRegistry(specs={}),
+            )
+
+            self.assertEqual(after, before)
+
+    def test_catalog_signature_tracks_declared_strings_and_new_packages(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            mods, quests, workshop = _catalog_roots(root)
+            package = mods / "Fixture"
+            (package / "Data").mkdir(parents=True)
+            strings = package / "Data" / "strings.xml"
+            strings.write_text("<Strings />", encoding="ascii")
+            (package / "fixture.mmxml").write_text(
+                f'''<Majesty><Mod id="{{{MOD_ID}}}"><DisplayName>Fixture</DisplayName>
+                <DataConfiguration><Dataset base="Any"><Load>
+                <Strings>Data/strings.xml</Strings>
+                </Load></Dataset></DataConfiguration></Mod></Majesty>''',
+                encoding="utf-8",
+            )
+            registry = CompatibilityRegistry(specs={})
+            before = catalog_input_signature(
+                local_mods_root=mods,
+                local_quests_root=quests,
+                workshop_roots=(workshop,),
+                registry=registry,
+            )
+            strings.write_text("<Strings><String /></Strings>", encoding="ascii")
+            changed_strings = catalog_input_signature(
+                local_mods_root=mods,
+                local_quests_root=quests,
+                workshop_roots=(workshop,),
+                registry=registry,
+            )
+            self.assertNotEqual(changed_strings, before)
+
+            second = mods / "Second"
+            second.mkdir()
+            _write_standard_manifest(
+                second / "second.mmxml",
+                "00000000-0000-4000-8000-000000000002",
+            )
+            added_package = catalog_input_signature(
+                local_mods_root=mods,
+                local_quests_root=quests,
+                workshop_roots=(workshop,),
+                registry=registry,
+            )
+            self.assertNotEqual(added_package, changed_strings)
+
+    def test_catalog_signature_ignores_manager_generated_output_changes(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            mods, quests, workshop = _catalog_roots(root)
+            generated = mods / "Majesty Mod Manager - Merged"
+            generated.mkdir()
+            (generated / ".majesty-mod-manager-owned.json").write_text("{}")
+            payload = generated / "Data" / "merged.cam"
+            payload.parent.mkdir()
+            payload.write_bytes(b"first")
+            registry = CompatibilityRegistry(specs={})
+            before = catalog_input_signature(
+                local_mods_root=mods,
+                local_quests_root=quests,
+                workshop_roots=(workshop,),
+                registry=registry,
+            )
+            payload.write_bytes(b"changed")
+            after = catalog_input_signature(
+                local_mods_root=mods,
+                local_quests_root=quests,
+                workshop_roots=(workshop,),
+                registry=registry,
+            )
+            self.assertEqual(after, before)
+
+    def test_catalog_signature_follows_a_linked_package_target(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            mods, quests, workshop = _catalog_roots(root)
+            target = root / "LinkedTarget"
+            (target / "GPL").mkdir(parents=True)
+            payload = target / "GPL" / "content.gpl"
+            payload.write_text("one", encoding="ascii")
+            _write_standard_manifest(target / "fixture.mmxml", MOD_ID, "GPL/content.gpl")
+            link = mods / "LinkedPackage"
+            try:
+                if os.name == "nt":
+                    result = subprocess.run(
+                        ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode != 0:
+                        self.skipTest("directory junctions are unavailable")
+                else:
+                    link.symlink_to(target, target_is_directory=True)
+            except OSError:
+                self.skipTest("directory links are unavailable")
+
+            registry = CompatibilityRegistry(specs={})
+            before = catalog_input_signature(
+                local_mods_root=mods,
+                local_quests_root=quests,
+                workshop_roots=(workshop,),
+                registry=registry,
+            )
+            payload.write_text("linked target changed", encoding="ascii")
+            after = catalog_input_signature(
+                local_mods_root=mods,
+                local_quests_root=quests,
+                workshop_roots=(workshop,),
+                registry=registry,
+            )
+
+            self.assertNotEqual(after, before)
 
     def test_controller_reuses_unchanged_qol_inspection(self):
         with TemporaryDirectory() as temp:
@@ -326,6 +476,32 @@ class StartupCacheTests(unittest.TestCase):
             # Rescan Content refreshes mod discovery, not unchanged executable
             # patch state. QOL mutations have their own targeted refresh path.
             self.assertEqual(inspect.call_count, 1)
+
+
+def _catalog_roots(root: Path) -> tuple[Path, Path, Path]:
+    mods = root / "Mods"
+    quests = root / "Quests"
+    workshop = root / "Workshop"
+    for path in (mods, quests, workshop):
+        path.mkdir()
+    return mods, quests, workshop
+
+
+def _write_standard_manifest(
+    path: Path, content_id: str, source=None
+) -> None:
+    gpl = (
+        "<GPL><Target>Data/Content.bcd</Target>"
+        f"<Source>{source}</Source></GPL>"
+        if source is not None
+        else ""
+    )
+    path.write_text(
+        f'''<Majesty><Mod id="{{{content_id}}}"><DisplayName>Fixture</DisplayName>
+        <DataConfiguration><Dataset base="Any"><Load>{gpl}</Load></Dataset>
+        </DataConfiguration></Mod></Majesty>''',
+        encoding="utf-8",
+    )
 
 
 def _manager_paths(root: Path) -> ManagerPaths:

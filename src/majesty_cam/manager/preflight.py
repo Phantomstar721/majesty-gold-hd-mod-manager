@@ -34,7 +34,7 @@ from .capabilities import (
 from .catalog import CatalogIssue, IssueSeverity
 from .compatibility import CompatibilityRegistry, CompatibilitySpec
 from .profile import normalize_guid
-from .startup_cache import metadata_signature
+from .startup_cache import package_input_metadata_signature, package_input_paths
 
 
 _CG_DIALOG = re.compile(r"^CG[A-Z0-9]{2}$")
@@ -230,7 +230,9 @@ def prepare_merge_package(
                 capabilities,
                 building_dialogs=building_dialogs,
             )
-        package_file_inputs = _package_file_inputs(effective_root)
+        package_file_inputs = _package_file_inputs(
+            effective_root, definition=definition
+        )
         source_metadata_signature = _source_metadata_signature(
             effective_root,
             spec=signature_spec,
@@ -298,6 +300,14 @@ def catalog_merge_preflight(
         source_root=source_root,
         registry=registry,
     )
+    return prepared_catalog_merge_preflight(prepared, game_path=game_path)
+
+
+def prepared_catalog_merge_preflight(
+    prepared: PreparedMergeMod, *, game_path: Path
+) -> tuple[CatalogIssue, ...]:
+    """Run catalog checks while preserving an already prepared package."""
+
     issues = [
         CatalogIssue(
             code=issue.code,
@@ -535,17 +545,22 @@ def _slug(display_name: str, content_id: str) -> str:
     return f"{value}-{uuid_suffix}"
 
 
-def _package_file_inputs(root: Path) -> tuple[tuple[str, str], ...]:
-    return tuple(
-        (
-            path.relative_to(root).as_posix(),
-            _sha256_file(path),
-        )
-        for path in sorted(
-            (value for value in root.rglob("*") if value.is_file()),
-            key=lambda value: value.relative_to(root).as_posix().casefold(),
-        )
-    )
+def _package_file_inputs(
+    root: Path, *, definition: Path | None
+) -> tuple[tuple[str, str], ...]:
+    resolved_root = root.resolve(strict=False)
+    files: list[tuple[str, str]] = []
+    for path in package_input_paths(resolved_root, definition=definition):
+        if not path.is_file():
+            continue
+        try:
+            relative = path.relative_to(resolved_root).as_posix()
+        except ValueError:
+            # External compatibility definitions are fingerprinted separately
+            # by the build plan and must not be mislabeled as package content.
+            continue
+        files.append((relative, _sha256_file(path)))
+    return tuple(sorted(files, key=lambda item: item[0].casefold()))
 
 
 def _source_metadata_signature(
@@ -553,13 +568,9 @@ def _source_metadata_signature(
     *,
     spec: CompatibilitySpec | None,
 ) -> str:
-    paths = [root]
-    if spec is not None:
-        paths.append(spec.definition_path)
-    return metadata_signature(
-        paths,
-        context=("prepared-merge-package-v1",),
-        recursive_directories=True,
+    return package_input_metadata_signature(
+        root,
+        definition=spec.definition_path if spec is not None else None,
     )
 
 
@@ -584,6 +595,7 @@ def _read_gpl_source(path: Path) -> str:
 __all__ = [
     "GENERIC_RUNTIME_CAPABILITIES",
     "catalog_merge_preflight",
+    "prepared_catalog_merge_preflight",
     "PreparedMergeMod",
     "ReadinessIssue",
     "SUPPORTED_RUNTIME_CAPABILITIES",

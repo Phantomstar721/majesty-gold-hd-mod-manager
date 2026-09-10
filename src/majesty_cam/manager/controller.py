@@ -17,6 +17,7 @@ from ..stock_controller_registry import (
 )
 from .build import (
     BuildPlan,
+    MANAGER_OUTPUT_SENTINEL,
     ManagerBuildError,
     ManagerBuildResult,
     STANDARD_SELECTION_ISSUE_CODES,
@@ -38,7 +39,10 @@ from .paths import (
     detect_manager_paths,
     save_game_executable_selection,
 )
-from .preflight import catalog_merge_preflight
+from .preflight import (
+    prepare_merge_package,
+    prepared_catalog_merge_preflight,
+)
 from .profile import (
     ManagerProfile,
     ProfileFormatError,
@@ -184,12 +188,15 @@ class ManagerController:
                 cached = cache.get_preflight(content_id, signature)
                 if cached is not None:
                     return cached
-            issues = catalog_merge_preflight(
-                content_id,
-                display_name,
-                package_root,
+            prepared = prepare_merge_package(
+                content_id=content_id,
+                display_name=display_name,
+                source_root=package_root,
                 registry=self.registry,
-                game_path=self.paths.game_path,
+            )
+            self._prepared_merge_cache[content_id] = prepared
+            issues = prepared_catalog_merge_preflight(
+                prepared, game_path=self.paths.game_path
             )
             cache.set_preflight(content_id, signature, issues)
             return issues
@@ -325,15 +332,20 @@ class ManagerController:
         )
         if entry is None or not entry.selectable:
             raise ValueError(f"Content is not selectable: {content_id}")
-        if enabled:
-            for incompatible_id in entry.incompatible_ids:
-                self.selections[incompatible_id] = False
-        self.selections[normalized] = bool(enabled)
-        if entry.kind is CatalogKind.STANDARD:
-            self._refresh_standard_plan()
-        else:
-            self._replan()
-        self._save_selection_state()
+        previous = self._selection_transaction_state()
+        try:
+            if enabled:
+                for incompatible_id in entry.incompatible_ids:
+                    self.selections[incompatible_id] = False
+            self.selections[normalized] = bool(enabled)
+            if entry.kind is CatalogKind.STANDARD:
+                self._refresh_standard_plan()
+            else:
+                self._replan()
+            self._save_selection_state()
+        except Exception:
+            self._restore_selection_transaction_state(previous)
+            raise
         return self.snapshot()
 
     def select_all(self, kind: CatalogKind, enabled: bool) -> ControllerSnapshot:
@@ -344,31 +356,51 @@ class ManagerController:
             for entry in self.catalog.entries
             if entry.kind is kind and entry.selectable and entry.content_id is not None
         )
-        if enabled:
-            for entry in candidates:
-                self.selections[entry.content_id] = False
-            selected_ids: set[str] = set()
-            for entry in sorted(
-                candidates,
-                key=lambda item: (
-                    item.collection_id or "",
-                    item.collection_index,
-                    item.display_name.casefold(),
-                ),
-            ):
-                if selected_ids.intersection(entry.incompatible_ids):
-                    continue
-                self.selections[entry.content_id] = True
-                selected_ids.add(entry.content_id)
-        else:
-            for entry in candidates:
-                self.selections[entry.content_id] = False
-        if kind is CatalogKind.STANDARD:
-            self._refresh_standard_plan()
-        else:
-            self._replan()
-        self._save_selection_state()
+        previous = self._selection_transaction_state()
+        try:
+            if enabled:
+                for entry in candidates:
+                    self.selections[entry.content_id] = False
+                selected_ids: set[str] = set()
+                for entry in sorted(
+                    candidates,
+                    key=lambda item: (
+                        item.collection_id or "",
+                        item.collection_index,
+                        item.display_name.casefold(),
+                    ),
+                ):
+                    if selected_ids.intersection(entry.incompatible_ids):
+                        continue
+                    self.selections[entry.content_id] = True
+                    selected_ids.add(entry.content_id)
+            else:
+                for entry in candidates:
+                    self.selections[entry.content_id] = False
+            if kind is CatalogKind.STANDARD:
+                self._refresh_standard_plan()
+            else:
+                self._replan()
+            self._save_selection_state()
+        except Exception:
+            self._restore_selection_transaction_state(previous)
+            raise
         return self.snapshot()
+
+    def _selection_transaction_state(self):
+        return (
+            dict(self.selections),
+            self.plan,
+            self.profile,
+            dict(self._prepared_merge_cache),
+        )
+
+    def _restore_selection_transaction_state(self, state) -> None:
+        selections, plan, profile, prepared = state
+        self.selections = selections
+        self.plan = plan
+        self.profile = profile
+        self._prepared_merge_cache = prepared
 
     def set_standard_conflict_winner(
         self,
@@ -793,23 +825,58 @@ class ManagerController:
 
     def _expand_generated_profile_ids(self, remembered: tuple[str, ...]) -> tuple[str, ...]:
         result: list[str] = []
-        generated_by_id = {
-            entry.content_id: entry
+        generated_by_id: dict[str, tuple[str, ...]] = {}
+        generated_roots = {
+            entry.package_root
             for entry in self.catalog.entries
-            if entry.generated and entry.content_id is not None
+            if entry.generated
         }
-        for content_id in remembered:
-            entry = generated_by_id.get(content_id)
-            if entry is None:
-                result.append(content_id)
+        generated_roots.add(self.paths.merged_output_root)
+        for root in generated_roots:
+            sentinel_path = root / MANAGER_OUTPUT_SENTINEL
+            try:
+                sentinel = json.loads(sentinel_path.read_text(encoding="utf-8"))
+                generated_id = normalize_guid(sentinel["mod_id"])
+                expanded = tuple(
+                    normalize_guid(value)
+                    for value in sentinel["selected_source_ids"]
+                )
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                generated_id = ""
+                expanded = ()
+            if generated_id and expanded:
+                generated_by_id[generated_id] = expanded
+
+        # Older Manager builds had only the report. Preserve their one-time
+        # import path, but never trust a cached generated ID for the current
+        # fixed output when its authoritative sentinel says otherwise.
+        for entry in self.catalog.entries:
+            if (
+                not entry.generated
+                or entry.content_id is None
+                or entry.content_id in generated_by_id
+                or entry.package_root == self.paths.merged_output_root
+            ):
                 continue
             report_path = entry.package_root / "CAM-MERGE-REPORT.json"
             try:
                 report = json.loads(report_path.read_text(encoding="utf-8"))
-                inputs = report.get("inputs", [])
-                expanded = [normalize_guid(item["mod_id"]) for item in inputs]
+                expanded = tuple(
+                    normalize_guid(item["mod_id"])
+                    for item in report.get("inputs", [])
+                )
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-                expanded = []
+                expanded = ()
+            if expanded:
+                generated_by_id[entry.content_id] = expanded
+            else:
+                generated_by_id[entry.content_id] = ()
+
+        for content_id in remembered:
+            expanded = generated_by_id.get(content_id)
+            if expanded is None:
+                result.append(content_id)
+                continue
             if expanded:
                 result.extend(expanded)
             else:

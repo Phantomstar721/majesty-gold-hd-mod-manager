@@ -252,7 +252,24 @@ int wmain(int argc, wchar_t** argv) {
         CloseHandle(process.hProcess);
         return 6;
     }
-    WaitForSingleObject(injection, INFINITE);
+    const DWORD injectionWait = WaitForSingleObject(injection, 30000);
+    if (injectionWait != WAIT_OBJECT_0) {
+        std::fwprintf(
+            stderr,
+            L"Runtime DLL injection did not complete within 30 seconds (wait result %lu, error %lu).\n",
+            injectionWait,
+            injectionWait == WAIT_FAILED ? GetLastError() : 0);
+        TerminateProcess(process.hProcess, 6);
+        CloseHandle(injection);
+        VirtualFreeEx(process.hProcess, remotePath, 0, MEM_RELEASE);
+        if (runtimeReadyEvent != nullptr) {
+            CloseHandle(runtimeReadyEvent);
+        }
+        CloseProfileLock(&profileLock);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        return 6;
+    }
     DWORD loadResult = 0;
     GetExitCodeThread(injection, &loadResult);
     CloseHandle(injection);

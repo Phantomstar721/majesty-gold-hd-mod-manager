@@ -28,6 +28,7 @@ from majesty_cam.compose import (
     _blank_positional_section,
     _build_manifest,
     _derive_runtime_capabilities,
+    _discard_incomplete_staging,
     _effective_analysis_tile_entries,
     _first_free_after_reserved,
     _generated_definition,
@@ -865,6 +866,15 @@ class PassthroughGplRewriteTests(unittest.TestCase):
 
 
 class ProfileIdentityTests(unittest.TestCase):
+    def test_failed_composition_staging_is_discarded(self):
+        with TemporaryDirectory() as tmp:
+            staging = Path(tmp) / ".manager-merged-abandoned"
+            staging.mkdir()
+            (staging / "partial.cam").write_bytes(b"partial")
+
+            self.assertIsNone(_discard_incomplete_staging(staging))
+            self.assertFalse(staging.exists())
+
     def test_private_text_runtime_capability_is_derived_not_caller_asserted(self):
         other = "freestyle-cam-rebind.v1"
         without_records, without_payload = _derive_runtime_capabilities(

@@ -6932,9 +6932,14 @@ def compose_package(
         )
         staging.rename(output_root)
     except Exception as exc:
+        cleanup_error = _discard_incomplete_staging(staging)
+        cleanup_detail = (
+            "incomplete staging data was discarded"
+            if cleanup_error is None
+            else f"incomplete staging data could not be removed from {staging}: {cleanup_error}"
+        )
         raise ComposeError(
-            f"profile generation failed; incomplete staging data was left at "
-            f"{staging}: {exc}"
+            f"profile generation failed; {cleanup_detail}: {exc}"
         ) from exc
 
     return ComposePackageResult(
@@ -8584,41 +8589,48 @@ def _require_cam_entry(path: Path, section: bytes, key: bytes) -> CamEntry:
 
 
 def _parse_description_file(path: Path) -> DescriptionsDocument:
-    info = path.stat()
+    payload = path.read_bytes()
     return _parse_description_file_cached(
         str(path),
-        info.st_size,
-        info.st_mtime_ns,
+        payload,
     )
 
 
-@lru_cache(maxsize=1024)
+def _discard_incomplete_staging(staging: Path) -> OSError | None:
+    """Best-effort removal for an unpublished sibling staging directory."""
+
+    try:
+        shutil.rmtree(staging)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return exc
+    return None
+
+
+@lru_cache(maxsize=128)
 def _parse_description_file_cached(
     path_text: str,
-    _size: int,
-    _mtime_ns: int,
+    payload: bytes,
 ) -> DescriptionsDocument:
-    path = Path(path_text)
-    return parse_descriptions(path.read_bytes(), source=path_text)
+    return parse_descriptions(payload, source=path_text)
 
 
 def _parse_semantic_source_file(path: Path) -> ParsedSemanticSource:
-    info = path.stat()
+    payload = path.read_bytes()
     return _parse_semantic_source_file_cached(
         str(path),
-        info.st_size,
-        info.st_mtime_ns,
+        payload,
     )
 
 
-@lru_cache(maxsize=1024)
+@lru_cache(maxsize=128)
 def _parse_semantic_source_file_cached(
     path_text: str,
-    _size: int,
-    _mtime_ns: int,
+    payload: bytes,
 ) -> ParsedSemanticSource:
     path = Path(path_text)
-    text = _read_source_text(path)
+    text = _decode_source_text(payload, path)
     if path.suffix.casefold() == ".gpl":
         return parse_gpl(text, path_text)
     if path.suffix.casefold() == ".dat":
@@ -8627,7 +8639,10 @@ def _parse_semantic_source_file_cached(
 
 
 def _read_source_text(path: Path) -> str:
-    data = path.read_bytes()
+    return _decode_source_text(path.read_bytes(), path)
+
+
+def _decode_source_text(data: bytes, path: Path) -> str:
     for encoding in ("utf-8-sig", "cp1252"):
         try:
             return data.decode(encoding)

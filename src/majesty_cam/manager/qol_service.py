@@ -372,6 +372,21 @@ class QolService:
     ) -> QolUtilityStatus:
         return self._change(key, install=False, current=current)
 
+    def ensure_required(self) -> tuple[QolUtilityStatus, ...]:
+        """Verify and install every helper declared as a Manager requirement."""
+
+        results: list[QolUtilityStatus] = []
+        for spec in self.specs:
+            if not spec.required_by_manager:
+                continue
+            current = self.inspect_patch(spec.key)
+            results.append(
+                current
+                if current.installed is True
+                else self.apply(spec.key, current=current)
+            )
+        return tuple(results)
+
     def _change(
         self,
         key: str,

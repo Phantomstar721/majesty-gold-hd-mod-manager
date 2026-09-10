@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "majesty-gold-hd-mod-manager"
-version = "0.3.5"
-description = "Merge Majesty Gold HD CAM mods, on a container layer that unpacks, inspects, and repacks CAM archives."
+version = "0.3.6"
+description = "Organize, combine, and launch Majesty Gold HD mods and quests."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
-  { name = "Majesty Gold HD CAM Merger contributors" }
+  { name = "Majesty Gold HD Mod Manager contributors" }
 ]
 dependencies = []
 

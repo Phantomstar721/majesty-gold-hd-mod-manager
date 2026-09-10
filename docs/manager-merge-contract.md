@@ -651,9 +651,10 @@ The manager passes the validated absolute path through
 an atomically written empty MMCP manifest, making absence of the environment
 variable distinguishable from an intentional manager launch. A merged launch
 uses the manifest inside the fingerprinted generated profile. Before launch,
-the manager validates the exact generated file set and every SHA-256 recorded
-by its sentinel, reparses the package graph and all emitted CAM resources, and
-rejects any missing, changed, or additional generated file.
+the manager compares a complete generated-file metadata signature with the last
+exact validation. Any metadata change triggers a full generated-file inventory,
+SHA-256 verification against the sentinel, and CAM resource reparse before
+launch is allowed.
 
 The matching MMFR path is passed through
 `MAJESTY_MOD_MANAGER_FEATURES`. Standard-only launches use a validated empty
@@ -732,12 +733,14 @@ and only then publishes a separate local package through a recoverable
 manager-owned staging/backup rename. The generated UUID
 is deterministic and never reuses a selected source UUID, even for a one-mod
 profile. Build-plan input identity uses the SHA-256 content of every selected
-package file, external adapter definition, and compatibility resolution source
-rather than timestamps. The manager recomputes that identity
-before composition, after composition, and immediately before publication; a
-Workshop update or source mutation at any of those boundaries discards staging
-and requires Prepare again, so a registry cannot be published beside GPL built
-from a different planned input set.
+package input, external adapter definition, and compatibility resolution source.
+The manager also records a complete metadata signature for those exact inputs.
+Before composition, after composition, and immediately before publication it
+compares that signature; if metadata changed, it recomputes exact SHA-256
+identity and rejects the build. A detected Workshop update or source mutation
+at any of those boundaries discards staging and requires Prepare again, so a
+registry cannot be published beside GPL built from a different planned input
+set.
 
 The fixed generated-profile directory is protected by one exclusive sibling
 lock from build validation through publication, and from launch validation

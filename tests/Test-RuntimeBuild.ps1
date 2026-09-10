@@ -124,9 +124,14 @@ try {
         "MAJESTY_BUILDING_RUNTIME_READY_EVENT", "ReadInheritedProfileLock",
         "GetHandleInformation", "FILE_TYPE_DISK", "WaitForMultipleObjects",
         "ResumeThread(process.hThread)",
+        "WaitForSingleObject(injection, 30000)",
+        "TerminateProcess(process.hProcess, 6)",
         "WaitForSingleObject(process.hProcess, INFINITE)",
         "CloseProfileLock(&profileLock)"
     ) "Runtime launcher contract"
+    if ($launcherSource.Contains("WaitForSingleObject(injection, INFINITE)")) {
+        throw "Runtime DLL injection can still wait forever."
+    }
     if (-not $probeSource.Contains('[string[]]$GameArguments = @()') -or
         -not $probeSource.Contains('$launcher $game $dll @GameArguments')) {
         throw "Runtime probe does not forward optional game arguments."
@@ -190,6 +195,16 @@ try {
         "registered != state.modeObject",
         "registeredCursor != state.record->cursorOrdinal"
     ) "Private Fl00 live-context and registry identity contract"
+    if ($runtimeSource.Contains("Quest list row-query:")) {
+        throw "Quest-board steady-state row polling still writes production logs."
+    }
+    $questPopulateSpan = Get-SourceSpan $runtimeSource `
+        "void __fastcall QuestBoardPopulate" `
+        "void RefreshQuestBoardRefreshPresentation"
+    Assert-Ordered $questPopulateSpan @(
+        "g_activeQuestRevision == static_cast<int>(revision)",
+        "Quest list population:"
+    ) "Quest-board revision-gated diagnostics"
     Assert-ContainsAny @($capabilitySource, $capabilityHeader) @(
         "kManifestVersion = 1", "kMaximumCapabilityCount = 64",
         "kMaximumCapabilityBytes = 128", "kMaximumManifestBytes = 64u * 1024u",

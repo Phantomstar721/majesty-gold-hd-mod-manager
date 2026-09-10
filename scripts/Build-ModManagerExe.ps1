@@ -1,5 +1,12 @@
 param(
     [string]$OutputDir = "",
+    [string]$WorkspaceRoot = "",
+    [string]$GenericVisitorListsRoot = "",
+    [string]$RememberActiveModsRoot = "",
+    [string]$QolUtilitiesRoot = "",
+    [string]$PhantomsHauntPackage = "",
+    [string]$MsvcToolRoot = "",
+    [string]$WindowsSdkRoot = "",
     [switch]$KeepBuildFiles
 )
 
@@ -51,7 +58,15 @@ foreach ($releaseFile in $releaseFiles) {
         throw "Required release notice was not found: $releaseFile"
     }
 }
-& (Join-Path $PSScriptRoot "Stage-ModManagerPayload.ps1")
+$payloadArguments = @{}
+foreach ($name in @(
+    "WorkspaceRoot", "GenericVisitorListsRoot", "RememberActiveModsRoot",
+    "QolUtilitiesRoot", "PhantomsHauntPackage", "MsvcToolRoot", "WindowsSdkRoot"
+)) {
+    $value = Get-Variable -Name $name -ValueOnly
+    if ($value) { $payloadArguments[$name] = $value }
+}
+& (Join-Path $PSScriptRoot "Stage-ModManagerPayload.ps1") @payloadArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Could not stage a complete schema-3 manager payload."
 }

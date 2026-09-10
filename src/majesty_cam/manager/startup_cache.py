@@ -14,12 +14,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from pathlib import PureWindowsPath
 import stat
 import sys
 import tempfile
 from typing import Iterable, Mapping
+import xml.etree.ElementTree as ET
 
-from ..package import CamLoad, DescriptionsLoad, GplLoad, load_package
 from .catalog import (
     Catalog,
     CatalogEntry,
@@ -297,7 +298,7 @@ def merge_preflight_signature(
             definition = spec.definition_path
         paths.append(spec.definition_path)
         paths.extend(spec.replacement_roots)
-    paths.extend(_shallow_package_paths(source_root))
+    paths.extend(_package_input_paths(source_root, definition=None))
     paths.extend(_package_input_paths(effective_root, definition=definition))
     paths.extend(item.source_path for item in registry.combination_resolutions)
     paths.extend(game_path / relative for relative in _STOCK_PREFLIGHT_INPUTS)
@@ -335,23 +336,33 @@ def catalog_input_signature(
     workshop_roots: Iterable[Path],
     registry: CompatibilityRegistry,
 ) -> str:
-    """Return a cheap complete identity for installed catalog inputs."""
+    """Return a content-aware identity for inputs which affect the catalog.
 
-    paths: list[Path] = [
-        *_manager_cache_identity_paths(),
-        local_mods_root,
-        local_quests_root,
-        *workshop_roots,
-    ]
+    Installed packages can contain large screenshots, source archives, and
+    unrelated documentation.  Catalog discovery needs their manifests,
+    definitions, declared load inputs, and fallback GPL sources—not every byte
+    below every Workshop directory.  Enumerating package roots explicitly also
+    follows local junction packages so changes in their targets invalidate the
+    cache correctly.
+    """
+
+    paths: list[Path] = [*_manager_cache_identity_paths()]
+    context: list[str] = ["installed-catalog-v2"]
+    for label, root, workshop in (
+        ("local-mods", local_mods_root, False),
+        ("local-quests", local_quests_root, False),
+        *((f"workshop-{index}", root, True) for index, root in enumerate(workshop_roots)),
+    ):
+        package_paths, package_context = _catalog_root_inputs(
+            Path(root), label=label, workshop=workshop
+        )
+        paths.extend(package_paths)
+        context.extend(package_context)
     for spec in registry.specs.values():
         paths.append(spec.definition_path)
         paths.extend(spec.replacement_roots)
     paths.extend(item.source_path for item in registry.combination_resolutions)
-    return metadata_signature(
-        paths,
-        context=("installed-catalog-v1",),
-        recursive_directories=True,
-    )
+    return metadata_signature(paths, context=context)
 
 
 def _catalog_issue_to_row(issue: CatalogIssue) -> dict[str, object]:
@@ -598,36 +609,160 @@ def _package_input_paths(
 ) -> tuple[Path, ...]:
     """Return only files that a valid package declares as merge inputs."""
 
-    paths: list[Path] = list(_shallow_package_paths(root))
-    try:
-        package = load_package(root, definition=definition)
-    except (OSError, ValueError):
-        return tuple(paths)
-    paths.append(package.manifest_path)
+    paths: list[Path] = [root]
+    paths.extend(_top_level_manifest_paths(root))
+    paths.extend(_declared_manifest_input_paths(root))
     packaged_definition = root / "mod-definition.json"
     if packaged_definition.exists():
         paths.append(packaged_definition)
     if definition is not None:
         paths.append(definition)
-    for dataset in package.datasets:
-        for load in dataset.loads:
-            for directive in load.directives:
-                if isinstance(directive, (CamLoad, DescriptionsLoad)):
-                    paths.append(directive.file.absolute_path)
-                elif isinstance(directive, GplLoad):
-                    paths.extend(item.file.absolute_path for item in directive.files)
     return tuple(paths)
 
 
-def _shallow_package_paths(root: Path) -> tuple[Path, ...]:
-    """Cover manifest discovery and missing-file repairs without a tree walk."""
+def package_input_metadata_signature(
+    root: Path, *, definition: Path | None = None
+) -> str:
+    """Fingerprint only files that can affect preparation of one package."""
 
-    paths = [root]
+    return metadata_signature(
+        _package_input_paths(root, definition=definition),
+        context=("prepared-merge-package-v2",),
+    )
+
+
+def package_input_paths(
+    root: Path, *, definition: Path | None = None
+) -> tuple[Path, ...]:
+    """Return the stable, deduplicated package inputs used by preparation."""
+
+    unique: dict[str, Path] = {}
+    for path in _package_input_paths(root, definition=definition):
+        resolved = Path(path).resolve(strict=False)
+        unique.setdefault(str(resolved).casefold(), resolved)
+    return tuple(unique[key] for key in sorted(unique))
+
+
+def _catalog_root_inputs(
+    root: Path, *, label: str, workshop: bool
+) -> tuple[list[Path], list[str]]:
+    paths: list[Path] = []
+    context = [f"root:{label}:{root.resolve(strict=False)}"]
     try:
-        paths.extend(root.iterdir())
+        resolved = root.resolve(strict=True)
+        if not resolved.is_dir():
+            context.append(f"root-state:{label}:not-directory")
+            return paths, context
+        children = list(resolved.iterdir())
+    except OSError as exc:
+        context.append(f"root-state:{label}:{type(exc).__name__}")
+        return paths, context
+
+    direct_manifest = any(
+        child.is_file() and child.suffix.casefold() in {".mmxml", ".mqxml"}
+        for child in children
+    )
+    if workshop and direct_manifest:
+        candidates = [(resolved.name, resolved)]
+    else:
+        candidates = [
+            (child.name, child)
+            for child in children
+            if child.is_dir() and (not workshop or child.name.isdecimal())
+        ]
+    candidates.sort(key=lambda item: (item[0].casefold(), str(item[1]).casefold()))
+    for source_name, source_path in candidates:
+        if _is_manager_generated_cache_path(source_path):
+            continue
+        effective = source_path.resolve(strict=False)
+        context.append(
+            f"package:{label}:{source_name.casefold()}:{str(effective).casefold()}"
+        )
+        paths.extend(_package_input_paths(effective, definition=None))
+        paths.extend(_fallback_gpl_inputs(effective))
+    context.append(f"package-count:{label}:{len(context) - 1}")
+    return paths, context
+
+
+def _is_manager_generated_cache_path(path: Path) -> bool:
+    name = path.name.casefold()
+    if name.startswith((".manager-merged-", ".majestymodmanager-build-")):
+        return True
+    return (path / ".majesty-mod-manager-owned.json").is_file()
+
+
+def _top_level_manifest_paths(root: Path) -> tuple[Path, ...]:
+    try:
+        return tuple(
+            sorted(
+                (
+                    path
+                    for path in root.iterdir()
+                    if path.is_file()
+                    and path.suffix.casefold() in {".mmxml", ".mqxml"}
+                ),
+                key=lambda path: path.name.casefold(),
+            )
+        )
     except OSError:
-        pass
-    return tuple(paths)
+        return ()
+
+
+def _declared_manifest_input_paths(root: Path) -> tuple[Path, ...]:
+    """Recover declared paths even from historical multi-Mod manifests."""
+
+    result: list[Path] = []
+    resolved_root = root.resolve(strict=False)
+    path_tags = {"cam", "descriptions", "strings", "source", "target"}
+    for manifest in _top_level_manifest_paths(root):
+        try:
+            payload = manifest.read_bytes()
+            upper = payload.upper()
+            if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
+                continue
+            document = ET.fromstring(payload)
+        except (OSError, ET.ParseError):
+            continue
+        for node in document.iter():
+            if node.tag.rsplit("}", 1)[-1].casefold() not in path_tags:
+                continue
+            declared = "".join(node.itertext()).strip()
+            if not declared or "\x00" in declared:
+                continue
+            windows_path = PureWindowsPath(declared)
+            normalized = declared.replace("\\", "/")
+            if windows_path.is_absolute() or windows_path.drive or normalized.startswith("/"):
+                continue
+            candidate = (resolved_root / normalized).resolve(strict=False)
+            try:
+                candidate.relative_to(resolved_root)
+            except ValueError:
+                continue
+            result.append(candidate)
+    return tuple(result)
+
+
+def _fallback_gpl_inputs(root: Path) -> tuple[Path, ...]:
+    """Track the legacy GPL tree used for Standard-Mod overlap discovery."""
+
+    source_root = root / "GPL"
+    if not source_root.is_dir():
+        return ()
+    result: list[Path] = [source_root]
+    try:
+        for directory, directories, files in os.walk(source_root, followlinks=False):
+            directories.sort(key=str.casefold)
+            files.sort(key=str.casefold)
+            current = Path(directory)
+            result.extend(current / name for name in directories)
+            result.extend(
+                current / name
+                for name in files
+                if Path(name).suffix.casefold() in {".gpl", ".dat", ".gplproj"}
+            )
+    except OSError:
+        return tuple(result)
+    return tuple(result)
 
 
 def _manager_cache_identity_paths() -> tuple[Path, ...]:
@@ -699,5 +834,7 @@ __all__ = [
     "catalog_input_signature",
     "merge_preflight_signature",
     "metadata_signature",
+    "package_input_metadata_signature",
+    "package_input_paths",
     "qol_input_signature",
 ]

@@ -80,7 +80,7 @@ from .paths import ManagerPaths
 from .preflight import PreparedMergeMod, prepare_merge_package
 from .profile import normalize_guid
 from .profile_lock import ProfileLockError, acquire_merged_profile_lock
-from .startup_cache import metadata_signature
+from .startup_cache import metadata_signature, package_input_metadata_signature
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
@@ -314,13 +314,13 @@ def _prepared_package_is_current(
         or prepared.source_root != entry.package_root.resolve(strict=False)
     ):
         return False
-    paths = [prepared.effective_root]
-    if prepared.compatibility is not None and not prepared.substituted:
-        paths.append(prepared.compatibility.definition_path)
-    return metadata_signature(
-        paths,
-        context=("prepared-merge-package-v1",),
-        recursive_directories=True,
+    return package_input_metadata_signature(
+        prepared.effective_root,
+        definition=(
+            prepared.compatibility.definition_path
+            if prepared.compatibility is not None and not prepared.substituted
+            else None
+        ),
     ) == prepared.source_metadata_signature
 
 
@@ -890,11 +890,11 @@ def build_merged_package(
         raise ManagerBuildError(
             f"Refusing to replace a non-manager directory: {target}"
         )
-
     staging = paths.local_mods_root / f".MajestyModManager-build-{uuid.uuid4().hex}"
-    if progress:
-        progress("Validating selected packages")
     try:
+        _cleanup_stale_manager_artifacts(paths.local_mods_root, target)
+        if progress:
+            progress("Validating selected packages")
         _require_current_plan_sources(
             plan, game_path=paths.game_path, phase="before composition"
         )
@@ -989,11 +989,21 @@ def build_merged_package(
             progress("Publishing validated profile")
         _publish_staging(staging, target)
     except (ComposeError, OSError, ValueError, ManagerBuildError) as exc:
+        cleanup_error = None
         if staging.exists() and _is_safe_staging_path(
             staging, paths.local_mods_root, ".MajestyModManager-build-"
         ):
-            shutil.rmtree(staging)
-        raise ManagerBuildError(str(exc)) from exc
+            try:
+                shutil.rmtree(staging)
+            except OSError as removal_exc:
+                cleanup_error = removal_exc
+        message = str(exc)
+        if cleanup_error is not None:
+            message += (
+                f"; incomplete Manager staging could not be removed from "
+                f"{staging}: {cleanup_error}"
+            )
+        raise ManagerBuildError(message) from exc
     finally:
         profile_lock.close()
 
@@ -1538,6 +1548,53 @@ def _is_safe_staging_path(path: Path, parent: Path, prefix: str) -> bool:
         and resolved.name.startswith(prefix)
         and not resolved.is_symlink()
     )
+
+
+def _cleanup_stale_manager_artifacts(parent: Path, target: Path) -> None:
+    """Remove abandoned Manager staging and recover interrupted publication."""
+
+    resolved_parent = parent.resolve(strict=False)
+    temporary_prefixes = (".manager-merged-", ".majestymodmanager-build-")
+    backup_prefix = f".{target.name}.backup-".casefold()
+    try:
+        children = tuple(resolved_parent.iterdir())
+    except OSError as exc:
+        raise ManagerBuildError(
+            f"Could not inspect prior Manager staging in {resolved_parent}: {exc}"
+        ) from exc
+
+    backups: list[Path] = []
+    for child in children:
+        if not child.is_dir() or child.is_symlink():
+            continue
+        folded = child.name.casefold()
+        if folded.startswith(temporary_prefixes):
+            try:
+                shutil.rmtree(child)
+            except OSError as exc:
+                raise ManagerBuildError(
+                    f"Could not remove abandoned Manager staging {child}: {exc}"
+                ) from exc
+        elif folded.startswith(backup_prefix) and _is_manager_owned_output(child):
+            backups.append(child)
+
+    if not backups:
+        return
+    backups.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
+    if not target.exists():
+        try:
+            backups.pop(0).rename(target)
+        except OSError as exc:
+            raise ManagerBuildError(
+                f"Could not recover the last completed Manager package: {exc}"
+            ) from exc
+    for backup in backups:
+        try:
+            shutil.rmtree(backup)
+        except OSError as exc:
+            raise ManagerBuildError(
+                f"Could not remove obsolete Manager backup {backup}: {exc}"
+            ) from exc
 
 
 def _publish_staging(staging: Path, target: Path) -> None:

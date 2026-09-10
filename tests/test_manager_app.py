@@ -193,6 +193,45 @@ class ManagerAppLayoutTests(unittest.TestCase):
 
         window.close()
 
+    def test_merge_selection_planning_runs_off_the_ui_thread(self) -> None:
+        content_id = "8c48289e-7c70-4426-8913-133f3544a182"
+        entry = CatalogEntry(
+            content_id=content_id,
+            raw_content_id=content_id,
+            display_name="Merge Fixture",
+            kind=CatalogKind.MERGE,
+            source=CatalogSource.LOCAL_MODS,
+            package_root=Path("C:/Mods/MergeFixture"),
+            manifest_path=Path("C:/Mods/MergeFixture/fixture.mmxml"),
+            has_cam=True,
+            merge_ready=True,
+        )
+
+        class _Paths:
+            game_path = Path("Z:/missing-majesty")
+            profile_path = Path(tempfile.gettempdir()) / "manager-ui-profile.json"
+
+        class _Controller:
+            paths = _Paths()
+
+            def set_selected(self, selected_id, enabled):
+                raise AssertionError("selection planning ran synchronously")
+
+        with patch.object(manager_app.QTimer, "singleShot"):
+            window = manager_app.ManagerWindow(_Controller())  # type: ignore[arg-type]
+        window.snapshot = replace(
+            _snapshot_with_required_qol("installed", "installed"),
+            catalog=Catalog(entries=(entry,)),
+            selections={content_id: False},
+        )
+
+        with patch.object(window, "_run_task") as run:
+            window._selection_changed(content_id, True)
+
+        self.assertEqual(run.call_args.args[0], "Checking selected mod")
+        self.assertEqual(run.call_args.args[2], window._selection_finished)
+        window.close()
+
     def test_header_explains_rescan_and_offers_game_location_controls(self) -> None:
         from PySide6.QtWidgets import QLabel, QPushButton
 

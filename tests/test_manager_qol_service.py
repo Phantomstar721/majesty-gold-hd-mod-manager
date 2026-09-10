@@ -7,7 +7,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -353,6 +353,40 @@ class QolServiceTests(unittest.TestCase):
             self.assertFalse(
                 any("-DryRun" not in command for command in runner.commands)
             )
+
+    def test_ensure_required_uses_the_registry_and_skips_optional_helpers(self):
+        first = replace(_test_spec(), key="required-one", required_by_manager=True)
+        optional = replace(_test_spec(), key="optional", required_by_manager=False)
+        future = replace(_test_spec(), key="future-required", required_by_manager=True)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            service = QolService(
+                repo_root=root,
+                game_executable=root / "MajestyHD.exe",
+                specs=(first, optional, future),
+            )
+            already_installed = Mock(installed=True)
+            needs_install = Mock(installed=False)
+            installed = Mock(installed=True)
+            with patch.object(
+                service,
+                "inspect_patch",
+                side_effect=(already_installed, needs_install),
+            ) as inspect, patch.object(
+                service,
+                "apply",
+                return_value=installed,
+            ) as apply:
+                result = service.ensure_required()
+
+            self.assertEqual(
+                [call.args[0] for call in inspect.call_args_list],
+                ["required-one", "future-required"],
+            )
+            apply.assert_called_once_with(
+                "future-required", current=needs_install
+            )
+            self.assertEqual(result, (already_installed, installed))
 
     def test_skip_intro_is_branch_independent_and_reads_stock_preference(self):
         spec = QolPatchSpec(

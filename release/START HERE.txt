@@ -4,7 +4,9 @@ Keep this entire folder together. "Majesty Mod Manager.exe" requires the
 nearby "_internal" folder and will not work if the EXE is moved by itself.
 
 1. Close Majesty Gold HD.
-2. Double-click "Majesty Mod Manager.exe" and approve the administrator prompt.
+2. Double-click "Majesty Mod Manager.exe". The Manager itself runs as your
+   current Windows user. Windows asks for administrator approval only when a
+   game-file helper must be changed inside a protected Majesty installation.
 3. Confirm the app detects Default Public 1.5.2.24 or beta2 1.5.2.28.
 4. Optionally choose "Desktop Shortcut" so this folder is easy to launch again.
 5. Install the two required helpers on the Quality of Life tab when prompted.

@@ -36,6 +36,7 @@ from majesty_cam.stock_controller_registry import (
 from majesty_cam.manager.build import (
     MANAGER_OUTPUT_SENTINEL,
     ManagerBuildError,
+    _cleanup_stale_manager_artifacts,
     _parse_resolution_source,
     _publish_staging,
     _require_current_plan_sources,
@@ -71,6 +72,43 @@ OTHER_ID = "48CDD934-B338-4373-A4A4-A99A8E7F917F"
 
 
 class ManagerBuildPlanTests(unittest.TestCase):
+    def test_abandoned_manager_staging_is_removed_without_touching_foreign_data(self):
+        with TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "Mods"
+            mods.mkdir()
+            target = mods / "Majesty Mod Manager - Merged"
+            target.mkdir()
+            (target / MANAGER_OUTPUT_SENTINEL).write_text("{}", encoding="utf-8")
+            compose_staging = mods / ".manager-merged-abandoned"
+            build_staging = mods / ".MajestyModManager-build-abandoned"
+            foreign_backup = mods / f".{target.name}.backup-foreign"
+            for path in (compose_staging, build_staging, foreign_backup):
+                path.mkdir()
+                (path / "payload").write_text("fixture", encoding="utf-8")
+
+            _cleanup_stale_manager_artifacts(mods, target)
+
+            self.assertFalse(compose_staging.exists())
+            self.assertFalse(build_staging.exists())
+            self.assertTrue(foreign_backup.is_dir())
+
+    def test_interrupted_publication_recovers_last_manager_owned_backup(self):
+        with TemporaryDirectory() as tmp:
+            mods = Path(tmp) / "Mods"
+            mods.mkdir()
+            target = mods / "Majesty Mod Manager - Merged"
+            backup = mods / f".{target.name}.backup-fixture"
+            backup.mkdir()
+            (backup / MANAGER_OUTPUT_SENTINEL).write_text("{}", encoding="utf-8")
+            (backup / "completed.txt").write_text("safe", encoding="utf-8")
+
+            _cleanup_stale_manager_artifacts(mods, target)
+
+            self.assertFalse(backup.exists())
+            self.assertEqual(
+                (target / "completed.txt").read_text(encoding="utf-8"), "safe"
+            )
+
     def test_detected_standard_dependency_overrides_saved_order_stably(self):
         prerequisite = CatalogEntry(
             content_id=HAUNT_ID,

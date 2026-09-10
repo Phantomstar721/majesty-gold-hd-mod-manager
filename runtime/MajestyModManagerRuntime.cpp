@@ -4843,7 +4843,7 @@ bool QueryQuestBoard(
     void* guild,
     std::uint32_t row,
     std::uint32_t* result,
-    bool trace = true) {
+    bool trace = false) {
     return g_questBoardScalarEvaluator(
         symbol, guild, row != 0, static_cast<int>(row), result, trace);
 }
@@ -4852,7 +4852,7 @@ bool QueryQuestBoardBoolean(
     const char* symbol,
     void* guild,
     bool* result,
-    bool trace = true) {
+    bool trace = false) {
     return g_questBoardBooleanEvaluator(symbol, guild, result, trace);
 }
 
@@ -4861,7 +4861,7 @@ bool QueryQuestBoardAgent(
     void* guild,
     std::uint32_t row,
     void** result,
-    bool trace = true) {
+    bool trace = false) {
     return g_questBoardAgentEvaluator(
         symbol, guild, static_cast<int>(row), result, trace);
 }
@@ -4871,7 +4871,7 @@ bool QueryQuestBoardString(
     void* guild,
     std::uint32_t row,
     std::string* result,
-    bool trace = true) {
+    bool trace = false) {
     return g_questBoardStringEvaluator(
         symbol, guild, static_cast<int>(row), result, trace);
 }
@@ -5053,18 +5053,11 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
     }
     const std::uint32_t guildId =
         *reinterpret_cast<const std::uint32_t*>(guild + 0x70);
-    char contextTrace[256] = {};
-    std::snprintf(
-        contextTrace, sizeof(contextTrace),
-        "Quest list population: controller=0x%08lX owner=0x%08lX owner_id=0x%08lX.",
-        static_cast<unsigned long>(value),
-        static_cast<unsigned long>(reinterpret_cast<std::uintptr_t>(guild)),
-        static_cast<unsigned long>(guildId));
-    WriteLog(contextTrace);
-
     std::uint32_t revision = 0;
     if (!QueryQuestBoard(
-            board->revisionCallbackSymbol.c_str(), guild, 0, &revision)) {
+            board->revisionCallbackSymbol.c_str(), guild, 0, &revision, false)) {
+        QueryQuestBoard(
+            board->revisionCallbackSymbol.c_str(), guild, 0, &revision, true);
         FaultQuestBoardPresentation(
             value,
             "Quest-board rows disabled: the package revision callback could not be evaluated.");
@@ -5074,6 +5067,15 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
         g_activeQuestRevision == static_cast<int>(revision)) {
         return;
     }
+    char contextTrace[256] = {};
+    std::snprintf(
+        contextTrace, sizeof(contextTrace),
+        "Quest list population: controller=0x%08lX owner=0x%08lX owner_id=0x%08lX revision=%lu.",
+        static_cast<unsigned long>(value),
+        static_cast<unsigned long>(reinterpret_cast<std::uintptr_t>(guild)),
+        static_cast<unsigned long>(guildId),
+        static_cast<unsigned long>(revision));
+    WriteLog(contextTrace);
     std::uint32_t agents[4] = {};
     QuestOfferPresentation presentations[kMaximumQuestOffers] = {};
     std::size_t count = 0;
@@ -5081,20 +5083,14 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
     for (std::uint32_t row = 1; row <= 4; ++row) {
         void* agent = nullptr;
         if (!QueryQuestBoardAgent(
-                board->listSourceCallbackSymbol.c_str(), guild, row, &agent)) {
+                board->listSourceCallbackSymbol.c_str(), guild, row, &agent, false)) {
+            QueryQuestBoardAgent(
+                board->listSourceCallbackSymbol.c_str(), guild, row, &agent, true);
             FaultQuestBoardPresentation(
                 value,
                 "Quest-board rows disabled: the package list callback did not return a stock agent value.");
             return;
         }
-        char rowTrace[224] = {};
-        std::snprintf(
-            rowTrace, sizeof(rowTrace),
-            "Quest list row-query: row=%lu agent=0x%08lX present=%u.",
-            static_cast<unsigned long>(row),
-            static_cast<unsigned long>(reinterpret_cast<std::uintptr_t>(agent)),
-            agent != nullptr ? 1u : 0u);
-        WriteLog(rowTrace);
         if (agent == nullptr) {
             reachedEnd = true;
         } else {
@@ -5117,13 +5113,38 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
             std::uint32_t reward = 0;
             if (!QueryQuestBoardString(
                     board->offerNameCallbackSymbol.c_str(), guild, row,
-                    &name) ||
-                !QueryQuestBoardString(
+                    &name, false)) {
+                QueryQuestBoardString(
+                    board->offerNameCallbackSymbol.c_str(), guild, row,
+                    &name, true);
+                FaultQuestBoardPresentation(
+                    value,
+                    "Quest-board rows disabled: a package row did not provide a valid bounded display name.");
+                return;
+            }
+            if (!QueryQuestBoardString(
                     board->offerGoalCallbackSymbol.c_str(), guild, row,
-                    &goal) ||
-                !QueryQuestBoard(
+                    &goal, false)) {
+                QueryQuestBoardString(
+                    board->offerGoalCallbackSymbol.c_str(), guild, row,
+                    &goal, true);
+                FaultQuestBoardPresentation(
+                    value,
+                    "Quest-board rows disabled: a package row did not provide a valid bounded goal.");
+                return;
+            }
+            if (!QueryQuestBoard(
                     board->offerRewardCallbackSymbol.c_str(), guild, row,
-                    &reward) ||
+                    &reward, false)) {
+                QueryQuestBoard(
+                    board->offerRewardCallbackSymbol.c_str(), guild, row,
+                    &reward, true);
+                FaultQuestBoardPresentation(
+                    value,
+                    "Quest-board rows disabled: a package row did not provide a valid bounded reward.");
+                return;
+            }
+            if (
                 name.empty() || goal.empty() || reward > 0x7FFFFFFFu) {
                 FaultQuestBoardPresentation(
                     value,
@@ -5218,16 +5239,25 @@ void RefreshQuestBoardRefreshPresentation(void* controller, bool force = false) 
     bool canRefresh = false;
     if (guild == nullptr || !QueryQuestBoard(
             board->refreshCostCallbackSymbol.c_str(), guild, 0,
-            &refreshCost) ||
+            &refreshCost, false) ||
         !QueryQuestBoardBoolean(
             board->canRefreshCallbackSymbol.c_str(), guild,
-            &canRefresh) ||
+            &canRefresh, false) ||
         refreshCost > 0x7FFFFFFFu) {
-        WriteLog(
-            "Quest-board child Refresh withheld: package callbacks did not provide a valid stock quote.");
+        if (guild != nullptr) {
+            QueryQuestBoard(
+                board->refreshCostCallbackSymbol.c_str(), guild, 0,
+                &refreshCost, true);
+            QueryQuestBoardBoolean(
+                board->canRefreshCallbackSymbol.c_str(), guild,
+                &canRefresh, true);
+        }
         g_activeQuestRefreshCost = -1;
         g_activeQuestRefreshEnabled = 0;
         SetQuestBoardRefreshVisible(value, false);
+        FaultQuestBoardPresentation(
+            value,
+            "Quest-board child Refresh withheld: package callbacks did not provide a valid stock quote.");
         return;
     }
     const int quotedCost = static_cast<int>(refreshCost);
@@ -5271,10 +5301,10 @@ int HandleQuestBoardRefreshControl(
     std::uint32_t refreshCost = 0;
     if (guildId == 0 || !QueryQuestBoardBoolean(
             board->canRefreshCallbackSymbol.c_str(), guild,
-            &canRefresh) ||
+            &canRefresh, false) ||
         !QueryQuestBoard(
             board->refreshCostCallbackSymbol.c_str(), guild, 0,
-            &refreshCost) ||
+            &refreshCost, false) ||
         !canRefresh || refreshCost > 0x7FFFFFFFu ||
         StockCurrentPlayerGold() < static_cast<int>(refreshCost)) {
         RefreshQuestBoardRefreshPresentation(controller, true);

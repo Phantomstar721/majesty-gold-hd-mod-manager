@@ -35,7 +35,7 @@ from .profile_lock import (
     acquire_merged_profile_lock,
 )
 from .profile import normalize_guid, write_remembered_mods
-from .qol import ensure_required_qol
+from .qol_service import QolService
 
 
 CURRENT_PERSISTENCE_LIMIT = 26
@@ -211,7 +211,10 @@ def launch_majesty(
     try:
         if ensure_qol:
             try:
-                ensure_required_qol(paths)
+                QolService(
+                    repo_root=paths.repo_root,
+                    game_executable=paths.game_executable,
+                ).ensure_required()
             except Exception as exc:
                 raise ManagerLaunchError(str(exc)) from exc
         write_remembered_mods(paths.remembered_path, ordered)

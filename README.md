@@ -258,10 +258,24 @@ Python 3.9 or newer is required. Building the native runtime also requires the
 x86 Visual C++ build tools and a Windows 10 SDK:
 
 ```powershell
-.\Setup - Majesty Mod Manager.bat
-.\Launch - Majesty Mod Manager.bat
+& ".\Setup - Majesty Mod Manager.bat"
+& ".\Launch - Majesty Mod Manager.bat"
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
+
+The complete release payload also uses the following public projects. By
+default, clone them beside this repository using these directory names:
+
+- `majesty-gold-hd-generic-visitor-lists`
+- `majesty-gold-hd-remember-active-mods`
+- `majesty-gold-hd-qol-utilities`
+- `majesty-gold-hd-custom-guild-phantoms-haunt`
+
+`scripts\Stage-ModManagerPayload.ps1` and
+`scripts\Build-ModManagerExe.ps1` also accept explicit paths for each dependency
+when your checkout layout is different. The runtime build locates an installed
+x86 Visual C++ toolchain and matching Windows 10 SDK automatically; their roots
+can likewise be supplied explicitly when needed.
 
 Build the standalone Windows application with:
 

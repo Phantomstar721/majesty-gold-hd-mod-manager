@@ -54,6 +54,27 @@ VARIANT_B_ID = "10000000-0000-4000-8000-000000000002"
 
 
 class ManagerControllerTests(unittest.TestCase):
+    def test_failed_merge_replan_rolls_back_the_selection(self):
+        with TemporaryDirectory() as tmp:
+            paths = _manager_paths(Path(tmp))
+            controller = ManagerController(
+                paths=paths, registry=CompatibilityRegistry(specs={})
+            )
+            entry = _entry(HAUNT_ID, "Merge Mod", paths.local_mods_root / "Merge")
+            controller.catalog = Catalog(entries=(entry,))
+            controller.selections = {HAUNT_ID: False}
+            controller.order = (HAUNT_ID,)
+            previous_plan = controller.plan
+
+            with patch.object(
+                controller, "_replan", side_effect=RuntimeError("fixture failure")
+            ):
+                with self.assertRaisesRegex(RuntimeError, "fixture failure"):
+                    controller.set_selected(HAUNT_ID, True)
+
+            self.assertEqual(controller.selections, {HAUNT_ID: False})
+            self.assertIs(controller.plan, previous_plan)
+
     def test_standard_checkbox_does_not_rehash_managed_output(self):
         with TemporaryDirectory() as tmp:
             paths = _manager_paths(Path(tmp))
@@ -308,6 +329,42 @@ class ManagerControllerTests(unittest.TestCase):
                 ],
             )
             self.assertNotIn("source selections", controller.notices[0])
+
+    def test_current_generated_sentinel_overrides_stale_cached_catalog_id(self):
+        with TemporaryDirectory() as tmp:
+            paths = _manager_paths(Path(tmp))
+            generated_root = paths.merged_output_root
+            generated_root.mkdir(parents=True)
+            current_generated_id = "00000000-0000-4000-8000-000000000099"
+            (generated_root / ".majesty-mod-manager-owned.json").write_text(
+                json.dumps(
+                    {
+                        "mod_id": current_generated_id,
+                        "selected_source_ids": [HAUNT_ID, ALCHEMIST_ID],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            controller = ManagerController(
+                paths=paths, registry=CompatibilityRegistry(specs={})
+            )
+            controller.catalog = Catalog(
+                entries=(
+                    _entry(
+                        GENERATED_ID,
+                        "Stale cached generated profile",
+                        generated_root,
+                        generated=True,
+                    ),
+                )
+            )
+
+            restored = controller._expand_generated_profile_ids(
+                (current_generated_id,)
+            )
+
+            self.assertEqual(restored, (HAUNT_ID, ALCHEMIST_ID))
+            self.assertEqual(controller.notices, [])
 
     def test_launch_activates_generated_profile_instead_of_merge_sources(self):
         with TemporaryDirectory() as tmp:

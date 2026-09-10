@@ -72,7 +72,6 @@ else:
 
 
 APP_NAME = "Majesty Mod Manager"
-APP_VERSION = "Proof of Concept"
 APP_USER_MODEL_ID = "MajestyGoldHD.ModManager"
 PHANTOMS_HAUNT_ID = "8c48289e-7c70-4426-8913-133f3544a182"
 _MANAGER_ICON_PATH = Path(__file__).with_name("assets") / "manager-icon.ico"
@@ -1818,34 +1817,54 @@ if _PYSIDE_IMPORT_ERROR is None:
                 ),
                 None,
             ) if previous is not None else None
-            try:
-                snapshot = self.controller.set_selected(content_id, enabled)
-                snapshot = self._capture_and_exclude_blocked(snapshot)
-            except Exception as exc:
-                self._show_interaction_error("Could not update selection", exc)
-                return
-            self.snapshot = snapshot
             if changed_entry is not None and changed_entry.kind is CatalogKind.STANDARD:
+                try:
+                    snapshot = self.controller.set_selected(content_id, enabled)
+                    snapshot = self._capture_and_exclude_blocked(snapshot)
+                except Exception as exc:
+                    self._show_interaction_error("Could not update selection", exc)
+                    self._render_snapshot(previous)
+                    return
+                self.snapshot = snapshot
                 self._render_selection_update(snapshot)
-            else:
-                self._render_snapshot(snapshot)
+                return
+
+            # Merge selections can inventory and validate a newly selected
+            # package. The checkbox has already changed visually, so keep Qt's
+            # event loop free while the controller prepares the new plan.
+            self._run_task(
+                "Checking selected mod",
+                lambda progress: self.controller.set_selected(content_id, enabled),
+                self._selection_finished,
+            )
+
+        def _selection_finished(self, value: object) -> None:
+            snapshot = self._capture_and_exclude_blocked(_require_snapshot(value))
+            self.snapshot = snapshot
+            # _task_finished performs the single final render after the worker
+            # releases the busy state. Rendering here too rebuilt every card
+            # twice for one Merge checkbox click.
 
         def _bulk_selection(self, raw_kind: object, enabled: bool) -> None:
             if self._busy:
                 return
             kind: Optional[CatalogKind] = None
-            try:
-                kind = raw_kind if isinstance(raw_kind, CatalogKind) else CatalogKind(raw_kind)
-                snapshot = self.controller.select_all(kind, enabled)
-                snapshot = self._capture_and_exclude_blocked(snapshot)
-            except Exception as exc:
-                self._show_interaction_error("Could not update selections", exc)
-                return
-            self.snapshot = snapshot
+            kind = raw_kind if isinstance(raw_kind, CatalogKind) else CatalogKind(raw_kind)
             if kind is CatalogKind.STANDARD:
+                try:
+                    snapshot = self.controller.select_all(kind, enabled)
+                    snapshot = self._capture_and_exclude_blocked(snapshot)
+                except Exception as exc:
+                    self._show_interaction_error("Could not update selections", exc)
+                    return
+                self.snapshot = snapshot
                 self._render_selection_update(snapshot)
-            else:
-                self._render_snapshot(snapshot)
+                return
+            self._run_task(
+                "Checking selected mods",
+                lambda progress: self.controller.select_all(kind, enabled),
+                self._selection_finished,
+            )
 
         def _show_interaction_error(self, title: str, exc: Exception) -> None:
             QMessageBox.critical(self, title, str(exc) or type(exc).__name__)

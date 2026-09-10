@@ -1,10 +1,19 @@
 param(
-    [string]$OutputRoot = ""
+    [string]$OutputRoot = "",
+    [string]$WorkspaceRoot = "",
+    [string]$GenericVisitorListsRoot = "",
+    [string]$RememberActiveModsRoot = "",
+    [string]$QolUtilitiesRoot = "",
+    [string]$PhantomsHauntPackage = "",
+    [string]$MsvcToolRoot = "",
+    [string]$WindowsSdkRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$workspaceRoot = Split-Path -Parent $repoRoot
+if (-not $WorkspaceRoot) {
+    $WorkspaceRoot = Split-Path -Parent $repoRoot
+}
 if (-not $OutputRoot) {
     $OutputRoot = Join-Path $repoRoot "payload"
 }
@@ -18,10 +27,26 @@ $stage = Join-Path $repoRoot (".payload-stage-" + [guid]::NewGuid().ToString("N"
 $backup = Join-Path $repoRoot (".payload-backup-" + [guid]::NewGuid().ToString("N"))
 $runtimeBuild = Join-Path $repoRoot "scripts\Build-Runtime.ps1"
 $runtimeSource = Join-Path $repoRoot "local\manager-runtime-release"
-$visitorRepo = Join-Path $workspaceRoot "majesty-gold-hd-generic-visitor-lists"
-$rememberRepo = Join-Path $workspaceRoot "majesty-gold-hd-remember-active-mods"
-$qolRepo = Join-Path $workspaceRoot "majesty-gold-hd-qol-utilities"
-$hauntSource = Join-Path $workspaceRoot "majesty-gold-hd-custom-guild-phantoms-haunt\dist\CustomGuildPhantomsHauntExpanded"
+$visitorRepo = if ($GenericVisitorListsRoot) {
+    [IO.Path]::GetFullPath($GenericVisitorListsRoot)
+} else {
+    Join-Path $WorkspaceRoot "majesty-gold-hd-generic-visitor-lists"
+}
+$rememberRepo = if ($RememberActiveModsRoot) {
+    [IO.Path]::GetFullPath($RememberActiveModsRoot)
+} else {
+    Join-Path $WorkspaceRoot "majesty-gold-hd-remember-active-mods"
+}
+$qolRepo = if ($QolUtilitiesRoot) {
+    [IO.Path]::GetFullPath($QolUtilitiesRoot)
+} else {
+    Join-Path $WorkspaceRoot "majesty-gold-hd-qol-utilities"
+}
+$hauntSource = if ($PhantomsHauntPackage) {
+    [IO.Path]::GetFullPath($PhantomsHauntPackage)
+} else {
+    Join-Path $WorkspaceRoot "majesty-gold-hd-custom-guild-phantoms-haunt\dist\CustomGuildPhantomsHauntExpanded"
+}
 
 $required = @(
     $runtimeBuild,
@@ -43,7 +68,10 @@ foreach ($path in $required) {
     }
 }
 
-& $runtimeBuild -OutputRoot $runtimeSource
+$runtimeArguments = @{ OutputRoot = $runtimeSource }
+if ($MsvcToolRoot) { $runtimeArguments.MsvcToolRoot = $MsvcToolRoot }
+if ($WindowsSdkRoot) { $runtimeArguments.WindowsSdkRoot = $WindowsSdkRoot }
+& $runtimeBuild @runtimeArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Majesty Mod Manager native runtime build failed with exit code $LASTEXITCODE."
 }
