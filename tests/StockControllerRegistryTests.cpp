@@ -616,7 +616,7 @@ int main() {
     }
 
     auto quests = Header(0, 0, 0, 0, 0, 0, 0);
-    quests[4] = 12;
+    quests[4] = 14;
     AppendU32(&quests, 0);  // occupant panels
     AppendU32(&quests, 0);  // building toggles
     AppendU32(&quests, 1);  // live-agent lists
@@ -652,18 +652,34 @@ int main() {
         AppendString(&quests, questCallbacks[index]);
     }
     AppendU32(&quests, FourCC("AP08"));
+    AppendU32(&quests, 1);  // remain on this child after a successful action
+    AppendU32(&quests, 0);  // do not focus the selected row's world target
     if (!MajestyStockControllers::ParseRegistry(
             quests.data(), quests.size(), &registry, &error) ||
         registry.liveAgentLists.size() != 1 ||
         !registry.liveAgentLists[0].hasRowVariants ||
         registry.liveAgentLists[0].rowVariants.size() != 2 ||
+        !registry.liveAgentLists[0].stayOnPanelAfterAction ||
+        registry.liveAgentLists[0].focusSelectedRowOnClick ||
         registry.FindLiveAgentListByChild(FourCC("QBP1")) == nullptr ||
         registry.FindLiveAgentListByParent(FourCC("AGP1")) == nullptr ||
         registry.FindLiveAgentListByCommand(0x20000) == nullptr) {
         std::fprintf(stderr, "Generic live-agent-list MMCR rejected: %s\n", error.c_str());
         return 41;
     }
+    auto invalidStayPolicy = quests;
+    invalidStayPolicy[invalidStayPolicy.size() - 8] = 2;
+    if (!ExpectInvalid(invalidStayPolicy, "live-agent-list record")) return 52;
+    auto invalidFocusPolicy = quests;
+    invalidFocusPolicy[invalidFocusPolicy.size() - 4] = 2;
+    if (!ExpectInvalid(invalidFocusPolicy, "live-agent-list record")) return 53;
     std::vector<unsigned char> obsoleteQuests = quests;
+    obsoleteQuests[4] = 13;
+    if (!ExpectInvalid(obsoleteQuests, "v13 live-agent lists")) return 54;
+    obsoleteQuests = quests;
+    obsoleteQuests[4] = 12;
+    if (!ExpectInvalid(obsoleteQuests, "v12 live-agent lists")) return 51;
+    obsoleteQuests = quests;
     obsoleteQuests[4] = 11;
     if (!ExpectInvalid(obsoleteQuests, "v11 live-agent lists")) return 50;
     obsoleteQuests = quests;

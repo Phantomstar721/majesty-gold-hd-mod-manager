@@ -316,7 +316,9 @@ live agents through MX05's native list lifecycle:
   "row_value_callback_symbol": "YourMod_Row_Reward",
   "row_value_suffix_text": " Gold",
   "action_cost_callback_symbol": "YourMod_Action_Cost",
-  "action_callback_symbol": "YourMod_Action_After_Debit"
+  "action_callback_symbol": "YourMod_Action_After_Debit",
+  "stay_on_panel_after_action": true,
+  "focus_selected_row_on_click": false
 }
 ```
 
@@ -337,7 +339,16 @@ provide up to 64 package-declared `row_variants` plus an integer
 `row_variant_callback_symbol`. That callback returns a one-based variant index
 for `(Parent, Row)`; it never returns text. The optional per-row integer plus
 suffix is rendered on its own reward line. MX05 passes the selected row agent
-to the action cost and after-debit callbacks.
+to the action cost and after-debit callbacks. The optional
+`stay_on_panel_after_action` boolean defaults to `false`. Set it to `true` when
+a successful action should keep this child list open instead of using MX05's
+stock post-submit transfer of world selection to the selected row. It does not
+change the queued command, payment, callback, row identity, or list refresh.
+The optional `focus_selected_row_on_click` boolean defaults to `true`, preserving
+stock MX05 behavior. Set it to `false` when selecting a text row should update
+the list selection without moving Majesty's world/tracking focus to the row's
+live-agent identity. These policies are independent and apply to any compatible
+MX05 live-agent list, not to a particular building or gameplay purpose.
 See [the generic MX05 live-agent-list proof](stock-quest-board-panel.md) for
 the exact resource geometry, callback signatures, stock lifecycle, and fault
 bounds.

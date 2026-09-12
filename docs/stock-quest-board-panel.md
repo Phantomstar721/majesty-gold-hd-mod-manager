@@ -39,7 +39,9 @@ poll from the painter, or replace MX05 selection and action handling.
   "row_value_callback_symbol": "YourMod_Row_Reward",
   "row_value_suffix_text": " Gold",
   "action_cost_callback_symbol": "YourMod_Action_Cost",
-  "action_callback_symbol": "YourMod_Action_After_Debit"
+  "action_callback_symbol": "YourMod_Action_After_Debit",
+  "stay_on_panel_after_action": true,
+  "focus_selected_row_on_click": false
 }
 ```
 
@@ -88,6 +90,23 @@ The optional value is enabled by supplying both `row_value_callback_symbol` and
 displayed on its own reward line below the selected row text. At least one of
 common text, row variants, or value must be customized.
 
+`stay_on_panel_after_action` is optional and defaults to `false`. Stock MX05
+normally transfers world selection from the parent building to the selected
+row agent after a successful bottom action. Set this field to `true` when the
+action should leave the current child list open instead. The policy runs only
+after stock has queued the paid action: it does not change the selected row,
+the quoted/debited cost, command packet, GPL callback, revision, or refresh.
+Lists that omit the field and all ordinary occupant-action panels retain the
+complete stock focus behavior.
+
+`focus_selected_row_on_click` is independently optional and defaults to `true`.
+Set it to `false` when the list uses a live agent only as stable row identity
+and clicking the row should not move Majesty's world or tracking-panel focus to
+that agent. MX05 still accepts the row selection and refreshes the list's
+selection, text, action, and cost state; only the final stock focus transfer is
+skipped. This is useful for abstract rows such as jobs, orders, or quests, but
+the contract is not quest- or building-specific.
+
 This contract intentionally uses live agents as row identity. It gives stock
 MX05 a real object for selection and queued action dispatch, and avoids a
 Manager-owned synthetic-row lifecycle.
@@ -115,7 +134,12 @@ rejected. The Manager assigns the final child-dialog and queued-action IDs.
 MX05 slot 11 clears the vector at controller offset `0x34` and inserts row
 agents through two stock vector helpers. The Manager invokes those helpers in
 the same order. It wraps only MX05 slots 8 and 11; selection slot 3 and the
-high-frequency refresh/painter slot 14 stay stock.
+high-frequency refresh/painter slot 14 stay stock. When the optional stay-on-
+panel or row-focus policy is active, the Manager wraps only slot 3's two calls
+to MX05's shared control handler. A retained post-action child and a row click
+without world focus both return MX05's stock non-transition result (`0`), so the
+current child remains open. The earlier action submission and row-selection
+refresh remain untouched.
 
 For each reported row, the Manager evaluates `Row_Agent_Id(Parent, Row)`,
 requires an integer result, resolves that number through Majesty's stock
@@ -177,9 +201,11 @@ stock-shaped reference used to resolve that integer ID.
 
 Read-only executable tests verify those profiles, GPL integer and agent-reference
 types, the complete agent resolver shape, MX05 vector helpers, painter, summary,
-and both status-icon seams, plus the stock event gate. Native x86 tests verify
+both status-icon seams, the stock event gate, and both shared-control handoffs.
+Native x86 tests verify
 three simultaneous rows, distinct identity, optional text/value presentation,
 matched-only status-icon suppression, stable string-view lifetime, percent
 escaping, one-based static variant selection and bounds failure, revision
-gating, queued selected-row dispatch, 64-row bounds, stock fallbacks, and
+gating, queued selected-row dispatch, independent child-retention and row-focus
+policies, 64-row bounds, stock fallbacks, and
 repeated slot-14 painting without GPL polling.

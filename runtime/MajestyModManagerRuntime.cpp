@@ -272,6 +272,9 @@ bool InstallQuestBoardChildVtable(std::uint32_t controller);
 bool InstallOccupantParentVtable(std::uint32_t controller);
 bool OpenOccupantPanel(void* controller, std::uint32_t command, int* result);
 bool OpenQuestBoardPanel(void* controller, std::uint32_t command, int* result);
+bool IsLiveQuestBoardController(
+    const void* controller,
+    const QuestBoard* expectedBoard);
 constexpr std::uint32_t kAp10DialogId = 0x30315041;
 constexpr std::uint32_t kAp08DialogId = 0x38305041;
 constexpr std::uint32_t kAp69DialogId = 0x39365041;
@@ -516,6 +519,7 @@ ControllerEvent g_stockAp69Event = nullptr;
 ControllerSetup g_stockParentSetup = nullptr;
 ControllerControl g_stockParentControl = nullptr;
 ControllerEvent g_stockParentEvent = nullptr;
+ControllerControl g_stockQuestBoardSharedControl = nullptr;
 ControllerActivity g_stockParentActivity = nullptr;
 GameUpdate g_stockGameUpdate = nullptr;
 
@@ -4308,13 +4312,24 @@ struct OccupantBuildProfile {
     std::uintptr_t actionStringCall;
     std::uintptr_t commandDispatch;
     std::uintptr_t stringConstructor;
+    std::uintptr_t postSubmitControlCall;
+    std::uintptr_t generalControlCall;
+    std::uintptr_t postSubmitControlHandler;
+    std::uintptr_t selectionFocusJumpTableEntry;
+    std::uintptr_t selectionFocusBranch;
+    std::uintptr_t actionFocusJumpTableEntry;
+    std::uintptr_t actionFocusBranch;
     std::uintptr_t childVtable;
 };
 constexpr OccupantBuildProfile kPublicOccupants = {
-    0x000BBDDD, 0x000BC14F, 0x000C55F1, 0x000C4DA0, 0x00227A80, 0x0033EAC4,
+    0x000BBDDD, 0x000BC14F, 0x000C55F1, 0x000C4DA0, 0x00227A80,
+    0x000BC15A, 0x000BC171, 0x00098170,
+    0x00098338, 0x000981A9, 0x00098340, 0x000981E8, 0x0033EAC4,
 };
 constexpr OccupantBuildProfile kBeta2Occupants = {
-    0x000BC81D, 0x000BCB8F, 0x000C6031, 0x000C57E0, 0x0023A220, 0x003577AC,
+    0x000BC81D, 0x000BCB8F, 0x000C6031, 0x000C57E0, 0x0023A220,
+    0x000BCB9A, 0x000BCBB1, 0x000995A0,
+    0x000997EC, 0x000995D9, 0x000997F4, 0x00099618, 0x003577AC,
 };
 const OccupantBuildProfile& OccupantProfile() {
     return g_buildProfile == &kPublicBuildProfile ? kPublicOccupants : kBeta2Occupants;
@@ -4652,10 +4667,75 @@ bool OccupantCallMatches(std::uintptr_t callRva, std::uintptr_t targetRva) {
 bool ValidateOccupantPanelProfile() {
     const auto& profile = OccupantProfile();
     const unsigned char entry[] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8};
+    const unsigned char sharedControlCall[] = {0x55, 0x8B, 0xCE, 0xE8};
+    const unsigned char selectionFocusEntry[] = {
+        0x8B, 0x4E, 0x24, 0x8B, 0x01, 0x8B,
+        0x50, 0x68, 0x6A, 0x00, 0x6A, 0x00,
+    };
+    const unsigned char actionFocusEntry[] = {
+        0x8B, 0x17, 0x8B, 0x82, 0xB8, 0x00,
+        0x00, 0x00, 0x8B, 0xCF, 0xFF, 0xD0,
+    };
+    const unsigned char selectedAgentWrite[] = {
+        0x89, 0x78, 0x48, 0x57, 0x57, 0xE8,
+    };
+    std::uint32_t selectionFocusJumpTarget = 0;
+    std::memcpy(
+        &selectionFocusJumpTarget,
+        reinterpret_cast<const void*>(
+            g_imageBase + profile.selectionFocusJumpTableEntry),
+        sizeof(selectionFocusJumpTarget));
+    std::uint32_t actionFocusJumpTarget = 0;
+    std::memcpy(
+        &actionFocusJumpTarget,
+        reinterpret_cast<const void*>(
+            g_imageBase + profile.actionFocusJumpTableEntry),
+        sizeof(actionFocusJumpTarget));
+    const bool customHandoffPolicyRequested = std::any_of(
+        g_stockControllerRegistry.liveAgentLists.begin(),
+        g_stockControllerRegistry.liveAgentLists.end(),
+        [](const QuestBoard& panel) {
+            return panel.stayOnPanelAfterAction ||
+                !panel.focusSelectedRowOnClick;
+        });
+    const bool sharedControlShape = !customHandoffPolicyRequested || (
+        MatchesProfileBytes(
+            profile.postSubmitControlCall - 3, sharedControlCall,
+            sizeof(sharedControlCall), "MX05 post-submit control handoff") &&
+        OccupantCallMatches(
+            profile.postSubmitControlCall,
+            profile.postSubmitControlHandler) &&
+        MatchesProfileBytes(
+            profile.generalControlCall - 3, sharedControlCall,
+            sizeof(sharedControlCall), "MX05 general control handoff") &&
+        OccupantCallMatches(
+            profile.generalControlCall,
+            profile.postSubmitControlHandler) &&
+        selectionFocusJumpTarget == static_cast<std::uint32_t>(
+            g_imageBase + profile.selectionFocusBranch) &&
+        MatchesProfileBytes(
+            profile.selectionFocusBranch, selectionFocusEntry,
+            sizeof(selectionFocusEntry), "MX05 selected-row focus branch") &&
+        actionFocusJumpTarget == static_cast<std::uint32_t>(
+            g_imageBase + profile.actionFocusBranch) &&
+        MatchesProfileBytes(
+            profile.actionFocusBranch, actionFocusEntry,
+            sizeof(actionFocusEntry), "MX05 action focus branch") &&
+        OccupantCallMatches(
+            profile.postSubmitControlHandler + 0xEB,
+            g_buildProfile->uiManagerRva) &&
+        MatchesProfileBytes(
+            profile.postSubmitControlHandler + 0xF0,
+            selectedAgentWrite, sizeof(selectedAgentWrite),
+            "MX05 selected-agent focus write") &&
+        OccupantCallMatches(
+            profile.postSubmitControlHandler + 0xF5,
+            g_buildProfile->uiManagerRva));
     return MatchesProfileBytes(profile.commandDispatch, entry, sizeof(entry), "MX05 command dispatch") &&
         OccupantCallMatches(profile.costStringCall, profile.stringConstructor) &&
         OccupantCallMatches(profile.actionStringCall, profile.stringConstructor) &&
         OccupantCallMatches(profile.submitCall, g_buildProfile->submitBuildingCommandRva) &&
+        sharedControlShape &&
         MatchesProfileBytes(g_buildProfile->secondaryControllerResultRva,
             g_buildProfile->expectedResultSite, sizeof(g_buildProfile->expectedResultSite), "MX05 controller result") &&
         MatchesProfileBytes(g_buildProfile->dialogCreationRva,
@@ -4711,6 +4791,25 @@ void __cdecl DispatchOccupantAction(std::uint32_t command, std::uint32_t buildin
     g_executingOccupantPanel = previous;
     g_executingQuestBoard = previousQuest;
 }
+int __fastcall LiveAgentListControlHandoff(
+    void* controller, void*, std::uint32_t controlId) {
+    const auto* board = g_activeQuestBoard;
+    if (board != nullptr && IsLiveQuestBoardController(controller, board)) {
+        if (controlId == 0x138Bu && board->stayOnPanelAfterAction) {
+            // Stock MX05 has already queued command 0x15 before reaching this
+            // call. Returning the stock non-transition result skips its world
+            // selection transfer without closing or replacing the child list.
+            return 0;
+        }
+        if (controlId == 0x1388u && !board->focusSelectedRowOnClick) {
+            // MX05 has already accepted the row click and refreshed its list
+            // state before this shared handoff. Skip only the stock transfer
+            // of world/tracking focus to that row's agent.
+            return 0;
+        }
+    }
+    return g_stockQuestBoardSharedControl(controller, controlId);
+}
 bool WriteOccupantBranch(std::uintptr_t address, void* target, unsigned char opcode,
                          std::size_t size = 5) {
     unsigned char patch[6] = {opcode, 0, 0, 0, 0, 0x90};
@@ -4734,6 +4833,26 @@ bool InstallOccupantPanelRoute() {
             reinterpret_cast<void*>(g_imageBase + profile.commandDispatch + 6), 0xE9)) return false;
     FlushInstructionCache(GetCurrentProcess(), trampoline, 11);
     g_stockOccupantDispatch = reinterpret_cast<BuildingCommandDispatch>(trampoline);
+    const bool customHandoffPolicyRequested = std::any_of(
+        g_stockControllerRegistry.liveAgentLists.begin(),
+        g_stockControllerRegistry.liveAgentLists.end(),
+        [](const QuestBoard& panel) {
+            return panel.stayOnPanelAfterAction ||
+                !panel.focusSelectedRowOnClick;
+        });
+    if (customHandoffPolicyRequested) {
+        g_stockQuestBoardSharedControl =
+            reinterpret_cast<ControllerControl>(
+                g_imageBase + profile.postSubmitControlHandler);
+        if (!WriteOccupantBranch(
+                g_imageBase + profile.postSubmitControlCall,
+                reinterpret_cast<void*>(&LiveAgentListControlHandoff),
+                0xE8) ||
+            !WriteOccupantBranch(
+                g_imageBase + profile.generalControlCall,
+                reinterpret_cast<void*>(&LiveAgentListControlHandoff),
+                0xE8)) return false;
+    }
     return WriteOccupantBranch(g_imageBase + profile.costStringCall, reinterpret_cast<void*>(&OccupantCostString), 0xE8) &&
         WriteOccupantBranch(g_imageBase + profile.actionStringCall, reinterpret_cast<void*>(&OccupantActionString), 0xE8) &&
         WriteOccupantBranch(g_imageBase + profile.submitCall, reinterpret_cast<void*>(&SubmitOccupantAction), 0xE8) &&

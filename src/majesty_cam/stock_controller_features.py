@@ -170,6 +170,8 @@ class StockMx05LiveAgentListPanel:
     action_callback_symbol: str
     row_variant_callback_symbol: Optional[str] = None
     row_variants: Tuple[LiveAgentListRowVariant, ...] = ()
+    stay_on_panel_after_action: bool = False
+    focus_selected_row_on_click: bool = True
     type: str = "stock.mx05-live-agent-list-panel.v1"
 
 
@@ -525,7 +527,12 @@ def parse_controller_feature(value: Mapping[str, object]) -> ControllerFeature:
     expected = {field.name for field in fields(cls)}
     actual = set(value)
     optional = (
-        {"row_variant_callback_symbol", "row_variants"}
+        {
+            "row_variant_callback_symbol",
+            "row_variants",
+            "stay_on_panel_after_action",
+            "focus_selected_row_on_click",
+        }
         if cls is StockMx05LiveAgentListPanel else set()
     )
     if not expected - optional <= actual or actual - expected:
@@ -565,6 +572,8 @@ def parse_controller_feature(value: Mapping[str, object]) -> ControllerFeature:
         # use one static title/detail for every row.
         arguments.setdefault("row_variant_callback_symbol", None)
         arguments.setdefault("row_variants", ())
+        arguments.setdefault("stay_on_panel_after_action", False)
+        arguments.setdefault("focus_selected_row_on_click", True)
         raw_variants = arguments["row_variants"]
         if not isinstance(raw_variants, (list, tuple)):
             raise ControllerFeatureError("row_variants must be an array")
@@ -704,6 +713,14 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
             if feature.cost_callback_symbol.casefold() == feature.action_callback_symbol.casefold():
                 raise ControllerFeatureError("occupant cost and action callbacks must be distinct")
         elif isinstance(feature, StockMx05LiveAgentListPanel):
+            if type(feature.stay_on_panel_after_action) is not bool:
+                raise ControllerFeatureError(
+                    "stay_on_panel_after_action must be true or false"
+                )
+            if type(feature.focus_selected_row_on_click) is not bool:
+                raise ControllerFeatureError(
+                    "focus_selected_row_on_click must be true or false"
+                )
             paired_value_fields = (
                 feature.row_value_callback_symbol is not None,
                 feature.row_value_suffix_text is not None,

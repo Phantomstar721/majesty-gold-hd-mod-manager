@@ -33,7 +33,7 @@ from majesty_cam.stock_controller_registry import (
 
 
 class StockControllerRegistryTests(unittest.TestCase):
-    def test_live_agent_list_round_trips_in_v12_with_optional_text_ids(self) -> None:
+    def test_live_agent_list_round_trips_in_v14_with_optional_text_ids(self) -> None:
         feature = StockMx05LiveAgentListPanel(
             panel_key="offers",
             parent_building="adventurer-guild",
@@ -48,6 +48,8 @@ class StockControllerRegistryTests(unittest.TestCase):
             row_value_suffix_text=" Gold",
             action_cost_callback_symbol="QB_RefreshCost",
             action_callback_symbol="QB_Refresh",
+            stay_on_panel_after_action=True,
+            focus_selected_row_on_click=False,
         )
         parent = int.from_bytes(b"AGP1", "little")
         child = int.from_bytes(b"QBP1", "little")
@@ -65,7 +67,7 @@ class StockControllerRegistryTests(unittest.TestCase):
         self.assertEqual(decode_stock_controller_registry(payload), registry)
         magic, version, *counts = struct.unpack_from("<4s13I", payload)
         self.assertEqual(magic, CONTROLLER_REGISTRY_MAGIC)
-        self.assertEqual(version, 12)
+        self.assertEqual(version, 14)
         self.assertEqual(counts[-3:], [0, 0, 1])
         board = registry.live_agent_lists[0]
         self.assertEqual(board.action_command_id, 0x20000)
@@ -73,7 +75,18 @@ class StockControllerRegistryTests(unittest.TestCase):
         self.assertEqual(board.row_title_intent_id, 0)
         self.assertEqual(board.row_text_intent_id, 0x68000001)
         self.assertEqual(board.row_value_suffix_intent_id, 0x68000002)
+        self.assertTrue(board.stay_on_panel_after_action)
+        self.assertFalse(board.focus_selected_row_on_click)
         self.assertNotIn(b"adventurer-guild", payload)
+
+        invalid_policy = bytearray(payload)
+        struct.pack_into("<I", invalid_policy, len(invalid_policy) - 8, 2)
+        with self.assertRaisesRegex(ControllerRegistryError, "stay-on-panel policy"):
+            decode_stock_controller_registry(bytes(invalid_policy))
+        invalid_focus_policy = bytearray(payload)
+        struct.pack_into("<I", invalid_focus_policy, len(invalid_focus_policy) - 4, 2)
+        with self.assertRaisesRegex(ControllerRegistryError, "row-focus policy"):
+            decode_stock_controller_registry(bytes(invalid_focus_policy))
 
         with self.assertRaisesRegex(ControllerRegistryError, "manager-allocated"):
             encode_stock_controller_registry(replace(
@@ -81,6 +94,14 @@ class StockControllerRegistryTests(unittest.TestCase):
                 live_agent_lists=(replace(board, action_command_id=0x15),),
             ))
 
+        obsolete = bytearray(payload)
+        struct.pack_into("<I", obsolete, 4, 13)
+        with self.assertRaisesRegex(ControllerRegistryError, "v13 live-agent lists"):
+            decode_stock_controller_registry(bytes(obsolete))
+        obsolete = bytearray(payload)
+        struct.pack_into("<I", obsolete, 4, 12)
+        with self.assertRaisesRegex(ControllerRegistryError, "v12 live-agent lists"):
+            decode_stock_controller_registry(bytes(obsolete))
         obsolete = bytearray(payload)
         struct.pack_into("<I", obsolete, 4, 11)
         with self.assertRaisesRegex(ControllerRegistryError, "v11 live-agent lists"):

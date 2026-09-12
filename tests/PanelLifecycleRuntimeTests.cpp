@@ -67,6 +67,7 @@ bool reenterParentEventOnSet = false;
 int stockQuestNameCount = 0, stockQuestAttributeCount = 0;
 int stockQuestSummaryCount = 0;
 int stockQuestStatusIconDrawCount = 0;
+int stockQuestPostActionFocusCount = 0;
 bool stockQuestDestinationConstructed = false;
 MajestyStringView* expectedQuestDestination = nullptr;
 void* expectedQuestSummaryOwner = nullptr;
@@ -149,6 +150,13 @@ void __cdecl SubmitBuilding(
     seenPrice = price;
 }
 int __fastcall Fallback(void*, void*, std::uint32_t) { ++fallbackCount; return 23; }
+int __fastcall StockQuestPostActionFocus(
+    void* object, void*, std::uint32_t controlId) {
+    assert(object == &child);
+    assert(controlId == 0x1388u || controlId == 0x138Bu);
+    ++stockQuestPostActionFocusCount;
+    return 37;
+}
 void __fastcall NativeParentEvent(
     void*, void*, std::uint32_t, std::uint32_t,
     std::uint32_t, std::uint32_t) {
@@ -324,6 +332,7 @@ void Reset() {
     resolvedQuestAgentNumber = 0;
     stockQuestNameCount = stockQuestAttributeCount = stockQuestSummaryCount = 0;
     stockQuestStatusIconDrawCount = 0;
+    stockQuestPostActionFocusCount = 0;
     stockQuestDestinationConstructed = false;
     expectedQuestDestination = nullptr;
     lastQuestStatusPainter = nullptr;
@@ -358,6 +367,8 @@ void Reset() {
         reinterpret_cast<ControllerSetup>(&NativeQuestRefresh);
     g_stockQuestBoardEvent =
         reinterpret_cast<ControllerEvent>(&NativeQuestEvent);
+    g_stockQuestBoardSharedControl =
+        reinterpret_cast<ControllerControl>(&StockQuestPostActionFocus);
     g_stockQuestRowStatusIconDraw =
         reinterpret_cast<StockQuestRowStatusIconDraw>(
             &StockQuestStatusIconDraw);
@@ -638,6 +649,7 @@ int main() {
     quest.actionCostCallbackSymbol = "Quest_RefreshCost";
     quest.actionCallbackSymbol = "Quest_Refresh";
     quest.parentControllerBase = 0x38305041;
+    quest.focusSelectedRowOnClick = true;
     g_stockControllerRegistry.liveAgentLists = {quest};
     g_parentQuestBoard = &g_stockControllerRegistry.liveAgentLists[0];
     parent.table = ap08StockTable;
@@ -854,10 +866,38 @@ int main() {
     assert(questVectorStorage[2] ==
            reinterpret_cast<std::uint32_t>(contextC));
 
+    // Package policies may independently retain the child after an action and
+    // suppress a row click's world/tracking focus. Both seams return MX05's
+    // stock non-transition result; default policies and stale controllers
+    // continue through the complete stock handler.
+    auto& activeList = g_stockControllerRegistry.liveAgentLists[0];
+    activeList.stayOnPanelAfterAction = false;
+    assert(LiveAgentListControlHandoff(
+               &child, nullptr, 0x138Bu) == 37);
+    assert(stockQuestPostActionFocusCount == 1);
+    activeList.stayOnPanelAfterAction = true;
+    assert(LiveAgentListControlHandoff(
+               &child, nullptr, 0x138Bu) == 0);
+    assert(stockQuestPostActionFocusCount == 1);
+    activeList.focusSelectedRowOnClick = true;
+    assert(LiveAgentListControlHandoff(
+               &child, nullptr, 0x1388u) == 37);
+    assert(stockQuestPostActionFocusCount == 2);
+    activeList.focusSelectedRowOnClick = false;
+    assert(LiveAgentListControlHandoff(
+               &child, nullptr, 0x1388u) == 0);
+    assert(stockQuestPostActionFocusCount == 2);
+    g_childController = reinterpret_cast<LONG>(&replacementChild);
+    assert(LiveAgentListControlHandoff(
+               &child, nullptr, 0x138Bu) == 37);
+    assert(stockQuestPostActionFocusCount == 3);
+    g_childController = reinterpret_cast<LONG>(&child);
+    activeList.stayOnPanelAfterAction = false;
+    activeList.focusSelectedRowOnClick = true;
+
     // The value/reward column is optional for the same multi-row lifecycle.
     // Omitting it performs no value callback and leaves each row's ordinary
     // title/detail/action behavior intact.
-    auto& activeList = g_stockControllerRegistry.liveAgentLists[0];
     activeList.hasRowValue = false;
     activeList.rowValueCallbackSymbol.clear();
     activeList.rowValueSuffixIntentId = 0;

@@ -48,7 +48,7 @@ from .stock_controller_features import (
 
 
 CONTROLLER_REGISTRY_MAGIC = b"MMCR"
-CONTROLLER_REGISTRY_VERSION = 12
+CONTROLLER_REGISTRY_VERSION = 14
 STOCK_CONTROLLER_RUNTIME_CAPABILITY = "stock.controller-recipes.v1"
 CONTROLLER_REGISTRY_ENVIRONMENT = "MAJESTY_MOD_MANAGER_CONTROLLERS"
 CONTROLLER_REGISTRY_RELATIVE_PATH = Path(
@@ -154,6 +154,8 @@ class ResolvedLiveAgentListRecord:
     action_cost_callback_symbol: str
     action_callback_symbol: str
     parent_controller_base: str
+    stay_on_panel_after_action: bool = False
+    focus_selected_row_on_click: bool = True
 
 
 @dataclass(frozen=True)
@@ -328,6 +330,8 @@ def resolve_stock_controller_registry(
                 text_ids.row_value_suffix_intent_id, item.action_cost_callback_symbol,
                 item.action_callback_symbol,
                 (occupant_parent_bases or {}).get(item.panel_key, "AP08"),
+                item.stay_on_panel_after_action,
+                item.focus_selected_row_on_click,
             ))
         else:
             reward_panels.append(ResolvedRewardPanelRecord(
@@ -484,7 +488,7 @@ class _Reader:
 
 
 def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> bytes:
-    """Encode canonical recipes as MMCR v2/v3/v4/v12 as features require."""
+    """Encode canonical recipes as MMCR v2/v3/v4/v14 as features require."""
 
     try:
         registry = _validate_resolved_registry(registry)
@@ -539,7 +543,7 @@ def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> by
 
 
 def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegistry:
-    """Decode canonical MMCR v2/v3/v4/v12 registries."""
+    """Decode canonical MMCR v2/v3/v4/v14 registries."""
 
     if not isinstance(payload, bytes):
         raise ControllerRegistryError("MMCR registry must be bytes")
@@ -581,11 +585,21 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
             "rebuild with the current Manager"
         )
     if version == 12:
+        raise ControllerRegistryError(
+            "MMCR v12 live-agent lists lack the post-action panel policy; "
+            "rebuild with the current Manager"
+        )
+    if version == 13:
+        raise ControllerRegistryError(
+            "MMCR v13 live-agent lists lack the row-focus policy; "
+            "rebuild with the current Manager"
+        )
+    if version == 14:
         if len(payload) < _LIST_HEADER.size:
-            raise ControllerRegistryError("MMCR v12 header is truncated")
+            raise ControllerRegistryError("MMCR v14 header is truncated")
         magic, version, *counts = _LIST_HEADER.unpack_from(payload)
         if counts[11] == 0:
-            raise ControllerRegistryError("MMCR v12 without live-agent lists is noncanonical")
+            raise ControllerRegistryError("MMCR v14 without live-agent lists is noncanonical")
     elif version == 4:
         if len(payload) < _TOGGLE_HEADER.size:
             raise ControllerRegistryError("MMCR v4 header is truncated")
@@ -608,7 +622,7 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
         raise ControllerRegistryError("MMCR panel count is outside bounds")
 
     reader = _Reader(payload)
-    if version == 12:
+    if version == 14:
         reader.cursor = _LIST_HEADER.size
     elif version == 4:
         reader.cursor = _TOGGLE_HEADER.size
@@ -794,6 +808,8 @@ def _encode_feature(writer: _Writer, feature: object) -> None:
         writer.symbol(feature.action_cost_callback_symbol)
         writer.symbol(feature.action_callback_symbol)
         writer.fourcc(feature.parent_controller_base)
+        writer.u32(1 if feature.stay_on_panel_after_action else 0)
+        writer.u32(1 if feature.focus_selected_row_on_click else 0)
     elif isinstance(feature, ResolvedHostileMonsterFlagRecord):
         writer.logical(feature.action_key)
         writer.fourcc(feature.private_mode)
@@ -867,14 +883,26 @@ def _decode_feature(reader: _Reader, kind: Type[ControllerFeature]) -> object:
         value_suffix_id = (
             reader.u32("live-agent-list value suffix text ID") if has_value else 0
         )
+        action_cost = reader.symbol("live-agent-list action cost callback")
+        action = reader.symbol("live-agent-list action callback")
+        parent_controller_base = reader.fourcc("parent_controller_base")
+        stay_on_panel = reader.u32("live-agent-list stay-on-panel policy")
+        if stay_on_panel not in (0, 1):
+            raise ControllerRegistryError(
+                "MMCR live-agent-list stay-on-panel policy is invalid"
+            )
+        focus_selected_row = reader.u32("live-agent-list row-focus policy")
+        if focus_selected_row not in (0, 1):
+            raise ControllerRegistryError(
+                "MMCR live-agent-list row-focus policy is invalid"
+            )
         return ResolvedLiveAgentListRecord(
             panel, parent, child, opened, action_command,
             row_count, row_agent, revision, title_id, text_id,
             variant_callback, variants,
             value_callback, value_suffix_id,
-            reader.symbol("live-agent-list action cost callback"),
-            reader.symbol("live-agent-list action callback"),
-            reader.fourcc("parent_controller_base"),
+            action_cost, action, parent_controller_base, bool(stay_on_panel),
+            bool(focus_selected_row),
         )
     if kind is StockAp10Ap69SecondaryPanel:
         return ResolvedSecondaryPanelRecord(
@@ -1093,6 +1121,14 @@ def _validate_resolved_registry(
             raise ControllerRegistryError(
                 "MMCR live-agent-list parent controller base is unsupported"
             )
+        if type(item.stay_on_panel_after_action) is not bool:
+            raise ControllerRegistryError(
+                "MMCR live-agent-list stay-on-panel policy is invalid"
+            )
+        if type(item.focus_selected_row_on_click) is not bool:
+            raise ControllerRegistryError(
+                "MMCR live-agent-list row-focus policy is invalid"
+            )
         optional_text_ids = (
             item.row_title_intent_id,
             item.row_text_intent_id,
@@ -1154,6 +1190,8 @@ def _validate_resolved_registry(
                 )
                 for variant in item.row_variants
             ),
+            item.stay_on_panel_after_action,
+            item.focus_selected_row_on_click,
         ))
     toggle_by_key = {}
     toggle_commands = set()

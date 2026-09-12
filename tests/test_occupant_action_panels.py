@@ -115,6 +115,23 @@ class OccupantPanelTests(unittest.TestCase):
     def test_schema_is_generic_and_rejects_unknown_fields(self):
         item = feature()
         self.assertEqual(parse_controller_feature(controller_feature_mapping(item)), item)
+        opted_in = replace(
+            quest_feature(),
+            stay_on_panel_after_action=True,
+            focus_selected_row_on_click=False,
+        )
+        self.assertEqual(
+            parse_controller_feature(controller_feature_mapping(opted_in)),
+            opted_in,
+        )
+        invalid_policy = controller_feature_mapping(quest_feature())
+        invalid_policy["stay_on_panel_after_action"] = 1
+        with self.assertRaisesRegex(ControllerFeatureError, "true or false"):
+            parse_controller_feature(invalid_policy)
+        invalid_focus_policy = controller_feature_mapping(quest_feature())
+        invalid_focus_policy["focus_selected_row_on_click"] = 1
+        with self.assertRaisesRegex(ControllerFeatureError, "true or false"):
+            parse_controller_feature(invalid_focus_policy)
         bad = controller_feature_mapping(item)
         bad["dll"] = "unsafe.dll"
         with self.assertRaises(ControllerFeatureError):

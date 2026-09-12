@@ -68,6 +68,11 @@ profile and call targets before writing any of these hooks.
 |---|---:|---:|
 | Cost symbol string-constructor call | `0xBBDDD` | `0xBC81D` |
 | MX05 queued-command submission call | `0xBC14F` | `0xBCB8F` |
+| MX05 post-submit shared-control call | `0xBC15A` | `0xBCB9A` |
+| MX05 general shared-control call | `0xBC171` | `0xBCBB1` |
+| Shared control handler | `0x98170` | `0x995A0` |
+| `0x1388` row-click focus branch | `0x981A9` | `0x995D9` |
+| `0x138B` post-action focus branch | `0x981E8` | `0x99618` |
 | Building-command executor | `0xC4DA0` | `0xC57E0` |
 | Action symbol string-constructor call | `0xC55F1` | `0xC6031` |
 | Native narrow-string constructor | `0x227A80` | `0x23A220` |
@@ -82,6 +87,10 @@ Stock cost/action names are passed through unchanged unless the relevant
 private UI/command record is active. The original MX05 vtable is not modified.
 Private instances copy its exact 15 entries and register only the existing
 manager destructor-cleanup boundary. There is no replacement list renderer.
+An independent live-agent-list recipe may keep its child open after an action
+or prevent a row click from transferring world/tracking focus to its live-agent
+identity. Those narrow policies are not available to occupant-action panels and
+do not alter their stock lifecycle.
 
 ## Manager wire format
 

@@ -68,6 +68,8 @@ class PackageTests(unittest.TestCase):
                 "row_value_suffix_text": " Gold",
                 "action_cost_callback_symbol": "QB_Cost",
                 "action_callback_symbol": "QB_Refresh",
+                "stay_on_panel_after_action": True,
+                "focus_selected_row_on_click": False,
             }],
         }
         parsed = parse_mod_definition(value)
@@ -78,6 +80,8 @@ class PackageTests(unittest.TestCase):
         self.assertIsNone(board.row_title_text)
         self.assertIsNone(board.row_variant_callback_symbol)
         self.assertEqual(board.row_variants, ())
+        self.assertTrue(board.stay_on_panel_after_action)
+        self.assertFalse(board.focus_selected_row_on_click)
 
     def test_definition_v3_parses_static_live_agent_list_variants(self):
         value = {
@@ -120,6 +124,8 @@ class PackageTests(unittest.TestCase):
             LiveAgentListRowVariant("Delivery", "Deliver goods"),
             LiveAgentListRowVariant("Escort", "Protect a traveler"),
         ))
+        self.assertFalse(board.stay_on_panel_after_action)
+        self.assertTrue(board.focus_selected_row_on_click)
 
     def test_definition_v3_rejects_obsolete_quest_board_agent_contract(self):
         value = {

@@ -851,7 +851,9 @@ bool ParseRegistry(
     if (version == 9) return Fail(error, "MMCR v9 quest boards contain a non-stock duplicate Refresh row; rebuild with the current Manager");
     if (version == 10) return Fail(error, "MMCR v10 one-row quest lists are unsupported; rebuild with the current Manager");
     if (version == 11) return Fail(error, "MMCR v11 live-agent lists lack per-row static variants; rebuild with the current Manager");
-    if (version == 12 && counts[11] == 0) return Fail(error, "MMCR v12 without live-agent lists is noncanonical");
+    if (version == 12) return Fail(error, "MMCR v12 live-agent lists lack the post-action panel policy; rebuild with the current Manager");
+    if (version == 13) return Fail(error, "MMCR v13 live-agent lists lack the row-focus policy; rebuild with the current Manager");
+    if (version == 14 && counts[11] == 0) return Fail(error, "MMCR v14 without live-agent lists is noncanonical");
     std::uint64_t total = 0;
     for (std::size_t index = 0; index < 12; ++index) total += counts[index];
     if (total > kMaximumRecordCount ||
@@ -1188,6 +1190,8 @@ bool ParseRegistry(
         LiveAgentListRecord item = {};
         std::uint32_t hasRowVariants = 0;
         std::uint32_t hasRowValue = 0;
+        std::uint32_t stayOnPanelAfterAction = 0;
+        std::uint32_t focusSelectedRowOnClick = 0;
         if (!reader.ReadLogical(&item.panelKey) ||
             !reader.ReadU32(&item.parentDialogId) || !reader.ReadU32(&item.childDialogId) ||
             !reader.ReadU32(&item.openCommandId))
@@ -1231,13 +1235,19 @@ bool ParseRegistry(
             return Fail(error, "MMCR live-agent-list value is truncated");
         if (!reader.ReadSymbol(&item.actionCostCallbackSymbol) ||
             !reader.ReadSymbol(&item.actionCallbackSymbol) ||
-            !reader.ReadU32(&item.parentControllerBase) || !IsPrintableFourCC(item.parentDialogId) ||
+            !reader.ReadU32(&item.parentControllerBase) ||
+            !reader.ReadU32(&stayOnPanelAfterAction) ||
+            !reader.ReadU32(&focusSelectedRowOnClick) ||
+            stayOnPanelAfterAction > 1 || focusSelectedRowOnClick > 1 ||
+            !IsPrintableFourCC(item.parentDialogId) ||
             !IsPrintableFourCC(item.childDialogId) || item.openCommandId == 0 ||
             (item.parentControllerBase != 0x37305041u &&
              item.parentControllerBase != 0x38305041u &&
              item.parentControllerBase != 0x30315041u &&
              item.parentControllerBase != 0x3930584Du))
             return Fail(error, "MMCR live-agent-list record is invalid");
+        item.stayOnPanelAfterAction = stayOnPanelAfterAction != 0;
+        item.focusSelectedRowOnClick = focusSelectedRowOnClick != 0;
         const std::uint32_t commandId = 0x20000u + index;
         if (item.actionCommandId != commandId ||
             (!parsed.liveAgentLists.empty() && parsed.liveAgentLists.back().panelKey >= item.panelKey))

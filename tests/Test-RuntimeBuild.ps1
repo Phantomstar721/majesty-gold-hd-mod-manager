@@ -164,7 +164,7 @@ try {
         "runtime feature registry contains trailing bytes", "FindEnchantmentRow"
     ) "Runtime feature registry contract"
     Assert-ContainsAny @($controllerSource, $controllerHeader) @(
-        "kRegistryVersion = 12", "kMaximumRecordCount = 256",
+        "kRegistryVersion = 14", "kMaximumRecordCount = 256",
         "kMaximumPanelCount = 32", "kMaximumRegistryBytes = 512u * 1024u",
         "ParseRegistry", "FindPanelByParentDialog", "FindPanelByChildDialog",
         "FindRewardPanelByParentDialog", "FindHostileMonsterFlagByMode",
@@ -177,7 +177,9 @@ try {
         "MMCR private sovereign mode collides with a stock mode",
         "!buildingFamilies.insert(item->buildingFamilyId).second",
         "stockTargetModes.find(*mode)", "stockExecutorModes.find(*mode)",
-        "FindLiveAgentListByCommand", "MMCR v11 live-agent lists lack per-row static variants",
+        "FindLiveAgentListByCommand", "MMCR v13 live-agent lists lack the row-focus policy",
+        "MMCR v12 live-agent lists lack the post-action panel policy",
+        "MMCR v11 live-agent lists lack per-row static variants",
         "MMCR v10 one-row quest lists are unsupported",
         "MMCR v8 quest rows use unsupported GPL string return contracts",
         "MMCR v7 quest rows use unsupported GPL agent/boolean return contracts",
@@ -190,6 +192,8 @@ try {
         "FindPrivateIntentText(intentId)",
         "rowCountCallbackSymbol", "rowAgentIdCallbackSymbol",
         "rowVariantCallbackSymbol", "rowVariants",
+        "stayOnPanelAfterAction", "focusSelectedRowOnClick",
+        "LiveAgentListControlHandoff",
         "offerCount > kMaximumQuestOffers",
         "presentation.agent = rowAgent",
         "rowStatusFirstBlock", "rowStatusSecondBlock",
@@ -556,6 +560,18 @@ try {
         "a row-variant callback did not select a declared variant",
         "Live-agent-list callback complete:"
     ) "Live-agent-list callback diagnostics"
+    $questPostAction = Get-SourceSpan $runtimeSource `
+        "int __fastcall LiveAgentListControlHandoff(" `
+        "bool WriteOccupantBranch("
+    Assert-ContainsAny @($questPostAction) @(
+        "controlId == 0x138Bu",
+        "board->stayOnPanelAfterAction",
+        "controlId == 0x1388u",
+        "!board->focusSelectedRowOnClick",
+        "IsLiveQuestBoardController(",
+        "return 0;",
+        "g_stockQuestBoardSharedControl(controller, controlId)"
+    ) "Package-declared MX05 child-retention and row-focus policies"
     $occupantParentInstall = Get-SourceSpan $runtimeSource `
         "bool InstallOccupantParentVtable(std::uint32_t controller) {" `
         "bool InstallOccupantChildVtable(std::uint32_t controller) {"
