@@ -566,7 +566,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             elif feature_type in {
                 "stock.ap10-ap69-secondary-panel.v1",
                 "stock.mx04-mx05-occupant-action-panel.v1",
-                "stock.ap08-mx05-quest-list-panel.v4",
+                "stock.mx05-live-agent-list-panel.v1",
                 "stock.mx09-ap41-reward-panel.v1",
                 "stock.ap17-upgrade-research-gate.v1",
             }:

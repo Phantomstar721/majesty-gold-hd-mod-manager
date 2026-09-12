@@ -149,7 +149,7 @@ from .stock_controller_features import (
     LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY,
     ControllerFeature,
     ControllerFeatureError,
-    StockAp08Mx05QuestBoardPanel,
+    StockMx05LiveAgentListPanel,
     StockAp10Ap69SecondaryPanel,
     StockAp41Fl00HostileMonsterFlag,
     StockMx09Ap41RewardPanel,
@@ -225,7 +225,7 @@ _STOCK_COMPOSE_OPTIONAL_INPUTS = (
     # an input state and therefore must be fingerprinted deterministically.
     Path("DataMX/mx_maindata.cam"),
     Path("DataMX/mx_interfacedata.cam"),
-    # Required only when a selected package requests the AP08/MX05 quest-board
+    # Required only when a selected package requests the MX05 live-agent-list
     # recipe. Its presence/hash is still part of every prepared plan so that a
     # later selection cannot silently consume a different stock template.
     Path("DataMX/mx_textdata.cam"),
@@ -932,7 +932,7 @@ def _smnu_record_index(
     return matches[0]
 
 
-def _validate_mx05_quest_refresh_panel(
+def _validate_mx05_live_agent_list_panel(
     game_path: Path,
     smnu_payload: bytes,
     strt_payload: bytes,
@@ -940,7 +940,7 @@ def _validate_mx05_quest_refresh_panel(
     owner: str,
     label: str,
 ) -> None:
-    """Require one stock-shaped MX05 row whose native action is Refresh."""
+    """Require MX05's exact list and single native bottom-action shape."""
 
     stock_payload = _require_cam_entry(
         game_path / Path("DataMX/mx_textdata.cam"), b"SMNU", b"MX05"
@@ -983,7 +983,7 @@ def _validate_mx05_quest_refresh_panel(
     )
     if obsolete:
         raise ComposeError(
-            f"{owner}: SMNU/{label} contains obsolete duplicate Refresh controls "
+            f"{owner}: SMNU/{label} contains obsolete duplicate action controls "
             + ", ".join(f"0x{value:08X}" for value in obsolete)
         )
 
@@ -993,18 +993,19 @@ def _validate_mx05_quest_refresh_panel(
         raise ComposeError(f"{owner}: STRT/{label} is invalid: {exc}") from exc
     action = records[indices[_MX05_NATIVE_ACTION_CONTROL_ID]]
     label_indices = struct.unpack_from("<2I", action, 0x2C)
-    if any(
-        index >= len(strings.records)
-        or strings.records[index].text.strip().upper() != b"REFRESH"
+    labels = [
+        strings.records[index].text.strip()
         for index in label_indices
-    ):
+        if index < len(strings.records)
+    ]
+    if len(labels) != 2 or not labels[0] or labels[0] != labels[1]:
         raise ComposeError(
             f"{owner}: SMNU/STRT/{label} must label MX05's one native bottom "
-            "action row REFRESH"
+            "action consistently with non-empty text"
         )
 
 
-def _materialize_quest_board_panel_resources(
+def _materialize_live_agent_list_panel_resources(
     game_path: Path,
     resources: Sequence[CamResource],
     *,
@@ -1012,27 +1013,27 @@ def _materialize_quest_board_panel_resources(
     controller_registry: ResolvedControllerRegistry,
     dialog_resolutions: Sequence[ResolvedBuildingDialog],
 ) -> tuple[CamResource, ...]:
-    if not controller_registry.quest_boards:
+    if not controller_registry.live_agent_lists:
         return tuple(resources)
     panels = {item.qualified_panel_key: item for item in controller_panels}
-    for board in controller_registry.quest_boards:
+    for board in controller_registry.live_agent_lists:
         panel = panels.get(board.panel_key)
         if panel is None:
-            raise ComposeError(f"quest-board panel mapping is missing: {board.panel_key}")
+            raise ComposeError(f"live-agent-list panel mapping is missing: {board.panel_key}")
         parent = next((
             item for item in dialog_resolutions
             if item.owner == panel.owner
             and int.from_bytes(item.resolved_dialog_id, "little") == board.parent_dialog_id
         ), None)
         if parent is None:
-            raise ComposeError(f"quest-board parent mapping is missing: {board.panel_key}")
+            raise ComposeError(f"live-agent-list parent mapping is missing: {board.panel_key}")
         parent_smnu = [
             resource for resource in resources
             if resource.owner == panel.owner and resource.section == b"SMNU"
             and resource.key == parent.source_dialog_id
         ]
         if len(parent_smnu) != 1:
-            raise ComposeError(f"{panel.owner}: quest-board parent SMNU is missing")
+            raise ComposeError(f"{panel.owner}: live-agent-list parent SMNU is missing")
         parent_values = _smnu_dword_values(
             parent_smnu[0].entry.data, panel.owner,
             _display_key(parent.source_dialog_id),
@@ -1041,7 +1042,7 @@ def _materialize_quest_board_panel_resources(
                     if value in parent_values]
         if authored:
             raise ComposeError(
-                f"{panel.owner}: remove the obsolete AP54 parent Refresh controls: "
+                f"{panel.owner}: remove obsolete duplicate parent action controls: "
                 + ", ".join(f"0x{value:08X}" for value in authored)
             )
 
@@ -1056,10 +1057,10 @@ def _materialize_quest_board_panel_resources(
             for section in (b"SMNU", b"STRT")
         }
         if any(len(matches) != 1 for matches in child_by_section.values()):
-            raise ComposeError(f"{panel.owner}: quest-board child panel is incomplete")
+            raise ComposeError(f"{panel.owner}: live-agent-list child panel is incomplete")
         smnu_resource = child_by_section[b"SMNU"][0]
         strt_resource = child_by_section[b"STRT"][0]
-        _validate_mx05_quest_refresh_panel(
+        _validate_mx05_live_agent_list_panel(
             game_path,
             smnu_resource.entry.data,
             strt_resource.entry.data,
@@ -1114,12 +1115,12 @@ def merge_text_resources(
     resources = collapse_native_cam_resources(
         resource for inv in inventories for resource in inv.resources
     )
-    if controller_registry is not None and controller_registry.quest_boards:
+    if controller_registry is not None and controller_registry.live_agent_lists:
         if dialog_resolutions is None:
             raise ComposeError(
-                "quest-board materialization requires resolved building dialogs"
+                "live-agent-list materialization requires resolved building dialogs"
             )
-        resources = _materialize_quest_board_panel_resources(
+        resources = _materialize_live_agent_list_panel_resources(
             game_path,
             resources,
             controller_panels=controller_panels,
@@ -3881,7 +3882,7 @@ def validate_controller_stock_evidence(
     registry_panel_keys = {
         item.panel_key for item in (*registry.panels, *registry.reward_panels,
                                     *registry.occupant_action_panels,
-                                    *registry.quest_boards)
+                                    *registry.live_agent_lists)
     }
     if registry_panel_keys != set(panel_owners):
         raise ComposeError(
@@ -4289,7 +4290,7 @@ def _validate_controller_panel_controls(
     panel = next((
         item for item in (*registry.panels, *registry.reward_panels,
                           *registry.occupant_action_panels,
-                          *registry.quest_boards)
+                          *registry.live_agent_lists)
         if item.panel_key == panel_key
     ), None)
     if panel is None:  # pragma: no cover - registry/panel ownership equality guards it
@@ -4311,7 +4312,7 @@ def _validate_controller_panel_controls(
     if panel in registry.occupant_action_panels:
         child_requirements.extend((f"MX05 stock control {value:#x}", value)
                                   for value in mx05_authored_controls)
-    if panel in registry.quest_boards:
+    if panel in registry.live_agent_lists:
         child_requirements.extend((f"MX05 stock control {value:#x}", value)
                                   for value in mx05_authored_controls)
     for meter in registry.meters:
@@ -5696,12 +5697,12 @@ def resolve_controller_registry(
     mappings: dict[tuple[str, str, str], ControllerKeyMapping] = {}
     qualified_origins: dict[str, tuple[str, str]] = {}
     panel_types = (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
-                   StockMx04Mx05OccupantActionPanel, StockAp08Mx05QuestBoardPanel)
+                   StockMx04Mx05OccupantActionPanel, StockMx05LiveAgentListPanel)
     raw_panels: dict[str, tuple[PackageInventory, ControllerFeature]] = {}
     raw_toggles: dict[str, tuple[PackageInventory, StockMx22BuildingOpenToggle]] = {}
     flag_prototypes: dict[str, str] = {}
-    quest_text_ids: dict[str, tuple[int, int]] = {}
-    quest_private_texts: list[PrivateLiteralTextRecord] = []
+    list_text_ids: dict[str, tuple[int, int, int]] = {}
+    list_private_texts: list[PrivateLiteralTextRecord] = []
     claimed_private_text_ids: set[int] = set()
     for inventory, feature in claims:
         package_id = _normalized_mod_uuid(inventory.selected.package.mod_id)
@@ -5729,31 +5730,34 @@ def resolve_controller_registry(
         qualified.append(resolved_feature)
         if isinstance(feature, panel_types):
             raw_panels[resolved_feature.panel_key] = (inventory, feature)
-            if isinstance(feature, StockAp08Mx05QuestBoardPanel):
+            if isinstance(feature, StockMx05LiveAgentListPanel):
+                text_fields = (
+                    ("row-title", feature.row_title_text),
+                    ("row-text", feature.row_text),
+                    ("row-value-suffix", feature.row_value_suffix_text),
+                )
                 ids = tuple(
-                    allocate_private_literal_text_id(
+                    0 if text is None else allocate_private_literal_text_id(
                         inventory.selected.package.mod_id,
-                        "stock.ap08-mx05-quest-list-panel.v4",
+                        "stock.mx05-live-agent-list-panel.v1",
                         f"{feature.panel_key}:{field}",
                     )
-                    for field in ("offer-name", "offer-goal")
+                    for field, text in text_fields
                 )
-                if ids[0] == ids[1] or any(
-                    value in claimed_private_text_ids for value in ids
+                nonzero_ids = tuple(value for value in ids if value != 0)
+                if len(nonzero_ids) != len(set(nonzero_ids)) or any(
+                    value in claimed_private_text_ids for value in nonzero_ids
                 ):
                     raise ComposeError(
-                        "manager-owned quest text ID allocation collided"
+                        "manager-owned live-agent-list text ID allocation collided"
                     )
-                claimed_private_text_ids.update(ids)
-                quest_text_ids[resolved_feature.panel_key] = ids
-                quest_private_texts.extend((
-                    PrivateLiteralTextRecord(
-                        ids[0], feature.offer_name_text.encode("cp1252")
-                    ),
-                    PrivateLiteralTextRecord(
-                        ids[1], feature.offer_goal_text.encode("cp1252")
-                    ),
-                ))
+                claimed_private_text_ids.update(nonzero_ids)
+                list_text_ids[resolved_feature.panel_key] = ids
+                list_private_texts.extend(
+                    PrivateLiteralTextRecord(runtime_id, text.encode("cp1252"))
+                    for runtime_id, (_field, text) in zip(ids, text_fields)
+                    if runtime_id != 0 and text is not None
+                )
         elif isinstance(feature, StockMx22BuildingOpenToggle):
             raw_toggles[resolved_feature.toggle_key] = (inventory, feature)
         elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
@@ -5842,7 +5846,7 @@ def resolve_controller_registry(
     for feature in panel_features:
         inventory, raw = raw_panels[feature.panel_key]
         if isinstance(feature, (StockMx04Mx05OccupantActionPanel,
-                                StockAp08Mx05QuestBoardPanel)):
+                                StockMx05LiveAgentListPanel)):
             definition = inventory.selected.package.definition
             occupant_parent_bases[feature.panel_key] = next(
                 b.controller_base for b in definition.custom_buildings
@@ -5922,7 +5926,7 @@ def resolve_controller_registry(
             normalized, panel_dialog_ids, flag_prototypes=flag_prototypes,
             occupant_parent_bases=occupant_parent_bases,
             toggle_parents=toggle_parents,
-            quest_text_ids=quest_text_ids,
+            list_text_ids=list_text_ids,
         )
     except ControllerRegistryError as exc:
         raise ComposeError(f"resolved controller registry is unsafe: {exc}") from exc
@@ -5942,13 +5946,13 @@ def resolve_controller_registry(
         ),
         toggles=tuple(toggles),
         private_texts=tuple(sorted(
-            quest_private_texts, key=lambda item: item.runtime_id
+            list_private_texts, key=lambda item: item.runtime_id
         )),
     )
 
 
 _CONTROLLER_FEATURE_CLASSES = (
-    StockAp08Mx05QuestBoardPanel,
+    StockMx05LiveAgentListPanel,
     StockMx04Mx05OccupantActionPanel,
     StockMx22BuildingOpenToggle,
     StockAp10Ap69SecondaryPanel,
@@ -6003,7 +6007,7 @@ def _qualify_controller_feature(feature: ControllerFeature, qualify) -> Controll
             parent_building=qualify("parent_building", feature.parent_building),
         )
     if isinstance(feature, (StockMx09Ap41RewardPanel, StockMx04Mx05OccupantActionPanel,
-                            StockAp08Mx05QuestBoardPanel)):
+                            StockMx05LiveAgentListPanel)):
         return replace(
             feature,
             panel_key=panel,
@@ -6154,7 +6158,7 @@ def _require_controller_feature_evidence(
         elif isinstance(feature, (
             StockMx09Ap41RewardPanel,
             StockMx04Mx05OccupantActionPanel,
-            StockAp08Mx05QuestBoardPanel,
+            StockMx05LiveAgentListPanel,
         )):
             parent = declared_buildings.get(feature.parent_building)
             if parent is None:
@@ -6206,27 +6210,38 @@ def _require_controller_feature_evidence(
                     _require_occupant_callback_signature(
                         item.text, symbol, symbol == feature.cost_callback_symbol
                     )
-            elif isinstance(feature, StockAp08Mx05QuestBoardPanel):
+            elif isinstance(feature, StockMx05LiveAgentListPanel):
                 if (
                     parent.controller_base,
                     parent.panel_resource_template,
-                ) != ("AP08", "AP08"):
+                ) not in {
+                    ("AP07", "AP10"),
+                    ("AP08", "AP08"),
+                    ("AP10", "AP10"),
+                    ("MX09", "MX09"),
+                }:
                     raise ComposeError(
-                        "quest-board panels use Majesty's stock AP08 quest-"
-                        "building lifecycle and require an AP08/AP08 parent"
+                        "live-agent-list panels require an AP07/AP10, AP08/AP08, "
+                        "AP10/AP10, or MX09/MX09 stock parent lifecycle"
                     )
-                callbacks = (
-                    (feature.offer_count_callback_symbol, ("agent",), "integer"),
+                callbacks = [
+                    (feature.row_count_callback_symbol, ("agent",), "integer"),
+                    (feature.row_agent_id_callback_symbol, ("agent", "integer"), "integer"),
                     (feature.revision_callback_symbol, ("agent",), "integer"),
-                    (feature.offer_reward_callback_symbol, ("agent", "integer"), "integer"),
-                    (feature.refresh_cost_callback_symbol, ("agent",), "integer"),
-                    (feature.refresh_callback_symbol, ("agent",), "boolean"),
-                )
+                    (feature.action_cost_callback_symbol, ("agent",), "integer"),
+                    (feature.action_callback_symbol, ("agent",), "boolean"),
+                ]
+                if feature.row_value_callback_symbol is not None:
+                    callbacks.append((
+                        feature.row_value_callback_symbol,
+                        ("agent", "integer"),
+                        "integer",
+                    ))
                 for symbol, parameters, result_type in callbacks:
                     matches = gpl_functions.get(symbol.casefold(), ())
                     if len(matches) != 1:
                         raise ComposeError(
-                            f"{inventory.selected.alias}: quest-board callback "
+                            f"{inventory.selected.alias}: live-agent-list callback "
                             f"{symbol!r} requires exactly one package-owned GPL "
                             f"function; found {len(matches)}"
                         )
@@ -6237,7 +6252,7 @@ def _require_controller_feature_evidence(
                         if item.kind is DefinitionKind.FUNCTION
                         and item.name.casefold() == symbol.casefold()
                     )
-                    _require_quest_board_callback_signature(
+                    _require_live_agent_list_callback_signature(
                         item.text, symbol, parameters, result_type
                     )
         elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
@@ -6305,13 +6320,13 @@ def _require_occupant_callback_signature(text: str, symbol: str, cost: bool) -> 
         raise ComposeError(f"occupant callback {symbol!r} must use the stock signature {expected}")
 
 
-def _require_quest_board_callback_signature(
+def _require_live_agent_list_callback_signature(
     text: str,
     symbol: str,
     parameter_types: Sequence[str],
     result_type: str,
 ) -> None:
-    """Require the bounded native evaluator ABI used by the quest board."""
+    """Require the bounded native evaluator ABI used by a live-agent list."""
 
     from .gpl import _mask_non_code
 
@@ -6328,7 +6343,7 @@ def _require_quest_board_callback_signature(
     if re.match(pattern, _mask_non_code(text), re.IGNORECASE) is None:
         expected = f"({', '.join(parameter_types)}) is {result_type}"
         raise ComposeError(
-            f"quest-board callback {symbol!r} must use signature {expected}"
+            f"live-agent-list callback {symbol!r} must use signature {expected}"
         )
 
 
@@ -6364,7 +6379,7 @@ def _require_v3_panel_declaration_completeness(
     for feature in controller_features:
         if isinstance(feature, (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
                                 StockMx04Mx05OccupantActionPanel,
-                                StockAp08Mx05QuestBoardPanel)):
+                                StockMx05LiveAgentListPanel)):
             declare(
                 feature.source_dialog_id.encode("ascii"),
                 f"secondary panel {feature.panel_key!r}",
@@ -6848,7 +6863,7 @@ def _controller_record_count(registry: ResolvedControllerRegistry) -> int:
             registry.occupant_action_panels,
             registry.hostile_monster_flags,
             registry.building_open_toggles,
-            registry.quest_boards,
+            registry.live_agent_lists,
         )
     )
 
@@ -7406,7 +7421,7 @@ def _validate_generated_runtime_evidence(
     for panel in (
         *controller_registry.reward_panels,
         *controller_registry.occupant_action_panels,
-        *controller_registry.quest_boards,
+        *controller_registry.live_agent_lists,
     ):
         parent = panel.parent_dialog_id.to_bytes(4, "little")
         child = panel.child_dialog_id.to_bytes(4, "little")
@@ -7435,21 +7450,27 @@ def _validate_generated_runtime_evidence(
                 gpl_function_texts[symbol.casefold()], symbol,
                 symbol == panel.cost_callback_symbol,
             )
-    for panel in controller_registry.quest_boards:
-        callbacks = (
-            (panel.offer_count_callback_symbol, ("agent",), "integer"),
+    for panel in controller_registry.live_agent_lists:
+        callbacks = [
+            (panel.row_count_callback_symbol, ("agent",), "integer"),
+            (panel.row_agent_id_callback_symbol, ("agent", "integer"), "integer"),
             (panel.revision_callback_symbol, ("agent",), "integer"),
-            (panel.offer_reward_callback_symbol, ("agent", "integer"), "integer"),
-            (panel.refresh_cost_callback_symbol, ("agent",), "integer"),
-            (panel.refresh_callback_symbol, ("agent",), "boolean"),
-        )
+            (panel.action_cost_callback_symbol, ("agent",), "integer"),
+            (panel.action_callback_symbol, ("agent",), "boolean"),
+        ]
+        if panel.row_value_callback_symbol is not None:
+            callbacks.append((
+                panel.row_value_callback_symbol,
+                ("agent", "integer"),
+                "integer",
+            ))
         for symbol, parameters, result_type in callbacks:
             if gpl_functions.get(symbol.casefold(), 0) != 1:
                 raise ComposeError(
-                    f"generated quest-board callback {symbol!r} must exist "
+                    f"generated live-agent-list callback {symbol!r} must exist "
                     "exactly once"
                 )
-            _require_quest_board_callback_signature(
+            _require_live_agent_list_callback_signature(
                 gpl_function_texts[symbol.casefold()],
                 symbol,
                 parameters,

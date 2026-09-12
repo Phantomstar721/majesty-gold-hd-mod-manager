@@ -29,7 +29,7 @@ from majesty_cam.gpl_features import (
     StockGplmxPurchaseEquipmentTail,
 )
 from majesty_cam.stock_controller_features import (
-    StockAp08Mx05QuestBoardPanel,
+    StockMx05LiveAgentListPanel,
     StockMx22BuildingOpenToggle,
     StockAp69SovereignTargetAction,
     controller_feature_mapping,
@@ -41,7 +41,7 @@ MOD_ID = "{42ba4603-2b13-446d-a2a4-6cf3a55ddac3}"
 
 
 class PackageTests(unittest.TestCase):
-    def test_definition_v3_parses_bounded_quest_board(self):
+    def test_definition_v3_parses_bounded_live_agent_list(self):
         value = {
             "schema_version": 3,
             "mod_id": MOD_ID,
@@ -53,24 +53,28 @@ class PackageTests(unittest.TestCase):
                 "panel_resource_template": "AP08",
             }],
             "runtime_features": [{
-                "type": "stock.ap08-mx05-quest-list-panel.v4",
+                "type": "stock.mx05-live-agent-list-panel.v1",
                 "panel_key": "quests",
                 "parent_building": "QuestGuild",
                 "source_dialog_id": "QB01",
                 "open_command_id": 29001,
-                "offer_count_callback_symbol": "QB_Count",
+                "row_count_callback_symbol": "QB_Count",
+                "row_agent_id_callback_symbol": "QB_Agent_Id",
                 "revision_callback_symbol": "QB_Revision",
-                "offer_name_text": "Royal Dispatch",
-                "offer_goal_text": "Deliver orders to an allied building",
-                "offer_reward_callback_symbol": "QB_Reward",
-                "refresh_cost_callback_symbol": "QB_Cost",
-                "refresh_callback_symbol": "QB_Refresh",
+                "row_title_text": None,
+                "row_text": "Deliver orders to an allied building",
+                "row_value_callback_symbol": "QB_Reward",
+                "row_value_suffix_text": " Gold",
+                "action_cost_callback_symbol": "QB_Cost",
+                "action_callback_symbol": "QB_Refresh",
             }],
         }
         parsed = parse_mod_definition(value)
         board = parsed.runtime_features[0]
-        self.assertIsInstance(board, StockAp08Mx05QuestBoardPanel)
-        self.assertEqual(board.offer_count_callback_symbol, "QB_Count")
+        self.assertIsInstance(board, StockMx05LiveAgentListPanel)
+        self.assertEqual(board.row_count_callback_symbol, "QB_Count")
+        self.assertEqual(board.row_agent_id_callback_symbol, "QB_Agent_Id")
+        self.assertIsNone(board.row_title_text)
 
     def test_definition_v3_rejects_obsolete_quest_board_agent_contract(self):
         value = {
@@ -84,10 +88,43 @@ class PackageTests(unittest.TestCase):
                 "panel_resource_template": "AP08",
             }],
             "runtime_features": [{
-                "type": "stock.ap08-mx05-quest-list-panel.v2",
+                "type": "stock.ap08-mx05-quest-list-panel.v4",
             }],
         }
         with self.assertRaisesRegex(PackageFormatError, "type is unsupported"):
+            parse_mod_definition(value)
+
+    def test_definition_v3_rejects_obsolete_live_list_agent_field(self):
+        value = {
+            "schema_version": 3,
+            "mod_id": MOD_ID,
+            "internal_name": "ObsoleteLiveList",
+            "display_name": "Obsolete Live List",
+            "custom_buildings": [{
+                "local_name": "ListParent",
+                "controller_base": "AP08",
+                "panel_resource_template": "AP08",
+            }],
+            "runtime_features": [{
+                "type": "stock.mx05-live-agent-list-panel.v1",
+                "panel_key": "offers",
+                "parent_building": "ListParent",
+                "source_dialog_id": "LP01",
+                "open_command_id": 29001,
+                "row_count_callback_symbol": "Rows_Count",
+                "row_agent_callback_symbol": "Rows_Agent",
+                "revision_callback_symbol": "Rows_Revision",
+                "row_title_text": None,
+                "row_text": "Available",
+                "row_value_callback_symbol": None,
+                "row_value_suffix_text": None,
+                "action_cost_callback_symbol": "Rows_Cost",
+                "action_callback_symbol": "Rows_Action",
+            }],
+        }
+        with self.assertRaisesRegex(
+            PackageFormatError, "row_agent_id_callback_symbol"
+        ):
             parse_mod_definition(value)
 
     def test_definition_v3_parses_generic_toggle_and_purchase_tail(self):

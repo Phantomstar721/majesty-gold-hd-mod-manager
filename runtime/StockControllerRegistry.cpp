@@ -562,27 +562,43 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
         parentCommands.insert({item.parentDialogId, item.openCommandId});
         parentCommands.insert({item.parentDialogId, item.closeCommandId});
     }
-    std::set<std::string> questKeys;
-    for (const auto& item : registry.questBoards) {
+    std::set<std::string> listKeys;
+    for (const auto& item : registry.liveAgentLists) {
+        const auto validPrivateTextId = [](std::uint32_t value) {
+            return value == 0 ||
+                (value >= 0x60000000u && value < 0x70000000u);
+        };
+        std::set<std::uint32_t> privateTextIds;
+        for (const auto value : {
+                 item.rowTitleIntentId,
+                 item.rowTextIntentId,
+                 item.rowValueSuffixIntentId}) {
+            if (value != 0 && !privateTextIds.insert(value).second) {
+                return Fail(error, "MMCR live-agent-list private text ID is duplicated");
+            }
+        }
         if (panels.count(item.panelKey) || rewardPanelKeys.count(item.panelKey) ||
-            occupantKeys.count(item.panelKey) || !questKeys.insert(item.panelKey).second ||
+            occupantKeys.count(item.panelKey) || !listKeys.insert(item.panelKey).second ||
             !childDialogs.insert(item.childDialogId).second ||
             !parentCommands.insert({item.parentDialogId, item.openCommandId}).second ||
-            !callbacks.insert(FoldAsciiCase(item.offerCountCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.rowCountCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.rowAgentIdCallbackSymbol)).second ||
             !callbacks.insert(FoldAsciiCase(item.revisionCallbackSymbol)).second ||
-            !callbacks.insert(FoldAsciiCase(item.offerRewardCallbackSymbol)).second ||
-            !callbacks.insert(FoldAsciiCase(item.refreshCostCallbackSymbol)).second ||
-            !callbacks.insert(FoldAsciiCase(item.refreshCallbackSymbol)).second ||
-            item.offerNameIntentId < 0x60000000u ||
-            item.offerNameIntentId >= 0x70000000u ||
-            item.offerGoalIntentId < 0x60000000u ||
-            item.offerGoalIntentId >= 0x70000000u ||
-            item.offerNameIntentId == item.offerGoalIntentId)
-            return Fail(error, "MMCR quest-board identity is duplicated");
+            (item.hasRowValue &&
+             !callbacks.insert(FoldAsciiCase(item.rowValueCallbackSymbol)).second) ||
+            !callbacks.insert(FoldAsciiCase(item.actionCostCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.actionCallbackSymbol)).second ||
+            !validPrivateTextId(item.rowTitleIntentId) ||
+            !validPrivateTextId(item.rowTextIntentId) ||
+            !validPrivateTextId(item.rowValueSuffixIntentId) ||
+            item.hasRowValue != (item.rowValueSuffixIntentId != 0) ||
+            (!item.hasRowValue && !item.rowValueCallbackSymbol.empty()) ||
+            (item.hasRowValue && item.rowValueCallbackSymbol.empty()))
+            return Fail(error, "MMCR live-agent-list identity is duplicated or invalid");
         parentDialogs.insert(item.parentDialogId);
         const auto prior = parentBases.find(item.parentDialogId);
         if (prior != parentBases.end() && prior->second != item.parentControllerBase)
-            return Fail(error, "MMCR quest-board parent controller conflicts");
+            return Fail(error, "MMCR live-agent-list parent controller conflicts");
         parentBases[item.parentDialogId] = item.parentControllerBase;
     }
     for (const auto child : childDialogs) {
@@ -594,7 +610,7 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
 }  // namespace
 
 void Registry::Clear() {
-    questBoards.clear();
+    liveAgentLists.clear();
     buildingOpenToggles.clear();
     occupantActionPanels.clear();
     panels.clear();
@@ -747,22 +763,22 @@ const OccupantActionPanelRecord* Registry::FindOccupantPanelByCommand(std::uint3
     return nullptr;
 }
 
-const QuestBoardRecord* Registry::FindQuestBoardByChild(std::uint32_t id) const {
-    for (const auto& item : questBoards) {
+const LiveAgentListRecord* Registry::FindLiveAgentListByChild(std::uint32_t id) const {
+    for (const auto& item : liveAgentLists) {
         if (item.childDialogId == id) return &item;
     }
     return nullptr;
 }
 
-const QuestBoardRecord* Registry::FindQuestBoardByParent(std::uint32_t id) const {
-    for (const auto& item : questBoards) {
+const LiveAgentListRecord* Registry::FindLiveAgentListByParent(std::uint32_t id) const {
+    for (const auto& item : liveAgentLists) {
         if (item.parentDialogId == id) return &item;
     }
     return nullptr;
 }
 
-const QuestBoardRecord* Registry::FindQuestBoardByCommand(std::uint32_t id) const {
-    for (const auto& item : questBoards) {
+const LiveAgentListRecord* Registry::FindLiveAgentListByCommand(std::uint32_t id) const {
+    for (const auto& item : liveAgentLists) {
         if (item.actionCommandId == id) return &item;
     }
     return nullptr;
@@ -809,7 +825,8 @@ bool ParseRegistry(
     if (version == 7) return Fail(error, "MMCR v7 quest rows use unsupported GPL agent/boolean return contracts; rebuild with the current Manager");
     if (version == 8) return Fail(error, "MMCR v8 quest rows use unsupported GPL string return contracts; rebuild with the current Manager");
     if (version == 9) return Fail(error, "MMCR v9 quest boards contain a non-stock duplicate Refresh row; rebuild with the current Manager");
-    if (version == 10 && counts[11] == 0) return Fail(error, "MMCR v10 without quest lists is noncanonical");
+    if (version == 10) return Fail(error, "MMCR v10 one-row quest lists are unsupported; rebuild with the current Manager");
+    if (version == 11 && counts[11] == 0) return Fail(error, "MMCR v11 without live-agent lists is noncanonical");
     std::uint64_t total = 0;
     for (std::size_t index = 0; index < 12; ++index) total += counts[index];
     if (total > kMaximumRecordCount ||
@@ -829,7 +846,7 @@ bool ParseRegistry(
     parsed.hostileMonsterFlags.reserve(counts[8]);
     parsed.occupantActionPanels.reserve(counts[9]);
     parsed.buildingOpenToggles.reserve(counts[10]);
-    parsed.questBoards.reserve(counts[11]);
+    parsed.liveAgentLists.reserve(counts[11]);
 
     for (std::uint32_t index = 0; index < counts[0]; ++index) {
         SecondaryPanelRecord item = {};
@@ -1143,29 +1160,42 @@ bool ParseRegistry(
         parsed.buildingOpenToggles.push_back(std::move(item));
     }
     for (std::uint32_t index = 0; index < counts[11]; ++index) {
-        QuestBoardRecord item = {};
+        LiveAgentListRecord item = {};
+        std::uint32_t hasRowValue = 0;
         if (!reader.ReadLogical(&item.panelKey) ||
             !reader.ReadU32(&item.parentDialogId) || !reader.ReadU32(&item.childDialogId) ||
             !reader.ReadU32(&item.openCommandId))
-            return Fail(error, "MMCR quest-board header is truncated");
+            return Fail(error, "MMCR live-agent-list header is truncated");
         if (!reader.ReadU32(&item.actionCommandId))
-            return Fail(error, "MMCR quest-board action command is truncated");
-        if (!reader.ReadSymbol(&item.offerCountCallbackSymbol) ||
+            return Fail(error, "MMCR live-agent-list action command is truncated");
+        if (!reader.ReadSymbol(&item.rowCountCallbackSymbol) ||
+            !reader.ReadSymbol(&item.rowAgentIdCallbackSymbol) ||
             !reader.ReadSymbol(&item.revisionCallbackSymbol) ||
-            !reader.ReadU32(&item.offerNameIntentId) ||
-            !reader.ReadU32(&item.offerGoalIntentId) ||
-            !reader.ReadSymbol(&item.offerRewardCallbackSymbol) ||
-            !reader.ReadSymbol(&item.refreshCostCallbackSymbol) ||
-            !reader.ReadSymbol(&item.refreshCallbackSymbol) ||
+            !reader.ReadU32(&item.rowTitleIntentId) ||
+            !reader.ReadU32(&item.rowTextIntentId) ||
+            !reader.ReadU32(&hasRowValue))
+            return Fail(error, "MMCR live-agent-list presentation is truncated");
+        if (hasRowValue > 1)
+            return Fail(error, "MMCR live-agent-list value marker is invalid");
+        item.hasRowValue = hasRowValue != 0;
+        if (item.hasRowValue &&
+            (!reader.ReadSymbol(&item.rowValueCallbackSymbol) ||
+             !reader.ReadU32(&item.rowValueSuffixIntentId)))
+            return Fail(error, "MMCR live-agent-list value is truncated");
+        if (!reader.ReadSymbol(&item.actionCostCallbackSymbol) ||
+            !reader.ReadSymbol(&item.actionCallbackSymbol) ||
             !reader.ReadU32(&item.parentControllerBase) || !IsPrintableFourCC(item.parentDialogId) ||
             !IsPrintableFourCC(item.childDialogId) || item.openCommandId == 0 ||
-            item.parentControllerBase != 0x38305041u)
-            return Fail(error, "MMCR quest-board record is invalid");
+            (item.parentControllerBase != 0x37305041u &&
+             item.parentControllerBase != 0x38305041u &&
+             item.parentControllerBase != 0x30315041u &&
+             item.parentControllerBase != 0x3930584Du))
+            return Fail(error, "MMCR live-agent-list record is invalid");
         const std::uint32_t commandId = 0x20000u + index;
         if (item.actionCommandId != commandId ||
-            (!parsed.questBoards.empty() && parsed.questBoards.back().panelKey >= item.panelKey))
-            return Fail(error, "MMCR quest-board record is noncanonical");
-        parsed.questBoards.push_back(std::move(item));
+            (!parsed.liveAgentLists.empty() && parsed.liveAgentLists.back().panelKey >= item.panelKey))
+            return Fail(error, "MMCR live-agent-list record is noncanonical");
+        parsed.liveAgentLists.push_back(std::move(item));
     }
     if (reader.cursor() != size) return Fail(error, "MMCR registry contains trailing bytes");
     if (!ValidateComposition(parsed, error)) return false;

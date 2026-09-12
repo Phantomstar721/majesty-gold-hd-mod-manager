@@ -28,7 +28,7 @@ from .stock_controller_features import (
     MAX_SECONDARY_PANELS,
     ControllerFeature,
     ControllerFeatureError,
-    StockAp08Mx05QuestBoardPanel,
+    StockMx05LiveAgentListPanel,
     StockAp10Ap69SecondaryPanel,
     StockAp41Fl00HostileMonsterFlag,
     StockMx09Ap41RewardPanel,
@@ -46,7 +46,7 @@ from .stock_controller_features import (
 
 
 CONTROLLER_REGISTRY_MAGIC = b"MMCR"
-CONTROLLER_REGISTRY_VERSION = 10
+CONTROLLER_REGISTRY_VERSION = 11
 STOCK_CONTROLLER_RUNTIME_CAPABILITY = "stock.controller-recipes.v1"
 CONTROLLER_REGISTRY_ENVIRONMENT = "MAJESTY_MOD_MANAGER_CONTROLLERS"
 CONTROLLER_REGISTRY_RELATIVE_PATH = Path(
@@ -57,7 +57,7 @@ MAX_CONTROLLER_REGISTRY_BYTES = 512 * 1024
 _HEADER = struct.Struct("<4s10I")
 _OCCUPANT_HEADER = struct.Struct("<4s11I")
 _TOGGLE_HEADER = struct.Struct("<4s12I")
-_QUEST_HEADER = struct.Struct("<4s13I")
+_LIST_HEADER = struct.Struct("<4s13I")
 _U32 = struct.Struct("<I")
 _SECTIONS: Tuple[Type[ControllerFeature], ...] = (
     StockAp10Ap69SecondaryPanel,
@@ -71,7 +71,7 @@ _SECTIONS: Tuple[Type[ControllerFeature], ...] = (
     StockAp41Fl00HostileMonsterFlag,
     StockMx04Mx05OccupantActionPanel,
     StockMx22BuildingOpenToggle,
-    StockAp08Mx05QuestBoardPanel,
+    StockMx05LiveAgentListPanel,
 )
 
 
@@ -120,20 +120,22 @@ class ResolvedBuildingOpenToggleRecord:
 
 
 @dataclass(frozen=True)
-class ResolvedQuestBoardRecord:
+class ResolvedLiveAgentListRecord:
     panel_key: str
     parent_dialog_id: int
     child_dialog_id: int
     open_command_id: int
     action_command_id: int
-    offer_count_callback_symbol: str
+    row_count_callback_symbol: str
+    row_agent_id_callback_symbol: str
     revision_callback_symbol: str
-    offer_name_intent_id: int
-    offer_goal_intent_id: int
-    offer_reward_callback_symbol: str
-    refresh_cost_callback_symbol: str
-    refresh_callback_symbol: str
-    parent_controller_base: str = "AP08"
+    row_title_intent_id: int
+    row_text_intent_id: int
+    row_value_callback_symbol: Optional[str]
+    row_value_suffix_intent_id: int
+    action_cost_callback_symbol: str
+    action_callback_symbol: str
+    parent_controller_base: str
 
 
 @dataclass(frozen=True)
@@ -173,7 +175,7 @@ class ResolvedControllerRegistry:
     hostile_monster_flags: Tuple[ResolvedHostileMonsterFlagRecord, ...] = ()
     occupant_action_panels: Tuple[ResolvedOccupantActionPanelRecord, ...] = ()
     building_open_toggles: Tuple[ResolvedBuildingOpenToggleRecord, ...] = ()
-    quest_boards: Tuple[ResolvedQuestBoardRecord, ...] = ()
+    live_agent_lists: Tuple[ResolvedLiveAgentListRecord, ...] = ()
 
 
 def resolve_stock_controller_registry(
@@ -183,7 +185,7 @@ def resolve_stock_controller_registry(
     flag_prototypes: Mapping[str, str] | None = None,
     occupant_parent_bases: Mapping[str, str] | None = None,
     toggle_parents: Mapping[str, Tuple[int, str]] | None = None,
-    quest_text_ids: Mapping[str, Tuple[int, int]] | None = None,
+    list_text_ids: Mapping[str, Tuple[int, int, int]] | None = None,
 ) -> ResolvedControllerRegistry:
     """Resolve author records to explicit parent/child dialog IDs.
 
@@ -199,7 +201,7 @@ def resolve_stock_controller_registry(
         raise ControllerRegistryError(str(exc)) from exc
     panel_features = tuple(item for item in features if isinstance(
         item, (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
-               StockMx04Mx05OccupantActionPanel, StockAp08Mx05QuestBoardPanel)
+               StockMx04Mx05OccupantActionPanel, StockMx05LiveAgentListPanel)
     ))
     expected = {item.panel_key for item in panel_features}
     if set(panel_dialog_ids) != expected:
@@ -209,8 +211,18 @@ def resolve_stock_controller_registry(
     panels = []
     reward_panels = []
     occupant_panels = []
-    quest_boards = []
-    resolved_quest_text_ids = {} if quest_text_ids is None else dict(quest_text_ids)
+    live_agent_lists = []
+    resolved_list_text_ids = {} if list_text_ids is None else dict(list_text_ids)
+    expected_list_text_keys = {
+        item.panel_key
+        for item in panel_features
+        if isinstance(item, StockMx05LiveAgentListPanel)
+    }
+    if set(resolved_list_text_ids) != expected_list_text_keys:
+        raise ControllerRegistryError(
+            "resolved list text mapping must contain exactly every "
+            "live-agent-list panel_key"
+        )
     for item in panel_features:
         value = panel_dialog_ids[item.panel_key]
         if not isinstance(value, tuple) or len(value) != 2:
@@ -232,27 +244,41 @@ def resolve_stock_controller_registry(
                 item.action_callback_symbol,
                 (occupant_parent_bases or {}).get(item.panel_key, "AP10"),
             ))
-        elif isinstance(item, StockAp08Mx05QuestBoardPanel):
-            text_ids = resolved_quest_text_ids.get(item.panel_key)
+        elif isinstance(item, StockMx05LiveAgentListPanel):
+            text_ids = resolved_list_text_ids.get(item.panel_key)
             if (
                 not isinstance(text_ids, tuple)
-                or len(text_ids) != 2
+                or len(text_ids) != 3
                 or any(
                     type(value) is not int
-                    or not 0x60000000 <= value < 0x70000000
+                    or (value != 0 and not 0x60000000 <= value < 0x70000000)
                     for value in text_ids
                 )
             ):
                 raise ControllerRegistryError(
-                    "quest-board panels require two manager-owned private text IDs"
+                    "live-agent lists require canonical optional private text IDs"
                 )
-            command_id = 0x20000 + len(quest_boards)
-            quest_boards.append(ResolvedQuestBoardRecord(
+            if (
+                (item.row_title_text is None) != (text_ids[0] == 0)
+                or (item.row_text is None) != (text_ids[1] == 0)
+                or (item.row_value_suffix_text is None) != (text_ids[2] == 0)
+            ):
+                raise ControllerRegistryError(
+                    "live-agent list private text IDs do not match its optional text fields"
+                )
+            nonzero_ids = tuple(value for value in text_ids if value != 0)
+            if len(nonzero_ids) != len(set(nonzero_ids)):
+                raise ControllerRegistryError(
+                    "live-agent list private text IDs are duplicated"
+                )
+            command_id = 0x20000 + len(live_agent_lists)
+            live_agent_lists.append(ResolvedLiveAgentListRecord(
                 item.panel_key, parent, child, item.open_command_id,
-                command_id, item.offer_count_callback_symbol,
-                item.revision_callback_symbol, text_ids[0], text_ids[1],
-                item.offer_reward_callback_symbol,
-                item.refresh_cost_callback_symbol, item.refresh_callback_symbol,
+                command_id, item.row_count_callback_symbol,
+                item.row_agent_id_callback_symbol, item.revision_callback_symbol,
+                text_ids[0], text_ids[1], item.row_value_callback_symbol,
+                text_ids[2], item.action_cost_callback_symbol,
+                item.action_callback_symbol,
                 (occupant_parent_bases or {}).get(item.panel_key, "AP08"),
             ))
         else:
@@ -322,7 +348,7 @@ def resolve_stock_controller_registry(
         hostile_monster_flags=flags,
         occupant_action_panels=tuple(occupant_panels),
         building_open_toggles=tuple(toggles),
-        quest_boards=tuple(quest_boards),
+        live_agent_lists=tuple(live_agent_lists),
     ))
 
 
@@ -410,7 +436,7 @@ class _Reader:
 
 
 def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> bytes:
-    """Encode canonical recipes as MMCR v2/v3/v4/v10 as features require."""
+    """Encode canonical recipes as MMCR v2/v3/v4/v11 as features require."""
 
     try:
         registry = _validate_resolved_registry(registry)
@@ -431,13 +457,13 @@ def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> by
     )
     counts = tuple(len(section) for section in sections)
     writer = _Writer()
-    if registry.quest_boards:
+    if registry.live_agent_lists:
         sections += (registry.occupant_action_panels, registry.building_open_toggles,
-                     registry.quest_boards)
-        writer.data += _QUEST_HEADER.pack(
+                     registry.live_agent_lists)
+        writer.data += _LIST_HEADER.pack(
             CONTROLLER_REGISTRY_MAGIC, CONTROLLER_REGISTRY_VERSION, *counts,
             len(registry.occupant_action_panels),
-            len(registry.building_open_toggles), len(registry.quest_boards),
+            len(registry.building_open_toggles), len(registry.live_agent_lists),
         )
     elif registry.building_open_toggles:
         sections += (registry.occupant_action_panels, registry.building_open_toggles)
@@ -465,7 +491,7 @@ def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> by
 
 
 def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegistry:
-    """Decode canonical MMCR v2/v3/v4/v10 registries."""
+    """Decode canonical MMCR v2/v3/v4/v11 registries."""
 
     if not isinstance(payload, bytes):
         raise ControllerRegistryError("MMCR registry must be bytes")
@@ -498,11 +524,15 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
             "rebuild with the current Manager"
         )
     if version == 10:
-        if len(payload) < _QUEST_HEADER.size:
-            raise ControllerRegistryError("MMCR v10 header is truncated")
-        magic, version, *counts = _QUEST_HEADER.unpack_from(payload)
+        raise ControllerRegistryError(
+            "MMCR v10 one-row quest lists are unsupported; rebuild with the current Manager"
+        )
+    if version == 11:
+        if len(payload) < _LIST_HEADER.size:
+            raise ControllerRegistryError("MMCR v11 header is truncated")
+        magic, version, *counts = _LIST_HEADER.unpack_from(payload)
         if counts[11] == 0:
-            raise ControllerRegistryError("MMCR v10 without quest lists is noncanonical")
+            raise ControllerRegistryError("MMCR v11 without live-agent lists is noncanonical")
     elif version == 4:
         if len(payload) < _TOGGLE_HEADER.size:
             raise ControllerRegistryError("MMCR v4 header is truncated")
@@ -525,8 +555,8 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
         raise ControllerRegistryError("MMCR panel count is outside bounds")
 
     reader = _Reader(payload)
-    if version == 10:
-        reader.cursor = _QUEST_HEADER.size
+    if version == 11:
+        reader.cursor = _LIST_HEADER.size
     elif version == 4:
         reader.cursor = _TOGGLE_HEADER.size
     elif version == 3:
@@ -684,23 +714,25 @@ def _encode_feature(writer: _Writer, feature: object) -> None:
         writer.u32(feature.open_command_id)
         writer.u32(feature.close_command_id)
         writer.fourcc(feature.parent_controller_base)
-    elif isinstance(feature, ResolvedQuestBoardRecord):
+    elif isinstance(feature, ResolvedLiveAgentListRecord):
         writer.u32(feature.parent_dialog_id)
         writer.u32(feature.child_dialog_id)
         writer.u32(feature.open_command_id)
         writer.u32(feature.action_command_id)
         for symbol in (
-            feature.offer_count_callback_symbol, feature.revision_callback_symbol,
+            feature.row_count_callback_symbol,
+            feature.row_agent_id_callback_symbol,
+            feature.revision_callback_symbol,
         ):
             writer.symbol(symbol)
-        writer.u32(feature.offer_name_intent_id)
-        writer.u32(feature.offer_goal_intent_id)
-        for symbol in (
-            feature.offer_reward_callback_symbol,
-            feature.refresh_cost_callback_symbol,
-            feature.refresh_callback_symbol,
-        ):
-            writer.symbol(symbol)
+        writer.u32(feature.row_title_intent_id)
+        writer.u32(feature.row_text_intent_id)
+        writer.u32(1 if feature.row_value_callback_symbol is not None else 0)
+        if feature.row_value_callback_symbol is not None:
+            writer.symbol(feature.row_value_callback_symbol)
+            writer.u32(feature.row_value_suffix_intent_id)
+        writer.symbol(feature.action_cost_callback_symbol)
+        writer.symbol(feature.action_callback_symbol)
         writer.fourcc(feature.parent_controller_base)
     elif isinstance(feature, ResolvedHostileMonsterFlagRecord):
         writer.logical(feature.action_key)
@@ -731,18 +763,33 @@ def _decode_feature(reader: _Reader, kind: Type[ControllerFeature]) -> object:
             reader.u32("open_command_id"), reader.u32("close_command_id"),
             reader.fourcc("parent_controller_base"),
         )
-    if kind is StockAp08Mx05QuestBoardPanel:
+    if kind is StockMx05LiveAgentListPanel:
         parent = reader.u32("parent_dialog_id")
         child = reader.u32("child_dialog_id")
         opened = reader.u32("open_command_id")
         action_command = reader.u32("action_command_id")
-        leading_symbols = [reader.symbol("quest-list callback") for _ in range(2)]
-        text_ids = [reader.u32("quest-list private text ID") for _ in range(2)]
-        trailing_symbols = [reader.symbol("quest-list callback") for _ in range(3)]
-        return ResolvedQuestBoardRecord(
+        row_count = reader.symbol("live-agent-list row-count callback")
+        row_agent = reader.symbol("live-agent-list row-agent callback")
+        revision = reader.symbol("live-agent-list revision callback")
+        title_id = reader.u32("live-agent-list row title text ID")
+        text_id = reader.u32("live-agent-list row text ID")
+        has_value = reader.u32("live-agent-list value marker")
+        if has_value not in (0, 1):
+            raise ControllerRegistryError(
+                "MMCR live-agent-list value marker is invalid"
+            )
+        value_callback = (
+            reader.symbol("live-agent-list value callback") if has_value else None
+        )
+        value_suffix_id = (
+            reader.u32("live-agent-list value suffix text ID") if has_value else 0
+        )
+        return ResolvedLiveAgentListRecord(
             panel, parent, child, opened, action_command,
-            *leading_symbols, *text_ids,
-            *trailing_symbols,
+            row_count, row_agent, revision, title_id, text_id,
+            value_callback, value_suffix_id,
+            reader.symbol("live-agent-list action cost callback"),
+            reader.symbol("live-agent-list action callback"),
             reader.fourcc("parent_controller_base"),
         )
     if kind is StockAp10Ap69SecondaryPanel:
@@ -840,14 +887,14 @@ def _validate_resolved_registry(
         registry.reward_panels, registry.hostile_monster_flags,
         registry.occupant_action_panels,
         registry.building_open_toggles,
-        registry.quest_boards,
+        registry.live_agent_lists,
     )
     if any(not isinstance(section, tuple) for section in sections):
         raise ControllerRegistryError("MMCR resolved registry sections must be tuples")
     if sum(len(section) for section in sections) > MAX_CONTROLLER_FEATURES:
         raise ControllerRegistryError("MMCR record count is outside bounds")
     if (len(registry.panels) + len(registry.reward_panels) +
-            len(registry.occupant_action_panels) + len(registry.quest_boards)) > MAX_SECONDARY_PANELS:
+            len(registry.occupant_action_panels) + len(registry.live_agent_lists)) > MAX_SECONDARY_PANELS:
         raise ControllerRegistryError("MMCR panel count is outside bounds")
 
     panels = {}
@@ -944,44 +991,55 @@ def _validate_resolved_registry(
             _unpack_fourcc(item.child_dialog_id), item.open_command_id,
             item.cost_callback_symbol, item.action_callback_symbol,
         ))
-    quest_by_key = {}
-    for index, item in enumerate(sorted(registry.quest_boards, key=lambda p: p.panel_key)):
-        if not isinstance(item, ResolvedQuestBoardRecord):
-            raise ControllerRegistryError("MMCR quest-board record type is invalid")
-        if item.panel_key in panels or item.panel_key in reward_panel_by_key or item.panel_key in occupant_by_key or item.panel_key in quest_by_key:
+    list_by_key = {}
+    for index, item in enumerate(sorted(registry.live_agent_lists, key=lambda p: p.panel_key)):
+        if not isinstance(item, ResolvedLiveAgentListRecord):
+            raise ControllerRegistryError("MMCR live-agent-list record type is invalid")
+        if item.panel_key in panels or item.panel_key in reward_panel_by_key or item.panel_key in occupant_by_key or item.panel_key in list_by_key:
             raise ControllerRegistryError("MMCR panel_key is duplicated")
         _resolved_dialog_id(item.parent_dialog_id, "parent_dialog_id")
         _resolved_dialog_id(item.child_dialog_id, "child_dialog_id")
         parent_command = (item.parent_dialog_id, item.open_command_id)
         if item.child_dialog_id in child_dialogs or parent_command in parent_commands:
-            raise ControllerRegistryError("MMCR quest-board panel identity is duplicated")
+            raise ControllerRegistryError("MMCR live-agent-list panel identity is duplicated")
         expected_command = 0x20000 + index
         if item.action_command_id != expected_command:
-            raise ControllerRegistryError("MMCR quest-board action command is not manager-allocated")
-        if item.parent_controller_base != "AP08":
+            raise ControllerRegistryError("MMCR live-agent-list action command is not manager-allocated")
+        if item.parent_controller_base not in ("AP07", "AP08", "AP10", "MX09"):
             raise ControllerRegistryError(
-                "MMCR quest-board parent controller base must be AP08"
+                "MMCR live-agent-list parent controller base is unsupported"
             )
-        if not all(
-            0x60000000 <= value < 0x70000000
-            for value in (
-                item.offer_name_intent_id,
-                item.offer_goal_intent_id,
-            )
-        ) or item.offer_name_intent_id == item.offer_goal_intent_id:
+        optional_text_ids = (
+            item.row_title_intent_id,
+            item.row_text_intent_id,
+            item.row_value_suffix_intent_id,
+        )
+        if any(
+            value != 0 and not 0x60000000 <= value < 0x70000000
+            for value in optional_text_ids
+        ) or len(tuple(value for value in optional_text_ids if value)) != len({
+            value for value in optional_text_ids if value
+        }):
             raise ControllerRegistryError(
-                "MMCR quest-board private text IDs are invalid or duplicated"
+                "MMCR live-agent-list private text IDs are invalid or duplicated"
+            )
+        if (item.row_value_callback_symbol is None) != (item.row_value_suffix_intent_id == 0):
+            raise ControllerRegistryError(
+                "MMCR live-agent-list optional value fields are inconsistent"
             )
         child_dialogs.add(item.child_dialog_id)
         parent_commands.add(parent_command)
-        quest_by_key[item.panel_key] = item
-        author_features.append(StockAp08Mx05QuestBoardPanel(
+        list_by_key[item.panel_key] = item
+        author_features.append(StockMx05LiveAgentListPanel(
             item.panel_key, _resolved_parent_key(item.parent_dialog_id),
             _unpack_fourcc(item.child_dialog_id), item.open_command_id,
-            item.offer_count_callback_symbol, item.revision_callback_symbol,
-            "Manager quest name", "Manager quest goal",
-            item.offer_reward_callback_symbol,
-            item.refresh_cost_callback_symbol, item.refresh_callback_symbol,
+            item.row_count_callback_symbol, item.row_agent_id_callback_symbol,
+            item.revision_callback_symbol,
+            "Manager row title" if item.row_title_intent_id else None,
+            "Manager row text" if item.row_text_intent_id else None,
+            item.row_value_callback_symbol,
+            " units" if item.row_value_suffix_intent_id else None,
+            item.action_cost_callback_symbol, item.action_callback_symbol,
         ))
     toggle_by_key = {}
     toggle_commands = set()
@@ -992,7 +1050,7 @@ def _validate_resolved_registry(
         **{item.parent_dialog_id: item.parent_controller_base
            for item in registry.occupant_action_panels},
         **{item.parent_dialog_id: item.parent_controller_base
-           for item in registry.quest_boards},
+           for item in registry.live_agent_lists},
     }
     for item in registry.building_open_toggles:
         if not isinstance(item, ResolvedBuildingOpenToggleRecord):
@@ -1046,7 +1104,7 @@ def _validate_resolved_registry(
     normalized = normalize_controller_features(author_features)
     parent_ids = {item.parent_dialog_id for item in (
         *registry.panels, *registry.reward_panels, *registry.occupant_action_panels,
-        *registry.quest_boards,
+        *registry.live_agent_lists,
     )}
     if parent_ids & child_dialogs:
         raise ControllerRegistryError("MMCR child dialog collides with a parent dialog")
@@ -1089,9 +1147,9 @@ def _validate_resolved_registry(
             toggle_by_key[item.toggle_key] for item in normalized
             if isinstance(item, StockMx22BuildingOpenToggle)
         ),
-        quest_boards=tuple(
-            quest_by_key[item.panel_key] for item in normalized
-            if isinstance(item, StockAp08Mx05QuestBoardPanel)
+        live_agent_lists=tuple(
+            list_by_key[item.panel_key] for item in normalized
+            if isinstance(item, StockMx05LiveAgentListPanel)
         ),
     )
 

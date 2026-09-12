@@ -158,7 +158,7 @@ def launch_majesty(
             prepared_controllers.occupant_action_panels,
             prepared_controllers.hostile_monster_flags,
             prepared_controllers.building_open_toggles,
-            prepared_controllers.quest_boards,
+            prepared_controllers.live_agent_lists,
         )
     )
     if legacy_runtime_features(prepared_capabilities) or (

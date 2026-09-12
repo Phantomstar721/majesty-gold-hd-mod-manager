@@ -9,14 +9,14 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from majesty_cam.compose import (
     ComposeError, _require_occupant_callback_signature,
-    _require_quest_board_callback_signature,
-    _validate_mx05_quest_refresh_panel, _split_smnu_records,
+    _require_live_agent_list_callback_signature,
+    _validate_mx05_live_agent_list_panel, _split_smnu_records,
     _validate_controller_panel_controls, resolve_controller_registry,
 )
 from majesty_cam.cam import CamEntry
 from majesty_cam.strt import StrtRecord, StrtTable
 from majesty_cam.stock_controller_features import (
-    ControllerFeatureError, StockAp08Mx05QuestBoardPanel,
+    ControllerFeatureError, StockMx05LiveAgentListPanel,
     StockMx04Mx05OccupantActionPanel,
     normalize_controller_features, parse_controller_feature, controller_feature_mapping,
     legacy_alchemist_controller_features,
@@ -35,18 +35,20 @@ CONTROLS = (
 
 
 def quest_feature():
-    return StockAp08Mx05QuestBoardPanel(
+    return StockMx05LiveAgentListPanel(
         panel_key="quests",
         parent_building="AdventurerGuild",
         source_dialog_id="QB01",
         open_command_id=0x7101,
-        offer_count_callback_symbol="Quest_Count",
+        row_count_callback_symbol="Quest_Count",
+        row_agent_id_callback_symbol="Quest_Agent_Id",
         revision_callback_symbol="Quest_Revision",
-        offer_name_text="Royal Dispatch",
-        offer_goal_text="Deliver orders",
-        offer_reward_callback_symbol="Quest_Reward",
-        refresh_cost_callback_symbol="Quest_RefreshCost",
-        refresh_callback_symbol="Quest_Refresh",
+        row_title_text=None,
+        row_text="Deliver orders",
+        row_value_callback_symbol="Quest_Reward",
+        row_value_suffix_text=" Gold",
+        action_cost_callback_symbol="Quest_RefreshCost",
+        action_callback_symbol="Quest_Refresh",
     )
 
 
@@ -57,7 +59,7 @@ def feature(key="visitors", parent="Stable", source="P001", symbol="Stable"):
 
 
 class OccupantPanelTests(unittest.TestCase):
-    def test_quest_board_requires_exact_single_stock_mx05_refresh_row(self):
+    def test_live_agent_list_requires_exact_stock_mx05_action_row(self):
         def record(size, rectangle, control_offset, control_id):
             value = bytearray(size)
             struct.pack_into("<4I", value, 8, *rectangle)
@@ -82,7 +84,7 @@ class OccupantPanelTests(unittest.TestCase):
             records=(StrtRecord(string_id=0, text=b"REFRESH"),),
         ).to_bytes()
         with patch("majesty_cam.compose._require_cam_entry", return_value=stock_entry):
-            _validate_mx05_quest_refresh_panel(
+            _validate_mx05_live_agent_list_panel(
                 Path("."), source, labels,
                 owner="test", label="QB01",
             )
@@ -93,7 +95,7 @@ class OccupantPanelTests(unittest.TestCase):
         moved[0] = bytes(moved_list)
         with patch("majesty_cam.compose._require_cam_entry", return_value=stock_entry):
             with self.assertRaisesRegex(ComposeError, "exact stock MX05"):
-                _validate_mx05_quest_refresh_panel(
+                _validate_mx05_live_agent_list_panel(
                     Path("."), b"".join(moved), labels,
                     owner="test", label="QB01",
                 )
@@ -103,7 +105,7 @@ class OccupantPanelTests(unittest.TestCase):
         )
         with patch("majesty_cam.compose._require_cam_entry", return_value=stock_entry):
             with self.assertRaisesRegex(ComposeError, "exact record count"):
-                _validate_mx05_quest_refresh_panel(
+                _validate_mx05_live_agent_list_panel(
                     Path("."), duplicate, labels,
                     owner="test", label="QB01",
                 )
@@ -115,6 +117,28 @@ class OccupantPanelTests(unittest.TestCase):
         bad["dll"] = "unsafe.dll"
         with self.assertRaises(ControllerFeatureError):
             parse_controller_feature(bad)
+
+    def test_live_agent_list_value_is_optional_but_paired(self):
+        without_value = replace(
+            quest_feature(),
+            row_value_callback_symbol=None,
+            row_value_suffix_text=None,
+        )
+        self.assertEqual(
+            normalize_controller_features((without_value,)),
+            (without_value,),
+        )
+        with self.assertRaisesRegex(ControllerFeatureError, "both be present"):
+            normalize_controller_features((replace(
+                without_value,
+                row_value_callback_symbol="Quest_Reward",
+            ),))
+        with self.assertRaisesRegex(ControllerFeatureError, "customize at least"):
+            normalize_controller_features((replace(
+                without_value,
+                row_title_text=None,
+                row_text=None,
+            ),))
 
     def test_v3_round_trip_and_order_independence(self):
         items = (feature(), feature("animals", "Menagerie", "P002", "Menagerie"))
@@ -168,16 +192,16 @@ class OccupantPanelTests(unittest.TestCase):
             with self.assertRaises(ComposeError):
                 _require_occupant_callback_signature(text, symbol, cost)
 
-    def test_quest_board_scalar_callback_signatures(self):
-        _require_quest_board_callback_signature(
+    def test_live_agent_list_callback_signatures(self):
+        _require_live_agent_list_callback_signature(
             "Function OfferReward(agent g, integer row) is integer begin return 500; end",
             "OfferReward", ("agent", "integer"), "integer",
         )
-        _require_quest_board_callback_signature(
+        _require_live_agent_list_callback_signature(
             "Function OfferCount(agent g) is integer begin return 1; end",
             "OfferCount", ("agent",), "integer",
         )
-        _require_quest_board_callback_signature(
+        _require_live_agent_list_callback_signature(
             "Function CanRefresh(agent g) is integer begin return 0; end",
             "CanRefresh", ("agent",), "integer",
         )
@@ -186,7 +210,7 @@ class OccupantPanelTests(unittest.TestCase):
             "Function OfferReward(agent g, integer row) is string begin return \"bad\"; end",
         ):
             with self.assertRaises(ComposeError):
-                _require_quest_board_callback_signature(
+                _require_live_agent_list_callback_signature(
                     text,
                     "OfferReward", ("agent", "integer"), "integer",
                 )
@@ -196,6 +220,18 @@ class OccupantPanelTests(unittest.TestCase):
             r = resolve_stock_controller_registry((feature(),), {"visitors": (0x31303042, 0x31303050)},
                 occupant_parent_bases={"visitors": base})
             self.assertEqual(decode_stock_controller_registry(encode_stock_controller_registry(r)).occupant_action_panels[0].parent_controller_base, base)
+            live = resolve_stock_controller_registry(
+                (quest_feature(),),
+                {"quests": (0x31303042, 0x31303050)},
+                occupant_parent_bases={"quests": base},
+                list_text_ids={"quests": (0, 0x68000001, 0x68000002)},
+            )
+            self.assertEqual(
+                decode_stock_controller_registry(
+                    encode_stock_controller_registry(live)
+                ).live_agent_lists[0].parent_controller_base,
+                base,
+            )
         with self.assertRaisesRegex(ControllerRegistryError, "collides with a parent"):
             resolve_stock_controller_registry((feature(),), {"visitors": (0x31303042, 0x31303042)})
 
@@ -249,7 +285,7 @@ class OccupantPanelTests(unittest.TestCase):
                 resolved.occupant_action_panels[0].parent_controller_base,
                 "AP08",
             )
-            self.assertFalse(resolved.quest_boards)
+            self.assertFalse(resolved.live_agent_lists)
 
             inventory.selected.package.definition = replace(
                 inventory.selected.package.definition,
@@ -272,18 +308,18 @@ class OccupantPanelTests(unittest.TestCase):
                 with self.assertRaises(ComposeError):
                     _validate_controller_panel_controls(*args, **kwargs)
 
-    def test_quest_board_requires_literal_mx05_records_not_constructor_ids(self):
+    def test_live_agent_list_requires_literal_mx05_records_not_constructor_ids(self):
         board = quest_feature()
         registry = resolve_stock_controller_registry(
             (board,),
             {"quests": (int.from_bytes(b"AG01", "little"),
                          int.from_bytes(b"QB01", "little"))},
             occupant_parent_bases={"quests": "AP08"},
-            quest_text_ids={"quests": (0x68000001, 0x68000002)},
+            list_text_ids={"quests": (0, 0x68000001, 0x68000002)},
         )
         parent = _smnu_payload(board.open_command_id)
         child = _smnu_payload(*CONTROLS)
-        resolved = registry.quest_boards[0]
+        resolved = registry.live_agent_lists[0]
         self.assertEqual(resolved.action_command_id, 0x20000)
 
         # These IDs are referenced or constructed by MX05 code but are not
@@ -325,7 +361,7 @@ class OccupantPanelTests(unittest.TestCase):
                 **kwargs,
             )
 
-    def test_quest_board_composition_allocates_private_static_text(self):
+    def test_live_agent_list_composition_allocates_optional_private_text(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             inventory = _v3_controller_inventory(
@@ -353,7 +389,8 @@ class OccupantPanelTests(unittest.TestCase):
             )
             callback_source = root / "dispatch.gpl"
             callback_source.write_text(
-                "Function Quest_Count(agent g) is integer begin return 1; end\n"
+                "Function Quest_Count(agent g) is integer begin return 3; end\n"
+                "Function Quest_Agent_Id(agent g, integer row) is integer begin return 123; end\n"
                 "Function Quest_Revision(agent g) is integer begin return 1; end\n"
                 "Function Quest_Reward(agent g, integer row) is integer begin return 100; end\n"
                 "Function Quest_RefreshCost(agent g) is integer begin return 25; end\n"
@@ -368,12 +405,13 @@ class OccupantPanelTests(unittest.TestCase):
             )
 
             result = resolve_controller_registry((inventory,))
-            resolved = result.registry.quest_boards[0]
+            resolved = result.registry.live_agent_lists[0]
             self.assertEqual(len(result.private_texts), 2)
             by_id = {item.runtime_id: item.text for item in result.private_texts}
-            self.assertEqual(by_id[resolved.offer_name_intent_id], b"Royal Dispatch")
-            self.assertEqual(by_id[resolved.offer_goal_intent_id], b"Deliver orders")
-            self.assertTrue(0x68000000 <= resolved.offer_name_intent_id < 0x70000000)
+            self.assertEqual(resolved.row_title_intent_id, 0)
+            self.assertEqual(by_id[resolved.row_text_intent_id], b"Deliver orders")
+            self.assertEqual(by_id[resolved.row_value_suffix_intent_id], b" Gold")
+            self.assertTrue(0x68000000 <= resolved.row_text_intent_id < 0x70000000)
 
     def test_two_unrelated_packages_compose_remove_and_reverse(self):
         with TemporaryDirectory() as tmp:

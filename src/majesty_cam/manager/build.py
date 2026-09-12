@@ -198,7 +198,7 @@ def _controller_record_count(registry: ResolvedControllerRegistry) -> int:
             registry.occupant_action_panels,
             registry.hostile_monster_flags,
             registry.building_open_toggles,
-            registry.quest_boards,
+            registry.live_agent_lists,
         )
     )
 

@@ -164,7 +164,7 @@ try {
         "runtime feature registry contains trailing bytes", "FindEnchantmentRow"
     ) "Runtime feature registry contract"
     Assert-ContainsAny @($controllerSource, $controllerHeader) @(
-        "kRegistryVersion = 10", "kMaximumRecordCount = 256",
+        "kRegistryVersion = 11", "kMaximumRecordCount = 256",
         "kMaximumPanelCount = 32", "kMaximumRegistryBytes = 512u * 1024u",
         "ParseRegistry", "FindPanelByParentDialog", "FindPanelByChildDialog",
         "FindRewardPanelByParentDialog", "FindHostileMonsterFlagByMode",
@@ -177,18 +177,21 @@ try {
         "MMCR private sovereign mode collides with a stock mode",
         "!buildingFamilies.insert(item->buildingFamilyId).second",
         "stockTargetModes.find(*mode)", "stockExecutorModes.find(*mode)",
-        "FindQuestBoardByCommand", "MMCR v9 quest boards contain a non-stock duplicate Refresh row",
+        "FindLiveAgentListByCommand", "MMCR v10 one-row quest lists are unsupported",
         "MMCR v8 quest rows use unsupported GPL string return contracts",
         "MMCR v7 quest rows use unsupported GPL agent/boolean return contracts",
         "MMCR v6 quest rows lack private display callbacks",
         "MMCR v5 fixed-row quest boards are unsupported"
     ) "Stock-controller registry contract"
     Assert-ContainsAny @($runtimeSource) @(
-        "EvaluateQuestBoardScalar(", "kGplIntegerResultType = 1",
-        "FindPrivateIntentText(board->offerNameIntentId)",
-        "FindPrivateIntentText(board->offerGoalIntentId)",
-        "offerCountCallbackSymbol", "offerCount > 1",
-        "presentations[0].agent = guild",
+        "EvaluateQuestBoardScalar(", "ResolveQuestBoardAgentNumber(",
+        "kGplIntegerResultType = 1",
+        "FindPrivateIntentText(intentId)",
+        "rowCountCallbackSymbol", "rowAgentIdCallbackSymbol",
+        "offerCount > kMaximumQuestOffers",
+        "presentation.agent = rowAgent",
+        "rowStatusFirstBlock", "rowStatusSecondBlock",
+        "rowStatusFirstDrawCall", "rowStatusSecondDrawCall",
         "FindRewardStateByPrivateMode",
         "state.modeObject == modeObject",
         "g_buildProfile->getFlagModeManagerRva",
@@ -199,24 +202,25 @@ try {
         "registeredCursor != state.record->cursorOrdinal"
     ) "Private Fl00 live-context and registry identity contract"
     foreach ($unsupportedQuestResultPath in @(
-        "EvaluateQuestBoardBoolean", "EvaluateQuestBoardAgent",
-        "EvaluateQuestBoardString", "g_questBoardBooleanEvaluator",
-        "g_questBoardAgentEvaluator", "g_questBoardStringEvaluator"
+        "EvaluateQuestBoardBoolean", "EvaluateQuestBoardString",
+        "g_questBoardBooleanEvaluator", "g_questBoardStringEvaluator",
+        "EvaluateQuestBoardAgent", "g_questBoardAgentEvaluator",
+        "rowAgentCallbackSymbol"
     )) {
         if ($runtimeSource.Contains($unsupportedQuestResultPath)) {
             throw "Unsupported quest-board GPL result path remains: $unsupportedQuestResultPath"
         }
     }
-    if ($runtimeSource.Contains("Quest list row-query:")) {
-        throw "Quest-board steady-state row polling still writes production logs."
+    if ($runtimeSource.Contains("Live-agent-list row-query:")) {
+        throw "Live-agent-list steady-state row polling still writes production logs."
     }
     $questPopulateSpan = Get-SourceSpan $runtimeSource `
         "void __fastcall QuestBoardPopulate" `
         "ControllerEvent g_stockQuestBoardEvent"
     Assert-Ordered $questPopulateSpan @(
         "!g_questBoardPopulationRequested) return;",
-        "Quest list population:"
-    ) "Quest-board revision-gated diagnostics"
+        "Live-agent-list population:"
+    ) "Live-agent-list revision-gated diagnostics"
     Assert-ContainsAny @($capabilitySource, $capabilityHeader) @(
         "kManifestVersion = 1", "kMaximumCapabilityCount = 64",
         "kMaximumCapabilityBytes = 128", "kMaximumManifestBytes = 64u * 1024u",
@@ -545,9 +549,10 @@ try {
         }
     }
     Assert-ContainsAny @($runtimeSource) @(
-        "Quest list callback resolve:",
-        "the package offer-count callback did not return an integer"
-    ) "Quest-board scalar callback diagnostics"
+        "Live-agent-list callback resolve:",
+        "the row-count callback did not return an integer",
+        "Live-agent-list callback complete:"
+    ) "Live-agent-list callback diagnostics"
     $occupantParentInstall = Get-SourceSpan $runtimeSource `
         "bool InstallOccupantParentVtable(std::uint32_t controller) {" `
         "bool InstallOccupantChildVtable(std::uint32_t controller) {"
@@ -594,10 +599,11 @@ try {
     Assert-ContainsAny @($questPopulation) @(
         "!g_questBoardPopulationRequested) return;",
         "FaultQuestBoardPresentation(",
-        "package offer-count callback did not return an integer",
-        "package offer count exceeded the proven one-row contract",
+        "the row-count callback did not return an integer",
+        "the row count exceeded the bounded 64-row contract",
+        "every row must return a distinct live agent",
         "return;"
-    ) "Fault-contained quest-board presentation"
+    ) "Fault-contained live-agent-list presentation"
     if ($questPopulation.Contains("StopUnsafeManagerRuntimeLaunch(")) {
         throw "Package quest-row data failures must not become runtime-install failures."
     }
@@ -605,9 +611,46 @@ try {
         "void* __cdecl QuestBoardRowNameFormatter(" `
         "int __fastcall QuestBoardRowIntentAttribute("
     Assert-Ordered $questRowName @(
+        "g_paintingQuestOffer = nullptr;",
         "g_stockQuestRowNameFormatter(destination, agent, stockStyle);",
+        "g_paintingQuestOffer = presentation;",
         "g_privateIntentStringAssign(destination, &view);"
     ) "Stock-constructed private quest-row name lifecycle"
+    $questRowSummary = Get-SourceSpan $runtimeSource `
+        "const MajestyStringView* __fastcall QuestBoardRowSummaryText(" `
+        "int __fastcall QuestBoardRowIntentAttribute("
+    Assert-Ordered $questRowSummary @(
+        "const QuestOfferPresentation* presentation = g_paintingQuestOffer;",
+        "g_paintingQuestOffer = nullptr;",
+        "IsQuestBoardBuildingSummary(textId)",
+        "return &presentation->summaryView;",
+        "return g_stockQuestRowSummaryText(stockTextOwner, textId);"
+    ) "Stock-boundary private quest-row summary lifecycle"
+    $questStatusIcons = Get-SourceSpan $runtimeSource `
+        "void __fastcall QuestBoardFirstStatusIconDraw(" `
+        "bool QuestSummaryCallMatches("
+    Assert-ContainsAny @($questStatusIcons) @(
+        "if (g_suppressQuestStatusIconsForCurrentRow) return;",
+        "g_stockQuestRowStatusIconDraw(painter, rectangle, style);",
+        "const bool suppress = g_suppressQuestStatusIconsForCurrentRow;",
+        "g_suppressQuestStatusIconsForCurrentRow = false;"
+    ) "Matched live-agent-list status-icon suppression"
+    if ($runtimeSource.Contains('presentation.detail += " - ";') -or
+        $runtimeSource.Contains('presentation.summaryTemplate += " - ";')) {
+        throw "Live-agent-list value presentation still prefixes the reward with a dash."
+    }
+    $questSummaryBuilder = Get-SourceSpan $runtimeSource `
+        "bool AppendQuestSummaryLiteral(" `
+        "void ClearQuestBoardPresentation("
+    Assert-Ordered $questSummaryBuilder @(
+        "std::string* destination,",
+        "for (std::size_t index = 0; index < length; ++index)",
+        "if (value == '%') destination->push_back('%');",
+        "destination->push_back(value);"
+    ) "Live-agent-list narrow-template literal escaping"
+    if ($runtimeSource.Contains("std::wstring summaryTemplate;")) {
+        throw "Live-agent-list summary storage regressed to an ABI-incompatible wide string."
+    }
 
     $researchBegin = Get-SourceSpan $runtimeSource `
         "int BeginPrivateResearch(" `

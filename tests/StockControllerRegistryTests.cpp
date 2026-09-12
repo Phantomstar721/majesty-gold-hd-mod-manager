@@ -257,7 +257,7 @@ bool ExpectInvalid(
         registry.sovereignTargetActions.empty() &&
         registry.rewardPanels.empty() && registry.hostileMonsterFlags.empty() &&
         registry.occupantActionPanels.empty() &&
-        registry.buildingOpenToggles.empty() && registry.questBoards.empty();
+        registry.buildingOpenToggles.empty() && registry.liveAgentLists.empty();
 }
 
 }  // namespace
@@ -616,26 +616,28 @@ int main() {
     }
 
     auto quests = Header(0, 0, 0, 0, 0, 0, 0);
-    quests[4] = 10;
+    quests[4] = 11;
     AppendU32(&quests, 0);  // occupant panels
     AppendU32(&quests, 0);  // building toggles
-    AppendU32(&quests, 1);  // quest boards
-    AppendString(&quests, "quest-board");
+    AppendU32(&quests, 1);  // live-agent lists
+    AppendString(&quests, "agent-list");
     AppendU32(&quests, FourCC("AGP1"));
     AppendU32(&quests, FourCC("QBP1"));
     AppendU32(&quests, 0x7101);
-    AppendU32(&quests, 0x20000);  // native Refresh action
+    AppendU32(&quests, 0x20000);  // native bottom action
     const char* questLeadingCallbacks[] = {
-        "QB_Count", "QB_Revision",
+        "QB_Count", "QB_Agent_Id", "QB_Revision",
     };
     for (std::size_t index = 0;
          index < sizeof(questLeadingCallbacks) / sizeof(questLeadingCallbacks[0]); ++index) {
         AppendString(&quests, questLeadingCallbacks[index]);
     }
-    AppendU32(&quests, 0x68000001u);
-    AppendU32(&quests, 0x68000002u);
+    AppendU32(&quests, 0);  // use each live agent's stock name
+    AppendU32(&quests, 0x68000001u);  // static row text
+    AppendU32(&quests, 1);  // optional value present
+    AppendString(&quests, "QB_Reward");
+    AppendU32(&quests, 0x68000002u);  // value suffix text
     const char* questCallbacks[] = {
-        "QB_Reward",
         "QB_RefreshCost", "QB_Refresh",
     };
     for (std::size_t index = 0;
@@ -645,16 +647,19 @@ int main() {
     AppendU32(&quests, FourCC("AP08"));
     if (!MajestyStockControllers::ParseRegistry(
             quests.data(), quests.size(), &registry, &error) ||
-        registry.questBoards.size() != 1 ||
-        registry.FindQuestBoardByChild(FourCC("QBP1")) == nullptr ||
-        registry.FindQuestBoardByParent(FourCC("AGP1")) == nullptr ||
-        registry.FindQuestBoardByCommand(0x20000) == nullptr) {
-        std::fprintf(stderr, "Generic quest-board MMCR rejected: %s\n", error.c_str());
+        registry.liveAgentLists.size() != 1 ||
+        registry.FindLiveAgentListByChild(FourCC("QBP1")) == nullptr ||
+        registry.FindLiveAgentListByParent(FourCC("AGP1")) == nullptr ||
+        registry.FindLiveAgentListByCommand(0x20000) == nullptr) {
+        std::fprintf(stderr, "Generic live-agent-list MMCR rejected: %s\n", error.c_str());
         return 41;
     }
     std::vector<unsigned char> obsoleteQuests = quests;
+    obsoleteQuests[4] = 10;
+    if (!ExpectInvalid(obsoleteQuests, "v10 one-row quest lists")) return 48;
+    obsoleteQuests = quests;
     obsoleteQuests[4] = 9;
-    if (!ExpectInvalid(obsoleteQuests, "v9 quest boards")) return 48;
+    if (!ExpectInvalid(obsoleteQuests, "v9 quest boards")) return 49;
     obsoleteQuests = quests;
     obsoleteQuests[4] = 5;
     if (!ExpectInvalid(obsoleteQuests, "v5 fixed-row")) return 43;

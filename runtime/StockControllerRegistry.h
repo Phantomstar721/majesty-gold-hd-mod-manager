@@ -7,7 +7,7 @@
 
 namespace MajestyStockControllers {
 
-constexpr std::uint32_t kRegistryVersion = 10;
+constexpr std::uint32_t kRegistryVersion = 11;
 constexpr std::uint32_t kMaximumRecordCount = 256;
 constexpr std::uint32_t kMaximumPanelCount = 32;
 constexpr std::size_t kMaximumRegistryBytes = 512u * 1024u;
@@ -152,15 +152,19 @@ struct BuildingOpenToggleRecord {
     std::uint32_t parentControllerBase;
 };
 
-struct QuestBoardRecord {
+struct LiveAgentListRecord {
     std::string panelKey;
     std::uint32_t parentDialogId, childDialogId, openCommandId;
     std::uint32_t actionCommandId;
-    std::string offerCountCallbackSymbol, revisionCallbackSymbol;
-    std::uint32_t offerNameIntentId, offerGoalIntentId;
-    std::string offerRewardCallbackSymbol;
-    std::string refreshCostCallbackSymbol;
-    std::string refreshCallbackSymbol;
+    std::string rowCountCallbackSymbol;
+    std::string rowAgentIdCallbackSymbol;
+    std::string revisionCallbackSymbol;
+    std::uint32_t rowTitleIntentId, rowTextIntentId;
+    bool hasRowValue;
+    std::string rowValueCallbackSymbol;
+    std::uint32_t rowValueSuffixIntentId;
+    std::string actionCostCallbackSymbol;
+    std::string actionCallbackSymbol;
     std::uint32_t parentControllerBase;
 };
 
@@ -176,15 +180,15 @@ struct Registry {
     std::vector<HostileMonsterFlagRecord> hostileMonsterFlags;
     std::vector<OccupantActionPanelRecord> occupantActionPanels;
     std::vector<BuildingOpenToggleRecord> buildingOpenToggles;
-    std::vector<QuestBoardRecord> questBoards;
+    std::vector<LiveAgentListRecord> liveAgentLists;
 
     void Clear();
     const OccupantActionPanelRecord* FindOccupantPanelByChild(std::uint32_t id) const;
     const OccupantActionPanelRecord* FindOccupantPanelByParent(std::uint32_t id) const;
     const OccupantActionPanelRecord* FindOccupantPanelByCommand(std::uint32_t id) const;
-    const QuestBoardRecord* FindQuestBoardByChild(std::uint32_t id) const;
-    const QuestBoardRecord* FindQuestBoardByParent(std::uint32_t id) const;
-    const QuestBoardRecord* FindQuestBoardByCommand(std::uint32_t id) const;
+    const LiveAgentListRecord* FindLiveAgentListByChild(std::uint32_t id) const;
+    const LiveAgentListRecord* FindLiveAgentListByParent(std::uint32_t id) const;
+    const LiveAgentListRecord* FindLiveAgentListByCommand(std::uint32_t id) const;
     const BuildingOpenToggleRecord* FindBuildingOpenToggleByParent(
         std::uint32_t id) const;
     const SecondaryPanelRecord* FindPanelByKey(const std::string& panelKey) const;

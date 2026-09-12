@@ -18,7 +18,7 @@ It does not identify a particular guild, Workshop item, UUID, or unit type.
    sets list mode `1`, binds the current player with the stock zero secondary
    filter, installs the ordinary list callback, and performs stock setup. The
    shared setup invokes virtual slot 14 before slot 1 tail-calls virtual slot 10
-   as its final native presenter. Private occupant-action and quest-board
+   as its final native presenter. Private occupant-action and live-agent-list
    instances retain both stock presentation paths; the Manager adds no action
    controls and performs no synthetic first-open UI write.
 3. MX05's population virtual reads relation index `2` from the parent agent's

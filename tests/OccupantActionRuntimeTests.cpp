@@ -14,7 +14,7 @@ void __cdecl RecordCommand(std::uint32_t command, std::uint32_t building,
     g_seenOwner = g_executingOccupantPanel;
     g_seenQuestOwner = g_executingQuestBoard;
     g_seenQuestCallback = g_executingQuestBoard == nullptr
-        ? nullptr : g_executingQuestBoard->refreshCallbackSymbol.c_str();
+        ? nullptr : g_executingQuestBoard->actionCallbackSymbol.c_str();
 }
 void __cdecl NestedCommand(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t) {
     const auto* outer = g_executingOccupantPanel;
@@ -36,19 +36,22 @@ int main() {
         {"clinic", 0x32303042, 0x32303050, 0x4102, 0x10001, "Clinic_Cost", "Clinic_Action", 0x3930584D},
         {"dispatch", 0x31304741, 0x31305044, 0x4103, 0x10002, "Dispatch_Cost", "Dispatch_Action", 0x38305041},
     };
-    MajestyStockControllers::QuestBoardRecord quest = {};
+    MajestyStockControllers::LiveAgentListRecord quest = {};
     quest.panelKey = "missions";
     quest.parentDialogId = 0x31304741;
     quest.childDialogId = 0x31304251;
     quest.openCommandId = 0x7101;
     quest.actionCommandId = 0x20000;
-    quest.offerCountCallbackSymbol = "Quest_Count";
-    quest.offerNameIntentId = 0x68000001;
-    quest.offerGoalIntentId = 0x68000002;
-    quest.offerRewardCallbackSymbol = "Quest_Reward";
-    quest.refreshCallbackSymbol = "Quest_Refresh";
+    quest.rowCountCallbackSymbol = "Quest_Count";
+    quest.rowAgentIdCallbackSymbol = "Quest_Agent_Id";
+    quest.rowTextIntentId = 0x68000001;
+    quest.hasRowValue = true;
+    quest.rowValueCallbackSymbol = "Quest_Reward";
+    quest.rowValueSuffixIntentId = 0x68000002;
+    quest.actionCostCallbackSymbol = "Quest_Cost";
+    quest.actionCallbackSymbol = "Quest_Refresh";
     quest.parentControllerBase = 0x38305041;
-    g_stockControllerRegistry.questBoards = {quest};
+    g_stockControllerRegistry.liveAgentLists = {quest};
     const auto* stable = &g_stockControllerRegistry.occupantActionPanels[0];
     const auto* clinic = &g_stockControllerRegistry.occupantActionPanels[1];
     const auto* dispatch = &g_stockControllerRegistry.occupantActionPanels[2];
@@ -59,9 +62,9 @@ int main() {
     assert(g_seenOwner == clinic && g_seen[0] == 21);
     assert(g_seen[1] == 10 && g_seen[2] == 20 && g_seen[3] == 300);
     assert(g_executingOccupantPanel == nullptr);
-    // The quest board's one native bottom action uses the same exact MX05
+    // The live-agent list's one native bottom action uses the same exact MX05
     // queue/debit executor and retains its durable agent and quoted price.
-    const auto* missions = &g_stockControllerRegistry.questBoards[0];
+    const auto* missions = &g_stockControllerRegistry.liveAgentLists[0];
     DispatchOccupantAction(0x20000, 30, 40, 0);
     assert(g_seenQuestOwner == missions && g_seen[0] == 21);
     assert(g_seen[1] == 30 && g_seen[2] == 40 && g_seen[3] == 0);
@@ -141,6 +144,6 @@ int main() {
     ClearSecondaryPanelControllerOwnedState();
     assert(g_activeOccupantPanel == nullptr && g_activeQuestBoard == nullptr &&
            g_captureChildController == 0);
-    std::puts("Occupant and quest-board x86 routing tests passed.");
+    std::puts("Occupant and live-agent-list x86 routing tests passed.");
     return 0;
 }

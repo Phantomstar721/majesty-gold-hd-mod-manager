@@ -21,6 +21,7 @@ struct Controller {
 static_assert(offsetof(Controller, stream) == 0x24, "native stream offset");
 static_assert(offsetof(Controller, listOwner) == 0x34, "MX05 list vector offset");
 unsigned char contextA[0xA0] = {}, contextB[0xA0] = {};
+unsigned char contextC[0xA0] = {}, contextD[0xA0] = {};
 void* contextTable[74] = {};
 void* streamTable[27] = {};
 void* playerTable[9] = {};
@@ -48,11 +49,12 @@ int setIntegerCount = 0, questEventCount = 0, questNativeRefreshCount = 0;
 int questNativeSetupCount = 0;
 int parentEventCount = 0;
 int questQueryCount = 0, questOfferCountQueryCount = 0;
-int questRevisionQueryCount = 0;
+int questRevisionQueryCount = 0, questAgentQueryCount = 0;
 int selectedQuestIndex = -1;
 std::uint32_t questRevision = 7;
-std::uint32_t questOfferCount = 1;
-std::uint32_t questVectorStorage[8] = {};
+std::uint32_t questOfferCount = 3;
+std::uint32_t resolvedQuestAgentNumber = 0;
+std::uint32_t questVectorStorage[68] = {};
 std::uint32_t lastMessageControl = 0, lastMessage = 0;
 std::uint32_t lastVisibleControl = 0, lastVisibleValue = 0;
 std::uint32_t visibleControls[16] = {};
@@ -61,8 +63,15 @@ std::size_t visibleControlCount = 0;
 bool affordable = true;
 bool reenterParentEventOnSet = false;
 int stockQuestNameCount = 0, stockQuestAttributeCount = 0;
+int stockQuestSummaryCount = 0;
+int stockQuestStatusIconDrawCount = 0;
 bool stockQuestDestinationConstructed = false;
 MajestyStringView* expectedQuestDestination = nullptr;
+void* expectedQuestSummaryOwner = nullptr;
+std::uint32_t expectedQuestSummaryTextId = 0;
+void* lastQuestStatusPainter = nullptr;
+const void* lastQuestStatusRectangle = nullptr;
+std::uint32_t lastQuestStatusStyle = 0;
 void* __fastcall Context(void* object, void*) {
     return static_cast<Controller*>(object)->context;
 }
@@ -157,12 +166,25 @@ bool QuestScalar(
         ++questOfferCountQueryCount;
         *result = questOfferCount;
     } else if (std::strcmp(symbol, "Quest_Reward") == 0) {
-        assert(hasInteger && integerValue >= 1 && integerValue <= 4);
+        assert(hasInteger && integerValue >= 1 && integerValue <= 64);
         *result = static_cast<std::uint32_t>(integerValue * 100);
+    } else if (std::strcmp(symbol, "Quest_Agent_Id") == 0) {
+        assert(hasInteger && integerValue >= 1 &&
+               integerValue <= static_cast<int>(questOfferCount));
+        ++questAgentQueryCount;
+        *result = 0x1000u + static_cast<std::uint32_t>(integerValue);
     } else {
         assert(false);
     }
     return true;
+}
+void* ResolveQuestAgentNumber(std::uint32_t agentNumber) {
+    resolvedQuestAgentNumber = agentNumber;
+    void* rows[] = {contextA, contextB, contextC, contextD};
+    if (agentNumber >= 0x1001u && agentNumber <= 0x1004u) {
+        return rows[agentNumber - 0x1001u];
+    }
+    return nullptr;
 }
 MajestyStringView* __fastcall AssignQuestText(
     MajestyStringView* destination, void*, const MajestyStringView* source) {
@@ -185,6 +207,25 @@ int __fastcall StockQuestAttribute(
     void*, void*, std::uint32_t, std::uint32_t) {
     ++stockQuestAttributeCount;
     return 91;
+}
+const MajestyStringView* __fastcall StockQuestSummary(
+    void* owner, void*, std::uint32_t textId) {
+    static const char text[] = "stock building summary";
+    static const MajestyStringView view = {
+        text, static_cast<std::uint32_t>(sizeof(text) - 1),
+        static_cast<std::uint32_t>(sizeof(text) - 1),
+    };
+    ++stockQuestSummaryCount;
+    assert(owner == expectedQuestSummaryOwner);
+    assert(textId == expectedQuestSummaryTextId);
+    return &view;
+}
+void __fastcall StockQuestStatusIconDraw(
+    void* painter, void*, const void* rectangle, std::uint32_t style) {
+    ++stockQuestStatusIconDrawCount;
+    lastQuestStatusPainter = painter;
+    lastQuestStatusRectangle = rectangle;
+    lastQuestStatusStyle = style;
 }
 void* __fastcall EraseQuestVector(
     void* vector, void*, void*, void*, std::uint32_t*, void*, std::uint32_t*) {
@@ -268,21 +309,27 @@ void Reset() {
     selectedQuestIndex = -1;
     parentEventCount = 0;
     questQueryCount = questOfferCountQueryCount = 0;
-    questRevisionQueryCount = 0;
+    questRevisionQueryCount = questAgentQueryCount = 0;
     questRevision = 7;
-    questOfferCount = 1;
-    stockQuestNameCount = stockQuestAttributeCount = 0;
+    questOfferCount = 3;
+    resolvedQuestAgentNumber = 0;
+    stockQuestNameCount = stockQuestAttributeCount = stockQuestSummaryCount = 0;
+    stockQuestStatusIconDrawCount = 0;
     stockQuestDestinationConstructed = false;
     expectedQuestDestination = nullptr;
+    lastQuestStatusPainter = nullptr;
+    lastQuestStatusRectangle = nullptr;
+    lastQuestStatusStyle = 0;
     std::memset(questVectorStorage, 0, sizeof(questVectorStorage));
     child.listOwner = &child;
     child.listBegin = questVectorStorage;
     child.listEnd = questVectorStorage +
         sizeof(questVectorStorage) / sizeof(questVectorStorage[0]);
     g_questBoardScalarEvaluator = &QuestScalar;
+    g_questBoardAgentNumberResolver = &ResolveQuestAgentNumber;
     g_privateIntentRecords = {
-        {0x68000001u, "Quest 1"},
-        {0x68000002u, "Complete objective 1"},
+        {0x68000001u, "Complete 100% objective"},
+        {0x68000002u, " Gold"},
     };
     g_privateIntentViews.clear();
     for (const auto& record : g_privateIntentRecords) {
@@ -298,6 +345,9 @@ void Reset() {
         reinterpret_cast<ControllerSetup>(&NativeQuestRefresh);
     g_stockQuestBoardEvent =
         reinterpret_cast<ControllerEvent>(&NativeQuestEvent);
+    g_stockQuestRowStatusIconDraw =
+        reinterpret_cast<StockQuestRowStatusIconDraw>(
+            &StockQuestStatusIconDraw);
     lastVisibleControl = lastVisibleValue = 0;
     std::memset(visibleControls, 0, sizeof(visibleControls));
     visibleControlCount = 0;
@@ -555,25 +605,28 @@ int main() {
     Destroy(parent);
     assert(g_parentOccupantPanel == nullptr && g_parentController == 0);
 
-    // 14. The quest-board recipe retains the exact AP08 parent boundary while
-    // the package-owned MX05 child keeps one native bottom action: Refresh.
+    // 14. The live-agent-list recipe retains the exact AP08 parent boundary
+    // while the package-owned MX05 child keeps one native bottom action.
     Reset();
-    MajestyStockControllers::QuestBoardRecord quest = {};
-    quest.panelKey = "quest-board";
+    MajestyStockControllers::LiveAgentListRecord quest = {};
+    quest.panelKey = "agent-list";
     quest.parentDialogId = 0x31304741;
     quest.childDialogId = 0x31304251;
     quest.openCommandId = 0x7101;
     quest.actionCommandId = 0x20000;
-    quest.offerCountCallbackSymbol = "Quest_Count";
+    quest.rowCountCallbackSymbol = "Quest_Count";
+    quest.rowAgentIdCallbackSymbol = "Quest_Agent_Id";
     quest.revisionCallbackSymbol = "Quest_Revision";
-    quest.offerNameIntentId = 0x68000001u;
-    quest.offerGoalIntentId = 0x68000002u;
-    quest.offerRewardCallbackSymbol = "Quest_Reward";
-    quest.refreshCostCallbackSymbol = "Quest_RefreshCost";
-    quest.refreshCallbackSymbol = "Quest_Refresh";
+    quest.rowTitleIntentId = 0;
+    quest.rowTextIntentId = 0x68000001u;
+    quest.hasRowValue = true;
+    quest.rowValueCallbackSymbol = "Quest_Reward";
+    quest.rowValueSuffixIntentId = 0x68000002u;
+    quest.actionCostCallbackSymbol = "Quest_RefreshCost";
+    quest.actionCallbackSymbol = "Quest_Refresh";
     quest.parentControllerBase = 0x38305041;
-    g_stockControllerRegistry.questBoards = {quest};
-    g_parentQuestBoard = &g_stockControllerRegistry.questBoards[0];
+    g_stockControllerRegistry.liveAgentLists = {quest};
+    g_parentQuestBoard = &g_stockControllerRegistry.liveAgentLists[0];
     parent.table = ap08StockTable;
     g_captureParentController = 1;
     CaptureSecondaryController(reinterpret_cast<std::uint32_t>(&parent), 0);
@@ -610,7 +663,7 @@ int main() {
     // 15. If stock MX05 slot 1 was already entered before the Manager installs
     // its clone, its later stock slot-14 call reaches the gated slot-11 package
     // population. Slots 3, 10, and 14 remain byte-for-byte stock.
-    g_activeQuestBoard = &g_stockControllerRegistry.questBoards[0];
+    g_activeQuestBoard = &g_stockControllerRegistry.liveAgentLists[0];
     g_childController = reinterpret_cast<LONG>(&child);
     g_stockQuestBoardRefresh =
         reinterpret_cast<ControllerSetup>(&NativeQuestRefresh);
@@ -632,22 +685,45 @@ int main() {
     assert(visibleControlCount == 0 && setIntegerCount == 0 &&
            lastMessageControl == 0);
 
-    // 16. The one-row package proof replaces only MX05's native vector and
-    // private row text. The native bottom action presentation remains stock.
+    // 16. One package population supplies multiple distinct live agents to
+    // MX05's native vector. Selection, scrolling, and the bottom action remain
+    // stock while optional static text and per-row values are Manager-owned.
     g_activeQuestRevision = -1;
     assert(kGplIntegerResultType == 1);
+    g_questBoardAgentNumberResolver = &ResolveQuestAgentNumber;
+    void* decodedAgent = nullptr;
+    assert(QueryQuestBoardAgent(
+        "Quest_Agent_Id", contextA, 2, &decodedAgent));
+    assert(decodedAgent == contextB && resolvedQuestAgentNumber == 0x1002u);
+    questQueryCount = questAgentQueryCount = 0;
     questQueryCount = questOfferCountQueryCount = questRevisionQueryCount = 0;
+    questAgentQueryCount = 0;
     QuestBoardPopulate(&child, nullptr);
     assert(g_activeQuestRevision == 7 && questOfferCountQueryCount == 1);
-    assert(g_questOfferPresentationCount == 1);
-    assert(g_questOfferPresentations[0].name == "Quest 1");
+    assert(questAgentQueryCount == 3 && g_questOfferPresentationCount == 3);
+    assert(g_questOfferPresentations[0].agent == contextA);
+    assert(g_questOfferPresentations[1].agent == contextB);
+    assert(g_questOfferPresentations[2].agent == contextC);
+    assert(g_questOfferPresentations[0].name.empty());
+    assert(g_questOfferPresentations[1].name.empty());
+    assert(g_questOfferPresentations[2].name.empty());
     assert(g_questOfferPresentations[0].detail ==
-           "Complete objective 1 (100 gold)");
+           "Complete 100% objective\n100 Gold");
+    assert(g_questOfferPresentations[1].detail ==
+           "Complete 100% objective\n200 Gold");
+    assert(g_questOfferPresentations[2].detail ==
+           "Complete 100% objective\n300 Gold");
+    const char expectedSummaryTemplate[] =
+        "\x01" "FFFFFF%s\n\x01"
+        "A550AAComplete 100%% objective\n\x01" "FFFF00100 Gold";
+    assert(g_questOfferPresentations[0].summaryTemplate == expectedSummaryTemplate);
     g_privateIntentStringAssign =
         reinterpret_cast<StockStringAssign>(&AssignQuestText);
     g_stockQuestRowNameFormatter = &StockQuestName;
     g_stockQuestRowAttributeReader =
         reinterpret_cast<StockQuestRowAttributeReader>(&StockQuestAttribute);
+    g_stockQuestRowSummaryText =
+        reinterpret_cast<StockQuestRowSummaryText>(&StockQuestSummary);
     MajestyStringView rowName = {
         reinterpret_cast<const char*>(0xDEADBEEFu),
         0xCCCCCCCCu,
@@ -655,9 +731,64 @@ int main() {
     };
     expectedQuestDestination = &rowName;
     QuestBoardRowNameFormatter(&rowName, contextA, 0);
-    assert(rowName.length == 7 &&
-           std::memcmp(rowName.data, "Quest 1", 7) == 0 &&
+    assert(rowName.data == nullptr && rowName.length == 0 &&
            stockQuestNameCount == 1 && stockQuestDestinationConstructed);
+    const MajestyStringView* stablePrivateSummary = nullptr;
+    for (const std::uint32_t textId : {0xD8u, 0xD9u, 0xDAu, 0xDBu}) {
+        if (textId != 0xD8u) {
+            rowName = {
+                reinterpret_cast<const char*>(0xDEADBEEFu),
+                0xCCCCCCCCu,
+                0xDDDDDDDDu,
+            };
+            stockQuestDestinationConstructed = false;
+            QuestBoardRowNameFormatter(&rowName, contextA, 0);
+            assert(stockQuestDestinationConstructed);
+        }
+        const int stockSummaryBefore = stockQuestSummaryCount;
+        const MajestyStringView* summary = QuestBoardRowSummaryText(
+            reinterpret_cast<void*>(0x12345678u), nullptr, textId);
+        assert(summary == &g_questOfferPresentations[0].summaryView);
+        assert(summary->length == sizeof(expectedSummaryTemplate) - 1);
+        assert(std::memcmp(
+                   summary->data, expectedSummaryTemplate,
+                   sizeof(expectedSummaryTemplate) - 1) == 0);
+        assert(summary->data[0] == 1 && summary->data[1] == 'F');
+        assert((reinterpret_cast<const unsigned char*>(summary)[7] & 1u) == 0);
+        char renderedSummary[128] = {};
+        sprintf_s(
+            renderedSummary, sizeof(renderedSummary), summary->data,
+            "Quest 1", 901, 902, 903);
+        const char expectedRenderedSummary[] =
+            "\x01" "FFFFFFQuest 1\n\x01"
+            "A550AAComplete 100% objective\n\x01" "FFFF00100 Gold";
+        assert(std::strcmp(renderedSummary, expectedRenderedSummary) == 0);
+        assert(stockQuestSummaryCount == stockSummaryBefore);
+        const int statusDrawsBefore = stockQuestStatusIconDrawCount;
+        void* statusPainter = reinterpret_cast<void*>(0x11223344u);
+        const void* statusRectangle = reinterpret_cast<void*>(0x55667788u);
+        QuestBoardFirstStatusIconDraw(
+            statusPainter, nullptr, statusRectangle, 2);
+        QuestBoardSecondStatusIconDraw(
+            statusPainter, nullptr, statusRectangle, 3);
+        assert(stockQuestStatusIconDrawCount == statusDrawsBefore);
+        assert(!g_suppressQuestStatusIconsForCurrentRow);
+        if (stablePrivateSummary == nullptr) stablePrivateSummary = summary;
+        assert(stablePrivateSummary->data ==
+               g_questOfferPresentations[0].summaryTemplate.c_str());
+    }
+    // The private marker is consumed by exactly one summary call. A second
+    // formatting request falls through with the stock owner and GMTX ID
+    // unchanged, while the previously returned private storage remains live.
+    expectedQuestSummaryOwner = reinterpret_cast<void*>(0x12345678u);
+    expectedQuestSummaryTextId = 0xD8u;
+    const MajestyStringView* stockSummary = QuestBoardRowSummaryText(
+        expectedQuestSummaryOwner, nullptr, expectedQuestSummaryTextId);
+    assert(stockSummary->length == 22 &&
+           std::memcmp(stockSummary->data, "stock building summary", 22) == 0);
+    assert(stockQuestSummaryCount == 1);
+    assert(stablePrivateSummary->data ==
+           g_questOfferPresentations[0].summaryTemplate.c_str());
     MajestyStringView fallbackName = {
         reinterpret_cast<const char*>(0xBAADF00Du),
         0xAAAAAAAAu,
@@ -668,20 +799,78 @@ int main() {
     assert(QuestBoardRowNameFormatter(
                &fallbackName, reinterpret_cast<void*>(999), 0) ==
            &fallbackName);
-    assert(stockQuestNameCount == 2 && stockQuestDestinationConstructed);
+    assert(stockQuestNameCount == 5 && stockQuestDestinationConstructed);
+    QuestBoardFirstStatusIconDraw(
+        reinterpret_cast<void*>(0x11223344u), nullptr,
+        reinterpret_cast<void*>(0x55667788u), 2);
+    QuestBoardSecondStatusIconDraw(
+        reinterpret_cast<void*>(0x11223344u), nullptr,
+        reinterpret_cast<void*>(0x55667788u), 3);
+    assert(stockQuestStatusIconDrawCount == 2);
+    assert(lastQuestStatusPainter == reinterpret_cast<void*>(0x11223344u));
+    assert(lastQuestStatusRectangle == reinterpret_cast<void*>(0x55667788u));
+    assert(lastQuestStatusStyle == 3);
+    expectedQuestSummaryOwner = reinterpret_cast<void*>(0x87654321u);
+    expectedQuestSummaryTextId = 0xDBu;
+    stockSummary = QuestBoardRowSummaryText(
+        expectedQuestSummaryOwner, nullptr, expectedQuestSummaryTextId);
+    assert(stockSummary->length == 22 &&
+           std::memcmp(stockSummary->data, "stock building summary", 22) == 0);
+    assert(stockQuestSummaryCount == 2);
     const int rowIntent = QuestBoardRowIntentAttribute(
         contextA, nullptr, 0x1E565041u, 0);
     assert(rowIntent == static_cast<int>(kFirstQuestOfferIntentId));
     const MajestyStringView* rowDetail = FindPrivateIntentText(rowIntent);
-    assert(rowDetail != nullptr && rowDetail->length == 31 &&
+    const char expectedDetail[] = "Complete 100% objective\n100 Gold";
+    assert(rowDetail != nullptr &&
+           rowDetail->length == sizeof(expectedDetail) - 1 &&
            std::memcmp(
-               rowDetail->data, "Complete objective 1 (100 gold)", 31) == 0);
+               rowDetail->data, expectedDetail,
+               sizeof(expectedDetail) - 1) == 0);
+    assert(QuestBoardRowIntentAttribute(
+        contextB, nullptr, 0x1E565041u, 0) ==
+        static_cast<int>(kFirstQuestOfferIntentId + 1));
     assert(QuestBoardRowIntentAttribute(
         reinterpret_cast<void*>(999), nullptr, 0x1E565041u, 0) == 91);
     assert(stockQuestAttributeCount == 1);
-    assert(child.listBegin == questVectorStorage + 1);
+    assert(child.listBegin == questVectorStorage + 3);
     assert(questVectorStorage[0] ==
            reinterpret_cast<std::uint32_t>(contextA));
+    assert(questVectorStorage[1] ==
+           reinterpret_cast<std::uint32_t>(contextB));
+    assert(questVectorStorage[2] ==
+           reinterpret_cast<std::uint32_t>(contextC));
+
+    // The value/reward column is optional for the same multi-row lifecycle.
+    // Omitting it performs no value callback and leaves each row's ordinary
+    // title/detail/action behavior intact.
+    auto& activeList = g_stockControllerRegistry.liveAgentLists[0];
+    activeList.hasRowValue = false;
+    activeList.rowValueCallbackSymbol.clear();
+    activeList.rowValueSuffixIntentId = 0;
+    g_activeQuestRevision = -1;
+    questQueryCount = questOfferCountQueryCount = questRevisionQueryCount = 0;
+    questAgentQueryCount = 0;
+    QuestBoardPopulate(&child, nullptr);
+    assert(questQueryCount == 5 && questAgentQueryCount == 3);
+    assert(g_questOfferPresentationCount == 3);
+    assert(g_questOfferPresentations[0].detail == "Complete 100% objective");
+    assert(g_questOfferPresentations[1].detail == "Complete 100% objective");
+    const char expectedTextOnlySummary[] =
+        "\x01" "FFFFFF%s\n\x01" "A550AAComplete 100%% objective";
+    assert(g_questOfferPresentations[0].summaryTemplate ==
+           expectedTextOnlySummary);
+
+    activeList.hasRowValue = true;
+    activeList.rowValueCallbackSymbol = "Quest_Reward";
+    activeList.rowValueSuffixIntentId = 0x68000002u;
+    g_activeQuestRevision = -1;
+    questQueryCount = questOfferCountQueryCount = questRevisionQueryCount = 0;
+    questAgentQueryCount = 0;
+    QuestBoardPopulate(&child, nullptr);
+    assert(questQueryCount == 8 && questAgentQueryCount == 3);
+    assert(g_questOfferPresentations[0].detail ==
+           "Complete 100% objective\n100 Gold");
 
     // Stock slot 14 can run at paint cadence without polling package GPL or
     // producing any Manager-owned UI write.
@@ -691,8 +880,31 @@ int main() {
     lastMessageControl = lastMessage = 0;
     for (int index = 0; index < 300; ++index) {
         reinterpret_cast<ControllerSetup>(child.table[14])(&child);
+        MajestyStringView paintName = {
+            reinterpret_cast<const char*>(0xDEADBEEFu),
+            0xCCCCCCCCu,
+            0xDDDDDDDDu,
+        };
+        expectedQuestDestination = &paintName;
+        stockQuestDestinationConstructed = false;
+        QuestBoardRowNameFormatter(&paintName, contextA, 0);
+        const MajestyStringView* paintSummary = QuestBoardRowSummaryText(
+            reinterpret_cast<void*>(0x12345678u), nullptr, 0xD8u);
+        assert(stockQuestDestinationConstructed);
+        assert(paintSummary == &g_questOfferPresentations[0].summaryView);
+        assert(std::memcmp(
+                   paintSummary->data, expectedSummaryTemplate,
+                   sizeof(expectedSummaryTemplate) - 1) == 0);
+        QuestBoardFirstStatusIconDraw(
+            reinterpret_cast<void*>(0x11223344u), nullptr,
+            reinterpret_cast<void*>(0x55667788u), 2);
+        QuestBoardSecondStatusIconDraw(
+            reinterpret_cast<void*>(0x11223344u), nullptr,
+            reinterpret_cast<void*>(0x55667788u), 3);
     }
     assert(questNativeRefreshCount == 300 && questQueryCount == 0);
+    assert(stockQuestSummaryCount == 2);
+    assert(stockQuestStatusIconDrawCount == 2);
     assert(visibleControlCount == 0 && setIntegerCount == 0 &&
            lastMessageControl == 0);
 
@@ -726,16 +938,16 @@ int main() {
     assert(visibleControlCount == 0 && setIntegerCount == 0 &&
            lastMessageControl == 0);
 
-    // 20. A package count above the proven single-row bound is contained to
-    // the private quest rows. The live MX05 controller remains usable and its
-    // vector is cleared instead of terminating Majesty.
+    // 20. A package count above the bounded multi-row contract is contained to
+    // the private rows. The live MX05 controller remains usable and its vector
+    // is cleared instead of terminating Majesty.
     g_activeQuestRevision = -1;
     g_activeQuestBoardFaulted = false;
-    questOfferCount = 2;
+    questOfferCount = 65;
     QuestBoardPopulate(&child, nullptr);
     assert(g_activeQuestBoardFaulted);
     assert(g_questOfferPresentationCount == 0);
     assert(child.listBegin == questVectorStorage);
 
-    std::puts("Panel lifecycle x86 tests passed: single/stacked, research, Back, visitors, reward, occupant, MX05 child Refresh and native quest list, revision gating, first-open building toggle, stale teardown.");
+    std::puts("Panel lifecycle x86 tests passed: single/stacked, research, Back, visitors, reward, occupant, multi-row MX05 live-agent list, revision gating, first-open building toggle, stale teardown.");
 }

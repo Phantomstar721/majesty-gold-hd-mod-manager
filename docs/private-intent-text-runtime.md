@@ -49,6 +49,16 @@ The one resolver covers all currently supported stock consumers:
 | `$LocalChatMessage` | `0x0042DF5B` | `0x0042EEBB` | Resolves its numeric AITX argument immediately. |
 | `$MessageFlag` presenter | `0x0045BE96` | `0x0045CEC6` | The GPL handler first stores the numeric ID in the stock `MSGF` lifecycle; the stock flag presenter resolves that stored ID here. |
 
+The generic MX05 live-agent-list recipe also assigns short-lived private
+intention IDs to matched rows that have custom detail text. This lets stock
+non-building presentation branches resolve the same optional text/value detail.
+Rows without custom detail preserve their agent's stock intention attribute.
+The ordinary building-summary branch uses the narrower, separately profiled
+GMTX-template seam documented in
+[the generic MX05 live-agent-list lifecycle](stock-quest-board-panel.md): stock
+still formats and draws every row, while only matched rows receive their
+bounded optional presentation.
+
 `tests/Test-IntentTextRuntimeProfiles.ps1` verifies these calls independently
 against a public and a beta2 executable fixture. `Test-DualRuntimeProfiles.ps1`
 also guards the resolver entry bytes in both complete runtime profiles.
@@ -92,8 +102,8 @@ repeat record count times:
 ```
 
 IDs are strictly increasing and unique in `0x60000000..0x6FFFFFFF`.
-AITX-derived rows use the lower half; bounded feature literals such as
-quest-board labels use the upper half. Text must be non-empty, contain no NUL,
+AITX-derived rows use the lower half; bounded runtime-feature literals such as
+live-agent-list text use the upper half. Text must be non-empty, contain no NUL,
 and use defined Windows-1252 bytes. The parser
 rejects truncation, trailing bytes, duplicates, unsupported versions, excessive
 sizes, and out-of-range IDs. Declaring the private-text capability with a

@@ -1,4 +1,4 @@
-"""Read-only proof of the AP08/MX05 quest-board runtime on both builds."""
+"""Read-only proof of the generic MX05 live-agent-list runtime on both builds."""
 
 import os
 from pathlib import Path
@@ -107,6 +107,7 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
             add_integer,
             execute,
             scalar_result,
+            live_agent_resolver,
             result_at,
             evaluator_destructor,
             string_destructor,
@@ -114,10 +115,21 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
             row_name_call,
             row_name_target,
             row_attribute_call,
+            row_summary_d8_call,
+            row_summary_d9_call,
+            row_summary_da_call,
+            row_summary_db_call,
+            row_summary_text_resolver,
+            row_status_first_block,
+            row_status_second_block,
+            row_status_first_draw_call,
+            row_status_second_draw_call,
+            row_status_draw,
         ) = [int(value, 16) for value in re.findall(r"0x[0-9A-Fa-f]+", body)]
 
         self.assertEqual(image.timestamp, timestamp)
         self.assert_gpl_result_type(image, b".?AVGplInteger@@", 1)
+        self.assert_gpl_result_type(image, b".?AVGplAgentRef@@", 5)
         self.assertEqual(image.read(helper, 3), bytes.fromhex("6a ff 68"))
         for offset, target in (
             (0x2D, string_constructor),
@@ -130,9 +142,80 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
         ):
             self.assertEqual(image.target(helper + offset), target)
         self.assertEqual(image.read(add_integer, 4), bytes.fromhex("83 c1 08 e9"))
+        self.assertEqual(
+            image.read(live_agent_resolver, 8),
+            bytes.fromhex("56 8b f1 8b 46 08 50 e8"),
+        )
+        self.assertEqual(
+            image.read(live_agent_resolver + 0x0C, 3),
+            bytes.fromhex("8b c8 e8"),
+        )
+        self.assertEqual(
+            image.read(live_agent_resolver + 0x13, 17),
+            bytes.fromhex(
+                "89 46 0c 5e 85 c0 74 0d 80 78 38 00 75 07 8b c8 e9"
+            ),
+        )
+        self.assertEqual(
+            image.read(live_agent_resolver + 0x28, 3),
+            bytes.fromhex("33 c0 c3"),
+        )
         self.assertEqual(image.target(scalar_result + 5), result_at)
         self.assertEqual(image.target(row_name_call), row_name_target)
         self.assertEqual(image.target(row_attribute_call), packed_attribute_reader)
+        for call, text_id in (
+            (row_summary_d8_call, 0xD8),
+            (row_summary_d9_call, 0xD9),
+            (row_summary_da_call, 0xDA),
+            (row_summary_db_call, 0xDB),
+        ):
+            self.assertEqual(
+                image.read(call - 5, 5),
+                b"\x68" + struct.pack("<I", text_id),
+                f"stock GMTX {text_id:#x} selection changed",
+            )
+            self.assertEqual(
+                image.target(call),
+                row_summary_text_resolver,
+                f"stock GMTX {text_id:#x} resolver target changed",
+            )
+
+        self.assertEqual(
+            image.read(row_status_first_block, 5),
+            bytes.fromhex("68 49 4e 42 62"),
+        )
+        first_branch = image.read(row_status_first_block + 0x39, 6)
+        self.assertEqual(first_branch[:2], bytes.fromhex("0f 84"))
+        self.assertEqual(
+            row_status_first_block + 0x3F + struct.unpack_from(
+                "<i", first_branch, 2
+            )[0],
+            row_status_second_block,
+        )
+        for offset, expected in (
+            (0x40, "68 41 50 42 10"),
+            (0x50, "68 0b 04 00 00"),
+            (0x65, "68 41 50 42 11"),
+            (0x7C, "68 0c 04 00 00"),
+            (0x88, "68 0b 04 00 00"),
+        ):
+            self.assertEqual(
+                image.read(row_status_first_block + offset, 5),
+                bytes.fromhex(expected),
+            )
+        for offset, expected in (
+            (0x03, "68 41 50 42 14"),
+            (0x13, "68 0d 04 00 00"),
+            (0x28, "68 41 50 42 15"),
+            (0x3F, "68 0e 04 00 00"),
+            (0x4B, "68 0d 04 00 00"),
+        ):
+            self.assertEqual(
+                image.read(row_status_second_block + offset, 5),
+                bytes.fromhex(expected),
+            )
+        self.assertEqual(image.target(row_status_first_draw_call), row_status_draw)
+        self.assertEqual(image.target(row_status_second_draw_call), row_status_draw)
 
         table = struct.unpack("<13I", image.read(parent_vtable, 13 * 4))
         for slot, expected in zip((0, 1, 3, 8), parent_slots):

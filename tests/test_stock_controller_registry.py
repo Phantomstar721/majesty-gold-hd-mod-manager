@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from majesty_cam.stock_controller_features import (
-    StockAp08Mx05QuestBoardPanel,
+    StockMx05LiveAgentListPanel,
     StockAp41Fl00HostileMonsterFlag,
     StockMx09Ap41RewardPanel,
     StockMx22BuildingOpenToggle,
@@ -30,19 +30,21 @@ from majesty_cam.stock_controller_registry import (
 
 
 class StockControllerRegistryTests(unittest.TestCase):
-    def test_quest_list_round_trips_in_v10_with_private_text_ids(self) -> None:
-        feature = StockAp08Mx05QuestBoardPanel(
+    def test_live_agent_list_round_trips_in_v11_with_optional_text_ids(self) -> None:
+        feature = StockMx05LiveAgentListPanel(
             panel_key="offers",
             parent_building="adventurer-guild",
             source_dialog_id="QB01",
             open_command_id=0x7101,
-            offer_count_callback_symbol="QB_Count",
+            row_count_callback_symbol="QB_Count",
+            row_agent_id_callback_symbol="QB_Agent_Id",
             revision_callback_symbol="QB_Revision",
-            offer_name_text="Royal Dispatch",
-            offer_goal_text="Deliver orders to an allied building",
-            offer_reward_callback_symbol="QB_Reward",
-            refresh_cost_callback_symbol="QB_RefreshCost",
-            refresh_callback_symbol="QB_Refresh",
+            row_title_text=None,
+            row_text="Deliver orders to an allied building",
+            row_value_callback_symbol="QB_Reward",
+            row_value_suffix_text=" Gold",
+            action_cost_callback_symbol="QB_RefreshCost",
+            action_callback_symbol="QB_Refresh",
         )
         parent = int.from_bytes(b"AGP1", "little")
         child = int.from_bytes(b"QBP1", "little")
@@ -50,7 +52,7 @@ class StockControllerRegistryTests(unittest.TestCase):
             (feature,),
             {"offers": (parent, child)},
             occupant_parent_bases={"offers": "AP08"},
-            quest_text_ids={"offers": (0x68000001, 0x68000002)},
+            list_text_ids={"offers": (0, 0x68000001, 0x68000002)},
         )
 
         payload = encode_stock_controller_registry(registry)
@@ -58,24 +60,25 @@ class StockControllerRegistryTests(unittest.TestCase):
         self.assertEqual(decode_stock_controller_registry(payload), registry)
         magic, version, *counts = struct.unpack_from("<4s13I", payload)
         self.assertEqual(magic, CONTROLLER_REGISTRY_MAGIC)
-        self.assertEqual(version, 10)
+        self.assertEqual(version, 11)
         self.assertEqual(counts[-3:], [0, 0, 1])
-        board = registry.quest_boards[0]
+        board = registry.live_agent_lists[0]
         self.assertEqual(board.action_command_id, 0x20000)
         self.assertEqual(board.parent_controller_base, "AP08")
-        self.assertEqual(board.offer_name_intent_id, 0x68000001)
-        self.assertEqual(board.offer_goal_intent_id, 0x68000002)
+        self.assertEqual(board.row_title_intent_id, 0)
+        self.assertEqual(board.row_text_intent_id, 0x68000001)
+        self.assertEqual(board.row_value_suffix_intent_id, 0x68000002)
         self.assertNotIn(b"adventurer-guild", payload)
 
         with self.assertRaisesRegex(ControllerRegistryError, "manager-allocated"):
             encode_stock_controller_registry(replace(
                 registry,
-                quest_boards=(replace(board, action_command_id=0x15),),
+                live_agent_lists=(replace(board, action_command_id=0x15),),
             ))
 
         obsolete = bytearray(payload)
-        struct.pack_into("<I", obsolete, 4, 9)
-        with self.assertRaisesRegex(ControllerRegistryError, "v9 quest boards"):
+        struct.pack_into("<I", obsolete, 4, 10)
+        with self.assertRaisesRegex(ControllerRegistryError, "v10 one-row"):
             decode_stock_controller_registry(bytes(obsolete))
         obsolete = bytearray(payload)
         struct.pack_into("<I", obsolete, 4, 5)

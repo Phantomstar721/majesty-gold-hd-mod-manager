@@ -79,15 +79,15 @@ class PrivateIntentRegistryTests(unittest.TestCase):
 
     def test_literal_text_ids_are_stable_and_share_the_strict_registry(self):
         name_id = allocate_private_literal_text_id(
-            MOD_A, "stock.ap08-mx05-quest-list-panel.v4", "offers:name"
+            MOD_A, "stock.mx05-live-agent-list-panel.v1", "offers:title"
         )
         again = allocate_private_literal_text_id(
             "{00000000-0000-0000-0000-000000000001}",
-            "stock.ap08-mx05-quest-list-panel.v4",
-            "offers:name",
+            "stock.mx05-live-agent-list-panel.v1",
+            "offers:title",
         )
         goal_id = allocate_private_literal_text_id(
-            MOD_A, "stock.ap08-mx05-quest-list-panel.v4", "offers:goal"
+            MOD_A, "stock.mx05-live-agent-list-panel.v1", "offers:text"
         )
         self.assertEqual(name_id, again)
         self.assertNotEqual(name_id, goal_id)

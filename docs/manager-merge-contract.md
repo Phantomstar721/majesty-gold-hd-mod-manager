@@ -293,38 +293,46 @@ occupant agent types through the required Generic Visitor Lists patch.
 See [the stock lifecycle and test guide](stock-occupant-action-panel.md) for
 native routing, ownership, and validation details.
 
-An AP08-shaped custom Guild can present the currently proven zero-or-one offer
-through MX05's native list lifecycle:
+Any supported custom-building parent can present a bounded multi-row list of
+live agents through MX05's native list lifecycle:
 
 ```json
 {
-  "type": "stock.ap08-mx05-quest-list-panel.v4",
-  "panel_key": "offers",
-  "parent_building": "YourNamespacedGuild",
-  "source_dialog_id": "QB01",
+  "type": "stock.mx05-live-agent-list-panel.v1",
+  "panel_key": "available-orders",
+  "parent_building": "YourNamespacedBuilding",
+  "source_dialog_id": "LP01",
   "open_command_id": 29001,
-  "offer_count_callback_symbol": "YourMod_Offer_Count",
-  "revision_callback_symbol": "YourMod_Offer_Revision",
-  "offer_name_text": "Royal Dispatch",
-  "offer_goal_text": "Deliver orders to an allied building",
-  "offer_reward_callback_symbol": "YourMod_Offer_Reward",
-  "refresh_cost_callback_symbol": "YourMod_Refresh_Cost",
-  "refresh_callback_symbol": "YourMod_Refresh_After_Debit"
+  "row_count_callback_symbol": "YourMod_Row_Count",
+  "row_agent_id_callback_symbol": "YourMod_Row_Agent_Id",
+  "revision_callback_symbol": "YourMod_Row_Revision",
+  "row_title_text": null,
+  "row_text": "Deliver this order",
+  "row_value_callback_symbol": "YourMod_Row_Reward",
+  "row_value_suffix_text": " Gold",
+  "action_cost_callback_symbol": "YourMod_Action_Cost",
+  "action_callback_symbol": "YourMod_Action_After_Debit"
 }
 ```
 
-The parent must be a declared `AP08`/`AP08` custom building. The package owns
-one exact stock-shaped MX05 child SMNU/STRT pair whose single native bottom
-action is labeled Refresh. The Manager allocates the final child and queued
-action IDs. Offer Count is an `(agent Guild) is integer` callback returning
-exactly `0` or `1`.
-When Offer Count is `1`, the Manager inserts that same live Guild context as
-the single native MX05 row. Name and Goal are bounded static package text that
-the Manager assigns private text-registry IDs; Reward receives `(Guild, 1)`;
-Refresh cost and after-debit action receive the Guild through MX05's native
-selection-dependent action row. The Manager rejects counts above one. See
-[the AP08/MX05 one-row proof](stock-quest-board-panel.md) for the exact resource
-geometry, callback signatures, and stock lifecycle.
+The parent must be a declared custom building using `AP07`/`AP10`,
+`AP08`/`AP08`, `AP10`/`AP10`, or `MX09`/`MX09` as its controller/template
+pair. The package owns one exact
+stock-shaped MX05 child SMNU/STRT pair and may choose the label of its one
+native bottom action. The Manager allocates the final child and queued-action
+IDs.
+
+The row-count callback returns `0` through `64`. A second callback receives the
+live parent and one-based row index and returns the selected live agent's
+integer `ATTRIB_AgentID`. The Manager resolves that ID through Majesty's stock
+live-agent lookup, so each row must identify a distinct live agent. A null title
+preserves each agent's stock name; optional static row text and an optional
+per-row integer plus suffix provide bounded presentation, with the optional
+value rendered on its own reward line. MX05 passes the selected row agent to
+the action cost and after-debit callbacks.
+See [the generic MX05 live-agent-list proof](stock-quest-board-panel.md) for
+the exact resource geometry, callback signatures, stock lifecycle, and fault
+bounds.
 
 An `AP07`, `AP10`, or `MX09` building can use MX22's persistent open/closed
 state and paired-control presentation:

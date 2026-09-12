@@ -118,8 +118,9 @@ The manager first resolves package-local building and child-dialog identities,
 then writes exact runtime identities and validated recipes into the binary
 registry.
 
-The header contains magic `MMCR`, schema version 2, and nine little-endian
-section counts in this order:
+The base header contains magic `MMCR`, a schema version, and nine
+little-endian section counts. Later canonical versions append their section
+counts in this order:
 
 1. AP10-owned/AP69-shaped secondary panels;
 2. AP22 packed-resource meters;
@@ -131,11 +132,13 @@ section counts in this order:
 8. MX09-owned/AP41-shaped reward panels; and
 9. AP41/Fl00 hostile-monster reward actions;
 10. MX04/MX05 occupant-action panels (v3); and
-11. MX22 building open/closed toggles (v4).
+11. MX22 building open/closed toggles (v4); and
+12. MX05 live-agent-list panels (v11).
 
 The writer retains canonical v2 when neither newer section is needed, uses v3
 when occupant panels are present, and uses v4 when building toggles are
-present. A newer-version header with an empty final section is noncanonical.
+present. It uses v11 only when at least one live-agent list is present. A
+newer-version header with an empty final section is noncanonical.
 
 Records are deterministically sorted within their section and refer to an
 existing panel through a manager-qualified `panel_key`. The parser validates

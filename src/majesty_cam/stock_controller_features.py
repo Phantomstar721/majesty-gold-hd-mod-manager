@@ -143,21 +143,23 @@ class StockMx04Mx05OccupantActionPanel:
 
 
 @dataclass(frozen=True)
-class StockAp08Mx05QuestBoardPanel:
-    """One MX05-native Refresh row backed by the live AP08 Guild agent."""
+class StockMx05LiveAgentListPanel:
+    """MX05's native multi-row list populated with package-selected live agents."""
 
     panel_key: str
     parent_building: str
     source_dialog_id: str
     open_command_id: int
-    offer_count_callback_symbol: str
+    row_count_callback_symbol: str
+    row_agent_id_callback_symbol: str
     revision_callback_symbol: str
-    offer_name_text: str
-    offer_goal_text: str
-    offer_reward_callback_symbol: str
-    refresh_cost_callback_symbol: str
-    refresh_callback_symbol: str
-    type: str = "stock.ap08-mx05-quest-list-panel.v4"
+    row_title_text: Optional[str]
+    row_text: Optional[str]
+    row_value_callback_symbol: Optional[str]
+    row_value_suffix_text: Optional[str]
+    action_cost_callback_symbol: str
+    action_callback_symbol: str
+    type: str = "stock.mx05-live-agent-list-panel.v1"
 
 
 @dataclass(frozen=True)
@@ -301,7 +303,7 @@ class StockAp69SovereignTargetAction:
 ControllerFeature = Union[
     StockMx22BuildingOpenToggle,
     StockMx04Mx05OccupantActionPanel,
-    StockAp08Mx05QuestBoardPanel,
+    StockMx05LiveAgentListPanel,
     StockAp10Ap69SecondaryPanel,
     StockMx09Ap41RewardPanel,
     StockAp41Fl00HostileMonsterFlag,
@@ -317,7 +319,7 @@ ControllerFeature = Union[
 _FEATURE_TYPES = {
     "stock.mx22-building-open-toggle.v1": StockMx22BuildingOpenToggle,
     "stock.mx04-mx05-occupant-action-panel.v1": StockMx04Mx05OccupantActionPanel,
-    "stock.ap08-mx05-quest-list-panel.v4": StockAp08Mx05QuestBoardPanel,
+    "stock.mx05-live-agent-list-panel.v1": StockMx05LiveAgentListPanel,
     "stock.ap10-ap69-secondary-panel.v1": StockAp10Ap69SecondaryPanel,
     "stock.mx09-ap41-reward-panel.v1": StockMx09Ap41RewardPanel,
     "stock.ap41-fl00-hostile-monster-flag.v1": StockAp41Fl00HostileMonsterFlag,
@@ -651,7 +653,7 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
         _family_id(feature.building_family_id, "building_family_id")
         _control(feature.open_command_id, "open_command_id")
     elif isinstance(feature, (StockMx09Ap41RewardPanel, StockMx04Mx05OccupantActionPanel,
-                              StockAp08Mx05QuestBoardPanel)):
+                              StockMx05LiveAgentListPanel)):
         _logical(feature.parent_building, "parent_building")
         _fourcc(feature.source_dialog_id, "source_dialog_id")
         _control(feature.open_command_id, "open_command_id")
@@ -660,20 +662,45 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
             _gpl_symbol(feature.action_callback_symbol)
             if feature.cost_callback_symbol.casefold() == feature.action_callback_symbol.casefold():
                 raise ControllerFeatureError("occupant cost and action callbacks must be distinct")
-        elif isinstance(feature, StockAp08Mx05QuestBoardPanel):
+        elif isinstance(feature, StockMx05LiveAgentListPanel):
+            paired_value_fields = (
+                feature.row_value_callback_symbol is not None,
+                feature.row_value_suffix_text is not None,
+            )
+            if paired_value_fields[0] != paired_value_fields[1]:
+                raise ControllerFeatureError(
+                    "row_value_callback_symbol and row_value_suffix_text must "
+                    "either both be present or both be null"
+                )
             symbols = (
-                feature.offer_count_callback_symbol,
+                feature.row_count_callback_symbol,
+                feature.row_agent_id_callback_symbol,
                 feature.revision_callback_symbol,
-                feature.offer_reward_callback_symbol,
-                feature.refresh_cost_callback_symbol,
-                feature.refresh_callback_symbol,
+                feature.action_cost_callback_symbol,
+                feature.action_callback_symbol,
+                *((feature.row_value_callback_symbol,)
+                  if feature.row_value_callback_symbol is not None else ()),
             )
             for symbol in symbols:
                 _gpl_symbol(symbol)
             if len({symbol.casefold() for symbol in symbols}) != len(symbols):
-                raise ControllerFeatureError("quest-list callback symbols must be distinct")
-            _bounded_cp1252(feature.offer_name_text, "offer_name_text")
-            _bounded_cp1252(feature.offer_goal_text, "offer_goal_text")
+                raise ControllerFeatureError("live-agent-list callback symbols must be distinct")
+            for value, field_name in (
+                (feature.row_title_text, "row_title_text"),
+                (feature.row_text, "row_text"),
+                (feature.row_value_suffix_text, "row_value_suffix_text"),
+            ):
+                if value is not None:
+                    _bounded_cp1252(value, field_name)
+            if (
+                feature.row_title_text is None
+                and feature.row_text is None
+                and feature.row_value_callback_symbol is None
+            ):
+                raise ControllerFeatureError(
+                    "a live-agent list must customize at least one of row_title_text, "
+                    "row_text, or row_value_callback_symbol"
+                )
     elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
         _logical(feature.action_key, "action_key")
         _fourcc(feature.private_mode, "private_mode")
@@ -907,7 +934,7 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
 
 def _validate_composition(features: Sequence[ControllerFeature]) -> None:
     panel_types = (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
-                   StockMx04Mx05OccupantActionPanel, StockAp08Mx05QuestBoardPanel)
+                   StockMx04Mx05OccupantActionPanel, StockMx05LiveAgentListPanel)
     panels = {
         item.panel_key: item
         for item in features
@@ -985,16 +1012,20 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
     for feature in features:
         if isinstance(feature, StockMx22BuildingOpenToggle):
             continue
-        if isinstance(feature, (StockMx04Mx05OccupantActionPanel, StockAp08Mx05QuestBoardPanel)):
+        if isinstance(feature, (StockMx04Mx05OccupantActionPanel, StockMx05LiveAgentListPanel)):
             symbols = (
                 (feature.cost_callback_symbol, feature.action_callback_symbol)
                 if isinstance(feature, StockMx04Mx05OccupantActionPanel)
-                else (
-                    feature.offer_count_callback_symbol,
-                    feature.revision_callback_symbol,
-                    feature.offer_reward_callback_symbol,
-                    feature.refresh_cost_callback_symbol,
-                    feature.refresh_callback_symbol,
+                else tuple(
+                    symbol for symbol in (
+                        feature.row_count_callback_symbol,
+                        feature.row_agent_id_callback_symbol,
+                        feature.revision_callback_symbol,
+                        feature.row_value_callback_symbol,
+                        feature.action_cost_callback_symbol,
+                        feature.action_callback_symbol,
+                    )
+                    if symbol is not None
                 )
             )
             for symbol in symbols:
@@ -1356,7 +1387,7 @@ __all__ = [
     "LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY",
     "MAX_CONTROLLER_FEATURES",
     "StockAp10Ap69SecondaryPanel",
-    "StockAp08Mx05QuestBoardPanel",
+    "StockMx05LiveAgentListPanel",
     "StockAp17UpgradeResearchGate",
     "StockAp22ResourceMeter",
     "StockAp24RageCommandAction",
