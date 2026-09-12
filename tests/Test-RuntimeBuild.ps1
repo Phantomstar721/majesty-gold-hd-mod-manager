@@ -164,7 +164,7 @@ try {
         "runtime feature registry contains trailing bytes", "FindEnchantmentRow"
     ) "Runtime feature registry contract"
     Assert-ContainsAny @($controllerSource, $controllerHeader) @(
-        "kRegistryVersion = 7", "kMaximumRecordCount = 256",
+        "kRegistryVersion = 10", "kMaximumRecordCount = 256",
         "kMaximumPanelCount = 32", "kMaximumRegistryBytes = 512u * 1024u",
         "ParseRegistry", "FindPanelByParentDialog", "FindPanelByChildDialog",
         "FindRewardPanelByParentDialog", "FindHostileMonsterFlagByMode",
@@ -177,15 +177,18 @@ try {
         "MMCR private sovereign mode collides with a stock mode",
         "!buildingFamilies.insert(item->buildingFamilyId).second",
         "stockTargetModes.find(*mode)", "stockExecutorModes.find(*mode)",
-        "FindQuestBoardByCommand", "MMCR v7 without quest lists is noncanonical",
+        "FindQuestBoardByCommand", "MMCR v9 quest boards contain a non-stock duplicate Refresh row",
+        "MMCR v8 quest rows use unsupported GPL string return contracts",
+        "MMCR v7 quest rows use unsupported GPL agent/boolean return contracts",
         "MMCR v6 quest rows lack private display callbacks",
         "MMCR v5 fixed-row quest boards are unsupported"
     ) "Stock-controller registry contract"
     Assert-ContainsAny @($runtimeSource) @(
-        "EvaluateQuestBoardBoolean", "EvaluateQuestBoardScalar(",
-        "kGplNullResultType = 0", "kGplIntegerResultType = 1",
-        "kGplAgentResultType = 5", "scalar != 0",
-        "IsQuestBoardAgentCompatibleResultType(type)",
+        "EvaluateQuestBoardScalar(", "kGplIntegerResultType = 1",
+        "FindPrivateIntentText(board->offerNameIntentId)",
+        "FindPrivateIntentText(board->offerGoalIntentId)",
+        "offerCountCallbackSymbol", "offerCount > 1",
+        "presentations[0].agent = guild",
         "FindRewardStateByPrivateMode",
         "state.modeObject == modeObject",
         "g_buildProfile->getFlagModeManagerRva",
@@ -195,14 +198,23 @@ try {
         "registered != state.modeObject",
         "registeredCursor != state.record->cursorOrdinal"
     ) "Private Fl00 live-context and registry identity contract"
+    foreach ($unsupportedQuestResultPath in @(
+        "EvaluateQuestBoardBoolean", "EvaluateQuestBoardAgent",
+        "EvaluateQuestBoardString", "g_questBoardBooleanEvaluator",
+        "g_questBoardAgentEvaluator", "g_questBoardStringEvaluator"
+    )) {
+        if ($runtimeSource.Contains($unsupportedQuestResultPath)) {
+            throw "Unsupported quest-board GPL result path remains: $unsupportedQuestResultPath"
+        }
+    }
     if ($runtimeSource.Contains("Quest list row-query:")) {
         throw "Quest-board steady-state row polling still writes production logs."
     }
     $questPopulateSpan = Get-SourceSpan $runtimeSource `
         "void __fastcall QuestBoardPopulate" `
-        "void RefreshQuestBoardRefreshPresentation"
+        "ControllerEvent g_stockQuestBoardEvent"
     Assert-Ordered $questPopulateSpan @(
-        "g_activeQuestRevision == static_cast<int>(revision)",
+        "!g_questBoardPopulationRequested) return;",
         "Quest list population:"
     ) "Quest-board revision-gated diagnostics"
     Assert-ContainsAny @($capabilitySource, $capabilityHeader) @(
@@ -522,24 +534,42 @@ try {
         "bool InstallQuestBoardChildVtable(std::uint32_t controller) {" `
         "struct OccupantParentClass"
     Assert-ContainsAny @($questChildInstall) @(
-        "table[3] = reinterpret_cast<void*>(&QuestBoardControl);",
         "table[8] = reinterpret_cast<void*>(&QuestBoardEvent);",
-        "table[11] = reinterpret_cast<void*>(&QuestBoardPopulate);",
-        "table[14] = reinterpret_cast<void*>(&QuestBoardRefresh);"
-    ) "MX05 quest lifecycle and presentation hooks"
-    foreach ($forbiddenQuestChildHook in @(
-        "table[1] = reinterpret_cast<void*>(&QuestBoardSetup);"
+        "table[11] = reinterpret_cast<void*>(&QuestBoardPopulate);"
+    ) "MX05 quest lifecycle hooks"
+    foreach ($forbiddenQuestChildOverride in @(
+        "table[3] =", "table[10] =", "table[14] ="
     )) {
-        if ($questChildInstall.Contains($forbiddenQuestChildHook)) {
-            throw "MX05 quest child replaced stock setup: $forbiddenQuestChildHook"
+        if ($questChildInstall.Contains($forbiddenQuestChildOverride)) {
+            throw "Quest-board MX05 child replaces a stock virtual: $forbiddenQuestChildOverride"
         }
     }
     Assert-ContainsAny @($runtimeSource) @(
-        "RefreshQuestBoardRefreshPresentation",
-        "SetQuestBoardRefreshVisible",
-        "HandleQuestBoardRefreshControl",
-        "kQuestRefreshCoinControlId = 0x7104"
-    ) "MX05 child Refresh presentation"
+        "Quest list callback resolve:",
+        "the package offer-count callback did not return an integer"
+    ) "Quest-board scalar callback diagnostics"
+    $occupantParentInstall = Get-SourceSpan $runtimeSource `
+        "bool InstallOccupantParentVtable(std::uint32_t controller) {" `
+        "bool InstallOccupantChildVtable(std::uint32_t controller) {"
+    Assert-ContainsAny @($occupantParentInstall) @(
+        "g_parentOccupantPanel->parentControllerBase",
+        "declaredBase == kAp08DialogId",
+        "kAp08VtableEntries"
+    ) "Declared AP08 occupant parent boundary"
+    $occupantChildInstall = Get-SourceSpan $runtimeSource `
+        "bool InstallOccupantChildVtable(std::uint32_t controller) {" `
+        "bool InstallRewardPanelControllerVtable(std::uint32_t controller) {"
+    Assert-ContainsAny @($occupantChildInstall) @(
+        "std::memcpy(table, stock, sizeof(table));",
+        "RegisterManagedVtable(table, stock, 15"
+    ) "Unchanged stock MX05 occupant child lifecycle"
+    foreach ($forbiddenOccupantChildOverride in @(
+        "table[1] =", "table[3] =", "table[8] =", "table[11] =", "table[14] ="
+    )) {
+        if ($occupantChildInstall.Contains($forbiddenOccupantChildOverride)) {
+            throw "Occupant-action MX05 child replaces a stock virtual: $forbiddenOccupantChildOverride"
+        }
+    }
     $questEvent = Get-SourceSpan $runtimeSource `
         "void __fastcall QuestBoardEvent(" `
         "bool InstallQuestBoardChildVtable("
@@ -548,7 +578,8 @@ try {
         "if (a3 == 0x09435358u)",
         "return;",
         "if (g_activeQuestRevision == static_cast<int>(revision)) return;",
-        "QuestBoardRefresh(controller, nullptr);"
+        "g_questBoardPopulationRequested = true;",
+        "g_stockQuestBoardRefresh(controller);"
     ) "MX05 stock XSCX and revision refresh"
     foreach ($forbiddenQuestEventWrite in @(
         "SetControllerControlInteger(", "SendControllerMessage("
@@ -559,15 +590,24 @@ try {
     }
     $questPopulation = Get-SourceSpan $runtimeSource `
         "void __fastcall QuestBoardPopulate(" `
-        "void RefreshQuestBoardChildActionChrome("
+        "ControllerEvent g_stockQuestBoardEvent"
     Assert-ContainsAny @($questPopulation) @(
+        "!g_questBoardPopulationRequested) return;",
         "FaultQuestBoardPresentation(",
-        "package list callback did not return a stock agent value",
+        "package offer-count callback did not return an integer",
+        "package offer count exceeded the proven one-row contract",
         "return;"
     ) "Fault-contained quest-board presentation"
     if ($questPopulation.Contains("StopUnsafeManagerRuntimeLaunch(")) {
         throw "Package quest-row data failures must not become runtime-install failures."
     }
+    $questRowName = Get-SourceSpan $runtimeSource `
+        "void* __cdecl QuestBoardRowNameFormatter(" `
+        "int __fastcall QuestBoardRowIntentAttribute("
+    Assert-Ordered $questRowName @(
+        "g_stockQuestRowNameFormatter(destination, agent, stockStyle);",
+        "g_privateIntentStringAssign(destination, &view);"
+    ) "Stock-constructed private quest-row name lifecycle"
 
     $researchBegin = Get-SourceSpan $runtimeSource `
         "int BeginPrivateResearch(" `

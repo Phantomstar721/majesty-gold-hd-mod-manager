@@ -78,6 +78,8 @@ from .intent_text import (
     IntentTextError,
     PrivateActivityTextBinding,
     PrivateActivityTextRecord,
+    PrivateLiteralTextRecord,
+    allocate_private_literal_text_id,
     audit_private_activity_text_resolver_aliases,
     collect_exact_integer_expressions,
     collect_integer_expression_environment,
@@ -165,9 +167,6 @@ from .stock_controller_features import (
 )
 from .stock_controller_registry import (
     CONTROLLER_REGISTRY_RELATIVE_PATH,
-    QUEST_REFRESH_COIN_CONTROL_ID,
-    QUEST_REFRESH_CONTROL_ID,
-    QUEST_REFRESH_PRICE_BINDING_ID,
     STOCK_CONTROLLER_RUNTIME_CAPABILITY,
     ControllerRegistryError,
     ResolvedControllerRegistry,
@@ -528,6 +527,7 @@ class ControllerComposeResult:
     panels: tuple[ResolvedControllerPanel, ...]
     key_mappings: tuple[ControllerKeyMapping, ...]
     toggles: tuple[ResolvedControllerToggle, ...] = ()
+    private_texts: tuple[PrivateLiteralTextRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -932,168 +932,76 @@ def _smnu_record_index(
     return matches[0]
 
 
-def _patch_mx05_record(
-    record: bytes,
-    *,
-    expected_size: int,
-    expected_rect: tuple[int, int, int, int],
-    rectangle: tuple[int, int, int, int],
-    owner: str,
-    label: str,
-    control_offset: int | None = None,
-    control_id: int | None = None,
-    string_patches: Mapping[int, int] | None = None,
-) -> bytes:
-    if (
-        len(record) != expected_size
-        or record[-4:] != b"\xff\xff\xff\xff"
-        or struct.unpack_from("<4I", record, 8) != expected_rect
-    ):
-        raise ComposeError(
-            f"{owner}: stock MX05 {label} record shape has changed"
-        )
-    result = bytearray(record)
-    struct.pack_into("<4I", result, 8, *rectangle)
-    if control_offset is not None and control_id is not None:
-        struct.pack_into("<I", result, control_offset, control_id)
-    for offset, value in (string_patches or {}).items():
-        struct.pack_into("<I", result, offset, value)
-    return bytes(result)
-
-
-def _append_quest_refresh_strings(
-    payload: bytes, *, owner: str, label: str
-) -> tuple[bytes, tuple[int, int, int, int]]:
-    try:
-        table = parse_strt(payload)
-    except ValueError as exc:
-        raise ComposeError(f"{owner}: STRT/{label} is invalid: {exc}") from exc
-    if len(table.records) > 0xFFFB:
-        raise ComposeError(f"{owner}: STRT/{label} has no room for Refresh strings")
-    first = len(table.records)
-    texts = (
-        b"REFRESH",
-        b"Replace all available quests.",
-        b"0",
-        b"Gold required to refresh the quest board.",
-    )
-    records = tuple(table.records) + tuple(
-        StrtRecord(string_id=first + index, text=text)
-        for index, text in enumerate(texts)
-    )
-    return StrtTable(version=table.version, records=records).to_bytes(), (
-        first, first + 1, first + 2, first + 3,
-    )
-
-
-def _materialize_mx05_quest_refresh_row(
+def _validate_mx05_quest_refresh_panel(
     game_path: Path,
-    payload: bytes,
-    strings: tuple[int, int, int, int],
+    smnu_payload: bytes,
+    strt_payload: bytes,
     *,
     owner: str,
     label: str,
-) -> bytes:
-    """Add a second literal MX05 bottom action row for quest-board Refresh.
-
-    The package supplies an unchanged MX05 panel. The Manager shortens the
-    native list/scrollbar by one stock row, moves the native selected action up
-    by exactly 25 pixels, and appends stock-cloned action/coin/price records at
-    the original bottom coordinates. No AP54 control or parent-panel workaround
-    is accepted or retained.
-    """
+) -> None:
+    """Require one stock-shaped MX05 row whose native action is Refresh."""
 
     stock_payload = _require_cam_entry(
         game_path / Path("DataMX/mx_textdata.cam"), b"SMNU", b"MX05"
     ).data
-    stock = list(_split_smnu_records(stock_payload, owner="stock", label="MX05"))
-    records = list(_split_smnu_records(payload, owner=owner, label=label))
-    ids = (
-        _MX05_NATIVE_LIST_CONTROL_ID,
-        _MX05_NATIVE_ACTION_CONTROL_ID,
-        _MX05_NATIVE_COIN_CONTROL_ID,
-        _MX05_NATIVE_SCROLL_CONTROL_ID,
-        _MX05_NATIVE_PRICE_CONTROL_ID,
-    )
-    stock_indices = {
-        control: _smnu_record_index(stock, control, owner="stock", label="MX05")
-        for control in ids
+    stock = _split_smnu_records(stock_payload, owner="stock", label="MX05")
+    records = _split_smnu_records(smnu_payload, owner=owner, label=label)
+    if len(records) != len(stock):
+        raise ComposeError(
+            f"{owner}: SMNU/{label} must retain stock MX05's exact record count"
+        )
+    shapes = {
+        _MX05_NATIVE_LIST_CONTROL_ID: (0x90, (10, 55, 164, 160)),
+        _MX05_NATIVE_ACTION_CONTROL_ID: (0xAC, (51, 219, 103, 21)),
+        _MX05_NATIVE_COIN_CONTROL_ID: (0x74, (33, 219, 16, 17)),
+        _MX05_NATIVE_SCROLL_CONTROL_ID: (0x54, (174, 51, 25, 167)),
+        _MX05_NATIVE_PRICE_CONTROL_ID: (0xA8, (115, 222, 39, 16)),
     }
-    indices = {
-        control: _smnu_record_index(records, control, owner=owner, label=label)
-        for control in ids
-    }
-    for control in ids:
-        if records[indices[control]] != stock[stock_indices[control]]:
+    indices: dict[int, int] = {}
+    for control, (size, rectangle) in shapes.items():
+        stock_index = _smnu_record_index(
+            stock, control, owner="stock", label="MX05"
+        )
+        index = _smnu_record_index(records, control, owner=owner, label=label)
+        record = records[index]
+        if (
+            index != stock_index
+            or len(record) != size
+            or record[-4:] != b"\xff\xff\xff\xff"
+            or struct.unpack_from("<4I", record, 8) != rectangle
+        ):
             raise ComposeError(
-                f"{owner}: SMNU/{label} control 0x{control:08X} is not the "
-                "literal stock MX05 record required for Manager layout"
+                f"{owner}: SMNU/{label} control 0x{control:08X} must retain "
+                "its exact stock MX05 record position, size, and geometry"
             )
+        indices[control] = index
 
-    records[indices[_MX05_NATIVE_LIST_CONTROL_ID]] = _patch_mx05_record(
-        stock[stock_indices[_MX05_NATIVE_LIST_CONTROL_ID]],
-        expected_size=0x90, expected_rect=(10, 55, 164, 160),
-        rectangle=(10, 55, 164, 135), owner=owner, label="list",
+    obsolete = tuple(
+        value for value in (0x7102, 0x7103, 0x7104)
+        if struct.pack("<I", value) in smnu_payload
     )
-    records[indices[_MX05_NATIVE_SCROLL_CONTROL_ID]] = _patch_mx05_record(
-        stock[stock_indices[_MX05_NATIVE_SCROLL_CONTROL_ID]],
-        expected_size=0x54, expected_rect=(174, 51, 25, 167),
-        rectangle=(174, 51, 25, 142), owner=owner, label="scrollbar",
-    )
-    records[indices[_MX05_NATIVE_COIN_CONTROL_ID]] = _patch_mx05_record(
-        stock[stock_indices[_MX05_NATIVE_COIN_CONTROL_ID]],
-        expected_size=0x74, expected_rect=(33, 219, 16, 17),
-        rectangle=(33, 194, 16, 17), owner=owner, label="selected-action coin",
-    )
-    records[indices[_MX05_NATIVE_ACTION_CONTROL_ID]] = _patch_mx05_record(
-        stock[stock_indices[_MX05_NATIVE_ACTION_CONTROL_ID]],
-        expected_size=0xAC, expected_rect=(51, 219, 103, 21),
-        rectangle=(51, 194, 103, 21), owner=owner, label="selected action",
-    )
-    records[indices[_MX05_NATIVE_PRICE_CONTROL_ID]] = _patch_mx05_record(
-        stock[stock_indices[_MX05_NATIVE_PRICE_CONTROL_ID]],
-        expected_size=0xA8, expected_rect=(115, 222, 39, 16),
-        rectangle=(115, 197, 39, 16), owner=owner, label="selected-action price",
-    )
+    if obsolete:
+        raise ComposeError(
+            f"{owner}: SMNU/{label} contains obsolete duplicate Refresh controls "
+            + ", ".join(f"0x{value:08X}" for value in obsolete)
+        )
 
-    refresh_label, refresh_tooltip, refresh_price, refresh_price_tooltip = strings
-    refresh_coin = _patch_mx05_record(
-        stock[stock_indices[_MX05_NATIVE_COIN_CONTROL_ID]],
-        expected_size=0x74, expected_rect=(33, 219, 16, 17),
-        rectangle=(33, 219, 16, 17), owner=owner, label="Refresh coin",
-        control_offset=0x64, control_id=QUEST_REFRESH_COIN_CONTROL_ID,
-        string_patches={0x20: refresh_price_tooltip},
-    )
-    refresh_action = _patch_mx05_record(
-        stock[stock_indices[_MX05_NATIVE_ACTION_CONTROL_ID]],
-        expected_size=0xAC, expected_rect=(51, 219, 103, 21),
-        rectangle=(51, 219, 103, 21), owner=owner, label="Refresh action",
-        control_offset=0x88, control_id=QUEST_REFRESH_CONTROL_ID,
-        string_patches={
-            0x2C: refresh_label,
-            0x30: refresh_label,
-            0x38: refresh_tooltip,
-        },
-    )
-    refresh_price_record = _patch_mx05_record(
-        stock[stock_indices[_MX05_NATIVE_PRICE_CONTROL_ID]],
-        expected_size=0xA8, expected_rect=(115, 222, 39, 16),
-        rectangle=(115, 222, 39, 16), owner=owner, label="Refresh price",
-        control_offset=0x7C, control_id=QUEST_REFRESH_PRICE_BINDING_ID,
-        string_patches={0x1C: refresh_price, 0x24: refresh_price_tooltip},
-    )
-    records[-1:-1] = (refresh_coin, refresh_action, refresh_price_record)
-    result = b"".join(records)
-    for control in (
-        QUEST_REFRESH_CONTROL_ID,
-        QUEST_REFRESH_PRICE_BINDING_ID,
-        QUEST_REFRESH_COIN_CONTROL_ID,
+    try:
+        strings = parse_strt(strt_payload)
+    except ValueError as exc:
+        raise ComposeError(f"{owner}: STRT/{label} is invalid: {exc}") from exc
+    action = records[indices[_MX05_NATIVE_ACTION_CONTROL_ID]]
+    label_indices = struct.unpack_from("<2I", action, 0x2C)
+    if any(
+        index >= len(strings.records)
+        or strings.records[index].text.strip().upper() != b"REFRESH"
+        for index in label_indices
     ):
-        if result.count(struct.pack("<I", control)) != 1:
-            raise ComposeError(
-                f"{owner}: generated quest-board control 0x{control:08X} is not unique"
-            )
-    return result
+        raise ComposeError(
+            f"{owner}: SMNU/STRT/{label} must label MX05's one native bottom "
+            "action row REFRESH"
+        )
 
 
 def _materialize_quest_board_panel_resources(
@@ -1107,7 +1015,6 @@ def _materialize_quest_board_panel_resources(
     if not controller_registry.quest_boards:
         return tuple(resources)
     panels = {item.qualified_panel_key: item for item in controller_panels}
-    output = list(resources)
     for board in controller_registry.quest_boards:
         panel = panels.get(board.panel_key)
         if panel is None:
@@ -1120,7 +1027,7 @@ def _materialize_quest_board_panel_resources(
         if parent is None:
             raise ComposeError(f"quest-board parent mapping is missing: {board.panel_key}")
         parent_smnu = [
-            resource for resource in output
+            resource for resource in resources
             if resource.owner == panel.owner and resource.section == b"SMNU"
             and resource.key == parent.source_dialog_id
         ]
@@ -1130,13 +1037,8 @@ def _materialize_quest_board_panel_resources(
             parent_smnu[0].entry.data, panel.owner,
             _display_key(parent.source_dialog_id),
         )
-        authored = [
-            value for value in (
-                QUEST_REFRESH_CONTROL_ID,
-                QUEST_REFRESH_PRICE_BINDING_ID,
-                QUEST_REFRESH_COIN_CONTROL_ID,
-            ) if value in parent_values
-        ]
+        authored = [value for value in (0x7102, 0x7103, 0x7104)
+                    if value in parent_values]
         if authored:
             raise ComposeError(
                 f"{panel.owner}: remove the obsolete AP54 parent Refresh controls: "
@@ -1144,48 +1046,27 @@ def _materialize_quest_board_panel_resources(
             )
 
         child_matches = [
-            (index, resource) for index, resource in enumerate(output)
+            resource for resource in resources
             if resource.owner == panel.owner and resource.key == panel.source_dialog_id
             and resource.section in (b"SMNU", b"STRT")
         ]
         child_by_section = {
-            section: [(index, resource) for index, resource in child_matches
+            section: [resource for resource in child_matches
                       if resource.section == section]
             for section in (b"SMNU", b"STRT")
         }
         if any(len(matches) != 1 for matches in child_by_section.values()):
             raise ComposeError(f"{panel.owner}: quest-board child panel is incomplete")
-        strt_index, strt_resource = child_by_section[b"STRT"][0]
-        strings_payload, string_indices = _append_quest_refresh_strings(
-            strt_resource.entry.data, owner=panel.owner,
+        smnu_resource = child_by_section[b"SMNU"][0]
+        strt_resource = child_by_section[b"STRT"][0]
+        _validate_mx05_quest_refresh_panel(
+            game_path,
+            smnu_resource.entry.data,
+            strt_resource.entry.data,
+            owner=panel.owner,
             label=_display_key(panel.source_dialog_id),
         )
-        smnu_index, smnu_resource = child_by_section[b"SMNU"][0]
-        child_values = _smnu_dword_values(
-            smnu_resource.entry.data, panel.owner,
-            _display_key(panel.source_dialog_id),
-        )
-        if any(value in child_values for value in (
-            QUEST_REFRESH_CONTROL_ID,
-            QUEST_REFRESH_PRICE_BINDING_ID,
-            QUEST_REFRESH_COIN_CONTROL_ID,
-        )):
-            raise ComposeError(
-                f"{panel.owner}: quest-board child must not pre-author Manager Refresh controls"
-            )
-        smnu_payload = _materialize_mx05_quest_refresh_row(
-            game_path, smnu_resource.entry.data, string_indices,
-            owner=panel.owner, label=_display_key(panel.source_dialog_id),
-        )
-        output[strt_index] = replace(
-            strt_resource,
-            entry=CamEntry(name=strt_resource.entry.name, data=strings_payload),
-        )
-        output[smnu_index] = replace(
-            smnu_resource,
-            entry=CamEntry(name=smnu_resource.entry.name, data=smnu_payload),
-        )
-    return tuple(output)
+    return tuple(resources)
 
 
 def _load_whole_strt_stock_lineage(
@@ -4402,7 +4283,6 @@ def _validate_controller_panel_controls(
     owner: str,
     parent_label: str,
     child_label: str,
-    allow_manager_generated_refresh: bool = False,
 ) -> None:
     parent_values = _smnu_dword_values(parent_payload, owner, parent_label)
     child_values = _smnu_dword_values(child_payload, owner, child_label)
@@ -4434,48 +4314,6 @@ def _validate_controller_panel_controls(
     if panel in registry.quest_boards:
         child_requirements.extend((f"MX05 stock control {value:#x}", value)
                                   for value in mx05_authored_controls)
-        # Refresh is a Manager-generated clone of MX05's literal child action,
-        # coin and price records. Packages must not author those controls in
-        # either panel (including the retired AP54 parent workaround).
-        refresh_controls = (
-            panel.refresh_control_id,
-            panel.refresh_price_binding_id,
-            QUEST_REFRESH_COIN_CONTROL_ID,
-        )
-        authored_refresh = [
-            value
-            for value in refresh_controls
-            if value in parent_values or value in child_values
-        ]
-        if authored_refresh and not allow_manager_generated_refresh:
-            raise ComposeError(
-                f"{owner}: quest-board Refresh controls are Manager-generated; "
-                "remove package-authored AP54/duplicate controls "
-                + ", ".join(f"0x{value:08X}" for value in authored_refresh)
-            )
-        if allow_manager_generated_refresh:
-            parent_refresh = [
-                value for value in refresh_controls if value in parent_values
-            ]
-            missing_child = [
-                value for value in refresh_controls if value not in child_values
-            ]
-            if parent_refresh or missing_child:
-                details = []
-                if parent_refresh:
-                    details.append(
-                        "unexpected parent controls "
-                        + ", ".join(f"0x{value:08X}" for value in parent_refresh)
-                    )
-                if missing_child:
-                    details.append(
-                        "missing child controls "
-                        + ", ".join(f"0x{value:08X}" for value in missing_child)
-                    )
-                raise ComposeError(
-                    f"{owner}: generated quest-board Refresh row is invalid: "
-                    + "; ".join(details)
-                )
     for meter in registry.meters:
         if meter.panel_key == panel_key:
             child_requirements.extend((
@@ -5852,7 +5690,7 @@ def resolve_controller_registry(
 
     if not claims:
         empty = resolve_stock_controller_registry((), {})
-        return ControllerComposeResult(empty, (), (), ())
+        return ControllerComposeResult(empty, (), (), (), ())
 
     qualified: list[ControllerFeature] = []
     mappings: dict[tuple[str, str, str], ControllerKeyMapping] = {}
@@ -5862,6 +5700,9 @@ def resolve_controller_registry(
     raw_panels: dict[str, tuple[PackageInventory, ControllerFeature]] = {}
     raw_toggles: dict[str, tuple[PackageInventory, StockMx22BuildingOpenToggle]] = {}
     flag_prototypes: dict[str, str] = {}
+    quest_text_ids: dict[str, tuple[int, int]] = {}
+    quest_private_texts: list[PrivateLiteralTextRecord] = []
+    claimed_private_text_ids: set[int] = set()
     for inventory, feature in claims:
         package_id = _normalized_mod_uuid(inventory.selected.package.mod_id)
 
@@ -5888,6 +5729,31 @@ def resolve_controller_registry(
         qualified.append(resolved_feature)
         if isinstance(feature, panel_types):
             raw_panels[resolved_feature.panel_key] = (inventory, feature)
+            if isinstance(feature, StockAp08Mx05QuestBoardPanel):
+                ids = tuple(
+                    allocate_private_literal_text_id(
+                        inventory.selected.package.mod_id,
+                        "stock.ap08-mx05-quest-list-panel.v4",
+                        f"{feature.panel_key}:{field}",
+                    )
+                    for field in ("offer-name", "offer-goal")
+                )
+                if ids[0] == ids[1] or any(
+                    value in claimed_private_text_ids for value in ids
+                ):
+                    raise ComposeError(
+                        "manager-owned quest text ID allocation collided"
+                    )
+                claimed_private_text_ids.update(ids)
+                quest_text_ids[resolved_feature.panel_key] = ids
+                quest_private_texts.extend((
+                    PrivateLiteralTextRecord(
+                        ids[0], feature.offer_name_text.encode("cp1252")
+                    ),
+                    PrivateLiteralTextRecord(
+                        ids[1], feature.offer_goal_text.encode("cp1252")
+                    ),
+                ))
         elif isinstance(feature, StockMx22BuildingOpenToggle):
             raw_toggles[resolved_feature.toggle_key] = (inventory, feature)
         elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
@@ -6056,6 +5922,7 @@ def resolve_controller_registry(
             normalized, panel_dialog_ids, flag_prototypes=flag_prototypes,
             occupant_parent_bases=occupant_parent_bases,
             toggle_parents=toggle_parents,
+            quest_text_ids=quest_text_ids,
         )
     except ControllerRegistryError as exc:
         raise ComposeError(f"resolved controller registry is unsafe: {exc}") from exc
@@ -6074,6 +5941,9 @@ def resolve_controller_registry(
             )
         ),
         toggles=tuple(toggles),
+        private_texts=tuple(sorted(
+            quest_private_texts, key=lambda item: item.runtime_id
+        )),
     )
 
 
@@ -6311,8 +6181,19 @@ def _require_controller_feature_evidence(
                         f"{feature.source_dialog_id}; found {len(matches)}"
                     )
             if isinstance(feature, StockMx04Mx05OccupantActionPanel):
-                if parent.controller_base not in ("AP07", "AP10", "MX09"):
-                    raise ComposeError("occupant panels require an AP07, AP10, or MX09 building controller")
+                if (
+                    parent.controller_base,
+                    parent.panel_resource_template,
+                ) not in {
+                    ("AP07", "AP10"),
+                    ("AP08", "AP08"),
+                    ("AP10", "AP10"),
+                    ("MX09", "MX09"),
+                }:
+                    raise ComposeError(
+                        "occupant panels require an AP07/AP10, AP08/AP08, "
+                        "AP10/AP10, or MX09/MX09 parent building"
+                    )
                 for symbol in (feature.cost_callback_symbol, feature.action_callback_symbol):
                     matches = gpl_functions.get(symbol.casefold(), ())
                     if len(matches) != 1:
@@ -6335,15 +6216,10 @@ def _require_controller_feature_evidence(
                         "building lifecycle and require an AP08/AP08 parent"
                     )
                 callbacks = (
-                    (feature.list_source_callback_symbol, ("agent", "integer"), "agent"),
+                    (feature.offer_count_callback_symbol, ("agent",), "integer"),
                     (feature.revision_callback_symbol, ("agent",), "integer"),
-                    (feature.offer_name_callback_symbol, ("agent", "integer"), "string"),
-                    (feature.offer_goal_callback_symbol, ("agent", "integer"), "string"),
                     (feature.offer_reward_callback_symbol, ("agent", "integer"), "integer"),
-                    (feature.selected_cost_callback_symbol, ("agent",), "integer"),
-                    (feature.selected_action_callback_symbol, ("agent",), "boolean"),
                     (feature.refresh_cost_callback_symbol, ("agent",), "integer"),
-                    (feature.can_refresh_callback_symbol, ("agent",), "boolean"),
                     (feature.refresh_callback_symbol, ("agent",), "boolean"),
                 )
                 for symbol, parameters, result_type in callbacks:
@@ -6706,7 +6582,9 @@ def compose_package(
         capability_manifest_payload,
     ) = _derive_runtime_capabilities(
         runtime_capabilities,
-        has_private_activity_text=bool(private_activity_texts),
+        has_private_activity_text=bool(
+            private_activity_texts or controller_result.private_texts
+        ),
         runtime_feature_registry=runtime_feature_registry,
         controller_registry=controller_result.registry,
     )
@@ -6889,7 +6767,10 @@ def compose_package(
         )
         registry_path = staging / Path(INTENT_REGISTRY_RELATIVE_PATH)
         registry_path.write_bytes(
-            encode_intent_registry(text_result.private_activity_texts)
+            encode_intent_registry((
+                *text_result.private_activity_texts,
+                *controller_result.private_texts,
+            ))
         )
         capability_manifest_path = staging / Path(
             RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH
@@ -7544,7 +7425,6 @@ def _validate_generated_runtime_evidence(
             owner="generated",
             parent_label=_display_key(parent),
             child_label=_display_key(child),
-            allow_manager_generated_refresh=True,
         )
 
     for panel in controller_registry.occupant_action_panels:
@@ -7557,15 +7437,10 @@ def _validate_generated_runtime_evidence(
             )
     for panel in controller_registry.quest_boards:
         callbacks = (
-            (panel.list_source_callback_symbol, ("agent", "integer"), "agent"),
+            (panel.offer_count_callback_symbol, ("agent",), "integer"),
             (panel.revision_callback_symbol, ("agent",), "integer"),
-            (panel.offer_name_callback_symbol, ("agent", "integer"), "string"),
-            (panel.offer_goal_callback_symbol, ("agent", "integer"), "string"),
             (panel.offer_reward_callback_symbol, ("agent", "integer"), "integer"),
-            (panel.selected_cost_callback_symbol, ("agent",), "integer"),
-            (panel.selected_action_callback_symbol, ("agent",), "boolean"),
             (panel.refresh_cost_callback_symbol, ("agent",), "integer"),
-            (panel.can_refresh_callback_symbol, ("agent",), "boolean"),
             (panel.refresh_callback_symbol, ("agent",), "boolean"),
         )
         for symbol, parameters, result_type in callbacks:

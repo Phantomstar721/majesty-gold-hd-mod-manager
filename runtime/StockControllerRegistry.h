@@ -7,7 +7,7 @@
 
 namespace MajestyStockControllers {
 
-constexpr std::uint32_t kRegistryVersion = 7;
+constexpr std::uint32_t kRegistryVersion = 10;
 constexpr std::uint32_t kMaximumRecordCount = 256;
 constexpr std::uint32_t kMaximumPanelCount = 32;
 constexpr std::size_t kMaximumRegistryBytes = 512u * 1024u;
@@ -155,14 +155,12 @@ struct BuildingOpenToggleRecord {
 struct QuestBoardRecord {
     std::string panelKey;
     std::uint32_t parentDialogId, childDialogId, openCommandId;
-    std::uint32_t selectedActionCommandId, refreshCommandId;
-    std::uint32_t refreshControlId, refreshPriceBindingId;
-    std::string listSourceCallbackSymbol, revisionCallbackSymbol;
-    std::string offerNameCallbackSymbol, offerGoalCallbackSymbol;
+    std::uint32_t actionCommandId;
+    std::string offerCountCallbackSymbol, revisionCallbackSymbol;
+    std::uint32_t offerNameIntentId, offerGoalIntentId;
     std::string offerRewardCallbackSymbol;
-    std::string selectedCostCallbackSymbol, selectedActionCallbackSymbol;
     std::string refreshCostCallbackSymbol;
-    std::string canRefreshCallbackSymbol, refreshCallbackSymbol;
+    std::string refreshCallbackSymbol;
     std::uint32_t parentControllerBase;
 };
 
@@ -186,8 +184,7 @@ struct Registry {
     const OccupantActionPanelRecord* FindOccupantPanelByCommand(std::uint32_t id) const;
     const QuestBoardRecord* FindQuestBoardByChild(std::uint32_t id) const;
     const QuestBoardRecord* FindQuestBoardByParent(std::uint32_t id) const;
-    const QuestBoardRecord* FindQuestBoardByCommand(
-        std::uint32_t id, bool* refresh) const;
+    const QuestBoardRecord* FindQuestBoardByCommand(std::uint32_t id) const;
     const BuildingOpenToggleRecord* FindBuildingOpenToggleByParent(
         std::uint32_t id) const;
     const SecondaryPanelRecord* FindPanelByKey(const std::string& panelKey) const;
@@ -223,7 +220,7 @@ struct Registry {
         std::uint32_t privateMode) const;
 };
 
-// Parses manager-owned MMCR v2/v3/v4/v7 registries without Win32 or executable
+// Parses manager-owned MMCR v2/v3/v4/v10 registries without Win32 or executable
 // dependencies.  Records are immutable alternatives for the existing stock-
 // shaped singleton sessions; the registry does not create per-mod controllers,
 // parallel AP99 owners, queued Rage commands, or parallel target sessions.

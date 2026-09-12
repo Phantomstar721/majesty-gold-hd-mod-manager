@@ -144,23 +144,20 @@ class StockMx04Mx05OccupantActionPanel:
 
 @dataclass(frozen=True)
 class StockAp08Mx05QuestBoardPanel:
-    """An MX05-native selectable list of package-owned quest agents."""
+    """One MX05-native Refresh row backed by the live AP08 Guild agent."""
 
     panel_key: str
     parent_building: str
     source_dialog_id: str
     open_command_id: int
-    list_source_callback_symbol: str
+    offer_count_callback_symbol: str
     revision_callback_symbol: str
-    offer_name_callback_symbol: str
-    offer_goal_callback_symbol: str
+    offer_name_text: str
+    offer_goal_text: str
     offer_reward_callback_symbol: str
-    selected_cost_callback_symbol: str
-    selected_action_callback_symbol: str
     refresh_cost_callback_symbol: str
-    can_refresh_callback_symbol: str
     refresh_callback_symbol: str
-    type: str = "stock.ap08-mx05-quest-list-panel.v1"
+    type: str = "stock.ap08-mx05-quest-list-panel.v4"
 
 
 @dataclass(frozen=True)
@@ -320,7 +317,7 @@ ControllerFeature = Union[
 _FEATURE_TYPES = {
     "stock.mx22-building-open-toggle.v1": StockMx22BuildingOpenToggle,
     "stock.mx04-mx05-occupant-action-panel.v1": StockMx04Mx05OccupantActionPanel,
-    "stock.ap08-mx05-quest-list-panel.v1": StockAp08Mx05QuestBoardPanel,
+    "stock.ap08-mx05-quest-list-panel.v4": StockAp08Mx05QuestBoardPanel,
     "stock.ap10-ap69-secondary-panel.v1": StockAp10Ap69SecondaryPanel,
     "stock.mx09-ap41-reward-panel.v1": StockMx09Ap41RewardPanel,
     "stock.ap41-fl00-hostile-monster-flag.v1": StockAp41Fl00HostileMonsterFlag,
@@ -665,21 +662,18 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
                 raise ControllerFeatureError("occupant cost and action callbacks must be distinct")
         elif isinstance(feature, StockAp08Mx05QuestBoardPanel):
             symbols = (
-                feature.list_source_callback_symbol,
+                feature.offer_count_callback_symbol,
                 feature.revision_callback_symbol,
-                feature.offer_name_callback_symbol,
-                feature.offer_goal_callback_symbol,
                 feature.offer_reward_callback_symbol,
-                feature.selected_cost_callback_symbol,
-                feature.selected_action_callback_symbol,
                 feature.refresh_cost_callback_symbol,
-                feature.can_refresh_callback_symbol,
                 feature.refresh_callback_symbol,
             )
             for symbol in symbols:
                 _gpl_symbol(symbol)
             if len({symbol.casefold() for symbol in symbols}) != len(symbols):
                 raise ControllerFeatureError("quest-list callback symbols must be distinct")
+            _bounded_cp1252(feature.offer_name_text, "offer_name_text")
+            _bounded_cp1252(feature.offer_goal_text, "offer_goal_text")
     elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
         _logical(feature.action_key, "action_key")
         _fourcc(feature.private_mode, "private_mode")
@@ -996,15 +990,10 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
                 (feature.cost_callback_symbol, feature.action_callback_symbol)
                 if isinstance(feature, StockMx04Mx05OccupantActionPanel)
                 else (
-                    feature.list_source_callback_symbol,
+                    feature.offer_count_callback_symbol,
                     feature.revision_callback_symbol,
-                    feature.offer_name_callback_symbol,
-                    feature.offer_goal_callback_symbol,
                     feature.offer_reward_callback_symbol,
-                    feature.selected_cost_callback_symbol,
-                    feature.selected_action_callback_symbol,
                     feature.refresh_cost_callback_symbol,
-                    feature.can_refresh_callback_symbol,
                     feature.refresh_callback_symbol,
                 )
             )

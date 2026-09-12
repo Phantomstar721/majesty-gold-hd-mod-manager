@@ -10,10 +10,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from majesty_cam.compose import (
     ComposeError, _require_occupant_callback_signature,
     _require_quest_board_callback_signature,
-    _materialize_mx05_quest_refresh_row, _split_smnu_records,
+    _validate_mx05_quest_refresh_panel, _split_smnu_records,
     _validate_controller_panel_controls, resolve_controller_registry,
 )
 from majesty_cam.cam import CamEntry
+from majesty_cam.strt import StrtRecord, StrtTable
 from majesty_cam.stock_controller_features import (
     ControllerFeatureError, StockAp08Mx05QuestBoardPanel,
     StockMx04Mx05OccupantActionPanel,
@@ -23,8 +24,6 @@ from majesty_cam.stock_controller_features import (
 from majesty_cam.stock_controller_registry import (
     ControllerRegistryError, encode_stock_controller_registry,
     decode_stock_controller_registry, resolve_stock_controller_registry,
-    QUEST_REFRESH_CONTROL_ID, QUEST_REFRESH_PRICE_BINDING_ID,
-    QUEST_REFRESH_COIN_CONTROL_ID,
 )
 from test_compose import _v3_controller_inventory, _panel_pair, _smnu_payload
 
@@ -37,10 +36,17 @@ CONTROLS = (
 
 def quest_feature():
     return StockAp08Mx05QuestBoardPanel(
-        "quests", "AdventurerGuild", "QB01", 0x7101,
-        "Quest_At", "Quest_Revision", "Quest_Name", "Quest_Goal",
-        "Quest_Reward", "Quest_SelectedCost",
-        "Quest_Reject", "Quest_RefreshCost", "Quest_CanRefresh", "Quest_Refresh",
+        panel_key="quests",
+        parent_building="AdventurerGuild",
+        source_dialog_id="QB01",
+        open_command_id=0x7101,
+        offer_count_callback_symbol="Quest_Count",
+        revision_callback_symbol="Quest_Revision",
+        offer_name_text="Royal Dispatch",
+        offer_goal_text="Deliver orders",
+        offer_reward_callback_symbol="Quest_Reward",
+        refresh_cost_callback_symbol="Quest_RefreshCost",
+        refresh_callback_symbol="Quest_Refresh",
     )
 
 
@@ -51,7 +57,7 @@ def feature(key="visitors", parent="Stable", source="P001", symbol="Stable"):
 
 
 class OccupantPanelTests(unittest.TestCase):
-    def test_manager_materializes_refresh_as_second_literal_mx05_row(self):
+    def test_quest_board_requires_exact_single_stock_mx05_refresh_row(self):
         def record(size, rectangle, control_offset, control_id):
             value = bytearray(size)
             struct.pack_into("<4I", value, 8, *rectangle)
@@ -59,45 +65,48 @@ class OccupantPanelTests(unittest.TestCase):
             value[-4:] = b"\xff" * 4
             return bytes(value)
 
-        records = (
+        action = bytearray(record(0xAC, (51, 219, 103, 21), 0x88, 0x138B))
+        struct.pack_into("<2I", action, 0x2C, 0, 0)
+        records = [
             record(0x90, (10, 55, 164, 160), 0x5C, 0x1388),
-            record(0xAC, (51, 219, 103, 21), 0x88, 0x138B),
+            bytes(action),
             record(0x74, (33, 219, 16, 17), 0x64, 0x138C),
             record(0x54, (174, 51, 25, 167), 0x4C, 0x1392),
             record(0xA8, (115, 222, 39, 16), 0x7C, 0x1F46),
             b"\xff" * 4,
-        )
+        ]
         source = b"".join(records)
         stock_entry = CamEntry(name=b"MX05" + b"\0" * 16, data=source)
+        labels = StrtTable(
+            version=b"\x01\x00",
+            records=(StrtRecord(string_id=0, text=b"REFRESH"),),
+        ).to_bytes()
         with patch("majesty_cam.compose._require_cam_entry", return_value=stock_entry):
-            output = _materialize_mx05_quest_refresh_row(
-                Path("."), source, (20, 21, 22, 23),
+            _validate_mx05_quest_refresh_panel(
+                Path("."), source, labels,
                 owner="test", label="QB01",
             )
-        result = _split_smnu_records(output, owner="test", label="QB01")
-        values = [
-            struct.unpack_from("<I", current, offset)[0]
-            for current in result[:-1]
-            for offset in range(0, len(current), 4)
-        ]
-        for control in (
-            QUEST_REFRESH_CONTROL_ID,
-            QUEST_REFRESH_PRICE_BINDING_ID,
-            QUEST_REFRESH_COIN_CONTROL_ID,
-        ):
-            self.assertEqual(values.count(control), 1)
-        self.assertEqual(len(result), len(records) + 3)
-        native_list = next(item for item in result if struct.pack("<I", 0x1388) in item)
-        native_action = next(item for item in result if struct.pack("<I", 0x138B) in item)
-        refresh_action = next(
-            item for item in result
-            if struct.pack("<I", QUEST_REFRESH_CONTROL_ID) in item
+
+        moved = list(records)
+        moved_list = bytearray(moved[0])
+        struct.pack_into("<4I", moved_list, 8, 10, 55, 164, 135)
+        moved[0] = bytes(moved_list)
+        with patch("majesty_cam.compose._require_cam_entry", return_value=stock_entry):
+            with self.assertRaisesRegex(ComposeError, "exact stock MX05"):
+                _validate_mx05_quest_refresh_panel(
+                    Path("."), b"".join(moved), labels,
+                    owner="test", label="QB01",
+                )
+
+        duplicate = source[:-4] + struct.pack(
+            "<III", 0x7102, 0xFFFFFFFF, 0xFFFFFFFF
         )
-        self.assertEqual(struct.unpack_from("<4I", native_list, 8), (10, 55, 164, 135))
-        self.assertEqual(struct.unpack_from("<4I", native_action, 8), (51, 194, 103, 21))
-        self.assertEqual(struct.unpack_from("<4I", refresh_action, 8), (51, 219, 103, 21))
-        self.assertEqual(struct.unpack_from("<I", refresh_action, 0x2C)[0], 20)
-        self.assertEqual(struct.unpack_from("<I", refresh_action, 0x38)[0], 21)
+        with patch("majesty_cam.compose._require_cam_entry", return_value=stock_entry):
+            with self.assertRaisesRegex(ComposeError, "exact record count"):
+                _validate_mx05_quest_refresh_panel(
+                    Path("."), duplicate, labels,
+                    owner="test", label="QB01",
+                )
 
     def test_schema_is_generic_and_rejects_unknown_fields(self):
         item = feature()
@@ -159,33 +168,97 @@ class OccupantPanelTests(unittest.TestCase):
             with self.assertRaises(ComposeError):
                 _require_occupant_callback_signature(text, symbol, cost)
 
-    def test_quest_board_display_callback_signatures(self):
-        _require_quest_board_callback_signature(
-            "Function OfferName(agent g, integer row) is string begin return \"Quest\"; end",
-            "OfferName", ("agent", "integer"), "string",
-        )
+    def test_quest_board_scalar_callback_signatures(self):
         _require_quest_board_callback_signature(
             "Function OfferReward(agent g, integer row) is integer begin return 500; end",
             "OfferReward", ("agent", "integer"), "integer",
         )
-        for text, result_type in (
-            ("Function OfferName(agent g, integer row) is integer begin return 1; end", "string"),
-            ("Function OfferReward(agent g) is integer begin return 1; end", "integer"),
+        _require_quest_board_callback_signature(
+            "Function OfferCount(agent g) is integer begin return 1; end",
+            "OfferCount", ("agent",), "integer",
+        )
+        _require_quest_board_callback_signature(
+            "Function CanRefresh(agent g) is integer begin return 0; end",
+            "CanRefresh", ("agent",), "integer",
+        )
+        for text in (
+            "Function OfferReward(agent g) is integer begin return 1; end",
+            "Function OfferReward(agent g, integer row) is string begin return \"bad\"; end",
         ):
             with self.assertRaises(ComposeError):
                 _require_quest_board_callback_signature(
                     text,
-                    "OfferName" if result_type == "string" else "OfferReward",
-                    ("agent", "integer"), result_type,
+                    "OfferReward", ("agent", "integer"), "integer",
                 )
 
     def test_parent_classes_and_parent_child_aliasing(self):
-        for base in ("AP07", "AP10", "MX09"):
+        for base in ("AP07", "AP08", "AP10", "MX09"):
             r = resolve_stock_controller_registry((feature(),), {"visitors": (0x31303042, 0x31303050)},
                 occupant_parent_bases={"visitors": base})
             self.assertEqual(decode_stock_controller_registry(encode_stock_controller_registry(r)).occupant_action_panels[0].parent_controller_base, base)
         with self.assertRaisesRegex(ControllerRegistryError, "collides with a parent"):
             resolve_stock_controller_registry((feature(),), {"visitors": (0x31303042, 0x31303042)})
+
+    def test_ap08_parent_uses_unchanged_occupant_action_recipe(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inventory = _v3_controller_inventory(
+                root,
+                alias="Dispatch",
+                mod_id="{00000000-0000-0000-0000-000000000008}",
+                local_name="AdventurerGuild",
+                building_source=b"AG01",
+                family="AG",
+            )
+            panel = feature(
+                key="dispatch",
+                parent="AdventurerGuild",
+                source="DP01",
+                symbol="Dispatch",
+            )
+            definition = inventory.selected.package.definition
+            parent = replace(
+                definition.custom_buildings[0],
+                controller_base="AP08",
+                panel_resource_template="AP08",
+            )
+            inventory.selected.package.definition = replace(
+                definition,
+                custom_buildings=(parent,),
+                runtime_features=(panel,),
+            )
+            inventory.resources = (
+                *_panel_pair("Dispatch", b"AG01", (panel.open_command_id,)),
+                *_panel_pair("Dispatch", b"DP01", CONTROLS),
+            )
+            callback_source = root / "dispatch.gpl"
+            callback_source.write_text(
+                "Function Dispatch_Cost(agent selected) is integer begin return 0; end\n"
+                "Function Dispatch_Action(agent selected) begin end\n",
+                encoding="cp1252",
+            )
+            from types import SimpleNamespace
+            inventory.gpl_loads = (
+                SimpleNamespace(
+                    sources=(SimpleNamespace(absolute_path=callback_source),)
+                ),
+            )
+
+            resolved = resolve_controller_registry((inventory,)).registry
+            self.assertEqual(
+                resolved.occupant_action_panels[0].parent_controller_base,
+                "AP08",
+            )
+            self.assertFalse(resolved.quest_boards)
+
+            inventory.selected.package.definition = replace(
+                inventory.selected.package.definition,
+                custom_buildings=(
+                    replace(parent, panel_resource_template="AP10"),
+                ),
+            )
+            with self.assertRaisesRegex(ComposeError, "AP08/AP08"):
+                resolve_controller_registry((inventory,))
 
     def test_required_controls_rejected_before_launch(self):
         registry = resolve_stock_controller_registry((feature(),), {"visitors": (0x31303042, 0x31303050)})
@@ -206,15 +279,12 @@ class OccupantPanelTests(unittest.TestCase):
             {"quests": (int.from_bytes(b"AG01", "little"),
                          int.from_bytes(b"QB01", "little"))},
             occupant_parent_bases={"quests": "AP08"},
+            quest_text_ids={"quests": (0x68000001, 0x68000002)},
         )
         parent = _smnu_payload(board.open_command_id)
         child = _smnu_payload(*CONTROLS)
         resolved = registry.quest_boards[0]
-        self.assertEqual(resolved.refresh_control_id, QUEST_REFRESH_CONTROL_ID)
-        self.assertEqual(
-            resolved.refresh_price_binding_id,
-            QUEST_REFRESH_PRICE_BINDING_ID,
-        )
+        self.assertEqual(resolved.action_command_id, 0x20000)
 
         # These IDs are referenced or constructed by MX05 code but are not
         # literal records in stock SMNU/MX05.  Their absence must not make an
@@ -233,57 +303,6 @@ class OccupantPanelTests(unittest.TestCase):
         kwargs = dict(owner="test", parent_label="AG01", child_label="QB01")
         _validate_controller_panel_controls(*args, **kwargs)
 
-        with self.assertRaisesRegex(ComposeError, "Manager-generated"):
-            _validate_controller_panel_controls(
-                registry,
-                "quests",
-                _smnu_payload(
-                    board.open_command_id,
-                    QUEST_REFRESH_CONTROL_ID,
-                    QUEST_REFRESH_PRICE_BINDING_ID,
-                ),
-                child,
-                **kwargs,
-            )
-
-        _validate_controller_panel_controls(
-            registry,
-            "quests",
-            parent,
-            _smnu_payload(
-                *CONTROLS,
-                QUEST_REFRESH_CONTROL_ID,
-                QUEST_REFRESH_PRICE_BINDING_ID,
-                QUEST_REFRESH_COIN_CONTROL_ID,
-            ),
-            allow_manager_generated_refresh=True,
-            **kwargs,
-        )
-        with self.assertRaisesRegex(
-            ComposeError, "generated quest-board Refresh row is invalid"
-        ):
-            _validate_controller_panel_controls(
-                registry,
-                "quests",
-                parent,
-                _smnu_payload(
-                    *CONTROLS,
-                    QUEST_REFRESH_CONTROL_ID,
-                    QUEST_REFRESH_PRICE_BINDING_ID,
-                ),
-                allow_manager_generated_refresh=True,
-                **kwargs,
-            )
-
-        with self.assertRaisesRegex(ComposeError, "Manager-generated"):
-            _validate_controller_panel_controls(
-                registry,
-                "quests",
-                parent,
-                _smnu_payload(*CONTROLS, QUEST_REFRESH_COIN_CONTROL_ID),
-                **kwargs,
-            )
-
         for missing in CONTROLS:
             reduced = _smnu_payload(
                 *(control for control in CONTROLS if control != missing),
@@ -297,18 +316,64 @@ class OccupantPanelTests(unittest.TestCase):
                     **kwargs,
                 )
 
-        for missing in (board.open_command_id,):
-            reduced = _smnu_payload(
-                *(control for control in (board.open_command_id,) if control != missing)
+        with self.assertRaisesRegex(ComposeError, "SMNU/AG01"):
+            _validate_controller_panel_controls(
+                registry,
+                "quests",
+                _smnu_payload(),
+                child,
+                **kwargs,
             )
-            with self.assertRaisesRegex(ComposeError, "SMNU/AG01"):
-                _validate_controller_panel_controls(
-                    registry,
-                    "quests",
-                    reduced,
-                    child,
-                    **kwargs,
-                )
+
+    def test_quest_board_composition_allocates_private_static_text(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inventory = _v3_controller_inventory(
+                root,
+                alias="Dispatch",
+                mod_id="{00000000-0000-0000-0000-000000000008}",
+                local_name="AdventurerGuild",
+                building_source=b"AG01",
+                family="AG",
+            )
+            board = quest_feature()
+            definition = inventory.selected.package.definition
+            inventory.selected.package.definition = replace(
+                definition,
+                custom_buildings=(replace(
+                    definition.custom_buildings[0],
+                    controller_base="AP08",
+                    panel_resource_template="AP08",
+                ),),
+                runtime_features=(board,),
+            )
+            inventory.resources = (
+                *_panel_pair("Dispatch", b"AG01", (board.open_command_id,)),
+                *_panel_pair("Dispatch", b"QB01", CONTROLS),
+            )
+            callback_source = root / "dispatch.gpl"
+            callback_source.write_text(
+                "Function Quest_Count(agent g) is integer begin return 1; end\n"
+                "Function Quest_Revision(agent g) is integer begin return 1; end\n"
+                "Function Quest_Reward(agent g, integer row) is integer begin return 100; end\n"
+                "Function Quest_RefreshCost(agent g) is integer begin return 25; end\n"
+                "Function Quest_Refresh(agent g) is boolean begin return TRUE; end\n",
+                encoding="cp1252",
+            )
+            from types import SimpleNamespace
+            inventory.gpl_loads = (
+                SimpleNamespace(sources=(
+                    SimpleNamespace(absolute_path=callback_source),
+                )),
+            )
+
+            result = resolve_controller_registry((inventory,))
+            resolved = result.registry.quest_boards[0]
+            self.assertEqual(len(result.private_texts), 2)
+            by_id = {item.runtime_id: item.text for item in result.private_texts}
+            self.assertEqual(by_id[resolved.offer_name_intent_id], b"Royal Dispatch")
+            self.assertEqual(by_id[resolved.offer_goal_intent_id], b"Deliver orders")
+            self.assertTrue(0x68000000 <= resolved.offer_name_intent_id < 0x70000000)
 
     def test_two_unrelated_packages_compose_remove_and_reverse(self):
         with TemporaryDirectory() as tmp:

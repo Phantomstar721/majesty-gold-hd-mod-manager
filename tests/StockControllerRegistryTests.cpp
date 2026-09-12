@@ -578,6 +578,16 @@ int main() {
         registry.occupantActionPanels.size() != 1 ||
         registry.FindOccupantPanelByCommand(0x10000) == nullptr ||
         registry.FindOccupantPanelByCommand(21) != nullptr) return 36;
+    auto ap08Occupants = occupants;
+    const std::uint32_t ap08 = FourCC("AP08");
+    for (std::size_t index = 0; index < 4; ++index) {
+        ap08Occupants[ap08Occupants.size() - 4 + index] =
+            static_cast<unsigned char>((ap08 >> (index * 8)) & 0xFF);
+    }
+    if (!MajestyStockControllers::ParseRegistry(
+            ap08Occupants.data(), ap08Occupants.size(), &registry, &error) ||
+        registry.occupantActionPanels.size() != 1 ||
+        registry.occupantActionPanels[0].parentControllerBase != ap08) return 45;
     for (std::size_t size = 0; size < occupants.size(); ++size) {
         if (MajestyStockControllers::ParseRegistry(occupants.data(), size, &registry, &error)) return 37;
     }
@@ -606,7 +616,7 @@ int main() {
     }
 
     auto quests = Header(0, 0, 0, 0, 0, 0, 0);
-    quests[4] = 7;
+    quests[4] = 10;
     AppendU32(&quests, 0);  // occupant panels
     AppendU32(&quests, 0);  // building toggles
     AppendU32(&quests, 1);  // quest boards
@@ -614,39 +624,49 @@ int main() {
     AppendU32(&quests, FourCC("AGP1"));
     AppendU32(&quests, FourCC("QBP1"));
     AppendU32(&quests, 0x7101);
-    AppendU32(&quests, 0x20000);  // selected action
-    AppendU32(&quests, 0x20001);  // refresh
-    AppendU32(&quests, 0x7102);
-    AppendU32(&quests, 0x7103);
+    AppendU32(&quests, 0x20000);  // native Refresh action
+    const char* questLeadingCallbacks[] = {
+        "QB_Count", "QB_Revision",
+    };
+    for (std::size_t index = 0;
+         index < sizeof(questLeadingCallbacks) / sizeof(questLeadingCallbacks[0]); ++index) {
+        AppendString(&quests, questLeadingCallbacks[index]);
+    }
+    AppendU32(&quests, 0x68000001u);
+    AppendU32(&quests, 0x68000002u);
     const char* questCallbacks[] = {
-        "QB_At", "QB_Revision", "QB_Name", "QB_Goal", "QB_Reward",
-        "QB_SelectedCost", "QB_Reject",
-        "QB_RefreshCost", "QB_CanRefresh", "QB_Refresh",
+        "QB_Reward",
+        "QB_RefreshCost", "QB_Refresh",
     };
     for (std::size_t index = 0;
          index < sizeof(questCallbacks) / sizeof(questCallbacks[0]); ++index) {
         AppendString(&quests, questCallbacks[index]);
     }
     AppendU32(&quests, FourCC("AP08"));
-    bool questRefresh = false;
     if (!MajestyStockControllers::ParseRegistry(
             quests.data(), quests.size(), &registry, &error) ||
         registry.questBoards.size() != 1 ||
         registry.FindQuestBoardByChild(FourCC("QBP1")) == nullptr ||
         registry.FindQuestBoardByParent(FourCC("AGP1")) == nullptr ||
-        registry.FindQuestBoardByCommand(
-            0x20000, &questRefresh) == nullptr || questRefresh ||
-        registry.FindQuestBoardByCommand(
-            0x20001, &questRefresh) == nullptr || !questRefresh) {
+        registry.FindQuestBoardByCommand(0x20000) == nullptr) {
         std::fprintf(stderr, "Generic quest-board MMCR rejected: %s\n", error.c_str());
         return 41;
     }
     std::vector<unsigned char> obsoleteQuests = quests;
+    obsoleteQuests[4] = 9;
+    if (!ExpectInvalid(obsoleteQuests, "v9 quest boards")) return 48;
+    obsoleteQuests = quests;
     obsoleteQuests[4] = 5;
     if (!ExpectInvalid(obsoleteQuests, "v5 fixed-row")) return 43;
     obsoleteQuests = quests;
     obsoleteQuests[4] = 6;
     if (!ExpectInvalid(obsoleteQuests, "v6 quest rows")) return 44;
+    obsoleteQuests = quests;
+    obsoleteQuests[4] = 7;
+    if (!ExpectInvalid(obsoleteQuests, "v7 quest rows")) return 46;
+    obsoleteQuests = quests;
+    obsoleteQuests[4] = 8;
+    if (!ExpectInvalid(obsoleteQuests, "v8 quest rows")) return 47;
     for (std::size_t size = 0; size < quests.size(); ++size) {
         if (MajestyStockControllers::ParseRegistry(
                 quests.data(), size, &registry, &error)) return 42;

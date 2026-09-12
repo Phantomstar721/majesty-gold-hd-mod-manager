@@ -26,27 +26,22 @@ from majesty_cam.stock_controller_registry import (
     encode_stock_controller_registry,
     resolve_stock_controller_registry,
     write_stock_controller_registry,
-    QUEST_REFRESH_CONTROL_ID,
-    QUEST_REFRESH_PRICE_BINDING_ID,
 )
 
 
 class StockControllerRegistryTests(unittest.TestCase):
-    def test_quest_list_round_trips_in_v7_with_manager_commands(self) -> None:
+    def test_quest_list_round_trips_in_v10_with_private_text_ids(self) -> None:
         feature = StockAp08Mx05QuestBoardPanel(
             panel_key="offers",
             parent_building="adventurer-guild",
             source_dialog_id="QB01",
             open_command_id=0x7101,
-            list_source_callback_symbol="QB_At",
+            offer_count_callback_symbol="QB_Count",
             revision_callback_symbol="QB_Revision",
-            offer_name_callback_symbol="QB_Name",
-            offer_goal_callback_symbol="QB_Goal",
+            offer_name_text="Royal Dispatch",
+            offer_goal_text="Deliver orders to an allied building",
             offer_reward_callback_symbol="QB_Reward",
-            selected_cost_callback_symbol="QB_SelectedCost",
-            selected_action_callback_symbol="QB_Reject",
             refresh_cost_callback_symbol="QB_RefreshCost",
-            can_refresh_callback_symbol="QB_CanRefresh",
             refresh_callback_symbol="QB_Refresh",
         )
         parent = int.from_bytes(b"AGP1", "little")
@@ -55,6 +50,7 @@ class StockControllerRegistryTests(unittest.TestCase):
             (feature,),
             {"offers": (parent, child)},
             occupant_parent_bases={"offers": "AP08"},
+            quest_text_ids={"offers": (0x68000001, 0x68000002)},
         )
 
         payload = encode_stock_controller_registry(registry)
@@ -62,25 +58,25 @@ class StockControllerRegistryTests(unittest.TestCase):
         self.assertEqual(decode_stock_controller_registry(payload), registry)
         magic, version, *counts = struct.unpack_from("<4s13I", payload)
         self.assertEqual(magic, CONTROLLER_REGISTRY_MAGIC)
-        self.assertEqual(version, 7)
+        self.assertEqual(version, 10)
         self.assertEqual(counts[-3:], [0, 0, 1])
         board = registry.quest_boards[0]
-        self.assertEqual(board.selected_action_command_id, 0x20000)
-        self.assertEqual(board.refresh_command_id, 0x20001)
-        self.assertEqual(board.refresh_control_id, QUEST_REFRESH_CONTROL_ID)
-        self.assertEqual(
-            board.refresh_price_binding_id,
-            QUEST_REFRESH_PRICE_BINDING_ID,
-        )
+        self.assertEqual(board.action_command_id, 0x20000)
         self.assertEqual(board.parent_controller_base, "AP08")
+        self.assertEqual(board.offer_name_intent_id, 0x68000001)
+        self.assertEqual(board.offer_goal_intent_id, 0x68000002)
         self.assertNotIn(b"adventurer-guild", payload)
 
         with self.assertRaisesRegex(ControllerRegistryError, "manager-allocated"):
             encode_stock_controller_registry(replace(
                 registry,
-                quest_boards=(replace(board, refresh_control_id=0x7000),),
+                quest_boards=(replace(board, action_command_id=0x15),),
             ))
 
+        obsolete = bytearray(payload)
+        struct.pack_into("<I", obsolete, 4, 9)
+        with self.assertRaisesRegex(ControllerRegistryError, "v9 quest boards"):
+            decode_stock_controller_registry(bytes(obsolete))
         obsolete = bytearray(payload)
         struct.pack_into("<I", obsolete, 4, 5)
         with self.assertRaisesRegex(ControllerRegistryError, "v5 fixed-row"):
@@ -88,6 +84,14 @@ class StockControllerRegistryTests(unittest.TestCase):
         obsolete = bytearray(payload)
         struct.pack_into("<I", obsolete, 4, 6)
         with self.assertRaisesRegex(ControllerRegistryError, "v6 quest rows"):
+            decode_stock_controller_registry(bytes(obsolete))
+        obsolete = bytearray(payload)
+        struct.pack_into("<I", obsolete, 4, 7)
+        with self.assertRaisesRegex(ControllerRegistryError, "v7 quest rows"):
+            decode_stock_controller_registry(bytes(obsolete))
+        obsolete = bytearray(payload)
+        struct.pack_into("<I", obsolete, 4, 8)
+        with self.assertRaisesRegex(ControllerRegistryError, "v8 quest rows"):
             decode_stock_controller_registry(bytes(obsolete))
 
     def test_building_open_toggle_round_trips_in_v4_without_package_identity(self) -> None:

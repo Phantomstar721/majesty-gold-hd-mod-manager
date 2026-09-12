@@ -17,7 +17,9 @@ from majesty_cam.intent_text import (
     IntentTextError,
     IntegerExpressionEnvironment,
     PrivateActivityTextRecord,
+    PrivateLiteralTextRecord,
     allocate_private_activity_text_ids,
+    allocate_private_literal_text_id,
     audit_private_activity_text_resolver_aliases,
     collect_integer_expression_environment,
     discover_private_activity_text_bindings,
@@ -74,6 +76,29 @@ class PrivateIntentRegistryTests(unittest.TestCase):
         self.assertEqual({text for _key, text in decoded}, {b"Warning text", b"Applying oil"})
         with self.assertRaisesRegex(IntentTextError, "trailing bytes"):
             decode_intent_registry(payload + b"trash")
+
+    def test_literal_text_ids_are_stable_and_share_the_strict_registry(self):
+        name_id = allocate_private_literal_text_id(
+            MOD_A, "stock.ap08-mx05-quest-list-panel.v4", "offers:name"
+        )
+        again = allocate_private_literal_text_id(
+            "{00000000-0000-0000-0000-000000000001}",
+            "stock.ap08-mx05-quest-list-panel.v4",
+            "offers:name",
+        )
+        goal_id = allocate_private_literal_text_id(
+            MOD_A, "stock.ap08-mx05-quest-list-panel.v4", "offers:goal"
+        )
+        self.assertEqual(name_id, again)
+        self.assertNotEqual(name_id, goal_id)
+        self.assertTrue(0x68000000 <= name_id < INTENT_ID_LIMIT)
+        payload = encode_intent_registry((
+            PrivateLiteralTextRecord(goal_id, b"Deliver orders"),
+            PrivateLiteralTextRecord(name_id, b"Royal Dispatch"),
+        ))
+        self.assertEqual(
+            dict(decode_intent_registry(payload))[name_id], b"Royal Dispatch"
+        )
 
     def test_empty_registry_is_valid_and_malformed_counts_or_lengths_are_not(self):
         self.assertEqual(decode_intent_registry(b"MMTX" + struct.pack("<II", 1, 0)), ())

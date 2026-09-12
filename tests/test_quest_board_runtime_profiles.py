@@ -51,12 +51,28 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
                 vtables.append(image.base + raw_to_rva(position) + 4)
                 position += 1
         self.assertTrue(vtables, decorated_name)
-        tag_store = b"\xC7\x40\x04" + struct.pack("<I", expected_tag)
+        tag_value = struct.pack("<I", expected_tag)
+
+        def constructor_sets_tag(vtable: int) -> bool:
+            reference = struct.pack("<I", vtable)
+            position = 0
+            while True:
+                position = image.data.find(reference, position)
+                if position < 0:
+                    return False
+                # Constructors use different destination registers. Require a
+                # direct vtable reference followed in the same short basic
+                # block by `mov dword ptr [reg+4], expected_tag`.
+                window = image.data[position + 4:position + 68]
+                if any(
+                    b"\xC7" + bytes((modrm,)) + b"\x04" + tag_value in window
+                    for modrm in range(0x40, 0x48)
+                ):
+                    return True
+                position += 1
+
         self.assertTrue(
-            any(
-                image.data.find(struct.pack("<I", vtable) + tag_store) >= 0
-                for vtable in vtables
-            ),
+            any(constructor_sets_tag(vtable) for vtable in vtables),
             f"{decorated_name!r} no longer constructs stock type {expected_tag}",
         )
 
@@ -69,6 +85,7 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
         packed_attribute_reader: int,
         parent_slots: tuple[int, int, int, int],
         child_slots: tuple[int, int, int, int, int, int],
+        shared_list_setup: int,
     ) -> None:
         path = os.environ.get(variable)
         if not path:
@@ -91,7 +108,6 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
             execute,
             scalar_result,
             result_at,
-            resolve_agent,
             evaluator_destructor,
             string_destructor,
             parent_vtable,
@@ -101,9 +117,7 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
         ) = [int(value, 16) for value in re.findall(r"0x[0-9A-Fa-f]+", body)]
 
         self.assertEqual(image.timestamp, timestamp)
-        self.assert_gpl_result_type(image, b".?AVGplNull@@", 0)
         self.assert_gpl_result_type(image, b".?AVGplInteger@@", 1)
-        self.assert_gpl_result_type(image, b".?AVGplBoolean@@", 6)
         self.assertEqual(image.read(helper, 3), bytes.fromhex("6a ff 68"))
         for offset, target in (
             (0x2D, string_constructor),
@@ -117,15 +131,6 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
             self.assertEqual(image.target(helper + offset), target)
         self.assertEqual(image.read(add_integer, 4), bytes.fromhex("83 c1 08 e9"))
         self.assertEqual(image.target(scalar_result + 5), result_at)
-        self.assertEqual(
-            image.read(resolve_agent, 8),
-            bytes.fromhex("56 8b f1 8b 46 08 50 e8"),
-        )
-        self.assertEqual(
-            image.read(resolve_agent + 19, 3),
-            bytes.fromhex("89 46 0c"),
-            "stock resolver no longer caches the resolved agent at handle +0x0C",
-        )
         self.assertEqual(image.target(row_name_call), row_name_target)
         self.assertEqual(image.target(row_attribute_call), packed_attribute_reader)
 
@@ -163,6 +168,27 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
         for slot, expected in zip((0, 1, 3, 8, 11, 14), child_slots):
             self.assertEqual(child_table[slot] - image.base, expected)
 
+        setup = image.read(child_slots[1], 0x45)
+        self.assertEqual(image.target(child_slots[1] + 0x33), shared_list_setup)
+        self.assertIn(
+            bytes.fromhex("8b 16 8b 42 28"), setup,
+            "MX05 slot 1 no longer completes its final stock presentation",
+        )
+        shared_setup = image.read(shared_list_setup, 0x90)
+        slot_12 = shared_setup.find(
+            bytes.fromhex("8b 06 8b 50 30 8b ce ff d2")
+        )
+        slot_14 = shared_setup.find(
+            bytes.fromhex("8b 16 8b 42 38 8b ce ff d0")
+        )
+        self.assertGreaterEqual(slot_12, 0)
+        self.assertGreater(slot_14, slot_12)
+        self.assertLess(
+            slot_14,
+            len(shared_setup) - 10,
+            "MX05 slot 14 is no longer followed by final setup presentation",
+        )
+
         population = child_slots[4]
         self.assertEqual(image.read(population + 0x3F, 1), b"\xE8")
         self.assertEqual(image.read(population + 0xDF, 1), b"\xE8")
@@ -188,6 +214,7 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
             0x1B9FD0,
             (0x9E2A0, 0x9E5D0, 0x9E660, 0x9E600),
             (0xBC2E0, 0xBC180, 0xBC0C0, 0xBBD90, 0xBC340, 0xBC1D0),
+            0x98EA0,
         )
 
     def test_beta2(self) -> None:
@@ -199,6 +226,7 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
             0x1CEF70,
             (0x9EB80, 0x9EEB0, 0x9EF40, 0x9EEE0),
             (0xBCD20, 0xBCBC0, 0xBCB00, 0xBC7D0, 0xBCD80, 0xBCC10),
+            0x99510,
         )
 
 

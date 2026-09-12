@@ -251,11 +251,13 @@ queued payment/action lifecycle. Add this record to `runtime_features`:
 }
 ```
 
-The parent must be a declared custom building with an `AP07`, `AP10`, or `MX09`
-controller and the corresponding supported panel template. Its private opener
-must emit `open_command_id`. Multiple panels can share a building, including
-an existing research or reward panel, with distinct keys, child resources,
-and opener commands.
+The parent must be a declared custom building using one of the supported
+controller/template pairs: `AP07`/`AP10`, `AP08`/`AP08`, `AP10`/`AP10`, or
+`MX09`/`MX09`. Its private opener must emit `open_command_id`. AP08 parents keep
+their complete 13-entry stock controller boundary; selecting AP08 does not turn
+this recipe into a quest board. Multiple panels can share a building, including
+an existing research or reward panel, with distinct keys, child resources, and
+opener commands.
 
 Supply package-owned `SMNU/VP01` and `STRT/VP01` cloned from stock `MX05`.
 Change text, art, and layout but keep its local control IDs: `0x1388` list,
@@ -290,6 +292,39 @@ occupant agent types through the required Generic Visitor Lists patch.
 
 See [the stock lifecycle and test guide](stock-occupant-action-panel.md) for
 native routing, ownership, and validation details.
+
+An AP08-shaped custom Guild can present the currently proven zero-or-one offer
+through MX05's native list lifecycle:
+
+```json
+{
+  "type": "stock.ap08-mx05-quest-list-panel.v4",
+  "panel_key": "offers",
+  "parent_building": "YourNamespacedGuild",
+  "source_dialog_id": "QB01",
+  "open_command_id": 29001,
+  "offer_count_callback_symbol": "YourMod_Offer_Count",
+  "revision_callback_symbol": "YourMod_Offer_Revision",
+  "offer_name_text": "Royal Dispatch",
+  "offer_goal_text": "Deliver orders to an allied building",
+  "offer_reward_callback_symbol": "YourMod_Offer_Reward",
+  "refresh_cost_callback_symbol": "YourMod_Refresh_Cost",
+  "refresh_callback_symbol": "YourMod_Refresh_After_Debit"
+}
+```
+
+The parent must be a declared `AP08`/`AP08` custom building. The package owns
+one exact stock-shaped MX05 child SMNU/STRT pair whose single native bottom
+action is labeled Refresh. The Manager allocates the final child and queued
+action IDs. Offer Count is an `(agent Guild) is integer` callback returning
+exactly `0` or `1`.
+When Offer Count is `1`, the Manager inserts that same live Guild context as
+the single native MX05 row. Name and Goal are bounded static package text that
+the Manager assigns private text-registry IDs; Reward receives `(Guild, 1)`;
+Refresh cost and after-debit action receive the Guild through MX05's native
+selection-dependent action row. The Manager rejects counts above one. See
+[the AP08/MX05 one-row proof](stock-quest-board-panel.md) for the exact resource
+geometry, callback signatures, and stock lifecycle.
 
 An `AP07`, `AP10`, or `MX09` building can use MX22's persistent open/closed
 state and paired-control presentation:

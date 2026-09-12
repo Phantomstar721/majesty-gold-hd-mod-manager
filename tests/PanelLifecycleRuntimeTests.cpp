@@ -5,7 +5,8 @@
 #include <cstdio>
 
 namespace {
-struct Stream { void** table; };
+struct StreamedDialog { void** table; };
+struct Stream { void** table; StreamedDialog* streamedDialog; };
 struct Controller {
     void** table;
     unsigned char padding[0x20];
@@ -27,7 +28,9 @@ struct PlayerRecord { void** table; } playerRecord = {playerTable};
 void* nativeTable[17] = {};
 void* parentTable[17] = {};
 void* childTable[17] = {};
-Stream stream = {streamTable};
+void* streamedDialogTable[1] = {};
+StreamedDialog streamedDialog = {streamedDialogTable};
+Stream stream = {streamTable, &streamedDialog};
 Controller parent = {parentTable, {}, &stream, contextA};
 Controller child = {childTable, {}, &stream, contextA};
 Controller replacementParent = {parentTable, {}, &stream, contextB};
@@ -42,13 +45,13 @@ int openResult = 0, deleteCount = 0, hideCount = 0;
 int packedValue = 0;
 int playerGold = 1000;
 int setIntegerCount = 0, questEventCount = 0, questNativeRefreshCount = 0;
+int questNativeSetupCount = 0;
 int parentEventCount = 0;
-int questQueryCount = 0, questRowQueryCount = 0, questTextQueryCount = 0;
+int questQueryCount = 0, questOfferCountQueryCount = 0;
+int questRevisionQueryCount = 0;
 int selectedQuestIndex = -1;
 std::uint32_t questRevision = 7;
-bool questCanRefresh = true;
-bool questAgentValid = true;
-std::uint32_t questAgents[4] = {101, 202, 303, 0};
+std::uint32_t questOfferCount = 1;
 std::uint32_t questVectorStorage[8] = {};
 std::uint32_t lastMessageControl = 0, lastMessage = 0;
 std::uint32_t lastVisibleControl = 0, lastVisibleValue = 0;
@@ -58,6 +61,8 @@ std::size_t visibleControlCount = 0;
 bool affordable = true;
 bool reenterParentEventOnSet = false;
 int stockQuestNameCount = 0, stockQuestAttributeCount = 0;
+bool stockQuestDestinationConstructed = false;
+MajestyStringView* expectedQuestDestination = nullptr;
 void* __fastcall Context(void* object, void*) {
     return static_cast<Controller*>(object)->context;
 }
@@ -92,7 +97,7 @@ void __fastcall WriteAttribute(void*, void*, std::uint32_t attribute, int value)
 std::uint32_t __fastcall Send(void*, void*, std::uint32_t control, std::uint32_t message,
                              std::uint32_t, std::uint32_t) {
     lastMessageControl = control; lastMessage = message;
-    if (control == kMx05SelectionControlId && message == 0x22u) {
+    if (control == 0x1388u && message == 0x22u) {
         return static_cast<std::uint32_t>(selectedQuestIndex);
     }
     return 0;
@@ -145,10 +150,12 @@ bool QuestScalar(
     ++questQueryCount;
     if (std::strcmp(symbol, "Quest_Revision") == 0) {
         assert(!hasInteger);
+        ++questRevisionQueryCount;
         *result = questRevision;
-    } else if (std::strcmp(symbol, "Quest_RefreshCost") == 0) {
+    } else if (std::strcmp(symbol, "Quest_Count") == 0) {
         assert(!hasInteger);
-        *result = 25;
+        ++questOfferCountQueryCount;
+        *result = questOfferCount;
     } else if (std::strcmp(symbol, "Quest_Reward") == 0) {
         assert(hasInteger && integerValue >= 1 && integerValue <= 4);
         *result = static_cast<std::uint32_t>(integerValue * 100);
@@ -157,44 +164,21 @@ bool QuestScalar(
     }
     return true;
 }
-bool QuestBoolean(
-    const char* symbol, void* owner, bool* result, bool) {
-    assert(std::strcmp(symbol, "Quest_CanRefresh") == 0);
-    assert(owner == contextA && result != nullptr);
-    ++questQueryCount;
-    *result = questCanRefresh;
-    return true;
-}
-bool QuestAgent(
-    const char* symbol, void* owner, int row, void** result, bool) {
-    assert(std::strcmp(symbol, "Quest_At") == 0);
-    assert(owner == contextA && result != nullptr && row >= 1 && row <= 4);
-    ++questRowQueryCount;
-    if (!questAgentValid) return false;
-    *result = reinterpret_cast<void*>(questAgents[row - 1]);
-    return true;
-}
-bool QuestString(
-    const char* symbol, void* owner, int row, std::string* result, bool) {
-    assert(owner == contextA && result != nullptr && row >= 1 && row <= 4);
-    ++questTextQueryCount;
-    if (std::strcmp(symbol, "Quest_Name") == 0) {
-        *result = "Quest " + std::to_string(row);
-    } else if (std::strcmp(symbol, "Quest_Goal") == 0) {
-        *result = "Complete objective " + std::to_string(row);
-    } else {
-        assert(false);
-    }
-    return true;
-}
 MajestyStringView* __fastcall AssignQuestText(
     MajestyStringView* destination, void*, const MajestyStringView* source) {
+    assert(destination == expectedQuestDestination);
+    assert(stockQuestDestinationConstructed);
     *destination = *source;
     return destination;
 }
 void* __cdecl StockQuestName(
     MajestyStringView* destination, void*, int) {
     ++stockQuestNameCount;
+    assert(destination == expectedQuestDestination);
+    destination->data = nullptr;
+    destination->capacityFlags = 0;
+    destination->length = 0;
+    stockQuestDestinationConstructed = true;
     return destination;
 }
 int __fastcall StockQuestAttribute(
@@ -222,12 +206,22 @@ void __fastcall NativeQuestRefresh(void* controller, void*) {
     ++questNativeRefreshCount;
     QuestBoardPopulate(controller, nullptr);
 }
-int __fastcall NativeQuestControl(void*, void*, std::uint32_t) { return 17; }
+void __fastcall NativeQuestSetup(void* controller, void*) {
+    ++questNativeSetupCount;
+    // Model an MX05 slot 1 that was already entered before Manager vtable
+    // installation: its later slot-14 call still resolves through the
+    // controller's newly installed table.
+    auto** table = *reinterpret_cast<void***>(controller);
+    reinterpret_cast<ControllerSetup>(table[14])(controller);
+}
 void __fastcall NativeQuestEvent(
     void* controller, void*, std::uint32_t, std::uint32_t,
     std::uint32_t eventId, std::uint32_t) {
     ++questEventCount;
-    if (eventId == 0x09435358u) QuestBoardRefresh(controller, nullptr);
+    if (eventId == 0x09435358u) {
+        auto** table = *reinterpret_cast<void***>(controller);
+        reinterpret_cast<ControllerSetup>(table[14])(controller);
+    }
 }
 void* __fastcall Delete(void* object, void*, std::uint32_t flags) {
     assert(flags == 1); ++deleteCount; return object;
@@ -260,8 +254,6 @@ void Reset() {
     g_parentOpenToggleRecord = nullptr;
     g_parentOccupantPanel = nullptr;
     g_parentQuestBoard = nullptr;
-    g_activeQuestRefreshCost = -1;
-    g_activeQuestRefreshEnabled = -1;
     g_researchOwner = {};
     parent.context = child.context = contextA;
     replacementParent.context = replacementChild.context = contextB;
@@ -272,25 +264,32 @@ void Reset() {
     reenterParentEventOnSet = false;
     packedValue = 0; lastMessageControl = lastMessage = 0;
     playerGold = 1000; setIntegerCount = 0;
-    questEventCount = questNativeRefreshCount = 0;
+    questEventCount = questNativeRefreshCount = questNativeSetupCount = 0;
     selectedQuestIndex = -1;
     parentEventCount = 0;
-    questQueryCount = questRowQueryCount = questTextQueryCount = 0;
+    questQueryCount = questOfferCountQueryCount = 0;
+    questRevisionQueryCount = 0;
     questRevision = 7;
-    questCanRefresh = true;
-    questAgentValid = true;
+    questOfferCount = 1;
     stockQuestNameCount = stockQuestAttributeCount = 0;
-    questAgents[0] = 101; questAgents[1] = 202;
-    questAgents[2] = 303; questAgents[3] = 0;
+    stockQuestDestinationConstructed = false;
+    expectedQuestDestination = nullptr;
     std::memset(questVectorStorage, 0, sizeof(questVectorStorage));
     child.listOwner = &child;
     child.listBegin = questVectorStorage;
     child.listEnd = questVectorStorage +
         sizeof(questVectorStorage) / sizeof(questVectorStorage[0]);
     g_questBoardScalarEvaluator = &QuestScalar;
-    g_questBoardBooleanEvaluator = &QuestBoolean;
-    g_questBoardAgentEvaluator = &QuestAgent;
-    g_questBoardStringEvaluator = &QuestString;
+    g_privateIntentRecords = {
+        {0x68000001u, "Quest 1"},
+        {0x68000002u, "Complete objective 1"},
+    };
+    g_privateIntentViews.clear();
+    for (const auto& record : g_privateIntentRecords) {
+        const auto length = static_cast<std::uint32_t>(record.text.size());
+        g_privateIntentViews.push_back(
+            {record.text.c_str(), length, length});
+    }
     g_stockQuestVectorErase =
         reinterpret_cast<QuestVectorErase>(&EraseQuestVector);
     g_stockQuestVectorInsert =
@@ -339,6 +338,7 @@ void Initialize() {
     nativeTable[0] = reinterpret_cast<void*>(&Delete);
     nativeTable[3] = reinterpret_cast<void*>(&Fallback);
     nativeTable[8] = reinterpret_cast<void*>(&NativeParentEvent);
+    nativeTable[14] = reinterpret_cast<void*>(&NativeQuestRefresh);
     playerTable[0x20 / 4] = reinterpret_cast<void*>(&PlayerValue);
     assert(MajestyControllerLifecycle::RegisterManagedVtable(parentTable, nativeTable,
         17, &g_parentController, &ParentPanelControllerDestroyed, nullptr));
@@ -508,35 +508,29 @@ int main() {
     assert(lastVisibleControl == 0x5D02 && lastVisibleValue == 0);
     assert(lastMessageControl == 0x5D01 && lastMessage == 0x0A);
 
-    // 13. AP08 is a distinct 13-entry parent class. The quest-board wrapper
-    // copies exactly that live table and retains its stock destructor rather
-    // than reading four AP10 entries from adjacent string data.
+    // 13. An occupant-action recipe may use AP08 without becoming a quest-board
+    // recipe. AP08 is a distinct 13-entry parent class; derive that boundary
+    // from the occupant record and leave the package-owned MX05 child native.
     Reset();
-    MajestyStockControllers::QuestBoardRecord quest = {};
-    quest.panelKey = "quest-board";
-    quest.parentDialogId = 0x31304741;
-    quest.childDialogId = 0x31304251;
-    quest.openCommandId = 0x7101;
-    quest.selectedActionCommandId = 0x20000;
-    quest.refreshCommandId = 0x20001;
-    quest.refreshControlId = 0x7102;
-    quest.refreshPriceBindingId = 0x7103;
-    quest.listSourceCallbackSymbol = "Quest_At";
-    quest.revisionCallbackSymbol = "Quest_Revision";
-    quest.offerNameCallbackSymbol = "Quest_Name";
-    quest.offerGoalCallbackSymbol = "Quest_Goal";
-    quest.offerRewardCallbackSymbol = "Quest_Reward";
-    quest.selectedCostCallbackSymbol = "Quest_SelectedCost";
-    quest.selectedActionCallbackSymbol = "Quest_Reject";
-    quest.refreshCostCallbackSymbol = "Quest_RefreshCost";
-    quest.canRefreshCallbackSymbol = "Quest_CanRefresh";
-    quest.refreshCallbackSymbol = "Quest_Refresh";
-    quest.parentControllerBase = 0x38305041;
-    g_stockControllerRegistry.questBoards = {quest};
-    g_parentQuestBoard = &g_stockControllerRegistry.questBoards[0];
-    parent.table = nativeTable;
-    g_imageBase = reinterpret_cast<std::uintptr_t>(nativeTable) -
-        kBeta2QuestBoard.parentVtable;
+    MajestyStockControllers::OccupantActionPanelRecord ap08Occupant = *occupant;
+    ap08Occupant.panelKey = "dispatch";
+    ap08Occupant.parentDialogId = 0x31304741;
+    ap08Occupant.childDialogId = 0x31305044;
+    ap08Occupant.openCommandId = 0x7101;
+    ap08Occupant.parentControllerBase = kAp08DialogId;
+    g_parentOccupantPanel = &ap08Occupant;
+    auto* ap08Image = static_cast<unsigned char*>(VirtualAlloc(
+        nullptr, 0x00400000u, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    assert(ap08Image != nullptr);
+    g_imageBase = reinterpret_cast<std::uintptr_t>(ap08Image);
+    auto** ap08StockTable = reinterpret_cast<void**>(
+        ap08Image + kBeta2QuestBoard.parentVtable);
+    ap08StockTable[0] = reinterpret_cast<void*>(&Delete);
+    ap08StockTable[1] = reinterpret_cast<void*>(&Fallback);
+    ap08StockTable[3] = reinterpret_cast<void*>(&Fallback);
+    ap08StockTable[8] = reinterpret_cast<void*>(&NativeParentEvent);
+    ap08StockTable[12] = ap08StockTable;
+    parent.table = ap08StockTable;
     profile.getPanelContextRva =
         reinterpret_cast<std::uintptr_t>(&Context) - g_imageBase;
     profile.uiManagerRva =
@@ -545,17 +539,51 @@ int main() {
         reinterpret_cast<std::uintptr_t>(&Player) - g_imageBase;
     profile.submitBuildingCommandRva =
         reinterpret_cast<std::uintptr_t>(&SubmitBuilding) - g_imageBase;
+    assert(ValidateAp08ParentProfile());
+    g_captureParentController = 1;
+    CaptureSecondaryController(reinterpret_cast<std::uint32_t>(&parent), 0);
+    auto* questAp08Clone = FindOccupantParentClass(&parent);
+    assert(questAp08Clone != nullptr &&
+           questAp08Clone->stock == ap08StockTable);
+    assert(questAp08Clone->entryCount == kAp08VtableEntries);
+    assert(g_parentQuestBoard == nullptr && g_parentOccupantPanel == &ap08Occupant);
+    assert(questQueryCount == 0 && setIntegerCount == 0 && visibleControlCount == 0);
+    OccupantParentEvent(&parent, nullptr, 1, 2, 3, 4);
+    assert(parentEventCount == 1 && questQueryCount == 0);
+    assert(OccupantParentControl(&parent, nullptr, 0x7102) == 23);
+    assert(fallbackCount == 1 && submitCount == 0);
+    Destroy(parent);
+    assert(g_parentOccupantPanel == nullptr && g_parentController == 0);
+
+    // 14. The quest-board recipe retains the exact AP08 parent boundary while
+    // the package-owned MX05 child keeps one native bottom action: Refresh.
+    Reset();
+    MajestyStockControllers::QuestBoardRecord quest = {};
+    quest.panelKey = "quest-board";
+    quest.parentDialogId = 0x31304741;
+    quest.childDialogId = 0x31304251;
+    quest.openCommandId = 0x7101;
+    quest.actionCommandId = 0x20000;
+    quest.offerCountCallbackSymbol = "Quest_Count";
+    quest.revisionCallbackSymbol = "Quest_Revision";
+    quest.offerNameIntentId = 0x68000001u;
+    quest.offerGoalIntentId = 0x68000002u;
+    quest.offerRewardCallbackSymbol = "Quest_Reward";
+    quest.refreshCostCallbackSymbol = "Quest_RefreshCost";
+    quest.refreshCallbackSymbol = "Quest_Refresh";
+    quest.parentControllerBase = 0x38305041;
+    g_stockControllerRegistry.questBoards = {quest};
+    g_parentQuestBoard = &g_stockControllerRegistry.questBoards[0];
+    parent.table = ap08StockTable;
     g_captureParentController = 1;
     CaptureSecondaryController(reinterpret_cast<std::uint32_t>(&parent), 0);
     auto* ap08Clone = FindOccupantParentClass(&parent);
-    assert(ap08Clone != nullptr && ap08Clone->stock == nativeTable);
+    assert(ap08Clone != nullptr && ap08Clone->stock == ap08StockTable);
     assert(ap08Clone->entryCount == kAp08VtableEntries);
     // Controller capture is installation only. It must not execute package GPL
     // or write private controls before Majesty inserts the controller.
     assert(parentEventCount == 0 && questQueryCount == 0);
     assert(setIntegerCount == 0 && visibleControlCount == 0);
-    assert(g_activeQuestRefreshCost == -1 &&
-           g_activeQuestRefreshEnabled == -1);
 
     // AP08 remains a stock parent with only the child opener. Refresh is not
     // presented, queried, or dispatched from the primary building panel.
@@ -565,11 +593,11 @@ int main() {
     OccupantParentEvent(&parent, nullptr, 1, 2, 0x06425041u, 4);
     assert(parentEventCount == 2 && questQueryCount == 0);
     assert(setIntegerCount == 0 && visibleControlCount == 0);
-    assert(OccupantParentControl(
-               &parent, nullptr, quest.refreshControlId) == 23);
+    assert(OccupantParentControl(&parent, nullptr, 0x7102) == 23);
     assert(fallbackCount == 1 && submitCount == 0);
     Destroy(parent);
     assert(g_parentQuestBoard == nullptr && g_parentController == 0);
+    assert(VirtualFree(ap08Image, 0, MEM_RELEASE));
 
     // Restore the direct native seams after the synthetic image-base proof.
     g_imageBase = 0;
@@ -579,146 +607,131 @@ int main() {
     profile.submitBuildingCommandRva =
         reinterpret_cast<std::uintptr_t>(&SubmitBuilding);
 
-    // 14. The custom population source replaces only MX05's native vector.
-    // Count is derived from contiguous package agents; presentation remains a
-    // separate post-stock-refresh boundary.
+    // 15. If stock MX05 slot 1 was already entered before the Manager installs
+    // its clone, its later stock slot-14 call reaches the gated slot-11 package
+    // population. Slots 3, 10, and 14 remain byte-for-byte stock.
     g_activeQuestBoard = &g_stockControllerRegistry.questBoards[0];
-    g_activeQuestRefreshCost = -1;
-    g_activeQuestRefreshEnabled = -1;
-    assert(IsQuestBoardAgentCompatibleResultType(kGplAgentResultType));
-    assert(IsQuestBoardAgentCompatibleResultType(kGplNullResultType));
-    assert(IsQuestBoardAgentCompatibleResultType(kGplIntegerResultType));
-    assert(!IsQuestBoardAgentCompatibleResultType(kGplStringResultType));
     g_childController = reinterpret_cast<LONG>(&child);
-    lastMessageControl = 0;
-    visibleControlCount = 0;
-    setIntegerCount = 0;
+    g_stockQuestBoardRefresh =
+        reinterpret_cast<ControllerSetup>(&NativeQuestRefresh);
+    visibleControlCount = setIntegerCount = 0;
+    lastMessageControl = lastMessage = 0;
+    questQueryCount = questOfferCountQueryCount = questRevisionQueryCount = 0;
+    child.table = nativeTable;
+    nativeTable[1] = reinterpret_cast<void*>(&NativeQuestSetup);
+    const auto alreadyEnteredSetup =
+        reinterpret_cast<ControllerSetup>(nativeTable[1]);
+    child.table = childTable;
+    childTable[8] = reinterpret_cast<void*>(&QuestBoardEvent);
+    childTable[11] = reinterpret_cast<void*>(&QuestBoardPopulate);
+    childTable[14] = reinterpret_cast<void*>(&NativeQuestRefresh);
+    alreadyEnteredSetup(&child);
+    assert(questNativeSetupCount == 1 && questNativeRefreshCount == 1);
+    assert(g_activeQuestRevision == 7 && questOfferCountQueryCount == 1);
+    assert(questRevisionQueryCount == 1);
+    assert(visibleControlCount == 0 && setIntegerCount == 0 &&
+           lastMessageControl == 0);
+
+    // 16. The one-row package proof replaces only MX05's native vector and
+    // private row text. The native bottom action presentation remains stock.
+    g_activeQuestRevision = -1;
+    assert(kGplIntegerResultType == 1);
+    questQueryCount = questOfferCountQueryCount = questRevisionQueryCount = 0;
     QuestBoardPopulate(&child, nullptr);
-    assert(g_activeQuestRevision == 7 && questRowQueryCount == 4);
-    assert(questTextQueryCount == 6 && g_questOfferPresentationCount == 3);
-    assert(g_questOfferPresentations[1].name == "Quest 2");
-    assert(g_questOfferPresentations[1].detail ==
-           "Complete objective 2 (200 gold)");
+    assert(g_activeQuestRevision == 7 && questOfferCountQueryCount == 1);
+    assert(g_questOfferPresentationCount == 1);
+    assert(g_questOfferPresentations[0].name == "Quest 1");
+    assert(g_questOfferPresentations[0].detail ==
+           "Complete objective 1 (100 gold)");
     g_privateIntentStringAssign =
         reinterpret_cast<StockStringAssign>(&AssignQuestText);
     g_stockQuestRowNameFormatter = &StockQuestName;
     g_stockQuestRowAttributeReader =
         reinterpret_cast<StockQuestRowAttributeReader>(&StockQuestAttribute);
-    MajestyStringView rowName = {};
-    QuestBoardRowNameFormatter(
-        &rowName, reinterpret_cast<void*>(202), 0);
+    MajestyStringView rowName = {
+        reinterpret_cast<const char*>(0xDEADBEEFu),
+        0xCCCCCCCCu,
+        0xDDDDDDDDu,
+    };
+    expectedQuestDestination = &rowName;
+    QuestBoardRowNameFormatter(&rowName, contextA, 0);
     assert(rowName.length == 7 &&
-           std::memcmp(rowName.data, "Quest 2", 7) == 0 &&
-           stockQuestNameCount == 0);
+           std::memcmp(rowName.data, "Quest 1", 7) == 0 &&
+           stockQuestNameCount == 1 && stockQuestDestinationConstructed);
+    MajestyStringView fallbackName = {
+        reinterpret_cast<const char*>(0xBAADF00Du),
+        0xAAAAAAAAu,
+        0xBBBBBBBBu,
+    };
+    expectedQuestDestination = &fallbackName;
+    stockQuestDestinationConstructed = false;
+    assert(QuestBoardRowNameFormatter(
+               &fallbackName, reinterpret_cast<void*>(999), 0) ==
+           &fallbackName);
+    assert(stockQuestNameCount == 2 && stockQuestDestinationConstructed);
     const int rowIntent = QuestBoardRowIntentAttribute(
-        reinterpret_cast<void*>(202), nullptr, 0x1E565041u, 0);
-    assert(rowIntent == static_cast<int>(kFirstQuestOfferIntentId + 1));
+        contextA, nullptr, 0x1E565041u, 0);
+    assert(rowIntent == static_cast<int>(kFirstQuestOfferIntentId));
     const MajestyStringView* rowDetail = FindPrivateIntentText(rowIntent);
     assert(rowDetail != nullptr && rowDetail->length == 31 &&
            std::memcmp(
-               rowDetail->data, "Complete objective 2 (200 gold)", 31) == 0);
+               rowDetail->data, "Complete objective 1 (100 gold)", 31) == 0);
     assert(QuestBoardRowIntentAttribute(
         reinterpret_cast<void*>(999), nullptr, 0x1E565041u, 0) == 91);
     assert(stockQuestAttributeCount == 1);
-    assert(child.listBegin == questVectorStorage + 3);
-    assert(questVectorStorage[0] == 101 && questVectorStorage[1] == 202 &&
-           questVectorStorage[2] == 303);
+    assert(child.listBegin == questVectorStorage + 1);
+    assert(questVectorStorage[0] ==
+           reinterpret_cast<std::uint32_t>(contextA));
+
+    // Stock slot 14 can run at paint cadence without polling package GPL or
+    // producing any Manager-owned UI write.
+    questNativeRefreshCount = 0;
+    questQueryCount = questOfferCountQueryCount = questRevisionQueryCount = 0;
+    visibleControlCount = setIntegerCount = 0;
+    lastMessageControl = lastMessage = 0;
+    for (int index = 0; index < 300; ++index) {
+        reinterpret_cast<ControllerSetup>(child.table[14])(&child);
+    }
+    assert(questNativeRefreshCount == 300 && questQueryCount == 0);
     assert(visibleControlCount == 0 && setIntegerCount == 0 &&
            lastMessageControl == 0);
 
-    // The native selected-action row moves up unchanged. The Manager-generated
-    // second MX05 clone presents Refresh at the child's original bottom row.
-    g_stockQuestBoardRefresh =
-        reinterpret_cast<ControllerSetup>(&NativeQuestRefresh);
-    g_stockQuestBoardControl =
-        reinterpret_cast<ControllerControl>(&NativeQuestControl);
-    visibleControlCount = 0;
-    selectedQuestIndex = -1;
-    QuestBoardRefresh(&child, nullptr);
-    assert(questNativeRefreshCount == 1 && visibleControlCount == 5);
-    assert(visibleControls[0] == kMx05SelectedActionCoinControlId &&
-           visibleValues[0] == 0);
-    assert(visibleControls[1] == kMx05SelectedActionPriceControlId &&
-           visibleValues[1] == 0);
-    assert(visibleControls[2] == quest.refreshControlId &&
-           visibleValues[2] == 1);
-    assert(visibleControls[3] == quest.refreshPriceBindingId &&
-           visibleValues[3] == 1);
-    assert(visibleControls[4] == kQuestRefreshCoinControlId &&
-           visibleValues[4] == 1);
-    assert(setIntegerCount == 1 && g_activeQuestRefreshCost == 25 &&
-           g_activeQuestRefreshEnabled == 1);
-    assert(lastMessageControl == quest.refreshControlId && lastMessage == 0x0Au);
-    visibleControlCount = 0;
-    selectedQuestIndex = 0;
-    assert(QuestBoardControl(&child, nullptr, kMx05SelectionControlId) == 17);
-    assert(visibleControlCount == 2);
-    assert(visibleControls[0] == kMx05SelectedActionCoinControlId &&
-           visibleValues[0] == 1);
-    assert(visibleControls[1] == kMx05SelectedActionPriceControlId &&
-           visibleValues[1] == 1);
-    playerGold = 10;
-    submitCount = 0;
-    assert(QuestBoardControl(&child, nullptr, quest.refreshControlId) == 0);
-    assert(submitCount == 0);
-    playerGold = 1000;
-    visibleControlCount = 0;
-    assert(QuestBoardControl(&child, nullptr, quest.refreshControlId) == 0);
-    assert(submitCount == 1 && seenCommand == quest.refreshCommandId);
-    assert(seenBuilding == 123 && seenAgent == 123 && seenPrice == 25);
-    assert(visibleControlCount == 3 &&
-           visibleControls[2] == kQuestRefreshCoinControlId &&
-           visibleValues[2] == 0 && g_activeQuestRefreshEnabled == 0);
-    visibleControlCount = 0;
-    assert(QuestBoardControl(&child, nullptr, 0x1F4Du) == 17);
-    assert(visibleControlCount == 0);
-
-    // 15. Unchanged high-frequency events are read-only: one revision query,
-    // no list refresh and no synthetic panel write or message.
-    questQueryCount = questRowQueryCount = questTextQueryCount = 0;
-    questEventCount = questNativeRefreshCount = setIntegerCount = 0;
-    lastMessageControl = 0;
+    // 17. Unchanged non-XSCX events perform one bounded revision query and no
+    // list refresh or synthetic presentation.
+    questQueryCount = questOfferCountQueryCount = questRevisionQueryCount = 0;
+    questEventCount = questNativeRefreshCount = 0;
     QuestBoardEvent(&child, nullptr, 1, 2, 3, 4);
-    assert(questEventCount == 1 && questQueryCount == 1);
-    assert(questNativeRefreshCount == 0 && setIntegerCount == 0 &&
-           lastMessageControl == 0);
-    QuestBoardRefresh(&child, nullptr);
-    assert(questRowQueryCount == 0 && questTextQueryCount == 0);
-    questNativeRefreshCount = 0;
-    visibleControlCount = 0;
+    assert(questEventCount == 1 && questQueryCount == 1 &&
+           questRevisionQueryCount == 1);
+    assert(questNativeRefreshCount == 0 && visibleControlCount == 0);
 
-    // 16. A changed package revision is translated into one stock slot-14
-    // refresh, whose slot-11 population keeps native list ownership. The
-    // post-stock boundary updates the selected-action chrome and revalidates
-    // the separate Manager-generated Refresh action.
+    // 18. A changed package revision is translated into exactly one stock
+    // slot-14 refresh, whose gated slot-11 population retains native ownership.
     questRevision = 8;
-    questQueryCount = questRowQueryCount = questTextQueryCount = 0;
+    questQueryCount = questOfferCountQueryCount = questRevisionQueryCount = 0;
     QuestBoardEvent(&child, nullptr, 1, 2, 3, 4);
-    assert(questNativeRefreshCount == 1 && questRowQueryCount == 4);
-    assert(g_activeQuestRevision == 8 && setIntegerCount == 0);
-    assert(visibleControlCount == 2);
-    assert(lastMessageControl == quest.refreshControlId && lastMessage == 0x0Au);
+    assert(questNativeRefreshCount == 1 && questOfferCountQueryCount == 1);
+    assert(questRevisionQueryCount == 1 && g_activeQuestRevision == 8);
+    assert(visibleControlCount == 0 && setIntegerCount == 0 &&
+           lastMessageControl == 0);
 
-    // 17. Stock MX05 owns exactly one slot-14 refresh for every XSCX event.
-    // Even if the engine supplies XSCX at a high cadence, the Manager adds no
-    // second list refresh; it only revalidates the child Refresh action.
-    questNativeRefreshCount = setIntegerCount = 0;
-    visibleControlCount = 0;
-    lastMessageControl = 0;
+    // 19. XSCX remains wholly stock: one native slot-14 refresh per event and
+    // no extra callback, UI write, or second refresh from the Manager.
+    questNativeRefreshCount = 0;
+    questQueryCount = questOfferCountQueryCount = questRevisionQueryCount = 0;
     for (int index = 0; index < 3; ++index) {
         QuestBoardEvent(&child, nullptr, 1, 2, 0x09435358u, 4);
     }
-    assert(questNativeRefreshCount == 3 && setIntegerCount == 0);
-    assert(visibleControlCount == 6);
-    assert(lastMessageControl == quest.refreshControlId && lastMessage == 0x0Au);
+    assert(questNativeRefreshCount == 3 && questQueryCount == 0);
+    assert(visibleControlCount == 0 && setIntegerCount == 0 &&
+           lastMessageControl == 0);
 
-    // 18. A mod callback that violates the declared stock-agent result
-    // contract is contained to the private quest rows. The live MX05
-    // controller remains usable and its vector is cleared instead of
-    // terminating Majesty as though runtime installation had failed.
+    // 20. A package count above the proven single-row bound is contained to
+    // the private quest rows. The live MX05 controller remains usable and its
+    // vector is cleared instead of terminating Majesty.
     g_activeQuestRevision = -1;
     g_activeQuestBoardFaulted = false;
-    questAgentValid = false;
+    questOfferCount = 2;
     QuestBoardPopulate(&child, nullptr);
     assert(g_activeQuestBoardFaulted);
     assert(g_questOfferPresentationCount == 0);

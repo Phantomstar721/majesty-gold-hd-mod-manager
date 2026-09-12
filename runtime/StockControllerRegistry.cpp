@@ -45,9 +45,6 @@ constexpr std::uint32_t kProvenSovereignVisualTemplate = 0x00001133u;
 constexpr std::uint32_t kProvenSovereignTargetTemplate = 0x00001132u;
 constexpr std::uint32_t kProvenSovereignTargetMode = 0x33327053u;  // Sp23
 constexpr std::uint32_t kProvenSovereignTargetLevel = 3u;
-constexpr std::uint32_t kQuestRefreshControlId = 0x00007102u;
-constexpr std::uint32_t kQuestRefreshPriceBindingId = 0x00007103u;
-constexpr std::uint32_t kQuestRefreshCoinControlId = 0x00007104u;
 
 bool IsStockAp99ControlId(std::uint32_t value) {
     return value >= kFirstStockAp99ControlId &&
@@ -567,25 +564,20 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
     }
     std::set<std::string> questKeys;
     for (const auto& item : registry.questBoards) {
-        std::uint32_t questControls[3] = {
-            item.refreshControlId, item.refreshPriceBindingId,
-            item.refreshControlId + 2u,
-        };
         if (panels.count(item.panelKey) || rewardPanelKeys.count(item.panelKey) ||
             occupantKeys.count(item.panelKey) || !questKeys.insert(item.panelKey).second ||
             !childDialogs.insert(item.childDialogId).second ||
             !parentCommands.insert({item.parentDialogId, item.openCommandId}).second ||
-            !ClaimControls(&controls, item.panelKey, questControls, 3) ||
-            !callbacks.insert(FoldAsciiCase(item.listSourceCallbackSymbol)).second ||
+            !callbacks.insert(FoldAsciiCase(item.offerCountCallbackSymbol)).second ||
             !callbacks.insert(FoldAsciiCase(item.revisionCallbackSymbol)).second ||
-            !callbacks.insert(FoldAsciiCase(item.offerNameCallbackSymbol)).second ||
-            !callbacks.insert(FoldAsciiCase(item.offerGoalCallbackSymbol)).second ||
             !callbacks.insert(FoldAsciiCase(item.offerRewardCallbackSymbol)).second ||
-            !callbacks.insert(FoldAsciiCase(item.selectedCostCallbackSymbol)).second ||
-            !callbacks.insert(FoldAsciiCase(item.selectedActionCallbackSymbol)).second ||
             !callbacks.insert(FoldAsciiCase(item.refreshCostCallbackSymbol)).second ||
-            !callbacks.insert(FoldAsciiCase(item.canRefreshCallbackSymbol)).second ||
-            !callbacks.insert(FoldAsciiCase(item.refreshCallbackSymbol)).second)
+            !callbacks.insert(FoldAsciiCase(item.refreshCallbackSymbol)).second ||
+            item.offerNameIntentId < 0x60000000u ||
+            item.offerNameIntentId >= 0x70000000u ||
+            item.offerGoalIntentId < 0x60000000u ||
+            item.offerGoalIntentId >= 0x70000000u ||
+            item.offerNameIntentId == item.offerGoalIntentId)
             return Fail(error, "MMCR quest-board identity is duplicated");
         parentDialogs.insert(item.parentDialogId);
         const auto prior = parentBases.find(item.parentDialogId);
@@ -769,17 +761,9 @@ const QuestBoardRecord* Registry::FindQuestBoardByParent(std::uint32_t id) const
     return nullptr;
 }
 
-const QuestBoardRecord* Registry::FindQuestBoardByCommand(
-    std::uint32_t id, bool* refresh) const {
+const QuestBoardRecord* Registry::FindQuestBoardByCommand(std::uint32_t id) const {
     for (const auto& item : questBoards) {
-        if (item.selectedActionCommandId == id) {
-            if (refresh != nullptr) *refresh = false;
-            return &item;
-        }
-        if (item.refreshCommandId == id) {
-            if (refresh != nullptr) *refresh = true;
-            return &item;
-        }
+        if (item.actionCommandId == id) return &item;
     }
     return nullptr;
 }
@@ -822,7 +806,10 @@ bool ParseRegistry(
     if (version == 4 && counts[10] == 0) return Fail(error, "MMCR v4 without building toggles is noncanonical");
     if (version == 5) return Fail(error, "MMCR v5 fixed-row quest boards are unsupported; rebuild with the current Manager");
     if (version == 6) return Fail(error, "MMCR v6 quest rows lack private display callbacks; rebuild with the current Manager");
-    if (version == 7 && counts[11] == 0) return Fail(error, "MMCR v7 without quest lists is noncanonical");
+    if (version == 7) return Fail(error, "MMCR v7 quest rows use unsupported GPL agent/boolean return contracts; rebuild with the current Manager");
+    if (version == 8) return Fail(error, "MMCR v8 quest rows use unsupported GPL string return contracts; rebuild with the current Manager");
+    if (version == 9) return Fail(error, "MMCR v9 quest boards contain a non-stock duplicate Refresh row; rebuild with the current Manager");
+    if (version == 10 && counts[11] == 0) return Fail(error, "MMCR v10 without quest lists is noncanonical");
     std::uint64_t total = 0;
     for (std::size_t index = 0; index < 12; ++index) total += counts[index];
     if (total > kMaximumRecordCount ||
@@ -1122,6 +1109,7 @@ bool ParseRegistry(
             !reader.ReadSymbol(&item.actionCallbackSymbol) ||
             !reader.ReadU32(&item.parentControllerBase) ||
             (item.parentControllerBase != 0x37305041u &&
+             item.parentControllerBase != 0x38305041u &&
              item.parentControllerBase != 0x30315041u &&
              item.parentControllerBase != 0x3930584Du) ||
             !IsPrintableFourCC(item.parentDialogId) ||
@@ -1160,30 +1148,21 @@ bool ParseRegistry(
             !reader.ReadU32(&item.parentDialogId) || !reader.ReadU32(&item.childDialogId) ||
             !reader.ReadU32(&item.openCommandId))
             return Fail(error, "MMCR quest-board header is truncated");
-        if (!reader.ReadU32(&item.selectedActionCommandId) ||
-            !reader.ReadU32(&item.refreshCommandId) ||
-            !reader.ReadU32(&item.refreshControlId) ||
-            !reader.ReadU32(&item.refreshPriceBindingId))
-            return Fail(error, "MMCR quest-board controls are truncated");
-        if (!reader.ReadSymbol(&item.listSourceCallbackSymbol) ||
+        if (!reader.ReadU32(&item.actionCommandId))
+            return Fail(error, "MMCR quest-board action command is truncated");
+        if (!reader.ReadSymbol(&item.offerCountCallbackSymbol) ||
             !reader.ReadSymbol(&item.revisionCallbackSymbol) ||
-            !reader.ReadSymbol(&item.offerNameCallbackSymbol) ||
-            !reader.ReadSymbol(&item.offerGoalCallbackSymbol) ||
+            !reader.ReadU32(&item.offerNameIntentId) ||
+            !reader.ReadU32(&item.offerGoalIntentId) ||
             !reader.ReadSymbol(&item.offerRewardCallbackSymbol) ||
-            !reader.ReadSymbol(&item.selectedCostCallbackSymbol) ||
-            !reader.ReadSymbol(&item.selectedActionCallbackSymbol) ||
             !reader.ReadSymbol(&item.refreshCostCallbackSymbol) ||
-            !reader.ReadSymbol(&item.canRefreshCallbackSymbol) || !reader.ReadSymbol(&item.refreshCallbackSymbol) ||
+            !reader.ReadSymbol(&item.refreshCallbackSymbol) ||
             !reader.ReadU32(&item.parentControllerBase) || !IsPrintableFourCC(item.parentDialogId) ||
             !IsPrintableFourCC(item.childDialogId) || item.openCommandId == 0 ||
-            item.refreshControlId != kQuestRefreshControlId ||
-            item.refreshPriceBindingId != kQuestRefreshPriceBindingId ||
-            item.refreshControlId + 2u != kQuestRefreshCoinControlId ||
             item.parentControllerBase != 0x38305041u)
             return Fail(error, "MMCR quest-board record is invalid");
-        const std::uint32_t commandBase = 0x20000u + index * 2u;
-        if (item.selectedActionCommandId != commandBase ||
-            item.refreshCommandId != commandBase + 1u ||
+        const std::uint32_t commandId = 0x20000u + index;
+        if (item.actionCommandId != commandId ||
             (!parsed.questBoards.empty() && parsed.questBoards.back().panelKey >= item.panelKey))
             return Fail(error, "MMCR quest-board record is noncanonical");
         parsed.questBoards.push_back(std::move(item));

@@ -7,7 +7,8 @@ quests can each load a complete copy of that table, so a quest row and a mod row
 with the same number describe different things even though the executable sees
 only one integer. Editing or duplicating every quest is not a scalable fix.
 
-The runtime therefore gives manager-built GPL a private positive ID range and
+The runtime therefore gives manager-built GPL and bounded manager features a
+private positive ID range and
 intercepts only IDs explicitly present in a manager-supplied registry. Every
 other value executes Majesty's complete stock resolver through a trampoline.
 The hook is installed only when MMCP declares
@@ -90,8 +91,10 @@ repeat record count times:
   bytes   text, without a NUL terminator
 ```
 
-IDs are strictly increasing and unique in `0x60000000..0x6FFFFFFF`. Text must
-be non-empty, contain no NUL, and use defined Windows-1252 bytes. The parser
+IDs are strictly increasing and unique in `0x60000000..0x6FFFFFFF`.
+AITX-derived rows use the lower half; bounded feature literals such as
+quest-board labels use the upper half. Text must be non-empty, contain no NUL,
+and use defined Windows-1252 bytes. The parser
 rejects truncation, trailing bytes, duplicates, unsupported versions, excessive
 sizes, and out-of-range IDs. Declaring the private-text capability with a
 missing, invalid, or zero-record registry stops runtime initialization before

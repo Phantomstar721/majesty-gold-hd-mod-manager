@@ -53,27 +53,42 @@ class PackageTests(unittest.TestCase):
                 "panel_resource_template": "AP08",
             }],
             "runtime_features": [{
-                "type": "stock.ap08-mx05-quest-list-panel.v1",
+                "type": "stock.ap08-mx05-quest-list-panel.v4",
                 "panel_key": "quests",
                 "parent_building": "QuestGuild",
                 "source_dialog_id": "QB01",
                 "open_command_id": 29001,
-                "list_source_callback_symbol": "QB_At",
+                "offer_count_callback_symbol": "QB_Count",
                 "revision_callback_symbol": "QB_Revision",
-                "offer_name_callback_symbol": "QB_Name",
-                "offer_goal_callback_symbol": "QB_Goal",
+                "offer_name_text": "Royal Dispatch",
+                "offer_goal_text": "Deliver orders to an allied building",
                 "offer_reward_callback_symbol": "QB_Reward",
-                "selected_cost_callback_symbol": "QB_SelectedCost",
-                "selected_action_callback_symbol": "QB_Reject",
                 "refresh_cost_callback_symbol": "QB_Cost",
-                "can_refresh_callback_symbol": "QB_CanRefresh",
                 "refresh_callback_symbol": "QB_Refresh",
             }],
         }
         parsed = parse_mod_definition(value)
         board = parsed.runtime_features[0]
         self.assertIsInstance(board, StockAp08Mx05QuestBoardPanel)
-        self.assertEqual(board.list_source_callback_symbol, "QB_At")
+        self.assertEqual(board.offer_count_callback_symbol, "QB_Count")
+
+    def test_definition_v3_rejects_obsolete_quest_board_agent_contract(self):
+        value = {
+            "schema_version": 3,
+            "mod_id": MOD_ID,
+            "internal_name": "ObsoleteQuestBoard",
+            "display_name": "Obsolete Quest Board",
+            "custom_buildings": [{
+                "local_name": "QuestGuild",
+                "controller_base": "AP08",
+                "panel_resource_template": "AP08",
+            }],
+            "runtime_features": [{
+                "type": "stock.ap08-mx05-quest-list-panel.v2",
+            }],
+        }
+        with self.assertRaisesRegex(PackageFormatError, "type is unsupported"):
+            parse_mod_definition(value)
 
     def test_definition_v3_parses_generic_toggle_and_purchase_tail(self):
         value = {

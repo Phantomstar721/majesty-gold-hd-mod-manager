@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 import hashlib
 import re
 import struct
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, Sequence, Union
 import uuid
 
 from .gpl import DefinitionKind, ParsedSemanticSource, SemanticItem
@@ -44,6 +44,17 @@ class PrivateActivityTextBinding:
 class PrivateActivityTextRecord:
     binding: PrivateActivityTextBinding
     text: bytes
+
+
+@dataclass(frozen=True)
+class PrivateLiteralTextRecord:
+    """Manager-owned text that is not sourced from Majesty's AITX table."""
+
+    runtime_id: int
+    text: bytes
+
+
+PrivateIntentTextRecord = Union[PrivateActivityTextRecord, PrivateLiteralTextRecord]
 
 
 @dataclass(frozen=True)
@@ -1099,7 +1110,9 @@ def allocate_private_activity_text_ids(
     allocated_ids: dict[int, tuple[str, int]] = {}
     for owner, source_mod_id, source_index, expressions, expected_text in normalized:
         identity = f"{source_mod_id.casefold()}\0aitx\0{source_index}".encode("ascii")
-        offset = int.from_bytes(hashlib.sha256(identity).digest()[:4], "little") & 0x0FFFFFFF
+        # Keep AITX-derived rows in the lower half of the private range. The
+        # upper half is reserved for other manager-owned literal text domains.
+        offset = int.from_bytes(hashlib.sha256(identity).digest()[:4], "little") & 0x07FFFFFF
         runtime_id = INTENT_ID_BASE + offset
         previous = allocated_ids.get(runtime_id)
         if previous is not None:
@@ -1120,17 +1133,57 @@ def allocate_private_activity_text_ids(
     return tuple(allocated)
 
 
-def encode_intent_registry(records: Iterable[PrivateActivityTextRecord]) -> bytes:
+def allocate_private_literal_text_id(
+    source_mod_id: str,
+    namespace: str,
+    local_key: str,
+) -> int:
+    """Allocate a stable manager text ID outside the AITX-derived namespace."""
+
+    try:
+        normalized_mod_id = str(uuid.UUID(source_mod_id)).casefold()
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise IntentTextError("private literal text source Mod ID must be a UUID") from exc
+    for label, value in (("namespace", namespace), ("local_key", local_key)):
+        if not isinstance(value, str) or not value or "\x00" in value:
+            raise IntentTextError(f"private literal text {label} is invalid")
+        try:
+            value.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise IntentTextError(
+                f"private literal text {label} must be ASCII"
+            ) from exc
+    identity = (
+        normalized_mod_id + "\0literal-text\0" + namespace + "\0" + local_key
+    ).encode("ascii")
+    # 0x68000000..0x6FFFFFFF is reserved for non-AITX manager text. Existing
+    # AITX allocations remain readable; combined-registry encoding catches the
+    # vanishingly unlikely legacy hash collision and fails closed.
+    return 0x68000000 + (
+        int.from_bytes(hashlib.sha256(identity).digest()[:4], "little")
+        & 0x07FFFFFF
+    )
+
+
+def _private_text_record_id(record: PrivateIntentTextRecord) -> int:
+    if isinstance(record, PrivateActivityTextRecord):
+        return record.binding.runtime_id
+    if isinstance(record, PrivateLiteralTextRecord):
+        return record.runtime_id
+    raise IntentTextError("private activity-text registry record type is invalid")
+
+
+def encode_intent_registry(records: Iterable[PrivateIntentTextRecord]) -> bytes:
     """Serialize the strict launcher/DLL activity-text registry."""
 
-    ordered = sorted(records, key=lambda record: record.binding.runtime_id)
+    ordered = sorted(records, key=_private_text_record_id)
     if len(ordered) > INTENT_REGISTRY_MAX_RECORDS:
         raise IntentTextError("private activity-text registry has too many records")
     seen: set[int] = set()
     output = bytearray(INTENT_REGISTRY_MAGIC)
     output += struct.pack("<II", INTENT_REGISTRY_VERSION, len(ordered))
     for record in ordered:
-        runtime_id = record.binding.runtime_id
+        runtime_id = _private_text_record_id(record)
         if not INTENT_ID_BASE <= runtime_id < INTENT_ID_LIMIT:
             raise IntentTextError(
                 f"private activity-text ID is outside the reserved range: 0x{runtime_id:08X}"
@@ -1242,6 +1295,9 @@ __all__ = [
     "IntentTextError",
     "PrivateActivityTextBinding",
     "PrivateActivityTextRecord",
+    "PrivateIntentTextRecord",
+    "PrivateLiteralTextRecord",
+    "allocate_private_literal_text_id",
     "allocate_private_activity_text_ids",
     "audit_private_activity_text_resolver_aliases",
     "collect_exact_integer_expressions",

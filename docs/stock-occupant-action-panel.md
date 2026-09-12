@@ -11,10 +11,16 @@ It does not identify a particular guild, Workshop item, UUID, or unit type.
    A package's opener makes that same call with its manager-resolved child ID.
    The factory aliases the child controller class to MX05 while retaining
    the package-owned streamed menu/string resources and building context.
-   The parent retains its declared AP07, AP10, or MX09 class.
+   The parent retains its declared AP07, AP08, AP10, or MX09 class. AP08 uses
+   its exact 13-entry parent vtable; the other supported parent classes retain
+   their exact 17-entry boundary.
 2. MX05 allocates `0x4C` bytes and constructs the normal list controller. It
    sets list mode `1`, binds the current player with the stock zero secondary
-   filter, installs the ordinary list callback, and performs stock setup.
+   filter, installs the ordinary list callback, and performs stock setup. The
+   shared setup invokes virtual slot 14 before slot 1 tail-calls virtual slot 10
+   as its final native presenter. Private occupant-action and quest-board
+   instances retain both stock presentation paths; the Manager adds no action
+   controls and performs no synthetic first-open UI write.
 3. MX05's population virtual reads relation index `2` from the parent agent's
    relation collection at `+0xA4`: the building's generic `Occupants` list.
    It copies its agents into the list-controller-owned vector at `+0x34`.

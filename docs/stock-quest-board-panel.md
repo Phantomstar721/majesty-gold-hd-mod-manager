@@ -1,165 +1,142 @@
-# AP08/MX05 quest-list lifecycle
+# AP08/MX05 one-row quest-board lifecycle
 
-`stock.ap08-mx05-quest-list-panel.v1` lets an AP08-shaped custom building show
-package-owned quest agents through Majesty's existing MX05 visitor list. It is
-a bounded stock-lifecycle recipe, not a generic UI or scripting engine.
+`stock.ap08-mx05-quest-list-panel.v4` is the smallest proven package-fed
+quest-board contract. It lets an AP08-shaped custom Guild present zero or one
+package-owned offer through Majesty's existing MX05 list lifecycle. It is not
+a generic multi-row UI or scripting engine.
 
-- AP08 owns the primary quest-building setup, commands, events, and teardown.
-- MX05 owns the child list, visitor row drawing, selection, scrollbar,
-  selected-agent price, affordability, queued building command, and Back.
-- The package owns quest creation, durable quest agents, availability,
-  rejection, completion, and rewards.
+- AP08 owns primary building setup, the child opener, events, and teardown.
+- MX05 owns the child list, drawing, scrollbar, selection-dependent action,
+  price, affordability, queued payment, and Back.
+- The package owns offer availability, static row text, reward, Refresh cost,
+  Refresh after-debit behavior, and all quest semantics.
 
-The Manager changes only the list population source, two presentation inputs
-inside MX05's existing row painter, and the GPL callbacks used for the selected
-action. It does not construct fixed rows or periodically rewrite the panel.
+The Manager changes only MX05's population source, resolves two bounded static
+row strings through its private text registry, and routes the native action's
+cost/action callback symbols. It does not add controls, resize the list, move
+the stock action row, poll the package, or replace MX05's presentation.
 
-## AP08 parent proof
+## Stock boundaries
 
 The public executable constructs AP08 at `0x0049E1E0`, installs vtable
-`0x0073D37C`, and returns a `0x38`-byte object from the dialog factory. Beta2
-constructs it at `0x0049EAC0`, installs vtable `0x00756054`, and uses the same
-object size. Both vtables contain exactly 13 executable entries; the next word
-is `#gam` string data.
+`0x0073D37C`, and allocates a `0x38`-byte object. Beta2 constructs AP08 at
+`0x0049EAC0`, installs vtable `0x00756054`, and uses the same object size. Both
+tables contain exactly 13 executable entries. The Manager copies that exact
+boundary, replaces only routing slots 1, 3, and 8 plus the registered
+destructor dispatcher, and delegates all unrelated behavior to stock.
 
-Slots 1, 3, and 8 are setup, command, and event handling. The Manager copies
-the live 13-entry table, replaces only those routing slots plus the registered
-destructor dispatcher, delegates unhandled work to the captured stock entries,
-and retires state only when Majesty destroys that exact controller.
+The MX05 child has 15 entries. On beta2 its relevant entries are:
 
-## MX05 child proof
+- slot 1, `0x004BCBC0`: shared list setup;
+- slot 3, `0x004BCB00`: list selection, action, and delegation;
+- slot 8, `0x004BC7D0`: stock `XSCX` list-change handling;
+- slot 11, `0x004BCD80`: native agent-vector population;
+- slot 14, `0x004BCC10`: shared list refresh/paint.
 
-The MX05 child vtable has 15 entries. On beta2 its relevant entries are:
+Public uses the equivalent table at `0x0073EAC4`; beta2 uses `0x007577AC`.
+The private clone wraps only slots 8 and 11. Slots 3, 10, and 14 remain the
+exact stock entries.
 
-- slot 1, `0x004BCBC0`: calls shared list setup;
-- slot 3, `0x004BCB00`: handles list selection `0x1388`, selected action
-  `0x138B`, and otherwise delegates;
-- slot 8, `0x004BC7D0`: refreshes only for the stock `XSCX` list-change event;
-- slot 11, `0x004BCD80`: clears and populates the native agent vector;
-- slot 14, `0x004BCC10`: invokes the shared list refresh.
+The package's MX05-shaped SMNU must retain stock MX05's exact record count and
+these exact native records and rectangles:
 
-Public has the equivalent slot layout at vtable `0x0073EAC4`; beta2 uses
-`0x007577AC`. Shared refresh preserves selection by agent handle and invokes
-Majesty's stock visitor row callback and painter. The Manager supplies the
-package's bounded offer title at the painter's stock name-format call and its
-goal/reward text at the painter's stock activity-text lookup. The rest of the
-painter, including icon, level, layout, scrollbar, and empty-list state,
-remains stock.
+| Control | Purpose | Rectangle |
+|---:|---|---:|
+| `0x1388` | list | `(10,55,164,160)` |
+| `0x138B` | one bottom action | `(51,219,103,21)` |
+| `0x138C` | action coin | `(33,219,16,17)` |
+| `0x1392` | scrollbar | `(174,51,25,167)` |
+| `0x1F46` | action price | `(115,222,39,16)` |
 
-The package must retain the native list and action/price chrome. Stock
-SMNU/MX05 literally authors controls `0x1388`, `0x138B`, `0x138C`, `0x1392`,
-`0x1F40`, `0x1F41`, `0x1F45`, `0x1F46`, and `0x1F4D`; additional controls used
-by MX05 are created or resolved by code. The package child adds no private
-controls and the AP08 parent authors only the child opener. At composition the
-Manager shortens the native list and scrollbar by one stock row, moves the
-unchanged selected-action/coin/price records up by 25 pixels, and clones those
-three literal records at their original bottom coordinates for Refresh. The
-Manager supplies the cloned control IDs and strings. A package-authored Refresh
-row or AP54 parent workaround is rejected.
+The two STRT indices referenced by native action `0x138B` must both say
+`REFRESH`. Obsolete generated controls `0x7102`, `0x7103`, and `0x7104` are
+rejected. There is no second action row and no Manager-owned presentation.
 
-## Native population and refresh
+## One-row population proof
 
-MX05's population virtual clears the vector stored at controller offset `0x34`
-and inserts every agent from relation index 2 through two native vector helpers.
-The Manager calls those same helpers, in the same order, but obtains at most
-four durable quest agents from the package's list-source callback. External GPL
-returns a durable agent ID as type-1 integer even when the function is declared
-`is agent`; the Manager extracts that scalar and passes a stock 16-byte
-agent-handle shape to Majesty's exact ID-to-agent resolver. Native type-5 agent
-values follow their existing stock virtual and the same resolver. Rows must be
-contiguous: row 1 through the last offer return agents and every later row
-returns `Null()`.
+MX05 slot 11 clears the vector at controller offset `0x34` and inserts agents
+through its two native vector helpers. The Manager invokes those same helpers
+in the same order. The package returns `0` or `1` from its integer offer-count
+callback:
 
-Stock setup calls slot 14, which reaches the overridden slot 11 and then the
-shared list presenter. The Manager does not perform a second content pass.
-After that presenter, the Manager applies one deliberately narrow visual rule
-approved for Manager quest boards: when stock reports no selected row, controls
-`0x138C` (coin) and `0x1F46` (price) are hidden; when a row is selected, both
-are restored. Stock still owns list selection, action `0x138B`, price text,
-affordability, command dispatch, and Back. The source package SMNU remains an
-exact MX05 clone; only generated merged output receives the second action row.
-Stock `XSCX` events follow the same route exactly once. Static disassembly shows
-that MX05 compares the event ID, calls vtable slot 14 once when it is `XSCX`,
-and immediately returns. Majesty may supply that stock event frequently; the
-Manager neither emits it nor adds a second list refresh. After stock finishes,
-it revalidates only the generated Refresh action.
-Package list changes do not emit `XSCX`, so at other existing stock event
-boundaries the Manager reads one side-effect-free revision value. An unchanged
-revision produces no list write; a changed revision invokes stock slot 14 once
-and then reapplies the selected-action and generated-Refresh presentation.
-No timer, watcher, or replacement state machine is introduced.
+- `0` produces the ordinary empty MX05 list;
+- `1` inserts the already-known live Guild panel context as the single row;
+- a value above `1` faults only the private rows and clears the vector.
 
-After MX05's native slot-14 refresh finishes, the child publishes the package's
-Refresh quote into the Manager-generated price binding, presents the cloned
-action/coin/price controls together, and uses the stock action-enable message.
-Unchanged events do not rebuild the list. XSCX or a package revision change
-follows MX05's existing slot-14 refresh and then revalidates the Refresh quote.
-The AP08 parent never evaluates or dispatches Refresh.
+The static title and goal come from the feature record. The reward callback
+receives `(Guild, 1)` when the count is one. Stock MX05 still owns icon, level,
+layout, scrollbar, selection, empty-list behavior, action enablement, and
+clearing selection.
 
-## Selected action and Refresh dispatch
+The revision callback is side-effect free. An unchanged revision performs no
+population work. A changed revision invokes the saved stock slot 14 once.
+Stock `XSCX` events keep their original one-refresh path; the Manager does not
+emit synthetic events or add a timer.
 
-MX05 selection `0x1388` and selected action `0x138B` remain entirely stock.
-The stock cost evaluator receives the selected quest agent. For a free Reject,
-the package returns zero. Stock queues the selected agent handle, owner building
-ID, and quoted price as command `0x15`; the Manager changes only that command's
-discriminator to its allocated quest-action ID.
+Because slot 14 is also a high-frequency paint/update path, its stock entry is
+never replaced. Slot 11 returns before evaluating package GPL unless this is
+the first open or a real revision change requested new population. Repeated
+slot-14 passes perform zero package GPL calls and zero Manager UI writes.
 
-The MX05 child handles its Manager-generated Refresh control before delegating
-unrelated controls to the stock handler. It validates the package gate and
-quote, then queues the Guild as both the building and action agent. At
-simulation dispatch, either immutable Manager
-command ID selects the corresponding package callback and is translated back
-to stock command `0x15`. The native executor still resolves the IDs, validates
-and debits the quoted gold, and invokes GPL. Package callbacks must not debit
+## Refresh dispatch and cleanup
+
+MX05 selection `0x1388`, native action `0x138B`, price control `0x1F46`,
+affordability, and queued payment remain stock. While the private quest-board
+child is active, the Manager substitutes only the Refresh cost and action
+symbols and one allocated command discriminator. The stock queue retains the
+Guild row agent, owner building ID, and quoted price. Dispatch translates the
+private discriminator back through the stock building-command executor, then
+invokes the package's after-debit Refresh callback. The package must not deduct
 gold again.
 
-Callback context is scoped to that native dispatch and restored after nested
-calls. Back may destroy the child inside the delegated stock handler, so no
-post-control panel access occurs.
+Back and destruction remain stock. Callback context is scoped to the active
+native dispatch and restored after nested calls.
 
 ## Author contract
 
-The feature has ten package-owned GPL callbacks:
+The feature declares five package-owned GPL callbacks:
 
 ```text
-Function YourMod_Offer_At (agent Guild, integer Row) is agent
+Function YourMod_Offer_Count (agent Guild) is integer
 Function YourMod_Offer_Revision (agent Guild) is integer
-Function YourMod_Offer_Name (agent Guild, integer Row) is string
-Function YourMod_Offer_Goal (agent Guild, integer Row) is string
 Function YourMod_Offer_Reward (agent Guild, integer Row) is integer
-Function YourMod_Reject_Cost (agent Offer) is integer
-Function YourMod_Reject_Offer (agent Offer) is boolean
 Function YourMod_Refresh_Cost (agent Guild) is integer
-Function YourMod_Can_Refresh (agent Guild) is boolean
 Function YourMod_Refresh_After_Debit (agent Guild) is boolean
 ```
 
-The parent is a declared `AP08`/`AP08` custom building. Its SMNU contains only
-the declared child opener. The child owns exactly one SMNU/STRT pair containing
-the nine literal stock MX05 records and no package-specific controls. Refresh
-control IDs and text are Manager-owned output and are not author fields. Dialog
-IDs, commands, and callback symbols must remain unambiguous across the full
-selection.
+The `runtime_features` record is:
 
-The Manager derives the count from `Offer_At`; there is no count callback,
-per-row command, or per-row UI contract. For each non-null row, the three
-presentation callbacks provide a bounded title, goal, and reward. They are
-read only when the revision changes and are shown through MX05's existing
-painter. Majesty's type-0 GPL `Null()` result is the normal end-of-list sentinel
-and produces an empty or shorter native MX05 list; it is not a runtime error.
-Native callers read external GPL boolean callbacks through Majesty's stock
-scalar-result helper and branch on zero/nonzero; at that evaluator boundary the
-result is type 1 even though the internal `GplBoolean` class is type 6. Integer
-callbacks likewise require type 1 before the scalar helper is used. A mismatched
-package callback is rejected without invoking a fatal base-class conversion.
-Quest semantics remain package-owned.
+```json
+{
+  "type": "stock.ap08-mx05-quest-list-panel.v4",
+  "panel_key": "offers",
+  "parent_building": "YourNamespacedGuild",
+  "source_dialog_id": "QB01",
+  "open_command_id": 29001,
+  "offer_count_callback_symbol": "YourMod_Offer_Count",
+  "revision_callback_symbol": "YourMod_Offer_Revision",
+  "offer_name_text": "Royal Dispatch",
+  "offer_goal_text": "Deliver orders to an allied building",
+  "offer_reward_callback_symbol": "YourMod_Offer_Reward",
+  "refresh_cost_callback_symbol": "YourMod_Refresh_Cost",
+  "refresh_callback_symbol": "YourMod_Refresh_After_Debit"
+}
+```
 
-MMCR v7 stores the two Manager-allocated commands and ten callbacks. MMCR v5's
-fixed-row wire and v6's incomplete native rows are rejected so an obsolete
-package/runtime combination cannot silently use an incompatible presenter.
+The parent is a declared `AP08`/`AP08` custom building. Its SMNU contains the
+child opener. The child owns exactly one stock-shaped MX05 SMNU/STRT pair with
+the native action labeled Refresh. The Manager assigns the final child and
+queued-action IDs.
 
-Read-only profile tests verify both executable builds' scalar/string/agent
-evaluator calls, AP08 vtable boundary, MX05 list virtuals, vector helper and
-row-painter call sites, and stock event gate. Native x86 tests verify command
-routing, vector replacement, private row text, revision gating, one-pass
-refresh, and teardown without launching Majesty.
+Offer Count must return only integer `0` or `1`. The two text fields are
+nonempty Windows-1252 strings of at most 96 bytes. The Manager assigns stable
+private IDs and stores only those IDs in MMCR. Reward and Refresh cost return
+nonnegative signed 32-bit values. MMCR v10 stores this contract. MMCR v9 is
+rejected because it encoded the non-stock duplicate Refresh row. Earlier
+quest-board wire versions remain obsolete.
+
+Read-only profile tests verify both executable builds' scalar evaluator calls,
+AP08 boundary, MX05 list virtuals, vector helpers, painter sites, and event
+gate. Native x86 tests verify zero/one population, count rejection, revision
+gating, one-pass refresh, command routing, teardown, and 300 consecutive stock
+slot-14 updates with no package scalar evaluation or Manager UI writes.
