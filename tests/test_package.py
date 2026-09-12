@@ -29,6 +29,7 @@ from majesty_cam.gpl_features import (
     StockGplmxPurchaseEquipmentTail,
 )
 from majesty_cam.stock_controller_features import (
+    LiveAgentListRowVariant,
     StockMx05LiveAgentListPanel,
     StockMx22BuildingOpenToggle,
     StockAp69SovereignTargetAction,
@@ -75,6 +76,50 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(board.row_count_callback_symbol, "QB_Count")
         self.assertEqual(board.row_agent_id_callback_symbol, "QB_Agent_Id")
         self.assertIsNone(board.row_title_text)
+        self.assertIsNone(board.row_variant_callback_symbol)
+        self.assertEqual(board.row_variants, ())
+
+    def test_definition_v3_parses_static_live_agent_list_variants(self):
+        value = {
+            "schema_version": 3,
+            "mod_id": MOD_ID,
+            "internal_name": "VariantListExample",
+            "display_name": "Variant List Example",
+            "custom_buildings": [{
+                "local_name": "OrderHall",
+                "controller_base": "AP08",
+                "panel_resource_template": "AP08",
+            }],
+            "runtime_features": [{
+                "type": "stock.mx05-live-agent-list-panel.v1",
+                "panel_key": "orders",
+                "parent_building": "OrderHall",
+                "source_dialog_id": "VL01",
+                "open_command_id": 29001,
+                "row_count_callback_symbol": "Rows_Count",
+                "row_agent_id_callback_symbol": "Rows_Agent_Id",
+                "revision_callback_symbol": "Rows_Revision",
+                "row_title_text": None,
+                "row_text": None,
+                "row_variant_callback_symbol": "Rows_Variant",
+                "row_variants": [
+                    {"title_text": "Delivery", "row_text": "Deliver goods"},
+                    {"title_text": "Escort", "row_text": "Protect a traveler"},
+                ],
+                "row_value_callback_symbol": "Rows_Reward",
+                "row_value_suffix_text": " Gold",
+                "action_cost_callback_symbol": "Rows_Cost",
+                "action_callback_symbol": "Rows_Action",
+            }],
+        }
+
+        board = parse_mod_definition(value).runtime_features[0]
+
+        self.assertEqual(board.row_variant_callback_symbol, "Rows_Variant")
+        self.assertEqual(board.row_variants, (
+            LiveAgentListRowVariant("Delivery", "Deliver goods"),
+            LiveAgentListRowVariant("Escort", "Protect a traveler"),
+        ))
 
     def test_definition_v3_rejects_obsolete_quest_board_agent_contract(self):
         value = {

@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from majesty_cam.stock_controller_features import (
+    LiveAgentListRowVariant,
     StockMx05LiveAgentListPanel,
     StockAp41Fl00HostileMonsterFlag,
     StockMx09Ap41RewardPanel,
@@ -22,6 +23,8 @@ from majesty_cam.stock_controller_registry import (
     CONTROLLER_REGISTRY_MAGIC,
     CONTROLLER_REGISTRY_RELATIVE_PATH,
     ControllerRegistryError,
+    LiveAgentListTextIds,
+    ResolvedLiveAgentListRowVariant,
     decode_stock_controller_registry,
     encode_stock_controller_registry,
     resolve_stock_controller_registry,
@@ -30,7 +33,7 @@ from majesty_cam.stock_controller_registry import (
 
 
 class StockControllerRegistryTests(unittest.TestCase):
-    def test_live_agent_list_round_trips_in_v11_with_optional_text_ids(self) -> None:
+    def test_live_agent_list_round_trips_in_v12_with_optional_text_ids(self) -> None:
         feature = StockMx05LiveAgentListPanel(
             panel_key="offers",
             parent_building="adventurer-guild",
@@ -52,7 +55,9 @@ class StockControllerRegistryTests(unittest.TestCase):
             (feature,),
             {"offers": (parent, child)},
             occupant_parent_bases={"offers": "AP08"},
-            list_text_ids={"offers": (0, 0x68000001, 0x68000002)},
+            list_text_ids={"offers": LiveAgentListTextIds(
+                0, 0x68000001, 0x68000002
+            )},
         )
 
         payload = encode_stock_controller_registry(registry)
@@ -60,7 +65,7 @@ class StockControllerRegistryTests(unittest.TestCase):
         self.assertEqual(decode_stock_controller_registry(payload), registry)
         magic, version, *counts = struct.unpack_from("<4s13I", payload)
         self.assertEqual(magic, CONTROLLER_REGISTRY_MAGIC)
-        self.assertEqual(version, 11)
+        self.assertEqual(version, 12)
         self.assertEqual(counts[-3:], [0, 0, 1])
         board = registry.live_agent_lists[0]
         self.assertEqual(board.action_command_id, 0x20000)
@@ -76,6 +81,10 @@ class StockControllerRegistryTests(unittest.TestCase):
                 live_agent_lists=(replace(board, action_command_id=0x15),),
             ))
 
+        obsolete = bytearray(payload)
+        struct.pack_into("<I", obsolete, 4, 11)
+        with self.assertRaisesRegex(ControllerRegistryError, "v11 live-agent lists"):
+            decode_stock_controller_registry(bytes(obsolete))
         obsolete = bytearray(payload)
         struct.pack_into("<I", obsolete, 4, 10)
         with self.assertRaisesRegex(ControllerRegistryError, "v10 one-row"):
@@ -96,6 +105,51 @@ class StockControllerRegistryTests(unittest.TestCase):
         struct.pack_into("<I", obsolete, 4, 8)
         with self.assertRaisesRegex(ControllerRegistryError, "v8 quest rows"):
             decode_stock_controller_registry(bytes(obsolete))
+
+    def test_live_agent_list_variant_text_ids_round_trip(self) -> None:
+        feature = StockMx05LiveAgentListPanel(
+            panel_key="offers",
+            parent_building="order-hall",
+            source_dialog_id="VL01",
+            open_command_id=0x7101,
+            row_count_callback_symbol="Rows_Count",
+            row_agent_id_callback_symbol="Rows_Agent_Id",
+            revision_callback_symbol="Rows_Revision",
+            row_title_text=None,
+            row_text=None,
+            row_value_callback_symbol="Rows_Reward",
+            row_value_suffix_text=" Gold",
+            action_cost_callback_symbol="Rows_Cost",
+            action_callback_symbol="Rows_Action",
+            row_variant_callback_symbol="Rows_Variant",
+            row_variants=(
+                LiveAgentListRowVariant("Delivery", "Deliver goods"),
+                LiveAgentListRowVariant(None, "Protect a traveler"),
+            ),
+        )
+        variants = (
+            ResolvedLiveAgentListRowVariant(0x68000001, 0x68000002),
+            ResolvedLiveAgentListRowVariant(0, 0x68000003),
+        )
+        registry = resolve_stock_controller_registry(
+            (feature,),
+            {"offers": (int.from_bytes(b"OH01", "little"),
+                        int.from_bytes(b"VL01", "little"))},
+            occupant_parent_bases={"offers": "AP08"},
+            list_text_ids={"offers": LiveAgentListTextIds(
+                0, 0, 0x68000004, variants
+            )},
+        )
+
+        payload = encode_stock_controller_registry(registry)
+        decoded = decode_stock_controller_registry(payload)
+
+        self.assertEqual(decoded, registry)
+        self.assertEqual(decoded.live_agent_lists[0].row_variants, variants)
+        self.assertEqual(
+            decoded.live_agent_lists[0].row_variant_callback_symbol,
+            "Rows_Variant",
+        )
 
     def test_building_open_toggle_round_trips_in_v4_without_package_identity(self) -> None:
         feature = StockMx22BuildingOpenToggle(

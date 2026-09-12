@@ -46,6 +46,7 @@ CONTROLLER_FEATURE_FORMAT_VERSION = 1
 MAX_CONTROLLER_FEATURES = 256
 MAX_SECONDARY_PANELS = 32
 MAX_FEATURE_TEXT_BYTES = 96
+MAX_LIVE_AGENT_LIST_VARIANTS = 64
 MAX_CALLBACK_SYMBOL_BYTES = 64
 MAX_CANONICAL_FEATURE_BYTES = 256 * 1024
 
@@ -143,6 +144,14 @@ class StockMx04Mx05OccupantActionPanel:
 
 
 @dataclass(frozen=True)
+class LiveAgentListRowVariant:
+    """One package-declared static title/detail choice for an MX05 row."""
+
+    title_text: Optional[str]
+    row_text: Optional[str]
+
+
+@dataclass(frozen=True)
 class StockMx05LiveAgentListPanel:
     """MX05's native multi-row list populated with package-selected live agents."""
 
@@ -159,6 +168,8 @@ class StockMx05LiveAgentListPanel:
     row_value_suffix_text: Optional[str]
     action_cost_callback_symbol: str
     action_callback_symbol: str
+    row_variant_callback_symbol: Optional[str] = None
+    row_variants: Tuple[LiveAgentListRowVariant, ...] = ()
     type: str = "stock.mx05-live-agent-list-panel.v1"
 
 
@@ -513,8 +524,12 @@ def parse_controller_feature(value: Mapping[str, object]) -> ControllerFeature:
     cls = _FEATURE_TYPES[feature_type]
     expected = {field.name for field in fields(cls)}
     actual = set(value)
-    if actual != expected:
-        missing = sorted(expected - actual)
+    optional = (
+        {"row_variant_callback_symbol", "row_variants"}
+        if cls is StockMx05LiveAgentListPanel else set()
+    )
+    if not expected - optional <= actual or actual - expected:
+        missing = sorted((expected - optional) - actual)
         unknown = sorted(actual - expected)
         details = []
         if missing:
@@ -545,6 +560,28 @@ def parse_controller_feature(value: Mapping[str, object]) -> ControllerFeature:
                 )
             )
         arguments["requirements"] = tuple(parsed_requirements)
+    elif cls is StockMx05LiveAgentListPanel:
+        # These fields extend v1 without invalidating existing packages that
+        # use one static title/detail for every row.
+        arguments.setdefault("row_variant_callback_symbol", None)
+        arguments.setdefault("row_variants", ())
+        raw_variants = arguments["row_variants"]
+        if not isinstance(raw_variants, (list, tuple)):
+            raise ControllerFeatureError("row_variants must be an array")
+        parsed_variants = []
+        for index, variant in enumerate(raw_variants):
+            if not isinstance(variant, Mapping) or set(variant) != {
+                "title_text",
+                "row_text",
+            }:
+                raise ControllerFeatureError(
+                    f"row_variants[{index}] must contain exactly title_text and row_text"
+                )
+            parsed_variants.append(LiveAgentListRowVariant(
+                title_text=variant["title_text"],  # type: ignore[arg-type]
+                row_text=variant["row_text"],  # type: ignore[arg-type]
+            ))
+        arguments["row_variants"] = tuple(parsed_variants)
     try:
         feature = cls(**arguments)
     except TypeError as exc:
@@ -562,6 +599,10 @@ def controller_feature_mapping(feature: ControllerFeature) -> dict:
     if isinstance(feature, StockAp17UpgradeResearchGate):
         value["requirements"] = [
             asdict(requirement) for requirement in feature.requirements
+        ]
+    elif isinstance(feature, StockMx05LiveAgentListPanel):
+        value["row_variants"] = [
+            asdict(variant) for variant in feature.row_variants
         ]
     # Keep type first for human-facing package examples without affecting the
     # canonical encoder, whose JSON keys are sorted.
@@ -672,12 +713,34 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
                     "row_value_callback_symbol and row_value_suffix_text must "
                     "either both be present or both be null"
                 )
+            paired_variant_fields = (
+                feature.row_variant_callback_symbol is not None,
+                bool(feature.row_variants),
+            )
+            if paired_variant_fields[0] != paired_variant_fields[1]:
+                raise ControllerFeatureError(
+                    "row_variant_callback_symbol and row_variants must either "
+                    "both be present or both be absent"
+                )
+            if len(feature.row_variants) > MAX_LIVE_AGENT_LIST_VARIANTS:
+                raise ControllerFeatureError(
+                    "row_variants exceeds the bounded "
+                    f"{MAX_LIVE_AGENT_LIST_VARIANTS}-variant contract"
+                )
+            if feature.row_variants and (
+                feature.row_title_text is not None or feature.row_text is not None
+            ):
+                raise ControllerFeatureError(
+                    "row_title_text and row_text must be null when row_variants is used"
+                )
             symbols = (
                 feature.row_count_callback_symbol,
                 feature.row_agent_id_callback_symbol,
                 feature.revision_callback_symbol,
                 feature.action_cost_callback_symbol,
                 feature.action_callback_symbol,
+                *((feature.row_variant_callback_symbol,)
+                  if feature.row_variant_callback_symbol is not None else ()),
                 *((feature.row_value_callback_symbol,)
                   if feature.row_value_callback_symbol is not None else ()),
             )
@@ -692,14 +755,30 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
             ):
                 if value is not None:
                     _bounded_cp1252(value, field_name)
+            for index, variant in enumerate(feature.row_variants):
+                if not isinstance(variant, LiveAgentListRowVariant):
+                    raise ControllerFeatureError(
+                        f"row_variants[{index}] is not a row variant"
+                    )
+                if variant.title_text is None and variant.row_text is None:
+                    raise ControllerFeatureError(
+                        f"row_variants[{index}] must provide title_text or row_text"
+                    )
+                for value, field_name in (
+                    (variant.title_text, f"row_variants[{index}].title_text"),
+                    (variant.row_text, f"row_variants[{index}].row_text"),
+                ):
+                    if value is not None:
+                        _bounded_cp1252(value, field_name)
             if (
                 feature.row_title_text is None
                 and feature.row_text is None
+                and not feature.row_variants
                 and feature.row_value_callback_symbol is None
             ):
                 raise ControllerFeatureError(
                     "a live-agent list must customize at least one of row_title_text, "
-                    "row_text, or row_value_callback_symbol"
+                    "row_text, row_variants, or row_value_callback_symbol"
                 )
     elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
         _logical(feature.action_key, "action_key")
@@ -1021,6 +1100,7 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
                         feature.row_count_callback_symbol,
                         feature.row_agent_id_callback_symbol,
                         feature.revision_callback_symbol,
+                        feature.row_variant_callback_symbol,
                         feature.row_value_callback_symbol,
                         feature.action_cost_callback_symbol,
                         feature.action_callback_symbol,
@@ -1385,7 +1465,9 @@ __all__ = [
     "ControllerFeature",
     "ControllerFeatureError",
     "LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY",
+    "LiveAgentListRowVariant",
     "MAX_CONTROLLER_FEATURES",
+    "MAX_LIVE_AGENT_LIST_VARIANTS",
     "StockAp10Ap69SecondaryPanel",
     "StockMx05LiveAgentListPanel",
     "StockAp17UpgradeResearchGate",

@@ -30,7 +30,12 @@ poll from the painter, or replace MX05 selection and action handling.
   "row_agent_id_callback_symbol": "YourMod_Row_Agent_Id",
   "revision_callback_symbol": "YourMod_Row_Revision",
   "row_title_text": null,
-  "row_text": "Deliver this order",
+  "row_text": null,
+  "row_variant_callback_symbol": "YourMod_Row_Variant",
+  "row_variants": [
+    {"title_text": "Delivery", "row_text": "Deliver this order"},
+    {"title_text": "Escort", "row_text": "Protect this traveler"}
+  ],
   "row_value_callback_symbol": "YourMod_Row_Reward",
   "row_value_suffix_text": " Gold",
   "action_cost_callback_symbol": "YourMod_Action_Cost",
@@ -44,6 +49,7 @@ The callbacks must exist exactly once in included GPL:
 Function YourMod_Row_Count (agent Parent) is integer
 Function YourMod_Row_Agent_Id (agent Parent, integer Row) is integer
 Function YourMod_Row_Revision (agent Parent) is integer
+Function YourMod_Row_Variant (agent Parent, integer Row) is integer
 Function YourMod_Row_Reward (agent Parent, integer Row) is integer
 Function YourMod_Action_Cost (agent SelectedRow) is integer
 Function YourMod_Action_After_Debit (agent SelectedRow) is boolean
@@ -64,12 +70,23 @@ is inserted into MX05. MX05 passes the selected row's live agent to both action
 callbacks. The cost callback is a side-effect-free gold quote; the action
 callback runs through stock queued payment and must not deduct that gold again.
 
-`row_title_text` and `row_text` are optional bounded Windows-1252 strings. A
-null title preserves each row agent's ordinary stock name. A non-null title is
-the same static title for every row. The optional value is enabled by supplying
-both `row_value_callback_symbol` and `row_value_suffix_text`; set both to null
-to omit it. When present, the value is displayed on its own reward line below
-the optional row text. At least one of title, text, or value must be customized.
+`row_title_text` and `row_text` are optional bounded Windows-1252 strings for
+packages that want the same presentation on every row. A null title preserves
+each row agent's ordinary stock name. Existing packages may omit the variant
+fields entirely.
+
+For different static presentation per row, set both common text fields to null,
+supply `row_variant_callback_symbol`, and declare one through 64 `row_variants`.
+Every variant contains exactly `title_text` and `row_text`; either may be null,
+but not both. The integer callback receives `(Parent, Row)` and returns the
+one-based variant index. The Manager resolves every declared string through its
+private literal-text registry before launch. GPL never returns strings. A zero
+or out-of-range variant result clears and faults only that private list.
+
+The optional value is enabled by supplying both `row_value_callback_symbol` and
+`row_value_suffix_text`; set both to null to omit it. When present, the value is
+displayed on its own reward line below the selected row text. At least one of
+common text, row variants, or value must be customized.
 
 This contract intentionally uses live agents as row identity. It gives stock
 MX05 a real object for selection and queued action dispatch, and avoids a
@@ -106,6 +123,11 @@ requires an integer result, resolves that number through Majesty's stock
 inserts the resolved agent pointer. It then builds immutable bounded
 presentation records keyed by those exact pointers. Unmatched agents always
 use stock presentation.
+
+When variants are enabled, the Manager evaluates the integer variant callback
+once for each row during that same revision-gated population pass and copies
+the selected pre-resolved title/detail into the immutable presentation record.
+The painter never invokes package GPL.
 
 The shared row painter still calls Majesty's stock name formatter first so the
 destination string has its normal construction and ownership. If the feature
@@ -158,5 +180,6 @@ types, the complete agent resolver shape, MX05 vector helpers, painter, summary,
 and both status-icon seams, plus the stock event gate. Native x86 tests verify
 three simultaneous rows, distinct identity, optional text/value presentation,
 matched-only status-icon suppression, stable string-view lifetime, percent
-escaping, revision gating, queued selected-row dispatch, 64-row bounds, stock
-fallbacks, and repeated slot-14 painting without GPL polling.
+escaping, one-based static variant selection and bounds failure, revision
+gating, queued selected-row dispatch, 64-row bounds, stock fallbacks, and
+repeated slot-14 painting without GPL polling.

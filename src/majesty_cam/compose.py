@@ -169,7 +169,9 @@ from .stock_controller_registry import (
     CONTROLLER_REGISTRY_RELATIVE_PATH,
     STOCK_CONTROLLER_RUNTIME_CAPABILITY,
     ControllerRegistryError,
+    LiveAgentListTextIds,
     ResolvedControllerRegistry,
+    ResolvedLiveAgentListRowVariant,
     decode_stock_controller_registry,
     encode_stock_controller_registry,
     resolve_stock_controller_registry,
@@ -5701,7 +5703,7 @@ def resolve_controller_registry(
     raw_panels: dict[str, tuple[PackageInventory, ControllerFeature]] = {}
     raw_toggles: dict[str, tuple[PackageInventory, StockMx22BuildingOpenToggle]] = {}
     flag_prototypes: dict[str, str] = {}
-    list_text_ids: dict[str, tuple[int, int, int]] = {}
+    list_text_ids: dict[str, LiveAgentListTextIds] = {}
     list_private_texts: list[PrivateLiteralTextRecord] = []
     claimed_private_text_ids: set[int] = set()
     for inventory, feature in claims:
@@ -5744,7 +5746,31 @@ def resolve_controller_registry(
                     )
                     for field, text in text_fields
                 )
-                nonzero_ids = tuple(value for value in ids if value != 0)
+                variant_text_fields = tuple(
+                    (
+                        (f"row-variant-{index}-title", variant.title_text),
+                        (f"row-variant-{index}-text", variant.row_text),
+                    )
+                    for index, variant in enumerate(feature.row_variants, start=1)
+                )
+                variant_ids = tuple(
+                    tuple(
+                        0 if text is None else allocate_private_literal_text_id(
+                            inventory.selected.package.mod_id,
+                            "stock.mx05-live-agent-list-panel.v1",
+                            f"{feature.panel_key}:{field}",
+                        )
+                        for field, text in fields
+                    )
+                    for fields in variant_text_fields
+                )
+                nonzero_ids = tuple(
+                    value for value in (
+                        *ids,
+                        *(value for pair in variant_ids for value in pair),
+                    )
+                    if value != 0
+                )
                 if len(nonzero_ids) != len(set(nonzero_ids)) or any(
                     value in claimed_private_text_ids for value in nonzero_ids
                 ):
@@ -5752,10 +5778,22 @@ def resolve_controller_registry(
                         "manager-owned live-agent-list text ID allocation collided"
                     )
                 claimed_private_text_ids.update(nonzero_ids)
-                list_text_ids[resolved_feature.panel_key] = ids
+                list_text_ids[resolved_feature.panel_key] = LiveAgentListTextIds(
+                    ids[0], ids[1], ids[2],
+                    tuple(
+                        ResolvedLiveAgentListRowVariant(*pair)
+                        for pair in variant_ids
+                    ),
+                )
                 list_private_texts.extend(
                     PrivateLiteralTextRecord(runtime_id, text.encode("cp1252"))
                     for runtime_id, (_field, text) in zip(ids, text_fields)
+                    if runtime_id != 0 and text is not None
+                )
+                list_private_texts.extend(
+                    PrivateLiteralTextRecord(runtime_id, text.encode("cp1252"))
+                    for pair, fields in zip(variant_ids, variant_text_fields)
+                    for runtime_id, (_field, text) in zip(pair, fields)
                     if runtime_id != 0 and text is not None
                 )
         elif isinstance(feature, StockMx22BuildingOpenToggle):
@@ -6234,6 +6272,12 @@ def _require_controller_feature_evidence(
                 if feature.row_value_callback_symbol is not None:
                     callbacks.append((
                         feature.row_value_callback_symbol,
+                        ("agent", "integer"),
+                        "integer",
+                    ))
+                if feature.row_variant_callback_symbol is not None:
+                    callbacks.append((
+                        feature.row_variant_callback_symbol,
                         ("agent", "integer"),
                         "integer",
                     ))
@@ -7461,6 +7505,12 @@ def _validate_generated_runtime_evidence(
         if panel.row_value_callback_symbol is not None:
             callbacks.append((
                 panel.row_value_callback_symbol,
+                ("agent", "integer"),
+                "integer",
+            ))
+        if panel.row_variant_callback_symbol is not None:
+            callbacks.append((
+                panel.row_variant_callback_symbol,
                 ("agent", "integer"),
                 "integer",
             ))

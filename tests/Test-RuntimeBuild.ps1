@@ -164,7 +164,7 @@ try {
         "runtime feature registry contains trailing bytes", "FindEnchantmentRow"
     ) "Runtime feature registry contract"
     Assert-ContainsAny @($controllerSource, $controllerHeader) @(
-        "kRegistryVersion = 11", "kMaximumRecordCount = 256",
+        "kRegistryVersion = 12", "kMaximumRecordCount = 256",
         "kMaximumPanelCount = 32", "kMaximumRegistryBytes = 512u * 1024u",
         "ParseRegistry", "FindPanelByParentDialog", "FindPanelByChildDialog",
         "FindRewardPanelByParentDialog", "FindHostileMonsterFlagByMode",
@@ -177,7 +177,8 @@ try {
         "MMCR private sovereign mode collides with a stock mode",
         "!buildingFamilies.insert(item->buildingFamilyId).second",
         "stockTargetModes.find(*mode)", "stockExecutorModes.find(*mode)",
-        "FindLiveAgentListByCommand", "MMCR v10 one-row quest lists are unsupported",
+        "FindLiveAgentListByCommand", "MMCR v11 live-agent lists lack per-row static variants",
+        "MMCR v10 one-row quest lists are unsupported",
         "MMCR v8 quest rows use unsupported GPL string return contracts",
         "MMCR v7 quest rows use unsupported GPL agent/boolean return contracts",
         "MMCR v6 quest rows lack private display callbacks",
@@ -188,6 +189,7 @@ try {
         "kGplIntegerResultType = 1",
         "FindPrivateIntentText(intentId)",
         "rowCountCallbackSymbol", "rowAgentIdCallbackSymbol",
+        "rowVariantCallbackSymbol", "rowVariants",
         "offerCount > kMaximumQuestOffers",
         "presentation.agent = rowAgent",
         "rowStatusFirstBlock", "rowStatusSecondBlock",
@@ -551,6 +553,7 @@ try {
     Assert-ContainsAny @($runtimeSource) @(
         "Live-agent-list callback resolve:",
         "the row-count callback did not return an integer",
+        "a row-variant callback did not select a declared variant",
         "Live-agent-list callback complete:"
     ) "Live-agent-list callback diagnostics"
     $occupantParentInstall = Get-SourceSpan $runtimeSource `

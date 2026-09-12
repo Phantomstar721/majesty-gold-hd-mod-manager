@@ -307,7 +307,12 @@ live agents through MX05's native list lifecycle:
   "row_agent_id_callback_symbol": "YourMod_Row_Agent_Id",
   "revision_callback_symbol": "YourMod_Row_Revision",
   "row_title_text": null,
-  "row_text": "Deliver this order",
+  "row_text": null,
+  "row_variant_callback_symbol": "YourMod_Row_Variant",
+  "row_variants": [
+    {"title_text": "Delivery", "row_text": "Deliver this order"},
+    {"title_text": "Escort", "row_text": "Protect this traveler"}
+  ],
   "row_value_callback_symbol": "YourMod_Row_Reward",
   "row_value_suffix_text": " Gold",
   "action_cost_callback_symbol": "YourMod_Action_Cost",
@@ -325,11 +330,14 @@ IDs.
 The row-count callback returns `0` through `64`. A second callback receives the
 live parent and one-based row index and returns the selected live agent's
 integer `ATTRIB_AgentID`. The Manager resolves that ID through Majesty's stock
-live-agent lookup, so each row must identify a distinct live agent. A null title
-preserves each agent's stock name; optional static row text and an optional
-per-row integer plus suffix provide bounded presentation, with the optional
-value rendered on its own reward line. MX05 passes the selected row agent to
-the action cost and after-debit callbacks.
+live-agent lookup, so each row must identify a distinct live agent. A null
+common title preserves each agent's stock name. Packages may either use the
+same optional `row_title_text`/`row_text` on every row, or set both to null and
+provide up to 64 package-declared `row_variants` plus an integer
+`row_variant_callback_symbol`. That callback returns a one-based variant index
+for `(Parent, Row)`; it never returns text. The optional per-row integer plus
+suffix is rendered on its own reward line. MX05 passes the selected row agent
+to the action cost and after-debit callbacks.
 See [the generic MX05 live-agent-list proof](stock-quest-board-panel.md) for
 the exact resource geometry, callback signatures, stock lifecycle, and fault
 bounds.

@@ -5169,6 +5169,20 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
             "Live-agent-list rows disabled: manager-owned presentation text is missing or invalid.");
         return;
     }
+    for (const auto& variant : board->rowVariants) {
+        const MajestyStringView* variantTitle =
+            privateText(variant.rowTitleIntentId);
+        const MajestyStringView* variantText =
+            privateText(variant.rowTextIntentId);
+        if ((variant.rowTitleIntentId != 0 && variantTitle == nullptr) ||
+            (variant.rowTextIntentId != 0 && variantText == nullptr) ||
+            invalidText(variantTitle) || invalidText(variantText)) {
+            FaultQuestBoardPresentation(
+                value,
+                "Live-agent-list rows disabled: manager-owned variant text is missing or invalid.");
+            return;
+        }
+    }
     for (std::size_t index = 0; index < count; ++index) {
         const std::uint32_t row = static_cast<std::uint32_t>(index + 1);
         void* rowAgent = nullptr;
@@ -5191,22 +5205,42 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
                 return;
             }
         }
+        const MajestyStringView* rowTitleView = titleView;
+        const MajestyStringView* rowTextView = textView;
+        if (board->hasRowVariants) {
+            std::uint32_t selectedVariant = 0;
+            if (!QueryQuestBoard(
+                    board->rowVariantCallbackSymbol.c_str(), parent, row,
+                    &selectedVariant, false) || selectedVariant == 0 ||
+                selectedVariant > board->rowVariants.size()) {
+                QueryQuestBoard(
+                    board->rowVariantCallbackSymbol.c_str(), parent, row,
+                    &selectedVariant, true);
+                FaultQuestBoardPresentation(
+                    value,
+                    "Live-agent-list rows disabled: a row-variant callback did not select a declared variant.");
+                return;
+            }
+            const auto& variant = board->rowVariants[selectedVariant - 1];
+            rowTitleView = privateText(variant.rowTitleIntentId);
+            rowTextView = privateText(variant.rowTextIntentId);
+        }
         auto& presentation = presentations[index];
         presentation.agent = rowAgent;
-        if (titleView != nullptr) {
-            presentation.name.assign(titleView->data, titleView->length);
+        if (rowTitleView != nullptr) {
+            presentation.name.assign(rowTitleView->data, rowTitleView->length);
         }
-        if (textView != nullptr) {
-            presentation.detail.assign(textView->data, textView->length);
+        if (rowTextView != nullptr) {
+            presentation.detail.assign(rowTextView->data, rowTextView->length);
         }
         presentation.summaryTemplate.assign("\x01" "FFFFFF%s");
-        if (textView != nullptr || board->hasRowValue) {
+        if (rowTextView != nullptr || board->hasRowValue) {
             presentation.summaryTemplate += "\n\x01" "A550AA";
         }
-        if (textView != nullptr && !AppendQuestSummaryLiteral(
+        if (rowTextView != nullptr && !AppendQuestSummaryLiteral(
                 &presentation.summaryTemplate,
-                textView->data,
-                textView->length)) {
+                rowTextView->data,
+                rowTextView->length)) {
             FaultQuestBoardPresentation(
                 value,
                 "Live-agent-list rows disabled: its row text could not be formatted.");
@@ -5232,7 +5266,7 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
             if (!presentation.detail.empty()) presentation.detail += "\n";
             presentation.detail += valueText;
             presentation.detail.append(suffixView->data, suffixView->length);
-            if (textView != nullptr) presentation.summaryTemplate += "\n";
+            if (rowTextView != nullptr) presentation.summaryTemplate += "\n";
             presentation.summaryTemplate += "\x01" "FFFF00";
             presentation.summaryTemplate += valueText;
             if (!AppendQuestSummaryLiteral(

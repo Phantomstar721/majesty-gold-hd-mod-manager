@@ -133,11 +133,11 @@ counts in this order:
 9. AP41/Fl00 hostile-monster reward actions;
 10. MX04/MX05 occupant-action panels (v3); and
 11. MX22 building open/closed toggles (v4); and
-12. MX05 live-agent-list panels (v11).
+12. MX05 live-agent-list panels with bounded static row variants (v12).
 
 The writer retains canonical v2 when neither newer section is needed, uses v3
 when occupant panels are present, and uses v4 when building toggles are
-present. It uses v11 only when at least one live-agent list is present. A
+present. It uses v12 only when at least one live-agent list is present. A
 newer-version header with an empty final section is noncanonical.
 
 Records are deterministically sorted within their section and refer to an

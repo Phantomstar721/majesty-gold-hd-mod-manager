@@ -25,9 +25,11 @@ from typing import Iterable, Mapping, Optional, Tuple, Type
 from .stock_controller_features import (
     MAX_CONTROLLER_FEATURES,
     MAX_FEATURE_TEXT_BYTES,
+    MAX_LIVE_AGENT_LIST_VARIANTS,
     MAX_SECONDARY_PANELS,
     ControllerFeature,
     ControllerFeatureError,
+    LiveAgentListRowVariant,
     StockMx05LiveAgentListPanel,
     StockAp10Ap69SecondaryPanel,
     StockAp41Fl00HostileMonsterFlag,
@@ -46,7 +48,7 @@ from .stock_controller_features import (
 
 
 CONTROLLER_REGISTRY_MAGIC = b"MMCR"
-CONTROLLER_REGISTRY_VERSION = 11
+CONTROLLER_REGISTRY_VERSION = 12
 STOCK_CONTROLLER_RUNTIME_CAPABILITY = "stock.controller-recipes.v1"
 CONTROLLER_REGISTRY_ENVIRONMENT = "MAJESTY_MOD_MANAGER_CONTROLLERS"
 CONTROLLER_REGISTRY_RELATIVE_PATH = Path(
@@ -120,6 +122,20 @@ class ResolvedBuildingOpenToggleRecord:
 
 
 @dataclass(frozen=True)
+class ResolvedLiveAgentListRowVariant:
+    row_title_intent_id: int
+    row_text_intent_id: int
+
+
+@dataclass(frozen=True)
+class LiveAgentListTextIds:
+    row_title_intent_id: int
+    row_text_intent_id: int
+    row_value_suffix_intent_id: int
+    row_variants: Tuple[ResolvedLiveAgentListRowVariant, ...] = ()
+
+
+@dataclass(frozen=True)
 class ResolvedLiveAgentListRecord:
     panel_key: str
     parent_dialog_id: int
@@ -131,6 +147,8 @@ class ResolvedLiveAgentListRecord:
     revision_callback_symbol: str
     row_title_intent_id: int
     row_text_intent_id: int
+    row_variant_callback_symbol: Optional[str]
+    row_variants: Tuple[ResolvedLiveAgentListRowVariant, ...]
     row_value_callback_symbol: Optional[str]
     row_value_suffix_intent_id: int
     action_cost_callback_symbol: str
@@ -185,7 +203,7 @@ def resolve_stock_controller_registry(
     flag_prototypes: Mapping[str, str] | None = None,
     occupant_parent_bases: Mapping[str, str] | None = None,
     toggle_parents: Mapping[str, Tuple[int, str]] | None = None,
-    list_text_ids: Mapping[str, Tuple[int, int, int]] | None = None,
+    list_text_ids: Mapping[str, LiveAgentListTextIds] | None = None,
 ) -> ResolvedControllerRegistry:
     """Resolve author records to explicit parent/child dialog IDs.
 
@@ -247,26 +265,54 @@ def resolve_stock_controller_registry(
         elif isinstance(item, StockMx05LiveAgentListPanel):
             text_ids = resolved_list_text_ids.get(item.panel_key)
             if (
-                not isinstance(text_ids, tuple)
-                or len(text_ids) != 3
+                not isinstance(text_ids, LiveAgentListTextIds)
+                or not isinstance(text_ids.row_variants, tuple)
+                or len(text_ids.row_variants) > MAX_LIVE_AGENT_LIST_VARIANTS
+                or any(
+                    not isinstance(variant, ResolvedLiveAgentListRowVariant)
+                    for variant in text_ids.row_variants
+                )
                 or any(
                     type(value) is not int
                     or (value != 0 and not 0x60000000 <= value < 0x70000000)
-                    for value in text_ids
+                    for value in (
+                        text_ids.row_title_intent_id,
+                        text_ids.row_text_intent_id,
+                        text_ids.row_value_suffix_intent_id,
+                        *(value for variant in text_ids.row_variants for value in (
+                            variant.row_title_intent_id,
+                            variant.row_text_intent_id,
+                        )),
+                    )
                 )
             ):
                 raise ControllerRegistryError(
                     "live-agent lists require canonical optional private text IDs"
                 )
             if (
-                (item.row_title_text is None) != (text_ids[0] == 0)
-                or (item.row_text is None) != (text_ids[1] == 0)
-                or (item.row_value_suffix_text is None) != (text_ids[2] == 0)
+                (item.row_title_text is None) != (text_ids.row_title_intent_id == 0)
+                or (item.row_text is None) != (text_ids.row_text_intent_id == 0)
+                or (item.row_value_suffix_text is None) !=
+                    (text_ids.row_value_suffix_intent_id == 0)
+                or len(item.row_variants) != len(text_ids.row_variants)
+                or any(
+                    (variant.title_text is None) != (ids.row_title_intent_id == 0)
+                    or (variant.row_text is None) != (ids.row_text_intent_id == 0)
+                    for variant, ids in zip(item.row_variants, text_ids.row_variants)
+                )
             ):
                 raise ControllerRegistryError(
                     "live-agent list private text IDs do not match its optional text fields"
                 )
-            nonzero_ids = tuple(value for value in text_ids if value != 0)
+            nonzero_ids = tuple(value for value in (
+                text_ids.row_title_intent_id,
+                text_ids.row_text_intent_id,
+                text_ids.row_value_suffix_intent_id,
+                *(value for variant in text_ids.row_variants for value in (
+                    variant.row_title_intent_id,
+                    variant.row_text_intent_id,
+                )),
+            ) if value != 0)
             if len(nonzero_ids) != len(set(nonzero_ids)):
                 raise ControllerRegistryError(
                     "live-agent list private text IDs are duplicated"
@@ -276,8 +322,10 @@ def resolve_stock_controller_registry(
                 item.panel_key, parent, child, item.open_command_id,
                 command_id, item.row_count_callback_symbol,
                 item.row_agent_id_callback_symbol, item.revision_callback_symbol,
-                text_ids[0], text_ids[1], item.row_value_callback_symbol,
-                text_ids[2], item.action_cost_callback_symbol,
+                text_ids.row_title_intent_id, text_ids.row_text_intent_id,
+                item.row_variant_callback_symbol, text_ids.row_variants,
+                item.row_value_callback_symbol,
+                text_ids.row_value_suffix_intent_id, item.action_cost_callback_symbol,
                 item.action_callback_symbol,
                 (occupant_parent_bases or {}).get(item.panel_key, "AP08"),
             ))
@@ -436,7 +484,7 @@ class _Reader:
 
 
 def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> bytes:
-    """Encode canonical recipes as MMCR v2/v3/v4/v11 as features require."""
+    """Encode canonical recipes as MMCR v2/v3/v4/v12 as features require."""
 
     try:
         registry = _validate_resolved_registry(registry)
@@ -491,7 +539,7 @@ def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> by
 
 
 def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegistry:
-    """Decode canonical MMCR v2/v3/v4/v11 registries."""
+    """Decode canonical MMCR v2/v3/v4/v12 registries."""
 
     if not isinstance(payload, bytes):
         raise ControllerRegistryError("MMCR registry must be bytes")
@@ -528,11 +576,16 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
             "MMCR v10 one-row quest lists are unsupported; rebuild with the current Manager"
         )
     if version == 11:
+        raise ControllerRegistryError(
+            "MMCR v11 live-agent lists lack per-row static variants; "
+            "rebuild with the current Manager"
+        )
+    if version == 12:
         if len(payload) < _LIST_HEADER.size:
-            raise ControllerRegistryError("MMCR v11 header is truncated")
+            raise ControllerRegistryError("MMCR v12 header is truncated")
         magic, version, *counts = _LIST_HEADER.unpack_from(payload)
         if counts[11] == 0:
-            raise ControllerRegistryError("MMCR v11 without live-agent lists is noncanonical")
+            raise ControllerRegistryError("MMCR v12 without live-agent lists is noncanonical")
     elif version == 4:
         if len(payload) < _TOGGLE_HEADER.size:
             raise ControllerRegistryError("MMCR v4 header is truncated")
@@ -555,7 +608,7 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
         raise ControllerRegistryError("MMCR panel count is outside bounds")
 
     reader = _Reader(payload)
-    if version == 11:
+    if version == 12:
         reader.cursor = _LIST_HEADER.size
     elif version == 4:
         reader.cursor = _TOGGLE_HEADER.size
@@ -727,6 +780,13 @@ def _encode_feature(writer: _Writer, feature: object) -> None:
             writer.symbol(symbol)
         writer.u32(feature.row_title_intent_id)
         writer.u32(feature.row_text_intent_id)
+        writer.u32(1 if feature.row_variant_callback_symbol is not None else 0)
+        if feature.row_variant_callback_symbol is not None:
+            writer.symbol(feature.row_variant_callback_symbol)
+            writer.u32(len(feature.row_variants))
+            for variant in feature.row_variants:
+                writer.u32(variant.row_title_intent_id)
+                writer.u32(variant.row_text_intent_id)
         writer.u32(1 if feature.row_value_callback_symbol is not None else 0)
         if feature.row_value_callback_symbol is not None:
             writer.symbol(feature.row_value_callback_symbol)
@@ -773,6 +833,29 @@ def _decode_feature(reader: _Reader, kind: Type[ControllerFeature]) -> object:
         revision = reader.symbol("live-agent-list revision callback")
         title_id = reader.u32("live-agent-list row title text ID")
         text_id = reader.u32("live-agent-list row text ID")
+        has_variants = reader.u32("live-agent-list variant marker")
+        if has_variants not in (0, 1):
+            raise ControllerRegistryError(
+                "MMCR live-agent-list variant marker is invalid"
+            )
+        variant_callback = (
+            reader.symbol("live-agent-list variant callback")
+            if has_variants else None
+        )
+        variant_count = (
+            reader.u32("live-agent-list variant count") if has_variants else 0
+        )
+        if variant_count > MAX_LIVE_AGENT_LIST_VARIANTS:
+            raise ControllerRegistryError(
+                "MMCR live-agent-list variant count is outside bounds"
+            )
+        variants = tuple(
+            ResolvedLiveAgentListRowVariant(
+                reader.u32("live-agent-list variant title text ID"),
+                reader.u32("live-agent-list variant row text ID"),
+            )
+            for _ in range(variant_count)
+        )
         has_value = reader.u32("live-agent-list value marker")
         if has_value not in (0, 1):
             raise ControllerRegistryError(
@@ -787,6 +870,7 @@ def _decode_feature(reader: _Reader, kind: Type[ControllerFeature]) -> object:
         return ResolvedLiveAgentListRecord(
             panel, parent, child, opened, action_command,
             row_count, row_agent, revision, title_id, text_id,
+            variant_callback, variants,
             value_callback, value_suffix_id,
             reader.symbol("live-agent-list action cost callback"),
             reader.symbol("live-agent-list action callback"),
@@ -1013,6 +1097,10 @@ def _validate_resolved_registry(
             item.row_title_intent_id,
             item.row_text_intent_id,
             item.row_value_suffix_intent_id,
+            *(value for variant in item.row_variants for value in (
+                variant.row_title_intent_id,
+                variant.row_text_intent_id,
+            )),
         )
         if any(
             value != 0 and not 0x60000000 <= value < 0x70000000
@@ -1027,6 +1115,24 @@ def _validate_resolved_registry(
             raise ControllerRegistryError(
                 "MMCR live-agent-list optional value fields are inconsistent"
             )
+        if (item.row_variant_callback_symbol is None) != (not item.row_variants):
+            raise ControllerRegistryError(
+                "MMCR live-agent-list optional variant fields are inconsistent"
+            )
+        if len(item.row_variants) > MAX_LIVE_AGENT_LIST_VARIANTS or any(
+            not isinstance(variant, ResolvedLiveAgentListRowVariant)
+            or (variant.row_title_intent_id == 0 and variant.row_text_intent_id == 0)
+            for variant in item.row_variants
+        ):
+            raise ControllerRegistryError(
+                "MMCR live-agent-list row variants are invalid"
+            )
+        if item.row_variants and (
+            item.row_title_intent_id != 0 or item.row_text_intent_id != 0
+        ):
+            raise ControllerRegistryError(
+                "MMCR live-agent-list static and variant row text cannot be combined"
+            )
         child_dialogs.add(item.child_dialog_id)
         parent_commands.add(parent_command)
         list_by_key[item.panel_key] = item
@@ -1040,6 +1146,14 @@ def _validate_resolved_registry(
             item.row_value_callback_symbol,
             " units" if item.row_value_suffix_intent_id else None,
             item.action_cost_callback_symbol, item.action_callback_symbol,
+            item.row_variant_callback_symbol,
+            tuple(
+                LiveAgentListRowVariant(
+                    "Manager variant title" if variant.row_title_intent_id else None,
+                    "Manager variant text" if variant.row_text_intent_id else None,
+                )
+                for variant in item.row_variants
+            ),
         ))
     toggle_by_key = {}
     toggle_commands = set()

@@ -16,14 +16,16 @@ from majesty_cam.compose import (
 from majesty_cam.cam import CamEntry
 from majesty_cam.strt import StrtRecord, StrtTable
 from majesty_cam.stock_controller_features import (
-    ControllerFeatureError, StockMx05LiveAgentListPanel,
+    ControllerFeatureError, LiveAgentListRowVariant,
+    StockMx05LiveAgentListPanel,
     StockMx04Mx05OccupantActionPanel,
     normalize_controller_features, parse_controller_feature, controller_feature_mapping,
     legacy_alchemist_controller_features,
 )
 from majesty_cam.stock_controller_registry import (
     ControllerRegistryError, encode_stock_controller_registry,
-    decode_stock_controller_registry, resolve_stock_controller_registry,
+    LiveAgentListTextIds, decode_stock_controller_registry,
+    resolve_stock_controller_registry,
 )
 from test_compose import _v3_controller_inventory, _panel_pair, _smnu_payload
 
@@ -140,6 +142,38 @@ class OccupantPanelTests(unittest.TestCase):
                 row_text=None,
             ),))
 
+    def test_live_agent_list_variants_are_bounded_static_presentation(self):
+        variants = (
+            LiveAgentListRowVariant("Delivery", "Deliver goods"),
+            LiveAgentListRowVariant("Escort", "Protect a traveler"),
+        )
+        item = replace(
+            quest_feature(),
+            row_text=None,
+            row_variant_callback_symbol="Quest_Variant",
+            row_variants=variants,
+        )
+        self.assertEqual(
+            parse_controller_feature(controller_feature_mapping(item)), item
+        )
+        with self.assertRaisesRegex(ControllerFeatureError, "both be present"):
+            normalize_controller_features((replace(
+                item, row_variant_callback_symbol=None,
+            ),))
+        with self.assertRaisesRegex(ControllerFeatureError, "must be null"):
+            normalize_controller_features((replace(
+                item, row_text="ambiguous fallback",
+            ),))
+        with self.assertRaisesRegex(ControllerFeatureError, "title_text or row_text"):
+            normalize_controller_features((replace(
+                item,
+                row_variants=(LiveAgentListRowVariant(None, None),),
+            ),))
+        with self.assertRaisesRegex(ControllerFeatureError, "64-variant"):
+            normalize_controller_features((replace(
+                item, row_variants=variants * 33,
+            ),))
+
     def test_v3_round_trip_and_order_independence(self):
         items = (feature(), feature("animals", "Menagerie", "P002", "Menagerie"))
         mapping = {p.panel_key: (int.from_bytes(b"B001", "little"),
@@ -224,7 +258,9 @@ class OccupantPanelTests(unittest.TestCase):
                 (quest_feature(),),
                 {"quests": (0x31303042, 0x31303050)},
                 occupant_parent_bases={"quests": base},
-                list_text_ids={"quests": (0, 0x68000001, 0x68000002)},
+                list_text_ids={"quests": LiveAgentListTextIds(
+                    0, 0x68000001, 0x68000002
+                )},
             )
             self.assertEqual(
                 decode_stock_controller_registry(
@@ -315,7 +351,9 @@ class OccupantPanelTests(unittest.TestCase):
             {"quests": (int.from_bytes(b"AG01", "little"),
                          int.from_bytes(b"QB01", "little"))},
             occupant_parent_bases={"quests": "AP08"},
-            list_text_ids={"quests": (0, 0x68000001, 0x68000002)},
+            list_text_ids={"quests": LiveAgentListTextIds(
+                0, 0x68000001, 0x68000002
+            )},
         )
         parent = _smnu_payload(board.open_command_id)
         child = _smnu_payload(*CONTROLS)
@@ -412,6 +450,74 @@ class OccupantPanelTests(unittest.TestCase):
             self.assertEqual(by_id[resolved.row_text_intent_id], b"Deliver orders")
             self.assertEqual(by_id[resolved.row_value_suffix_intent_id], b" Gold")
             self.assertTrue(0x68000000 <= resolved.row_text_intent_id < 0x70000000)
+
+    def test_live_agent_list_composition_allocates_variant_private_text(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inventory = _v3_controller_inventory(
+                root,
+                alias="Dispatch",
+                mod_id="{00000000-0000-0000-0000-000000000009}",
+                local_name="OrderHall",
+                building_source=b"OH01",
+                family="OH",
+            )
+            board = replace(
+                quest_feature(),
+                parent_building="OrderHall",
+                source_dialog_id="VL01",
+                row_text=None,
+                row_variant_callback_symbol="Quest_Variant",
+                row_variants=(
+                    LiveAgentListRowVariant("Delivery", "Deliver goods"),
+                    LiveAgentListRowVariant(None, "Protect a traveler"),
+                ),
+            )
+            definition = inventory.selected.package.definition
+            inventory.selected.package.definition = replace(
+                definition,
+                custom_buildings=(replace(
+                    definition.custom_buildings[0],
+                    controller_base="AP08",
+                    panel_resource_template="AP08",
+                ),),
+                runtime_features=(board,),
+            )
+            inventory.resources = (
+                *_panel_pair("Dispatch", b"OH01", (board.open_command_id,)),
+                *_panel_pair("Dispatch", b"VL01", CONTROLS),
+            )
+            callback_source = root / "dispatch-variants.gpl"
+            callback_source.write_text(
+                "Function Quest_Count(agent g) is integer begin return 3; end\n"
+                "Function Quest_Agent_Id(agent g, integer row) is integer begin return 123; end\n"
+                "Function Quest_Revision(agent g) is integer begin return 1; end\n"
+                "Function Quest_Variant(agent g, integer row) is integer begin return row; end\n"
+                "Function Quest_Reward(agent g, integer row) is integer begin return 100; end\n"
+                "Function Quest_RefreshCost(agent g) is integer begin return 25; end\n"
+                "Function Quest_Refresh(agent g) is boolean begin return TRUE; end\n",
+                encoding="cp1252",
+            )
+            from types import SimpleNamespace
+            inventory.gpl_loads = (
+                SimpleNamespace(sources=(
+                    SimpleNamespace(absolute_path=callback_source),
+                )),
+            )
+
+            result = resolve_controller_registry((inventory,))
+            resolved = result.registry.live_agent_lists[0]
+            by_id = {item.runtime_id: item.text for item in result.private_texts}
+
+            self.assertEqual(len(result.private_texts), 4)
+            self.assertEqual(resolved.row_variant_callback_symbol, "Quest_Variant")
+            self.assertEqual(len(resolved.row_variants), 2)
+            first, second = resolved.row_variants
+            self.assertEqual(by_id[first.row_title_intent_id], b"Delivery")
+            self.assertEqual(by_id[first.row_text_intent_id], b"Deliver goods")
+            self.assertEqual(second.row_title_intent_id, 0)
+            self.assertEqual(by_id[second.row_text_intent_id], b"Protect a traveler")
+            self.assertEqual(by_id[resolved.row_value_suffix_intent_id], b" Gold")
 
     def test_two_unrelated_packages_compose_remove_and_reverse(self):
         with TemporaryDirectory() as tmp:

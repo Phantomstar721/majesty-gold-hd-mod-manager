@@ -616,7 +616,7 @@ int main() {
     }
 
     auto quests = Header(0, 0, 0, 0, 0, 0, 0);
-    quests[4] = 11;
+    quests[4] = 12;
     AppendU32(&quests, 0);  // occupant panels
     AppendU32(&quests, 0);  // building toggles
     AppendU32(&quests, 1);  // live-agent lists
@@ -633,10 +633,17 @@ int main() {
         AppendString(&quests, questLeadingCallbacks[index]);
     }
     AppendU32(&quests, 0);  // use each live agent's stock name
-    AppendU32(&quests, 0x68000001u);  // static row text
+    AppendU32(&quests, 0);  // variant-selected row text
+    AppendU32(&quests, 1);  // optional row variants present
+    AppendString(&quests, "QB_Variant");
+    AppendU32(&quests, 2);
+    AppendU32(&quests, 0x68000001u);
+    AppendU32(&quests, 0x68000002u);
+    AppendU32(&quests, 0x68000003u);
+    AppendU32(&quests, 0x68000004u);
     AppendU32(&quests, 1);  // optional value present
     AppendString(&quests, "QB_Reward");
-    AppendU32(&quests, 0x68000002u);  // value suffix text
+    AppendU32(&quests, 0x68000005u);  // value suffix text
     const char* questCallbacks[] = {
         "QB_RefreshCost", "QB_Refresh",
     };
@@ -648,6 +655,8 @@ int main() {
     if (!MajestyStockControllers::ParseRegistry(
             quests.data(), quests.size(), &registry, &error) ||
         registry.liveAgentLists.size() != 1 ||
+        !registry.liveAgentLists[0].hasRowVariants ||
+        registry.liveAgentLists[0].rowVariants.size() != 2 ||
         registry.FindLiveAgentListByChild(FourCC("QBP1")) == nullptr ||
         registry.FindLiveAgentListByParent(FourCC("AGP1")) == nullptr ||
         registry.FindLiveAgentListByCommand(0x20000) == nullptr) {
@@ -655,6 +664,9 @@ int main() {
         return 41;
     }
     std::vector<unsigned char> obsoleteQuests = quests;
+    obsoleteQuests[4] = 11;
+    if (!ExpectInvalid(obsoleteQuests, "v11 live-agent lists")) return 50;
+    obsoleteQuests = quests;
     obsoleteQuests[4] = 10;
     if (!ExpectInvalid(obsoleteQuests, "v10 one-row quest lists")) return 48;
     obsoleteQuests = quests;

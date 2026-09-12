@@ -577,6 +577,15 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
                 return Fail(error, "MMCR live-agent-list private text ID is duplicated");
             }
         }
+        for (const auto& variant : item.rowVariants) {
+            for (const auto value : {
+                     variant.rowTitleIntentId,
+                     variant.rowTextIntentId}) {
+                if (value != 0 && !privateTextIds.insert(value).second) {
+                    return Fail(error, "MMCR live-agent-list private text ID is duplicated");
+                }
+            }
+        }
         if (panels.count(item.panelKey) || rewardPanelKeys.count(item.panelKey) ||
             occupantKeys.count(item.panelKey) || !listKeys.insert(item.panelKey).second ||
             !childDialogs.insert(item.childDialogId).second ||
@@ -584,6 +593,8 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
             !callbacks.insert(FoldAsciiCase(item.rowCountCallbackSymbol)).second ||
             !callbacks.insert(FoldAsciiCase(item.rowAgentIdCallbackSymbol)).second ||
             !callbacks.insert(FoldAsciiCase(item.revisionCallbackSymbol)).second ||
+            (item.hasRowVariants &&
+             !callbacks.insert(FoldAsciiCase(item.rowVariantCallbackSymbol)).second) ||
             (item.hasRowValue &&
              !callbacks.insert(FoldAsciiCase(item.rowValueCallbackSymbol)).second) ||
             !callbacks.insert(FoldAsciiCase(item.actionCostCallbackSymbol)).second ||
@@ -591,10 +602,23 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
             !validPrivateTextId(item.rowTitleIntentId) ||
             !validPrivateTextId(item.rowTextIntentId) ||
             !validPrivateTextId(item.rowValueSuffixIntentId) ||
+            item.rowVariants.size() > kMaximumLiveAgentListVariants ||
+            item.hasRowVariants != !item.rowVariants.empty() ||
+            (!item.hasRowVariants && !item.rowVariantCallbackSymbol.empty()) ||
+            (item.hasRowVariants && item.rowVariantCallbackSymbol.empty()) ||
+            (item.hasRowVariants &&
+             (item.rowTitleIntentId != 0 || item.rowTextIntentId != 0)) ||
             item.hasRowValue != (item.rowValueSuffixIntentId != 0) ||
             (!item.hasRowValue && !item.rowValueCallbackSymbol.empty()) ||
             (item.hasRowValue && item.rowValueCallbackSymbol.empty()))
             return Fail(error, "MMCR live-agent-list identity is duplicated or invalid");
+        for (const auto& variant : item.rowVariants) {
+            if ((!validPrivateTextId(variant.rowTitleIntentId) ||
+                 !validPrivateTextId(variant.rowTextIntentId)) ||
+                (variant.rowTitleIntentId == 0 && variant.rowTextIntentId == 0)) {
+                return Fail(error, "MMCR live-agent-list row variant is invalid");
+            }
+        }
         parentDialogs.insert(item.parentDialogId);
         const auto prior = parentBases.find(item.parentDialogId);
         if (prior != parentBases.end() && prior->second != item.parentControllerBase)
@@ -826,7 +850,8 @@ bool ParseRegistry(
     if (version == 8) return Fail(error, "MMCR v8 quest rows use unsupported GPL string return contracts; rebuild with the current Manager");
     if (version == 9) return Fail(error, "MMCR v9 quest boards contain a non-stock duplicate Refresh row; rebuild with the current Manager");
     if (version == 10) return Fail(error, "MMCR v10 one-row quest lists are unsupported; rebuild with the current Manager");
-    if (version == 11 && counts[11] == 0) return Fail(error, "MMCR v11 without live-agent lists is noncanonical");
+    if (version == 11) return Fail(error, "MMCR v11 live-agent lists lack per-row static variants; rebuild with the current Manager");
+    if (version == 12 && counts[11] == 0) return Fail(error, "MMCR v12 without live-agent lists is noncanonical");
     std::uint64_t total = 0;
     for (std::size_t index = 0; index < 12; ++index) total += counts[index];
     if (total > kMaximumRecordCount ||
@@ -1161,6 +1186,7 @@ bool ParseRegistry(
     }
     for (std::uint32_t index = 0; index < counts[11]; ++index) {
         LiveAgentListRecord item = {};
+        std::uint32_t hasRowVariants = 0;
         std::uint32_t hasRowValue = 0;
         if (!reader.ReadLogical(&item.panelKey) ||
             !reader.ReadU32(&item.parentDialogId) || !reader.ReadU32(&item.childDialogId) ||
@@ -1173,8 +1199,29 @@ bool ParseRegistry(
             !reader.ReadSymbol(&item.revisionCallbackSymbol) ||
             !reader.ReadU32(&item.rowTitleIntentId) ||
             !reader.ReadU32(&item.rowTextIntentId) ||
-            !reader.ReadU32(&hasRowValue))
+            !reader.ReadU32(&hasRowVariants))
             return Fail(error, "MMCR live-agent-list presentation is truncated");
+        if (hasRowVariants > 1)
+            return Fail(error, "MMCR live-agent-list variant marker is invalid");
+        item.hasRowVariants = hasRowVariants != 0;
+        if (item.hasRowVariants) {
+            std::uint32_t variantCount = 0;
+            if (!reader.ReadSymbol(&item.rowVariantCallbackSymbol) ||
+                !reader.ReadU32(&variantCount) || variantCount == 0 ||
+                variantCount > kMaximumLiveAgentListVariants)
+                return Fail(error, "MMCR live-agent-list variants are truncated or invalid");
+            item.rowVariants.reserve(variantCount);
+            for (std::uint32_t variantIndex = 0;
+                 variantIndex < variantCount; ++variantIndex) {
+                LiveAgentListRowVariant variant = {};
+                if (!reader.ReadU32(&variant.rowTitleIntentId) ||
+                    !reader.ReadU32(&variant.rowTextIntentId))
+                    return Fail(error, "MMCR live-agent-list variants are truncated");
+                item.rowVariants.push_back(variant);
+            }
+        }
+        if (!reader.ReadU32(&hasRowValue))
+            return Fail(error, "MMCR live-agent-list value marker is truncated");
         if (hasRowValue > 1)
             return Fail(error, "MMCR live-agent-list value marker is invalid");
         item.hasRowValue = hasRowValue != 0;

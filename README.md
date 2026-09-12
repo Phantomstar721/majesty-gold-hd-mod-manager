@@ -179,8 +179,9 @@ The manager also supports data-only recipes for AP10/AP69 secondary panels,
 AP22 resource meters, AP99 research rows, AP17 upgrade gates, AP24 Rage-backed
 actions, AP69 sovereign-target actions, and MX09/AP41 reward panels with
 private Fl00-shaped hostile-monster reward flags. It can also clone MX22's
-per-building open/closed controls and append package-owned boolean choices to
-the end of stock GPLMx `Purchase_Equipment` or `Purchase_Bazaar`. Their linked
+per-building open/closed controls, populate generic MX05 live-agent lists with
+bounded package-declared static row variants, and append package-owned boolean
+choices to the end of stock GPLMx `Purchase_Equipment` or `Purchase_Bazaar`. Their linked
 logical keys are local to the package. Visible controls are reserved within
 their own authored panel;
 global engine identities such as private descriptor commands, packed

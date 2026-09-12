@@ -7,9 +7,10 @@
 
 namespace MajestyStockControllers {
 
-constexpr std::uint32_t kRegistryVersion = 11;
+constexpr std::uint32_t kRegistryVersion = 12;
 constexpr std::uint32_t kMaximumRecordCount = 256;
 constexpr std::uint32_t kMaximumPanelCount = 32;
+constexpr std::uint32_t kMaximumLiveAgentListVariants = 64;
 constexpr std::size_t kMaximumRegistryBytes = 512u * 1024u;
 constexpr std::size_t kMaximumLogicalKeyBytes = 64;
 constexpr std::size_t kMaximumCallbackBytes = 64;
@@ -152,6 +153,10 @@ struct BuildingOpenToggleRecord {
     std::uint32_t parentControllerBase;
 };
 
+struct LiveAgentListRowVariant {
+    std::uint32_t rowTitleIntentId, rowTextIntentId;
+};
+
 struct LiveAgentListRecord {
     std::string panelKey;
     std::uint32_t parentDialogId, childDialogId, openCommandId;
@@ -160,6 +165,9 @@ struct LiveAgentListRecord {
     std::string rowAgentIdCallbackSymbol;
     std::string revisionCallbackSymbol;
     std::uint32_t rowTitleIntentId, rowTextIntentId;
+    bool hasRowVariants;
+    std::string rowVariantCallbackSymbol;
+    std::vector<LiveAgentListRowVariant> rowVariants;
     bool hasRowValue;
     std::string rowValueCallbackSymbol;
     std::uint32_t rowValueSuffixIntentId;
@@ -224,7 +232,7 @@ struct Registry {
         std::uint32_t privateMode) const;
 };
 
-// Parses manager-owned MMCR v2/v3/v4/v10 registries without Win32 or executable
+// Parses manager-owned MMCR v2/v3/v4/v12 registries without Win32 or executable
 // dependencies.  Records are immutable alternatives for the existing stock-
 // shaped singleton sessions; the registry does not create per-mod controllers,
 // parallel AP99 owners, queued Rage commands, or parallel target sessions.

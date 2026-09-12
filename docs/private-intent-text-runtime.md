@@ -52,6 +52,9 @@ The one resolver covers all currently supported stock consumers:
 The generic MX05 live-agent-list recipe also assigns short-lived private
 intention IDs to matched rows that have custom detail text. This lets stock
 non-building presentation branches resolve the same optional text/value detail.
+Package-declared row-variant titles and details are allocated into this same
+bounded immutable literal registry; a row callback selects only their one-based
+index and never supplies string data at runtime.
 Rows without custom detail preserve their agent's stock intention attribute.
 The ordinary building-summary branch uses the narrower, separately profiled
 GMTX-template seam documented in

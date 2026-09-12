@@ -50,9 +50,11 @@ int questNativeSetupCount = 0;
 int parentEventCount = 0;
 int questQueryCount = 0, questOfferCountQueryCount = 0;
 int questRevisionQueryCount = 0, questAgentQueryCount = 0;
+int questVariantQueryCount = 0;
 int selectedQuestIndex = -1;
 std::uint32_t questRevision = 7;
 std::uint32_t questOfferCount = 3;
+std::uint32_t questVariantSelections[3] = {1, 2, 1};
 std::uint32_t resolvedQuestAgentNumber = 0;
 std::uint32_t questVectorStorage[68] = {};
 std::uint32_t lastMessageControl = 0, lastMessage = 0;
@@ -168,6 +170,10 @@ bool QuestScalar(
     } else if (std::strcmp(symbol, "Quest_Reward") == 0) {
         assert(hasInteger && integerValue >= 1 && integerValue <= 64);
         *result = static_cast<std::uint32_t>(integerValue * 100);
+    } else if (std::strcmp(symbol, "Quest_Variant") == 0) {
+        assert(hasInteger && integerValue >= 1 && integerValue <= 3);
+        ++questVariantQueryCount;
+        *result = questVariantSelections[integerValue - 1];
     } else if (std::strcmp(symbol, "Quest_Agent_Id") == 0) {
         assert(hasInteger && integerValue >= 1 &&
                integerValue <= static_cast<int>(questOfferCount));
@@ -309,9 +315,12 @@ void Reset() {
     selectedQuestIndex = -1;
     parentEventCount = 0;
     questQueryCount = questOfferCountQueryCount = 0;
-    questRevisionQueryCount = questAgentQueryCount = 0;
+    questRevisionQueryCount = questAgentQueryCount = questVariantQueryCount = 0;
     questRevision = 7;
     questOfferCount = 3;
+    questVariantSelections[0] = 1;
+    questVariantSelections[1] = 2;
+    questVariantSelections[2] = 1;
     resolvedQuestAgentNumber = 0;
     stockQuestNameCount = stockQuestAttributeCount = stockQuestSummaryCount = 0;
     stockQuestStatusIconDrawCount = 0;
@@ -330,6 +339,10 @@ void Reset() {
     g_privateIntentRecords = {
         {0x68000001u, "Complete 100% objective"},
         {0x68000002u, " Gold"},
+        {0x68000003u, "Delivery"},
+        {0x68000004u, "Deliver goods"},
+        {0x68000005u, "Escort"},
+        {0x68000006u, "Protect a traveler"},
     };
     g_privateIntentViews.clear();
     for (const auto& record : g_privateIntentRecords) {
@@ -871,6 +884,54 @@ int main() {
     assert(questQueryCount == 8 && questAgentQueryCount == 3);
     assert(g_questOfferPresentations[0].detail ==
            "Complete 100% objective\n100 Gold");
+
+    // Package-declared static variants select bounded title/detail text with
+    // the same integer scalar evaluator already used by row values. Row
+    // identity, selection, action routing, and stock MX05 ownership do not
+    // change.
+    activeList.rowTextIntentId = 0;
+    activeList.hasRowVariants = true;
+    activeList.rowVariantCallbackSymbol = "Quest_Variant";
+    activeList.rowVariants = {
+        {0x68000003u, 0x68000004u},
+        {0x68000005u, 0x68000006u},
+    };
+    g_activeQuestRevision = -1;
+    g_activeQuestBoardFaulted = false;
+    questQueryCount = questOfferCountQueryCount = questRevisionQueryCount = 0;
+    questAgentQueryCount = questVariantQueryCount = 0;
+    QuestBoardPopulate(&child, nullptr);
+    assert(!g_activeQuestBoardFaulted && questVariantQueryCount == 3);
+    assert(questQueryCount == 11 && questAgentQueryCount == 3);
+    assert(g_questOfferPresentations[0].name == "Delivery");
+    assert(g_questOfferPresentations[1].name == "Escort");
+    assert(g_questOfferPresentations[2].name == "Delivery");
+    assert(g_questOfferPresentations[0].detail == "Deliver goods\n100 Gold");
+    assert(g_questOfferPresentations[1].detail ==
+           "Protect a traveler\n200 Gold");
+
+    // A non-one-based or out-of-range result faults only this private list and
+    // clears its borrowed rows.
+    questVariantSelections[1] = 3;
+    g_activeQuestRevision = -1;
+    g_activeQuestBoardFaulted = false;
+    questQueryCount = questVariantQueryCount = 0;
+    QuestBoardPopulate(&child, nullptr);
+    assert(g_activeQuestBoardFaulted && g_questOfferPresentationCount == 0);
+    assert(child.listBegin == questVectorStorage);
+
+    // Restore the ordinary single static presentation for the remaining
+    // stock-painter and revision lifecycle checks.
+    questVariantSelections[1] = 2;
+    activeList.hasRowVariants = false;
+    activeList.rowVariantCallbackSymbol.clear();
+    activeList.rowVariants.clear();
+    activeList.rowTextIntentId = 0x68000001u;
+    g_activeQuestRevision = -1;
+    g_activeQuestBoardFaulted = false;
+    QuestBoardPopulate(&child, nullptr);
+    assert(!g_activeQuestBoardFaulted && g_questOfferPresentationCount == 3);
+    assert(g_questOfferPresentations[0].summaryTemplate == expectedSummaryTemplate);
 
     // Stock slot 14 can run at paint cadence without polling package GPL or
     // producing any Manager-owned UI write.
