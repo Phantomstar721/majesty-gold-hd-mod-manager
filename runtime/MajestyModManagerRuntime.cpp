@@ -278,6 +278,7 @@ bool IsLiveQuestBoardController(
     const void* controller,
     const QuestBoard* expectedBoard);
 void __fastcall QuestBoardRefresh(void* controller, void*);
+void RefreshQuestBoardAfterAction(const QuestBoard* board, std::uint32_t building);
 constexpr std::uint32_t kAp10DialogId = 0x30315041;
 constexpr std::uint32_t kAp69DialogId = 0x39365041;
 constexpr std::uint32_t kAp41DialogId = 0x31345041;
@@ -391,6 +392,7 @@ MajestyRuntimeCapabilities::Manifest g_runtimeCapabilities;
 
 constexpr std::uint32_t kFirstQuestOfferIntentId = 0x70000000u;
 constexpr std::size_t kMaximumQuestOffers = 64;
+constexpr int kDataRecordListRowHeight = 40;
 struct QuestOfferPresentation {
     void* agent;
     std::uint32_t recordKey = 0;
@@ -4865,12 +4867,22 @@ void* __fastcall OccupantActionString(void* destination, void*, const char* stoc
 }
 void __cdecl SubmitOccupantAction(std::uint32_t command, std::uint32_t building,
                                  std::uint32_t agent, std::uint32_t price) {
+    const QuestBoard* submittedList = nullptr;
     if (command == 0x15) {
         if (g_activeOccupantPanel != nullptr) {
             command = g_activeOccupantPanel->actionCommandId;
         } else if (g_activeQuestBoard != nullptr) {
             command = g_activeQuestBoard->actionCommandId;
+            submittedList = g_activeQuestBoard;
         }
+    }
+    if (submittedList != nullptr) {
+        char trace[256] = {};
+        std::snprintf(trace, sizeof(trace),
+            "List action submitted: command=0x%08lX parent_id=0x%08lX callback=%s.",
+            static_cast<unsigned long>(command), static_cast<unsigned long>(building),
+            submittedList->actionCallbackSymbol.c_str());
+        WriteLog(trace);
     }
     reinterpret_cast<BuildingCommandDispatch>(
         g_imageBase + g_buildProfile->submitBuildingCommandRva)(command, building, agent, price);
@@ -4881,6 +4893,16 @@ void __cdecl DispatchOccupantAction(std::uint32_t command, std::uint32_t buildin
     const auto* quest = g_stockControllerRegistry.FindLiveAgentListByCommand(command);
     const auto* previous = g_executingOccupantPanel;
     const auto* previousQuest = g_executingQuestBoard;
+    ULONGLONG actionStarted = 0;
+    if (quest != nullptr) {
+        char trace[256] = {};
+        std::snprintf(trace, sizeof(trace),
+            "List action dispatch: command=0x%08lX parent_id=0x%08lX callback=%s.",
+            static_cast<unsigned long>(command), static_cast<unsigned long>(building),
+            quest->actionCallbackSymbol.c_str());
+        WriteLog(trace);
+        actionStarted = GetTickCount64();
+    }
     g_executingOccupantPanel = record;
     g_executingQuestBoard = quest;
     g_stockOccupantDispatch(
@@ -4888,6 +4910,21 @@ void __cdecl DispatchOccupantAction(std::uint32_t command, std::uint32_t buildin
         building, agent, price);
     g_executingOccupantPanel = previous;
     g_executingQuestBoard = previousQuest;
+    const ULONGLONG actionFinished = quest == nullptr ? 0 : GetTickCount64();
+    // Stock's GPL evaluator has completed and released its call object here.
+    // Package-owned records need not change the native Occupants relation, so
+    // they may emit no XSCX event. Observe the completed action's revision now,
+    // through the same stock list refresh used by an event, not a paint poll.
+    if (quest != nullptr) {
+        RefreshQuestBoardAfterAction(quest, building);
+        const ULONGLONG presentationFinished = GetTickCount64();
+        char trace[224] = {};
+        std::snprintf(trace, sizeof(trace),
+            "List action complete: command=0x%08lX parent_id=0x%08lX callback_ms=%llu presentation_ms=%llu.",
+            static_cast<unsigned long>(command), static_cast<unsigned long>(building),
+            actionFinished-actionStarted, presentationFinished-actionFinished);
+        WriteLog(trace);
+    }
 }
 int __fastcall LiveAgentListControlHandoff(
     void* controller, void*, std::uint32_t controlId) {
@@ -5566,24 +5603,13 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
 
 ControllerEvent g_stockQuestBoardEvent = nullptr;
 
-void __fastcall QuestBoardEvent(
-    void* controller, void*, std::uint32_t a1, std::uint32_t a2,
-    std::uint32_t a3, std::uint32_t a4) {
-    const auto* board = g_activeQuestBoard;
-    g_stockQuestBoardEvent(controller, a1, a2, a3, a4);
+void RefreshChangedQuestBoardRevision(void* controller, const QuestBoard* board) {
     if (!IsLiveQuestBoardController(controller, board) ||
         g_activeQuestBoardFaulted) return;
 
-    if (a3 == 0x09435358u) {
-        // This is the complete stock MX05 branch: one virtual slot-14 list
-        // refresh and return. The installed slot preserves stock-selected or
-        // declared parent-scoped cost presentation as appropriate.
-        return;
-    }
-
     // Package lists are not stored in Majesty's relation index 2, so their
-    // revision cannot emit XSCX. Observe the bounded revision value at the
-    // existing stock event boundary, but do not touch any control unless it
+    // revision cannot emit XSCX. Observe the bounded revision value at a stock
+    // event or completed-action boundary, but do not touch any control unless it
     // actually changes. A change is translated into the same slot-14 refresh
     // MX05 performs for XSCX; unchanged high-frequency events are read-only.
     auto* parent = NativePanelContext(
@@ -5595,7 +5621,7 @@ void __fastcall QuestBoardEvent(
             board->revisionCallbackSymbol.c_str(), parent, 0, &revision, true);
         FaultQuestBoardPresentation(
             reinterpret_cast<std::uint32_t>(controller),
-            "Live-agent-list rows disabled: the package revision callback failed at a stock MX05 event boundary.");
+            "Live-agent-list rows disabled: the package revision callback failed at a stock MX05 lifecycle boundary.");
         return;
     }
     if (g_activeQuestRevision == static_cast<int>(revision)) return;
@@ -5613,7 +5639,34 @@ void __fastcall QuestBoardEvent(
     }
     g_requestedQuestRevision = static_cast<int>(revision);
     g_questBoardPopulationRequested = true;
-    QuestBoardRefresh(controller, nullptr);
+    // Literal MX05 event dispatch: invoke its live slot 14. The installed
+    // private wrapper retains the package's chosen list/presentation policy.
+    reinterpret_cast<ControllerSetup>((*static_cast<void***>(controller))[14])(controller);
+}
+
+void RefreshQuestBoardAfterAction(const QuestBoard* board, std::uint32_t building) {
+    // The action may have closed/replaced the UI or destroyed its parent.
+    // Resolve only the currently live controller after dispatch, and require
+    // its native parent handle to match this command before reading any GPL.
+    auto* controller = reinterpret_cast<void*>(
+        static_cast<std::uintptr_t>(InterlockedCompareExchange(&g_childController, 0, 0)));
+    if (!IsLiveQuestBoardController(controller, board) || g_activeQuestBoardFaulted) return;
+    auto* parent = NativePanelContext(reinterpret_cast<std::uint32_t>(controller));
+    if (parent == nullptr || building == 0 ||
+        *reinterpret_cast<const std::uint32_t*>(parent + 0x70) != building) return;
+    RefreshChangedQuestBoardRevision(controller, board);
+}
+
+void __fastcall QuestBoardEvent(
+    void* controller, void*, std::uint32_t a1, std::uint32_t a2,
+    std::uint32_t a3, std::uint32_t a4) {
+    const auto* board = g_activeQuestBoard;
+    g_stockQuestBoardEvent(controller, a1, a2, a3, a4);
+    if (a3 == 0x09435358u) {
+        // XSCX already dispatched stock slot 14; do not refresh it twice.
+        return;
+    }
+    RefreshChangedQuestBoardRevision(controller, board);
 }
 
 bool QueryQuestBoardParentActionCost(
@@ -5761,9 +5814,10 @@ bool RefreshDataRecordListStock(void* controller) {
     if (top < oldCount) send(0x37u, top, reinterpret_cast<std::uint32_t>(&topKey));
     for (std::uint32_t i = 0; i < oldCount; ++i) send(0x27u, 0, 0);
     if (send(0x18u, 0, 0) != 0) return false;
-    // The stock list's row height and icon inset, as used by shared MX05
-    // refresh. Text-only records reserve three lines and no icon column.
-    *reinterpret_cast<int*>(static_cast<unsigned char*>(list)+0x50) = 48;
+    // Shared MX05 refresh uses 40 pixels for its detailed non-monster row
+    // (public 0x97F49 / beta2 0x98769), not three compact 16-pixel rows.
+    // Keep that stock pitch for title/detail/value, with no icon column.
+    *reinterpret_cast<int*>(static_cast<unsigned char*>(list)+0x50) = kDataRecordListRowHeight;
     *reinterpret_cast<int*>(static_cast<unsigned char*>(list)+0x58) = 0;
     int selectedIndex = -1, topIndex = 0;
     const auto count = g_activeQuestBoardFaulted ? 0 : g_questOfferPresentationCount;

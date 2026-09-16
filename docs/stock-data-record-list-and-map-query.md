@@ -112,7 +112,8 @@ Callbacks retain the existing integer contract:
 variant indices are one-based. Use null static title/detail when supplying
 variants. Every data row/variant needs an explicit title; no world name fallback
 exists. Each title/detail/suffix is bounded to 96 Windows-1252 bytes; keep text
-concise for the stock sidebar. The native text-only row reserves three lines.
+concise for the stock sidebar. The native text-only row uses stock's 40-pixel
+detailed-row spacing for its title, detail, and optional value.
 
 No row action or world refocus is implied by selecting a record. Actions are
 parent-scoped and stay on the child panel; contradictory policies are rejected.
@@ -132,6 +133,12 @@ responsible for their stock creation/save/load/deletion lifecycle.
 The Manager owns only a bounded presentation snapshot. Opening constructs the
 stock child with its live parent handle; callbacks populate the snapshot.
 Revision changes replace native text rows, preserving selection by key.
+After a declared list action finishes, the Manager checks the same parent's
+revision immediately and dispatches stock list refresh if it changed. A record
+update need not emit Majesty's native Occupants relation event; it must not wait
+for an unrelated event before becoming visible. Closed/replaced panels and
+actions for a different parent are ignored, and an already-presented revision
+does not rebuild rows again. This adds no timer or per-frame row query.
 Bad counts/keys/callbacks disable the list instance instead of interpreting data
 as pointers. Closing, changing building, parent destruction, or native teardown
 clears that transient snapshot through the existing controller destructor.
@@ -159,7 +166,67 @@ work or native search context survives the call.
 MX05 shared refresh `97E20 / 98640` defines list clear/insert/text/item-data,
 selection/top restoration, and scrollbar linkage. `CYDialogListboxItem`
 vtables `34F76C / 369844` provide the native text painter instead of MX05's
-Unit-specific painter. Parent payment uses the already traced stock command
+Unit-specific painter. Shared refresh at `97F49 / 98769` sets the detailed
+non-monster row height to `32 + 8 = 40` pixels. Record rows retain that spacing
+at list+50, with the unused icon inset at list+58 set to zero. The 16-pixel
+compact-row height includes padding and is not a text line height; multiplying
+it by three added an unnecessary 8-pixel gap per record. Height is set during
+the existing revision rebuild before row insertion and stock scrollbar linkage;
+painting, scrolling, selection, and teardown are otherwise unchanged.
+Parent payment uses the already traced stock command
 0x15 lifecycle, and controller teardown uses the existing stock destructor
 registry. MMFR v2 carries a map-query flag; MMCR v16 carries the record-row
 mode. Old features still emit their prior wire versions.
+
+Stock command 0x15 calls the synchronous GPL evaluator at
+`C562E / C606E`, then destroys its evaluator at `C4FC6 / C5A06` and returns.
+The completed-action revision check runs after that stock dispatch has returned,
+using the currently live controller and matching parent handle. It shares the
+revision gate with the native event adapter and invokes the same slot 14 used
+by MX05's XSCX handler. Payment, callback arguments, script execution, and native
+call-object cleanup are unchanged.
+
+## Stock PathCost optional-unit boundary
+
+The SDK documents `PathCost(start, end, collisionOption, canFindPath, agent)`
+with an optional final agent: omission uses Majesty's average-unit path rules.
+Both supported executables contain that default path but fetch and dereference
+argument slot 5 unconditionally before testing its value. A compiled call with
+four explicit arguments supplies only five slots including its return value.
+That out-of-range read can crash before pathfinding begins. `NullAgent()` is
+not equivalent: it supplies an agent object that the native resolver rejects.
+The stock compiler also rejects an explicit trailing empty argument.
+
+When the map-query capability is selected, the Manager redirects only the
+optional lookup in the stock PathCost wrapper. Exactly five slots (return plus
+four required arguments) produce a borrowed, read-only null-value slot. Stock
+code consumes it immediately and follows its existing average-unit branch.
+The argument collection is not changed; nothing is allocated, retained, or
+cleaned up. Explicit agent arguments use the original accessor, validation,
+movement characteristics, and error handling. Required-argument errors are not
+converted into defaults. There is no Guild-specific policy or replacement
+pathfinder, map scan, timer, or background work. With no map-query capability,
+this optional-argument guard is not installed.
+
+Public / beta2 wrapper RVAs are `1BE7A0 / 1D3980`, independently traced from
+the stock PathCost registration. Their optional accessor calls at `+81` invoke
+`2DDF0 / 2ED50`; `+86` dereferences the result. `+95` initializes the native
+unit pointer to zero and `+128` branches over explicit-unit resolution when
+the optional value is null. The remainder of stock's collision-mode parsing,
+path computation, result conversion, and evaluator cleanup is unmodified.
+Installation validates those bytes before redirecting the single call.
+
+This corrects the reproduced null read at beta2 `1D3A06`; it does not replace
+or accelerate stock pathfinding. Immediate list presentation is handled by
+the completed-action revision boundary described above.
+
+Declared list actions log submission, execution start, and completion. The
+completion record separates time inside the stock command executor (the
+`callback_ms` field) from post-action list presentation. Returning from that
+executor does not prove the GPL callback entered or succeeded: native validation
+can reject a command, and a script error can abort it before the package
+publishes a revision. Correlate the revision and package state before attributing
+an unchanged list to presentation or map scanning. These measurements run only
+for an actual list action, not from paint/map polling, and add no persistent
+gameplay state. An execution start without completion locates a subsequent
+crash inside the stock action or its post-action presentation boundary.

@@ -14,7 +14,7 @@ class MapQueryProfiles(unittest.TestCase):
         image = PeImage(path)
         source = (Path(__file__).resolve().parents[1]/"runtime/MapQueryRuntime.cpp").read_text()
         body = re.search(r"constexpr Profile " + name + r" = \{(.*?)\};", source, re.S)[1]
-        (call, registration, engine, register, ctor, dtor, at, world, extents, nearest) = [
+        (call, registration, engine, register, ctor, dtor, at, world, extents, nearest, path_cost) = [
             int(x,16) for x in re.findall(r"0x[0-9a-fA-F]+",body)]
         self.assertEqual(image.target(call), registration)
         self.assertEqual(image.read(extents+0x1a,23), bytes.fromhex(
@@ -28,6 +28,18 @@ class MapQueryProfiles(unittest.TestCase):
         self.assertEqual(image.target(registration+0x800),engine)
         self.assertEqual(image.target(registration+0x814),register)
         self.assertEqual(image.target(registration+0x821),dtor)
+        # Both stock PathCost wrappers document an optional unit but fetch its
+        # slot unconditionally. The guard changes only that one argument call.
+        self.assertEqual(image.target(registration+0x7c2),engine)
+        self.assertEqual(image.read(registration+0x7d0,1),b"\x68")
+        self.assertEqual(struct.unpack("<I", image.read(registration+0x7d1,4))[0],
+                         image.base+path_cost)
+        self.assertEqual(image.target(registration+0x7d6),register)
+        self.assertEqual(image.read(path_cost+0x7b,6),bytes.fromhex("6a 05 8b ce 8b e8"))
+        self.assertEqual(image.target(path_cost+0x81),at)
+        self.assertEqual(image.read(path_cost+0x86,6),bytes.fromhex("8b 00 8b 4c 24 1c"))
+        self.assertEqual(image.read(path_cost+0x95,8),bytes.fromhex("c7 44 24 24 00 00 00 00"))
+        self.assertEqual(image.read(path_cost+0x128,8),bytes.fromhex("8b 4c 24 24 85 c9 74 5f"))
         # The bounded traversal clones the first orientation of the stock
         # expanding rectangle scan, not a row-major approximation.
         search = 0x1c2f20 if name == "kPublic" else 0x1d8100

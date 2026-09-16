@@ -257,6 +257,30 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
         self.assertEqual(child_refresh, child_slots[5])
         self.assertEqual(image.target(child_refresh + 0x03), shared_list_refresh)
 
+        # Command completion is a synchronous stock boundary: action calls
+        # the same evaluator used by the list's scalar queries, then branches
+        # to evaluator destruction and a direct return (no queued GPL wake).
+        action_execute = 0xC562E if profile_name == "kPublicQuestBoard" else 0xC606E
+        action_cleanup = 0xC4FB7 if profile_name == "kPublicQuestBoard" else 0xC59F7
+        self.assertEqual(image.target(action_execute), execute)
+        self.assertEqual(image.target(action_execute + 5), action_cleanup)
+        self.assertEqual(image.target(action_cleanup + 15), evaluator_destructor)
+        self.assertEqual(image.read(action_cleanup + 41, 1), b"\xC3")
+
+        # Stock detailed non-monster rows set CL=1, then height=32+8*CL.
+        # The independent text list must retain that 40-pixel pitch; using
+        # three compact 16-pixel rows introduces a gap and clips the fourth
+        # title/detail/value record above the stock bottom action strip.
+        self.assertEqual(
+            image.read(shared_list_refresh + 0x129, 13),
+            bytes.fromhex("0f 94 c1 8d 0c cd 20 00 00 00 89 4e 50"),
+        )
+        record_row_height = int(re.search(
+            r"constexpr int kDataRecordListRowHeight = (\d+);", source
+        )[1])
+        self.assertEqual(record_row_height, 32 + 8)
+        self.assertIn("+0x50) = kDataRecordListRowHeight;", source)
+
         setup = image.read(child_slots[1], 0x45)
         self.assertEqual(image.target(child_slots[1] + 0x33), shared_list_setup)
         self.assertIn(

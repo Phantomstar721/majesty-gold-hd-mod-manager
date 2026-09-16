@@ -10,14 +10,14 @@ namespace {
 struct Profile {
     std::uintptr_t registrationCall, registration, engine, registerFunction;
     std::uintptr_t stringConstructor, stringDestructor, argumentAt;
-    std::uintptr_t worldGlobal, boardExtents, nearestHidden;
+    std::uintptr_t worldGlobal, boardExtents, nearestHidden, pathCost;
 };
 constexpr Profile kPublic = {
     0x198EE7, 0x1C0A10, 0x15EEF0, 0x16BCE0, 0x227A80, 0x227C30,
-    0x2DDF0, 0x3C544C, 0x1BC9C0, 0x1BE9F0};
+    0x2DDF0, 0x3C544C, 0x1BC9C0, 0x1BE9F0, 0x1BE7A0};
 constexpr Profile kBeta = {
     0x1ADE97, 0x1D5BF0, 0x175030, 0x181CF0, 0x23A220, 0x23A3D0,
-    0x2ED50, 0x3E3FD4, 0x1D1930, 0x1D3BD0};
+    0x2ED50, 0x3E3FD4, 0x1D1930, 0x1D3BD0, 0x1D3980};
 std::uintptr_t g_base = 0;
 const Profile* g_profile = nullptr;
 
@@ -33,6 +33,37 @@ bool Call(std::uintptr_t rva, std::uintptr_t target) {
     const auto* site = reinterpret_cast<const unsigned char*>(g_base+rva);
     return site[0] == 0xE8 &&
         g_base+rva+5+Read<std::int32_t>(site, 1) == g_base+target;
+}
+void* const* __fastcall OptionalPathCostUnit(void* arguments, void*, unsigned index) {
+    // Stock PathCost documents an optional unit, and its null-value branch
+    // already selects the average unit. Both supported executables nevertheless
+    // dereference slot 5 before that branch, even if GPL supplied only four
+    // arguments. Supply the missing *value slot*, never a NullAgent object.
+    // This borrowed read-only slot is consumed immediately by stock code; it is
+    // not appended to the GPL collection and owns no agent or allocated memory.
+    if (arguments != nullptr && index == 5) {
+        const auto first = Read<std::uintptr_t>(arguments, 0x0C);
+        const auto last = Read<std::uintptr_t>(arguments, 0x10);
+        if (first != 0 && last >= first && last-first == 5*sizeof(void*)) {
+            static void* const omittedUnit = nullptr;
+            return &omittedUnit;
+        }
+    }
+    // Explicit units, including their stock validity errors, are unchanged.
+    // Do not turn missing required arguments into optional ones.
+    using At = void** (__thiscall*)(void*, unsigned);
+    return reinterpret_cast<At>(g_base+g_profile->argumentAt)(arguments, index);
+}
+bool RedirectCall(std::uintptr_t rva, const void* target) {
+    auto* site = reinterpret_cast<unsigned char*>(g_base+rva);
+    DWORD old = 0;
+    if (!VirtualProtect(site, 5, PAGE_EXECUTE_READWRITE, &old)) return false;
+    const auto delta = static_cast<std::int32_t>(
+        reinterpret_cast<std::uintptr_t>(target)-reinterpret_cast<std::uintptr_t>(site)-5);
+    std::memcpy(site+1, &delta, sizeof(delta));
+    FlushInstructionCache(GetCurrentProcess(), site, 5);
+    DWORD ignored = 0;
+    return VirtualProtect(site, 5, old, &ignored) != 0;
 }
 void* Argument(void* arguments, unsigned index) {
     if (arguments == nullptr) return nullptr;
@@ -135,23 +166,27 @@ bool InstallMapQueryRuntime(std::uintptr_t imageBase, bool publicBuild) {
     constexpr unsigned char extents[] = {0x8B,0x48,0x10,0x8B,0x81,0x88,0,0,0,
         0xDB,0x40,0x38,0x8D,0x4C,0x24,0x10,0xD9,0x5C,0x24,4,0xDB,0x40,0x3C};
     constexpr unsigned char nativeMap[] = {0x8B,0x8E,0x94,0,0,0,0x8B,0x91,0x88,0,0,0};
+    constexpr unsigned char optionalUnitLookup[] = {0x6A,0x05,0x8B,0xCE,0x8B,0xE8};
+    constexpr unsigned char optionalUnitRead[] = {0x8B,0x00,0x8B,0x4C,0x24,0x1C};
+    constexpr unsigned char averageUnitDefault[] = {0xC7,0x44,0x24,0x24,0,0,0,0};
+    constexpr unsigned char averageUnitBranch[] = {0x8B,0x4C,0x24,0x24,0x85,0xC9,0x74,0x5F};
     if (!Call(g_profile->registrationCall, g_profile->registration) ||
         !Call(g_profile->registration+0x7F1, g_profile->stringConstructor) ||
         !Call(g_profile->registration+0x800, g_profile->engine) ||
         !Call(g_profile->registration+0x814, g_profile->registerFunction) ||
         !Call(g_profile->registration+0x821, g_profile->stringDestructor) ||
         !Call(g_profile->nearestHidden+0x2F, g_profile->argumentAt) ||
+        !Bytes(g_profile->pathCost+0x7B, optionalUnitLookup, sizeof(optionalUnitLookup)) ||
+        !Call(g_profile->pathCost+0x81, g_profile->argumentAt) ||
+        !Bytes(g_profile->pathCost+0x86, optionalUnitRead, sizeof(optionalUnitRead)) ||
+        !Bytes(g_profile->pathCost+0x95, averageUnitDefault, sizeof(averageUnitDefault)) ||
+        !Bytes(g_profile->pathCost+0x128, averageUnitBranch, sizeof(averageUnitBranch)) ||
         !Bytes(g_profile->boardExtents+0x1A, extents, sizeof(extents)) ||
         !Bytes(g_profile->nearestHidden+0x6F, nativeMap, sizeof(nativeMap)) ||
         Read<std::uint32_t>(reinterpret_cast<void*>(imageBase+g_profile->boardExtents), 6)
             != imageBase+g_profile->worldGlobal) return false;
-    auto* site = reinterpret_cast<unsigned char*>(imageBase+g_profile->registrationCall);
-    DWORD old = 0;
-    if (!VirtualProtect(site, 5, PAGE_EXECUTE_READWRITE, &old)) return false;
-    const auto delta = static_cast<std::int32_t>(
-        reinterpret_cast<std::uintptr_t>(&RegisterAfterStock)-reinterpret_cast<std::uintptr_t>(site)-5);
-    std::memcpy(site+1, &delta, sizeof(delta));
-    FlushInstructionCache(GetCurrentProcess(), site, 5);
-    DWORD ignored = 0;
-    return VirtualProtect(site, 5, old, &ignored) != 0;
+    return RedirectCall(g_profile->pathCost+0x81,
+                        reinterpret_cast<const void*>(&OptionalPathCostUnit)) &&
+        RedirectCall(g_profile->registrationCall,
+                     reinterpret_cast<const void*>(&RegisterAfterStock));
 }

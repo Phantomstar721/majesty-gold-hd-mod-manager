@@ -113,6 +113,61 @@ int* __fastcall AsInt(void* object, void*) { return &static_cast<Value*>(object)
 void* __fastcall AsPoint(void* object, void*) { return object; }
 void* __fastcall PointData(void* object, void*) { return &static_cast<Value*>(object)->x; }
 void** __fastcall At(void* args, void*, unsigned index) { return static_cast<Args*>(args)->first[index]; }
+int optionalAtCalls = 0;
+void* suppliedUnit = reinterpret_cast<void*>(0x12345678u);
+void** __fastcall OptionalAt(void*, void*, unsigned) {
+    ++optionalAtCalls;
+    return &suppliedUnit;
+}
+void VerifyOptionalPathCostUnit() {
+    Profile profile = kBeta;
+    profile.argumentAt = reinterpret_cast<std::uintptr_t>(&OptionalAt);
+    g_base = 0; g_profile = &profile;
+    // Put the omitted sixth slot in a no-access page: this mirrors the dump's
+    // five-entry argument collection and catches any out-of-bounds lookup.
+    SYSTEM_INFO system{};
+    GetSystemInfo(&system);
+    auto* pages = static_cast<unsigned char*>(VirtualAlloc(
+        nullptr, 2*system.dwPageSize, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE));
+    assert(pages != nullptr);
+    DWORD old = 0;
+    assert(VirtualProtect(pages+system.dwPageSize, system.dwPageSize, PAGE_NOACCESS, &old));
+    auto** entries = reinterpret_cast<void***>(pages+system.dwPageSize)-5;
+    for (int i = 0; i < 5; ++i) entries[i] = &suppliedUnit;
+    Args args{nullptr,{},entries,entries+5};
+    const Args original = args;
+    for (int repeat = 0; repeat < 100; ++repeat) {
+        void* const* result = OptionalPathCostUnit(&args, nullptr, 5);
+        assert(result != nullptr && *result == nullptr && optionalAtCalls == 0);
+        assert(std::memcmp(&args, &original, sizeof(args)) == 0);
+    }
+    // The x86 call site is __thiscall (ECX + one callee-popped argument).
+    using StockAt = void* const* (__thiscall*)(void*, unsigned);
+    auto at = reinterpret_cast<StockAt>(&OptionalPathCostUnit);
+    assert(*at(&args, 5) == nullptr && optionalAtCalls == 0);
+    // Required slots and malformed/other arities keep the original accessor.
+    assert(at(&args, 4) == &suppliedUnit && optionalAtCalls == 1);
+    args.end = args.first+4;
+    assert(at(&args, 5) == &suppliedUnit && optionalAtCalls == 2);
+    args.end = args.first;
+    assert(at(&args, 5) == &suppliedUnit && optionalAtCalls == 3);
+    args.first = nullptr;
+    assert(at(&args, 5) == &suppliedUnit && optionalAtCalls == 4);
+    assert(at(nullptr, 5) == &suppliedUnit && optionalAtCalls == 5);
+    assert(VirtualFree(pages, 0, MEM_RELEASE));
+    // With an explicit slot, return precisely what stock returns. A supplied
+    // NullAgent object is not rewritten to the omitted-unit default either.
+    void** full[6] = {};
+    args = {nullptr,{},full,full+6};
+    assert(at(&args, 5) == &suppliedUnit && *at(&args, 5) == suppliedUnit);
+    profile.argumentAt = reinterpret_cast<std::uintptr_t>(&At);
+    full[5] = &suppliedUnit;
+    assert(at(&args, 5) == full[5]);
+    void* explicitNull = nullptr;
+    full[5] = &explicitNull;
+    assert(at(&args, 5) == &explicitNull && *at(&args, 5) == nullptr);
+    g_profile = nullptr;
+}
 template<class T> void Put(void* memory, int offset, T value) {
     std::memcpy(static_cast<unsigned char*>(memory)+offset, &value, sizeof(value));
 }
@@ -150,6 +205,7 @@ void Run() {
 }
 int main() {
     VerifyOutwardTraversal();
+    NativeTest::VerifyOptionalPathCostUnit();
     NativeTest::Run();
     Grid grid{7, 5, 0, std::vector<std::uint32_t>(35)};
     View map{&grid, &Mask, 7, 5};

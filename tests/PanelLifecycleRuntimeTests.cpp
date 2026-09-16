@@ -53,6 +53,7 @@ int questQueryCount = 0, questOfferCountQueryCount = 0;
 int questRevisionQueryCount = 0, questAgentQueryCount = 0;
 int questVariantQueryCount = 0;
 int questParentActionPresentationCount = 0;
+int questActionMode = 0;
 int selectedQuestIndex = -1;
 std::uint32_t questRevision = 7;
 std::uint32_t questOfferCount = 3;
@@ -285,6 +286,18 @@ void __fastcall NativeQuestRefresh(void* controller, void*) {
 void __fastcall NativeQuestSharedRefresh(void* controller, void*) {
     ++questSharedRefreshCount;
     QuestBoardPopulate(controller, nullptr);
+}
+void __cdecl CompleteListAction(std::uint32_t, std::uint32_t,
+                               std::uint32_t, std::uint32_t) {
+    if (questActionMode == 1) return; // rejected/no-op action
+    ++questRevision; // package publishes without a native relation event
+    if (questActionMode == 2) {
+        // The lifecycle dispatcher clears its slot before the owner callback.
+        InterlockedExchange(&g_childController, 0);
+        ClearSecondaryPanelControllerOwnedState();
+    }
+    if (questActionMode == 3) child.context = contextB;
+    if (questActionMode == 4) QuestBoardEvent(&child, nullptr, 1, 2, 3, 4);
 }
 void __fastcall NativeQuestSetup(void* controller, void*) {
     ++questNativeSetupCount;
@@ -1190,6 +1203,64 @@ int main() {
     assert(questNativeRefreshCount == 3 && questQueryCount == 0);
     assert(visibleControlCount == 0 && setIntegerCount == 0 &&
            lastMessageControl == 0);
+
+    // An action that publishes saved rows need not emit stock XSCX. Both list
+    // modes must observe its revision before dispatch returns, with no later
+    // event, repeated click, or paint-time polling needed.
+    const auto savedRefreshSlot = child.table[14];
+    child.table[14] = reinterpret_cast<void*>(&NativeQuestRefresh);
+    const auto parentHandle = *reinterpret_cast<std::uint32_t*>(contextA + 0x70);
+    *reinterpret_cast<std::uint32_t*>(contextB + 0x70) = parentHandle + 1;
+    g_stockOccupantDispatch = &CompleteListAction;
+    const auto savedKeyCallback = activeList.rowAgentIdCallbackSymbol;
+    for (bool records : {false, true}) {
+        activeList.dataRecordRows = records;
+        activeList.rowAgentIdCallbackSymbol = records ? "Record_Key" : savedKeyCallback;
+        g_activeQuestRevision = -1;
+        QuestBoardPopulate(&child, nullptr);
+        questActionMode = 0;
+        questNativeRefreshCount = questRevisionQueryCount = questOfferCountQueryCount = 0;
+        for (int click = 0; click < 4; ++click) {
+            DispatchOccupantAction(activeList.actionCommandId, parentHandle, parentHandle, 500);
+            assert(g_activeQuestRevision == static_cast<int>(questRevision));
+            assert(questNativeRefreshCount == click + 1);
+            assert(questOfferCountQueryCount == click + 1);
+            assert(g_executingQuestBoard == nullptr);
+        }
+        assert(questRevisionQueryCount == 4);
+        questActionMode = 1;
+        DispatchOccupantAction(activeList.actionCommandId, parentHandle, parentHandle, 500);
+        assert(questNativeRefreshCount == 4 && questOfferCountQueryCount == 4);
+        // A normal notification inside the action may already show this
+        // revision. The completion check must not rebuild it a second time.
+        questActionMode = 4;
+        DispatchOccupantAction(activeList.actionCommandId, parentHandle, parentHandle, 500);
+        assert(questNativeRefreshCount == 5 && questOfferCountQueryCount == 5);
+        assert(g_activeQuestRevision == static_cast<int>(questRevision));
+    }
+    // No GPL read or UI write for unrelated packets, another building, a
+    // closed panel, or a context replaced during the stock callback.
+    questRevisionQueryCount = questOfferCountQueryCount = questNativeRefreshCount = 0;
+    questActionMode = 0;
+    DispatchOccupantAction(21, parentHandle, parentHandle, 500);
+    DispatchOccupantAction(activeList.actionCommandId, parentHandle + 1, parentHandle, 500);
+    questActionMode = 3;
+    DispatchOccupantAction(activeList.actionCommandId, parentHandle, parentHandle, 500);
+    assert(questRevisionQueryCount == 0 && questNativeRefreshCount == 0);
+    child.context = contextA;
+    questActionMode = 2;
+    DispatchOccupantAction(activeList.actionCommandId, parentHandle, parentHandle, 500);
+    assert(questRevisionQueryCount == 0 && questNativeRefreshCount == 0);
+    assert(g_childController == 0 && g_activeQuestBoard == nullptr);
+    g_childController = reinterpret_cast<LONG>(&child);
+    g_activeQuestBoard = &activeList;
+    g_activeQuestBoardFaulted = true;
+    questActionMode = 0;
+    DispatchOccupantAction(activeList.actionCommandId, parentHandle, parentHandle, 500);
+    assert(questRevisionQueryCount == 0 && questNativeRefreshCount == 0);
+    child.table[14] = savedRefreshSlot;
+    activeList.dataRecordRows = false;
+    activeList.rowAgentIdCallbackSymbol = savedKeyCallback;
 
     // 20. A package count above the bounded multi-row contract is contained to
     // the private rows. The live MX05 controller remains usable and its vector
