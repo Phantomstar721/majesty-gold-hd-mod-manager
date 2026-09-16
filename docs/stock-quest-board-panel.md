@@ -1,9 +1,13 @@
 # Generic MX05 live-agent list lifecycle
 
+For independent rows without a native world object, use the separate
+[data-record list feature](stock-data-record-list-and-map-query.md). Its keys
+are not live-agent IDs and must not be passed to the feature described here.
+
 `stock.mx05-live-agent-list-panel.v1` lets a package populate Majesty's stock
 MX05 list with zero to 64 distinct live agents. It is not quest-specific: the
-parent may be any declared custom building using `AP07`/`AP10`, `AP08`/`AP08`,
-`AP10`/`AP10`, or `MX09`/`MX09` as its controller/template pair.
+parent may use any cataloged stock primary-building controller with its
+matching stock panel template.
 
 The ownership boundary is deliberately small:
 
@@ -11,7 +15,7 @@ The ownership boundary is deliberately small:
 - MX05 owns the list, scrollbar, selection, native bottom action, price,
   affordability, queued payment, and Back;
 - package GPL chooses the live agents, reports a revision, computes an optional
-  per-row value, and performs the selected-row action;
+  per-row value, and performs the declared row- or parent-scoped action;
 - the Manager supplies only bounded row presentation and callback routing.
 
 The Manager does not create fake row objects, add controls, resize the list,
@@ -41,7 +45,8 @@ poll from the painter, or replace MX05 selection and action handling.
   "action_cost_callback_symbol": "YourMod_Action_Cost",
   "action_callback_symbol": "YourMod_Action_After_Debit",
   "stay_on_panel_after_action": true,
-  "focus_selected_row_on_click": false
+  "focus_selected_row_on_click": false,
+  "action_agent_scope": "parent"
 }
 ```
 
@@ -53,8 +58,8 @@ Function YourMod_Row_Agent_Id (agent Parent, integer Row) is integer
 Function YourMod_Row_Revision (agent Parent) is integer
 Function YourMod_Row_Variant (agent Parent, integer Row) is integer
 Function YourMod_Row_Reward (agent Parent, integer Row) is integer
-Function YourMod_Action_Cost (agent SelectedRow) is integer
-Function YourMod_Action_After_Debit (agent SelectedRow) is boolean
+Function YourMod_Action_Cost (agent ActionAgent) is integer
+Function YourMod_Action_After_Debit (agent ActionAgent) is boolean
 ```
 
 Rows are one-based. `Row_Count` may return `0` through `64`.
@@ -68,9 +73,15 @@ return $GetAttribute(RowAgent, #ATTRIB_AgentID);
 
 Those agents must remain live while the panel is open. The Manager resolves
 each returned ID through Majesty's validated stock live-agent lookup before it
-is inserted into MX05. MX05 passes the selected row's live agent to both action
-callbacks. The cost callback is a side-effect-free gold quote; the action
-callback runs through stock queued payment and must not deduct that gold again.
+is inserted into MX05. By default, MX05 passes the selected row's live agent to
+both action callbacks. The optional `action_agent_scope` field accepts
+`"selected-row"` (the default) or `"parent"`. Parent scope makes the native
+bottom action panel-global: both callbacks receive the durable parent building
+regardless of row selection, and the action remains available when the list is
+empty. This avoids binding a list-wide action such as Refresh to a row that may
+disappear before its queued command executes. The cost callback is a
+side-effect-free gold quote; the action callback runs through stock queued
+payment and must not deduct that gold again.
 
 `row_title_text` and `row_text` are optional bounded Windows-1252 strings for
 packages that want the same presentation on every row. A null title preserves
@@ -133,13 +144,16 @@ rejected. The Manager assigns the final child-dialog and queued-action IDs.
 
 MX05 slot 11 clears the vector at controller offset `0x34` and inserts row
 agents through two stock vector helpers. The Manager invokes those helpers in
-the same order. It wraps only MX05 slots 8 and 11; selection slot 3 and the
-high-frequency refresh/painter slot 14 stay stock. When the optional stay-on-
-panel or row-focus policy is active, the Manager wraps only slot 3's two calls
-to MX05's shared control handler. A retained post-action child and a row click
-without world focus both return MX05's stock non-transition result (`0`), so the
-current child remains open. The earlier action submission and row-selection
-refresh remain untouched.
+the same order. Slots 8 and 11 provide the revision-gated population. The
+slot-3 and slot-14 wrappers delegate directly to stock unless a declared list
+policy applies. Stay-on-panel and row-focus policies affect only MX05's shared
+control handoff. Parent-scoped actions run slot 14's unchanged shared-list
+refresh half, skip only its incompatible selected-row cost tail, and then quote
+and present the bottom action against the parent. Slot 3 submits MX05's same
+four-word paid command with the parent building as both durable building and
+action-agent handles. Selected-row scope never enters that branch.
+A retained post-action child and a row click without world focus both return
+MX05's stock non-transition result (`0`).
 
 For each reported row, the Manager evaluates `Row_Agent_Id(Parent, Row)`,
 requires an integer result, resolves that number through Majesty's stock
@@ -179,8 +193,12 @@ An unchanged revision causes no vector rewrite. A changed revision invokes the
 saved stock slot 14 once, which reaches the gated slot-11 population. Stock
 `XSCX` keeps its original one-refresh path.
 
-Because slot 14 also runs at paint cadence, it never evaluates package GPL.
-Repeated paints perform zero package calls and zero Manager-owned UI writes.
+Because slot 14 also runs at paint cadence, it never evaluates row population,
+identity, revision, variant, or value callbacks. Selected-row scope retains
+stock's normal cost-callback cadence. Parent scope runs the same stock shared
+list refresh but bypasses the selected-row cost presenter, then evaluates the
+package cost callback exactly once against the parent. It performs no row
+discovery or vector rewrite.
 
 Invalid callback results, more than 64 rows, null or duplicate row agents, or
 bad presentation data clear only the private list and fault that child
@@ -206,6 +224,7 @@ Native x86 tests verify
 three simultaneous rows, distinct identity, optional text/value presentation,
 matched-only status-icon suppression, stable string-view lifetime, percent
 escaping, one-based static variant selection and bounds failure, revision
-gating, queued selected-row dispatch, independent child-retention and row-focus
-policies, 64-row bounds, stock fallbacks, and
-repeated slot-14 painting without GPL polling.
+gating, queued selected-row dispatch, parent-scoped paid actions with and
+without rows, independent child-retention and row-focus policies, 64-row
+bounds, stock fallbacks, and repeated slot-14 painting without polling the
+row-count, row-identity, revision, variant, or row-value callbacks.

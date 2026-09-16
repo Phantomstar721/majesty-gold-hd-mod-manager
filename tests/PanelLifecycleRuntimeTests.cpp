@@ -46,16 +46,21 @@ int openResult = 0, deleteCount = 0, hideCount = 0;
 int packedValue = 0;
 int playerGold = 1000;
 int setIntegerCount = 0, questEventCount = 0, questNativeRefreshCount = 0;
+int questSharedRefreshCount = 0;
 int questNativeSetupCount = 0;
 int parentEventCount = 0;
 int questQueryCount = 0, questOfferCountQueryCount = 0;
 int questRevisionQueryCount = 0, questAgentQueryCount = 0;
 int questVariantQueryCount = 0;
+int questParentActionPresentationCount = 0;
 int selectedQuestIndex = -1;
 std::uint32_t questRevision = 7;
 std::uint32_t questOfferCount = 3;
 std::uint32_t questVariantSelections[3] = {1, 2, 1};
+std::uint32_t dataRecordKeys[3] = {17, 19, 23};
 std::uint32_t resolvedQuestAgentNumber = 0;
+std::uint32_t presentedQuestParentActionCost = 0;
+bool presentedQuestParentActionAffordable = false;
 std::uint32_t questVectorStorage[68] = {};
 std::uint32_t lastMessageControl = 0, lastMessage = 0;
 std::uint32_t lastVisibleControl = 0, lastVisibleValue = 0;
@@ -157,6 +162,16 @@ int __fastcall StockQuestPostActionFocus(
     ++stockQuestPostActionFocusCount;
     return 37;
 }
+bool PresentQuestParentAction(
+    std::uint32_t controller,
+    std::uint32_t cost,
+    bool isAffordable) {
+    assert(controller == reinterpret_cast<std::uint32_t>(&child));
+    ++questParentActionPresentationCount;
+    presentedQuestParentActionCost = cost;
+    presentedQuestParentActionAffordable = isAffordable;
+    return true;
+}
 void __fastcall NativeParentEvent(
     void*, void*, std::uint32_t, std::uint32_t,
     std::uint32_t, std::uint32_t) {
@@ -182,11 +197,17 @@ bool QuestScalar(
         assert(hasInteger && integerValue >= 1 && integerValue <= 3);
         ++questVariantQueryCount;
         *result = questVariantSelections[integerValue - 1];
+    } else if (std::strcmp(symbol, "Record_Key") == 0) {
+        assert(hasInteger && integerValue >= 1 && integerValue <= 3);
+        *result = dataRecordKeys[integerValue-1];
     } else if (std::strcmp(symbol, "Quest_Agent_Id") == 0) {
         assert(hasInteger && integerValue >= 1 &&
                integerValue <= static_cast<int>(questOfferCount));
         ++questAgentQueryCount;
         *result = 0x1000u + static_cast<std::uint32_t>(integerValue);
+    } else if (std::strcmp(symbol, "Quest_RefreshCost") == 0) {
+        assert(!hasInteger);
+        *result = 500;
     } else {
         assert(false);
     }
@@ -261,6 +282,10 @@ void __fastcall NativeQuestRefresh(void* controller, void*) {
     ++questNativeRefreshCount;
     QuestBoardPopulate(controller, nullptr);
 }
+void __fastcall NativeQuestSharedRefresh(void* controller, void*) {
+    ++questSharedRefreshCount;
+    QuestBoardPopulate(controller, nullptr);
+}
 void __fastcall NativeQuestSetup(void* controller, void*) {
     ++questNativeSetupCount;
     // Model an MX05 slot 1 that was already entered before Manager vtable
@@ -319,17 +344,21 @@ void Reset() {
     reenterParentEventOnSet = false;
     packedValue = 0; lastMessageControl = lastMessage = 0;
     playerGold = 1000; setIntegerCount = 0;
-    questEventCount = questNativeRefreshCount = questNativeSetupCount = 0;
+    questEventCount = questNativeRefreshCount = questSharedRefreshCount = 0;
+    questNativeSetupCount = 0;
     selectedQuestIndex = -1;
     parentEventCount = 0;
     questQueryCount = questOfferCountQueryCount = 0;
     questRevisionQueryCount = questAgentQueryCount = questVariantQueryCount = 0;
+    questParentActionPresentationCount = 0;
     questRevision = 7;
     questOfferCount = 3;
     questVariantSelections[0] = 1;
     questVariantSelections[1] = 2;
     questVariantSelections[2] = 1;
     resolvedQuestAgentNumber = 0;
+    presentedQuestParentActionCost = 0;
+    presentedQuestParentActionAffordable = false;
     stockQuestNameCount = stockQuestAttributeCount = stockQuestSummaryCount = 0;
     stockQuestStatusIconDrawCount = 0;
     stockQuestPostActionFocusCount = 0;
@@ -367,8 +396,11 @@ void Reset() {
         reinterpret_cast<ControllerSetup>(&NativeQuestRefresh);
     g_stockQuestBoardEvent =
         reinterpret_cast<ControllerEvent>(&NativeQuestEvent);
+    g_stockQuestBoardControl =
+        reinterpret_cast<ControllerControl>(&Fallback);
     g_stockQuestBoardSharedControl =
         reinterpret_cast<ControllerControl>(&StockQuestPostActionFocus);
+    g_questBoardParentActionPresenter = &PresentQuestParentAction;
     g_stockQuestRowStatusIconDraw =
         reinterpret_cast<StockQuestRowStatusIconDraw>(
             &StockQuestStatusIconDraw);
@@ -567,7 +599,26 @@ int main() {
     // after stock setup has already run.  Reward+occupant+toggle parents must
     // receive their first MX22 presentation immediately at that boundary.
     Reset();
-    parent.table = nativeTable;
+    auto* mx09Image = static_cast<unsigned char*>(VirtualAlloc(
+        nullptr, 0x00400000u, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    assert(mx09Image != nullptr);
+    g_imageBase = reinterpret_cast<std::uintptr_t>(mx09Image);
+    const auto* mx09Record =
+        MajestyStockBuildingControllers::Find(kMx09DialogId);
+    const auto* mx09Profile =
+        MajestyStockBuildingControllers::Profile(mx09Record, true);
+    assert(mx09Profile != nullptr && mx09Profile->entryCount == 13);
+    auto** mx09StockTable = reinterpret_cast<void**>(
+        mx09Image + mx09Profile->vtableRva);
+    mx09StockTable[0] = reinterpret_cast<void*>(&Delete);
+    mx09StockTable[1] = reinterpret_cast<void*>(&Fallback);
+    mx09StockTable[3] = reinterpret_cast<void*>(&Fallback);
+    mx09StockTable[8] = reinterpret_cast<void*>(&NativeParentEvent);
+    parent.table = mx09StockTable;
+    profile.getPanelContextRva =
+        reinterpret_cast<std::uintptr_t>(&Context) - g_imageBase;
+    profile.readPackedAttributeRva =
+        reinterpret_cast<std::uintptr_t>(&ReadAttribute) - g_imageBase;
     g_stockRewardParentControl = nullptr;
     g_stockRewardParentSetup = nullptr;
     g_stockRewardParentEvent = nullptr;
@@ -591,7 +642,7 @@ int main() {
     ap08Occupant.parentDialogId = 0x31304741;
     ap08Occupant.childDialogId = 0x31305044;
     ap08Occupant.openCommandId = 0x7101;
-    ap08Occupant.parentControllerBase = kAp08DialogId;
+    ap08Occupant.parentControllerBase = 0x38305041u;
     g_parentOccupantPanel = &ap08Occupant;
     auto* ap08Image = static_cast<unsigned char*>(VirtualAlloc(
         nullptr, 0x00400000u, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
@@ -611,15 +662,16 @@ int main() {
         reinterpret_cast<std::uintptr_t>(&Manager) - g_imageBase;
     profile.getCurrentPlayerRva =
         reinterpret_cast<std::uintptr_t>(&Player) - g_imageBase;
+    profile.readPackedAttributeRva =
+        reinterpret_cast<std::uintptr_t>(&ReadAttribute) - g_imageBase;
     profile.submitBuildingCommandRva =
         reinterpret_cast<std::uintptr_t>(&SubmitBuilding) - g_imageBase;
-    assert(ValidateAp08ParentProfile());
     g_captureParentController = 1;
     CaptureSecondaryController(reinterpret_cast<std::uint32_t>(&parent), 0);
     auto* questAp08Clone = FindOccupantParentClass(&parent);
     assert(questAp08Clone != nullptr &&
            questAp08Clone->stock == ap08StockTable);
-    assert(questAp08Clone->entryCount == kAp08VtableEntries);
+    assert(questAp08Clone->entryCount == 13);
     assert(g_parentQuestBoard == nullptr && g_parentOccupantPanel == &ap08Occupant);
     assert(questQueryCount == 0 && setIntegerCount == 0 && visibleControlCount == 0);
     OccupantParentEvent(&parent, nullptr, 1, 2, 3, 4);
@@ -629,7 +681,61 @@ int main() {
     Destroy(parent);
     assert(g_parentOccupantPanel == nullptr && g_parentController == 0);
 
-    // 14. The live-agent-list recipe retains the exact AP08 parent boundary
+    // 14. A toggle-only AP08 parent uses the same exact 13-entry stock clone,
+    // refreshes ATTRIB_EmbassyActiveFlag presentation, and submits no Embassy
+    // order side effect.
+    Reset();
+    MajestyStockControllers::BuildingOpenToggleRecord ap08Toggle =
+        g_stockControllerRegistry.buildingOpenToggles[0];
+    ap08Toggle.parentDialogId = 0x31304741;
+    ap08Toggle.parentControllerBase = 0x38305041u;
+    g_parentOpenToggleRecord = &ap08Toggle;
+    parent.table = ap08StockTable;
+    g_captureParentController = 1;
+    CaptureSecondaryController(reinterpret_cast<std::uint32_t>(&parent), 0);
+    auto* toggleAp08Clone = FindOccupantParentClass(&parent);
+    assert(toggleAp08Clone != nullptr && toggleAp08Clone->stock == ap08StockTable);
+    assert(toggleAp08Clone->entryCount == 13);
+    assert(g_parentQuestBoard == nullptr && g_parentOccupantPanel == nullptr);
+    toggleResult = 99;
+    assert(OccupantParentControl(&parent, nullptr, 0x5D01) == 0);
+    assert(packedValue == 1 && submitCount == 0);
+    OccupantParentEvent(&parent, nullptr, 1, 2, 3, 4);
+    assert(parentEventCount == 1);
+    Destroy(parent);
+    assert(g_parentOpenToggleRecord == nullptr && g_parentController == 0);
+
+    // 15. The same generic path selects AP31's independently audited
+    // 14-entry Marketplace controller instead of assuming AP10 or AP08 size.
+    Reset();
+    MajestyStockControllers::BuildingOpenToggleRecord ap31Toggle =
+        g_stockControllerRegistry.buildingOpenToggles[0];
+    ap31Toggle.parentDialogId = 0x32304741;
+    ap31Toggle.parentControllerBase = 0x31335041u;
+    const auto* ap31Record =
+        MajestyStockBuildingControllers::Find(ap31Toggle.parentControllerBase);
+    const auto* ap31Profile =
+        MajestyStockBuildingControllers::Profile(ap31Record, true);
+    assert(ap31Profile != nullptr && ap31Profile->entryCount == 14);
+    auto** ap31StockTable = reinterpret_cast<void**>(
+        ap08Image + ap31Profile->vtableRva);
+    ap31StockTable[0] = reinterpret_cast<void*>(&Delete);
+    ap31StockTable[1] = reinterpret_cast<void*>(&Fallback);
+    ap31StockTable[3] = reinterpret_cast<void*>(&Fallback);
+    ap31StockTable[8] = reinterpret_cast<void*>(&NativeParentEvent);
+    g_parentOpenToggleRecord = &ap31Toggle;
+    parent.table = ap31StockTable;
+    g_captureParentController = 1;
+    CaptureSecondaryController(reinterpret_cast<std::uint32_t>(&parent), 0);
+    auto* ap31Clone = FindOccupantParentClass(&parent);
+    assert(ap31Clone != nullptr && ap31Clone->stock == ap31StockTable);
+    assert(ap31Clone->entryCount == 14);
+    assert(OccupantParentControl(&parent, nullptr, 0x5D01) == 0);
+    assert(packedValue == 1 && submitCount == 0);
+    Destroy(parent);
+    assert(g_parentOpenToggleRecord == nullptr && g_parentController == 0);
+
+    // 16. The live-agent-list recipe retains the exact AP08 parent boundary
     // while the package-owned MX05 child keeps one native bottom action.
     Reset();
     MajestyStockControllers::LiveAgentListRecord quest = {};
@@ -657,7 +763,7 @@ int main() {
     CaptureSecondaryController(reinterpret_cast<std::uint32_t>(&parent), 0);
     auto* ap08Clone = FindOccupantParentClass(&parent);
     assert(ap08Clone != nullptr && ap08Clone->stock == ap08StockTable);
-    assert(ap08Clone->entryCount == kAp08VtableEntries);
+    assert(ap08Clone->entryCount == 13);
     // Controller capture is installation only. It must not execute package GPL
     // or write private controls before Majesty inserts the controller.
     assert(parentEventCount == 0 && questQueryCount == 0);
@@ -687,11 +793,14 @@ int main() {
 
     // 15. If stock MX05 slot 1 was already entered before the Manager installs
     // its clone, its later stock slot-14 call reaches the gated slot-11 package
-    // population. Slots 3, 10, and 14 remain byte-for-byte stock.
+    // population. The saved stock slots remain the first/default path; the
+    // Manager's slot-3/14 wrappers activate only declared list policies.
     g_activeQuestBoard = &g_stockControllerRegistry.liveAgentLists[0];
     g_childController = reinterpret_cast<LONG>(&child);
     g_stockQuestBoardRefresh =
         reinterpret_cast<ControllerSetup>(&NativeQuestRefresh);
+    g_stockQuestBoardSharedRefresh =
+        reinterpret_cast<ControllerSetup>(&NativeQuestSharedRefresh);
     visibleControlCount = setIntegerCount = 0;
     lastMessageControl = lastMessage = 0;
     questQueryCount = questOfferCountQueryCount = questRevisionQueryCount = 0;
@@ -895,6 +1004,49 @@ int main() {
     activeList.stayOnPanelAfterAction = false;
     activeList.focusSelectedRowOnClick = true;
 
+    // A package may declare the native bottom action to be panel-global. Its
+    // cost and queued callback then use the durable parent building whether a
+    // row is selected, while row selection and all non-action controls remain
+    // on MX05's ordinary stock path.
+    activeList.actionUsesParent = true;
+    activeList.stayOnPanelAfterAction = true;
+    g_questOfferPresentationCount = 3;
+    submitCount = questParentActionPresentationCount = 0;
+    playerGold = 1000;
+    const int fullRefreshBeforeParentAction = questNativeRefreshCount;
+    const int sharedRefreshBeforeParentAction = questSharedRefreshCount;
+    QuestBoardRefresh(&child, nullptr);
+    assert(questNativeRefreshCount == fullRefreshBeforeParentAction);
+    assert(questSharedRefreshCount == sharedRefreshBeforeParentAction + 1);
+    assert(questParentActionPresentationCount == 1);
+    assert(presentedQuestParentActionCost == 500);
+    assert(presentedQuestParentActionAffordable);
+    assert(QuestBoardControl(&child, nullptr, 0x138Bu) == 0);
+    assert(submitCount == 1 && seenCommand == 0x20000u);
+    assert(seenBuilding == 123 && seenAgent == 123 && seenPrice == 500);
+
+    // The same paid stock packet remains available with no row identity. An
+    // unaffordable quote cannot enter the queue, and an ordinary selected-row
+    // package still delegates its entire control path to stock.
+    g_questOfferPresentationCount = 0;
+    assert(QuestBoardControl(&child, nullptr, 0x138Bu) == 0);
+    assert(submitCount == 2 && seenBuilding == 123 && seenAgent == 123);
+    playerGold = 499;
+    assert(QuestBoardControl(&child, nullptr, 0x138Bu) == 0);
+    assert(submitCount == 2);
+    activeList.actionUsesParent = false;
+    activeList.stayOnPanelAfterAction = false;
+    g_questOfferPresentationCount = 3;
+    const int fullRefreshBeforeSelectedAction = questNativeRefreshCount;
+    const int sharedRefreshBeforeSelectedAction = questSharedRefreshCount;
+    QuestBoardRefresh(&child, nullptr);
+    assert(questNativeRefreshCount == fullRefreshBeforeSelectedAction + 1);
+    assert(questSharedRefreshCount == sharedRefreshBeforeSelectedAction);
+    const int fallbackBeforeParentAction = fallbackCount;
+    assert(QuestBoardControl(&child, nullptr, 0x138Bu) == 23);
+    assert(fallbackCount == fallbackBeforeParentAction + 1);
+    playerGold = 1000;
+
     // The value/reward column is optional for the same multi-row lifecycle.
     // Omitting it performs no value callback and leaves each row's ordinary
     // title/detail/action behavior intact.
@@ -973,8 +1125,8 @@ int main() {
     assert(!g_activeQuestBoardFaulted && g_questOfferPresentationCount == 3);
     assert(g_questOfferPresentations[0].summaryTemplate == expectedSummaryTemplate);
 
-    // Stock slot 14 can run at paint cadence without polling package GPL or
-    // producing any Manager-owned UI write.
+    // Default selected-row scope can run slot 14 at paint cadence without
+    // polling package row GPL or producing any Manager-owned UI write.
     questNativeRefreshCount = 0;
     questQueryCount = questOfferCountQueryCount = questRevisionQueryCount = 0;
     visibleControlCount = setIntegerCount = 0;
@@ -1050,5 +1202,39 @@ int main() {
     assert(g_questOfferPresentationCount == 0);
     assert(child.listBegin == questVectorStorage);
 
-    std::puts("Panel lifecycle x86 tests passed: single/stacked, research, Back, visitors, reward, occupant, multi-row MX05 live-agent list, revision gating, first-open building toggle, stale teardown.");
+    // 21. Independent records never enter the Unit resolver or vector. The
+    // parent callback retains the same one-based row protocol and no world
+    // focus is transferred by a record click, tab, detail, or tracking action.
+    activeList.dataRecordRows = true;
+    activeList.actionUsesParent = true;
+    activeList.stayOnPanelAfterAction = true;
+    activeList.focusSelectedRowOnClick = false;
+    activeList.rowAgentIdCallbackSymbol = "Record_Key";
+    questOfferCount = 3;
+    g_activeQuestRevision = -1;
+    g_activeQuestBoardFaulted = false;
+    g_questBoardAgentNumberResolver = [](std::uint32_t) -> void* { assert(false); return nullptr; };
+    QuestBoardPopulate(&child, nullptr);
+    assert(!g_activeQuestBoardFaulted && g_questOfferPresentationCount == 3);
+    assert(child.listBegin == questVectorStorage); // test double's insertion cursor remains untouched
+    for (int i = 0; i < 3; ++i) {
+        assert(g_questOfferPresentations[i].agent == nullptr);
+        assert(g_questOfferPresentations[i].recordKey == dataRecordKeys[i]);
+    }
+    const int previousFallbacks = fallbackCount;
+    for (auto control : {0x1388u,0x138Cu,0x138Du,0x138Eu,0x138Fu,0x1F40u,0x1F41u})
+        assert(QuestBoardControl(&child, nullptr, control) == 0);
+    assert(fallbackCount == previousFallbacks);
+    for (auto invalid : {17u,0u,0xFFFFFFFFu}) {
+        dataRecordKeys[1] = invalid;
+        g_activeQuestRevision = -1; g_activeQuestBoardFaulted = false;
+        QuestBoardPopulate(&child, nullptr);
+        assert(g_activeQuestBoardFaulted && g_questOfferPresentationCount == 0);
+        assert(child.listBegin == questVectorStorage);
+    }
+    g_renderedDataRecordRevision = 19;
+    ClearSecondaryPanelControllerOwnedState();
+    assert(g_renderedDataRecordRevision == -1 && g_questOfferPresentationCount == 0);
+    assert(g_questOfferPresentations[0].recordKey == 0);
+    std::puts("Panel lifecycle x86 tests passed.");
 }

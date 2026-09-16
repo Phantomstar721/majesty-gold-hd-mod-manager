@@ -21,6 +21,7 @@ RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH = (
 RUNTIME_FEATURE_REGISTRY_ENV_VAR = "MAJESTY_MOD_MANAGER_FEATURES"
 NAME_GENERATOR_RUNTIME_CAPABILITY = "stock.name-generator.v1"
 ENCHANTMENT_ROW_RUNTIME_CAPABILITY = "stock.ap78-enchantment-row.v1"
+MAP_QUERY_RUNTIME_CAPABILITY = "stock.map-fog-query.v1"
 
 _MAGIC = b"MMFR"
 _VERSION = 1
@@ -59,17 +60,24 @@ class EnchantmentRowFeature:
     display_text: str
 
 
-RuntimeFeature = Union[NameGeneratorFeature, EnchantmentRowFeature]
+@dataclass(frozen=True)
+class MapFogQueryFeature:
+    """Read-only stock fog queries with explicitly bounded frontier work."""
+
+
+RuntimeFeature = Union[NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature]
 
 
 @dataclass(frozen=True)
 class RuntimeFeatureRegistry:
     name_generators: tuple[NameGeneratorFeature, ...] = ()
     enchantment_rows: tuple[EnchantmentRowFeature, ...] = ()
+    map_fog_query: bool = False
 
     @property
     def features(self) -> tuple[RuntimeFeature, ...]:
-        return (*self.name_generators, *self.enchantment_rows)
+        return (*self.name_generators, *self.enchantment_rows,
+                *((MapFogQueryFeature(),) if self.map_fog_query else ()))
 
 
 def _fourcc_bytes(value: object, *, prefix: str | None = None) -> bytes:
@@ -140,6 +148,7 @@ def normalize_runtime_features(
     expanded = [*features, *legacy_runtime_features(legacy_capabilities)]
     names: dict[int, NameGeneratorFeature] = {}
     rows: dict[int, EnchantmentRowFeature] = {}
+    map_fog_query = False
     for feature in expanded:
         if isinstance(feature, NameGeneratorFeature):
             generator_key = _fourcc_u32(feature.generator_id, prefix="NM")
@@ -189,9 +198,11 @@ def normalize_runtime_features(
                     f"conflicting enchantment-row feature for {feature.overlay_id}"
                 )
             rows[overlay_key] = canonical
+        elif isinstance(feature, MapFogQueryFeature):
+            map_fog_query = True
         else:
             raise ValueError(
-                "runtime features must be name-generator or enchantment-row records"
+                "runtime features must be name-generator, enchantment-row, or map-query records"
             )
     if len(names) > _MAX_NAME_GENERATORS:
         raise ValueError(
@@ -206,6 +217,7 @@ def normalize_runtime_features(
     return RuntimeFeatureRegistry(
         name_generators=tuple(names[key] for key in sorted(names)),
         enchantment_rows=tuple(rows[key] for key in sorted(rows)),
+        map_fog_query=map_fog_query,
     )
 
 
@@ -273,6 +285,9 @@ def derive_feature_runtime_capabilities(
     )
     effective.discard(NAME_GENERATOR_RUNTIME_CAPABILITY)
     effective.discard(ENCHANTMENT_ROW_RUNTIME_CAPABILITY)
+    effective.discard(MAP_QUERY_RUNTIME_CAPABILITY)
+    if registry.map_fog_query:
+        effective.add(MAP_QUERY_RUNTIME_CAPABILITY)
     if registry.name_generators:
         effective.add(NAME_GENERATOR_RUNTIME_CAPABILITY)
     if registry.enchantment_rows:
@@ -297,11 +312,13 @@ def encode_runtime_feature_registry(
     chunks = [
         _HEADER.pack(
             _MAGIC,
-            _VERSION,
+            2 if registry.map_fog_query else _VERSION,
             len(registry.name_generators),
             len(registry.enchantment_rows),
         )
     ]
+    if registry.map_fog_query:
+        chunks.append(struct.pack("<I", 1))
     for feature in registry.name_generators:
         chunks.append(
             _NAME_GENERATOR.pack(
@@ -342,7 +359,7 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
     magic, version, name_count, row_count = _HEADER.unpack_from(payload)
     if magic != _MAGIC:
         raise ValueError("runtime feature registry magic is invalid")
-    if version != _VERSION:
+    if version not in (1, 2):
         raise ValueError(f"unsupported runtime feature registry version: {version}")
     if name_count > _MAX_NAME_GENERATORS:
         raise ValueError(
@@ -355,15 +372,21 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
             f"maximum is {_MAX_ENCHANTMENT_ROWS}"
         )
 
+    header_size = _HEADER.size + (4 if version == 2 else 0)
+    if len(payload) < header_size:
+        raise ValueError("runtime feature registry flags are truncated")
+    flags = struct.unpack_from("<I", payload, _HEADER.size)[0] if version == 2 else 0
+    if flags & ~1:
+        raise ValueError("runtime feature registry has unsupported flags")
     minimum_size = (
-        _HEADER.size
+        header_size
         + name_count * _NAME_GENERATOR.size
         + row_count * _ENCHANTMENT_HEADER.size
     )
     if minimum_size > len(payload):
         raise ValueError("runtime feature registry cannot contain its declared records")
 
-    offset = _HEADER.size
+    offset = header_size
     names: list[NameGeneratorFeature] = []
     previous_generator = -1
     for _index in range(name_count):
@@ -427,7 +450,7 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
         previous_overlay = overlay_id
     if offset != len(payload):
         raise ValueError("runtime feature registry has trailing bytes")
-    return normalize_runtime_features((*names, *rows))
+    return normalize_runtime_features((*names, *rows, *((MapFogQueryFeature(),) if flags & 1 else ())))
 
 
 def write_runtime_feature_registry(
@@ -466,6 +489,8 @@ __all__ = [
     "RUNTIME_FEATURE_REGISTRY_ENV_VAR",
     "RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH",
     "RuntimeFeature",
+    "MapFogQueryFeature",
+    "MAP_QUERY_RUNTIME_CAPABILITY",
     "RuntimeFeatureRegistry",
     "decode_runtime_feature_registry",
     "derive_feature_runtime_capabilities",

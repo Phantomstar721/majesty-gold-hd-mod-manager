@@ -139,7 +139,7 @@ int main() {
         return 6;
     }
     std::vector<unsigned char> badVersion = valid;
-    badVersion[4] = 2;
+    badVersion[4] = 99;
     if (!ExpectInvalid(badVersion, "version")) {
         return 7;
     }
@@ -218,6 +218,12 @@ int main() {
         return 17;
     }
 
+    auto mapQuery = Header(2, 0, 0);
+    AppendU32(&mapQuery, 1);
+    if (!MajestyRuntimeFeatures::ParseRegistry(mapQuery.data(), mapQuery.size(), &registry, &error) ||
+        !registry.mapFogQuery) return 22;
+    mapQuery.back() = 2;
+    if (!ExpectInvalid(mapQuery, "flags")) return 23;
     std::puts("Runtime feature registry parser tests passed.");
     return 0;
 }

@@ -45,11 +45,12 @@ class StockControlledFollowerSpeedSync:
 
 @dataclass(frozen=True)
 class StockHeroQuestLifecycle:
-    """A package callback at stock hero choice, reset, and death boundaries."""
+    """Package callbacks at stock hero quest, reset, and death boundaries."""
 
     feature_key: str
     hero_scripts: Tuple[str, ...]
-    decision_callback_symbol: str
+    resume_callback_symbol: str
+    consider_callback_symbol: str
     reset_callback_symbol: str
     death_callback_symbol: str
     type: str = "stock.hero-quest-lifecycle.v1"
@@ -119,8 +120,9 @@ def parse_gpl_feature(value: Mapping[str, object]) -> GplFeature:
         )
     if feature_type == "stock.hero-quest-lifecycle.v1":
         expected = {
-            "type", "feature_key", "hero_scripts", "decision_callback_symbol",
-            "reset_callback_symbol", "death_callback_symbol",
+            "type", "feature_key", "hero_scripts", "resume_callback_symbol",
+            "consider_callback_symbol", "reset_callback_symbol",
+            "death_callback_symbol",
         }
         if set(value) != expected:
             missing = sorted(expected - set(value))
@@ -151,21 +153,22 @@ def parse_gpl_feature(value: Mapping[str, object]) -> GplFeature:
             normalized_scripts.append(folded)
         symbols = []
         for field_name in (
-            "decision_callback_symbol", "reset_callback_symbol",
-            "death_callback_symbol",
+            "resume_callback_symbol", "consider_callback_symbol",
+            "reset_callback_symbol", "death_callback_symbol",
         ):
             symbol = value[field_name]
             if not isinstance(symbol, str) or not _GPL_SYMBOL.fullmatch(symbol):
                 raise GplFeatureError(f"{field_name} must be a GPL function name")
             symbols.append(symbol)
-        if len({symbol.casefold() for symbol in symbols}) != 3:
+        if len({symbol.casefold() for symbol in symbols}) != 4:
             raise GplFeatureError("hero-quest lifecycle callbacks must be distinct")
         return StockHeroQuestLifecycle(
             feature_key=feature_key,
             hero_scripts=tuple(sorted(normalized_scripts)),
-            decision_callback_symbol=symbols[0],
-            reset_callback_symbol=symbols[1],
-            death_callback_symbol=symbols[2],
+            resume_callback_symbol=symbols[0],
+            consider_callback_symbol=symbols[1],
+            reset_callback_symbol=symbols[2],
+            death_callback_symbol=symbols[3],
         )
     if feature_type not in feature_classes:
         raise GplFeatureError(f"unsupported GPL feature type: {feature_type!r}")
@@ -203,7 +206,8 @@ def normalize_gpl_features(features: Sequence[GplFeature]) -> Tuple[GplFeature, 
             if isinstance(feature, StockControlledFollowerSpeedSync)
             else (
                 (
-                    feature.decision_callback_symbol,
+                    feature.resume_callback_symbol,
+                    feature.consider_callback_symbol,
                     feature.reset_callback_symbol,
                     feature.death_callback_symbol,
                 )
@@ -252,7 +256,7 @@ def _gpl_feature_sort_key(feature: GplFeature) -> tuple[str, str, str]:
         return (
             feature.type,
             feature.feature_key.casefold(),
-            feature.decision_callback_symbol.casefold(),
+            feature.resume_callback_symbol.casefold(),
         )
     return (
         feature.type,

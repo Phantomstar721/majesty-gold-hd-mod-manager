@@ -12,6 +12,7 @@ from majesty_cam.gpl import (
     DuplicateDefinitionError,
     SemanticItem,
     SemanticMergeConflictError,
+    UnterminatedDefinitionError,
     find_foreach_return_violations,
     merge_semantic_items,
     merge_sources,
@@ -29,9 +30,13 @@ from majesty_cam.gpl import (
 
 
 class GplParsingTests(unittest.TestCase):
-    def test_hero_quest_lifecycle_uses_exact_stock_decision_reset_and_death_anchors(self):
+    def test_hero_quest_lifecycle_uses_exact_stock_resume_consider_reset_and_death_anchors(self):
         callback_source = parse_gpl(textwrap.dedent("""\
-            function Quest_Decide(agent ThisAgent) is boolean
+            function Quest_Resume(agent ThisAgent) is boolean
+            begin
+                return FALSE;
+            end
+            function Quest_Consider(agent ThisAgent) is boolean
             begin
                 return FALSE;
             end
@@ -48,6 +53,9 @@ class GplParsingTests(unittest.TestCase):
                 if ($check_nearby(thisagent) == False)
 
                 if ($Check_rewards(thisagent,FALSE) == False)
+
+                if ($pursue_entertainment(thisagent) == False)
+
                     $Go_home(thisagent,95);
             end
         """), "mx_Adept.gpl").require("function", "adept_tree")
@@ -71,20 +79,96 @@ class GplParsingTests(unittest.TestCase):
 
         result = add_hero_quest_lifecycle_callbacks(
             merged,
-            [(("mx_adept",), "Quest_Decide", "Quest_Reset", "Quest_Death")],
+            [(("mx_adept",), "Quest_Resume", "Quest_Consider", "Quest_Reset", "Quest_Death")],
             stock_hero_trees={"mx_adept": tree},
             stock_reset_tasks=reset,
             stock_unit_death=death,
         )
 
         decision_text = next(item.text for item in result.items if item.normalized_name == "adept_tree")
-        self.assertLess(decision_text.index("$check_nearby"), decision_text.index("$Quest_Decide"))
-        self.assertLess(decision_text.index("$Quest_Decide"), decision_text.index("$Check_rewards"))
+        self.assertLess(decision_text.index("$check_nearby"), decision_text.index("$Quest_Resume"))
+        self.assertLess(decision_text.index("$Quest_Resume"), decision_text.index("$Check_rewards"))
+        self.assertLess(decision_text.index("$pursue_entertainment"), decision_text.index("$Quest_Consider"))
+        self.assertLess(decision_text.index("$Quest_Consider"), decision_text.index("$Go_home"))
         reset_text = next(item.text for item in result.items if item.normalized_name == "reset_tasks")
         self.assertLess(reset_text.index("$Quest_Reset"), reset_text.index("$StopMoving"))
         death_text = next(item.text for item in result.items if item.normalized_name == "unit_call_deathscript")
         self.assertLess(death_text.index("$DeleteAllEffectors"), death_text.index("$Quest_Death"))
         self.assertLess(death_text.index("$Quest_Death"), death_text.index("$validfunction"))
+
+    def test_hero_quest_consider_uses_only_healer_monk_bazaar_fallback(self):
+        callbacks = parse_gpl(textwrap.dedent("""\
+            function Quest_Resume(agent ThisAgent) is boolean
+            begin
+                return FALSE;
+            end
+            function Quest_Consider(agent ThisAgent) is boolean
+            begin
+                return FALSE;
+            end
+            function Quest_Reset(agent ThisAgent)
+            begin
+            end
+            function Quest_Death(agent ThisAgent)
+            begin
+            end
+        """), "callbacks.gpl")
+        fallback_trees = {}
+        for script in ("mx_healer", "mx_monk"):
+            tree_name = script.removeprefix("mx_") + "_tree"
+            fallback_trees[script] = parse_gpl(textwrap.dedent(f"""\
+                function {tree_name}(agent thisagent)
+                begin
+                    if ($check_nearby(thisagent) == False)
+
+                    if ($Check_rewards(thisagent,TRUE) == False)
+
+                    if ($Purchase_bazaar(thisagent, 70) == False)
+
+                    if ($Seed_Resource_Check(ThisAgent, 50) == False)
+                        $Go_home(thisagent,90);
+                end
+            """), f"{script}.gpl").require("function", tree_name)
+        reset = parse_gpl(
+            "function reset_tasks(agent thisagent)\nbegin\n"
+            "$StopMoving(ThisAgent);\nend\n",
+            "reset.gpl",
+        ).require("function", "reset_tasks")
+        death = parse_gpl(textwrap.dedent('''\
+            function Unit_Call_Deathscript(agent thisagent)
+            begin
+                $DeleteAllEffectors(thisagent);
+                if ($validfunction(thisagent's "IGDeathScript") == TRUE)
+                    (thisagent's "IGDeathScript")(thisagent);
+            end
+        '''), "death.gpl").require("function", "Unit_Call_Deathscript")
+        merged = merge_sources([], {"mod": [callbacks]})
+
+        for script, tree in fallback_trees.items():
+            with self.subTest(script=script):
+                result = add_hero_quest_lifecycle_callbacks(
+                    merged,
+                    [((script,), "Quest_Resume", "Quest_Consider", "Quest_Reset", "Quest_Death")],
+                    stock_hero_trees={script: tree},
+                    stock_reset_tasks=reset,
+                    stock_unit_death=death,
+                )
+                tree_name = script.removeprefix("mx_") + "_tree"
+                text = next(
+                    item.text for item in result.items
+                    if item.normalized_name == tree_name
+                )
+                self.assertLess(text.index("$Purchase_bazaar"), text.index("$Quest_Consider"))
+                self.assertLess(text.index("$Quest_Consider"), text.index("$Seed_Resource_Check"))
+
+        with self.assertRaisesRegex(ValueError, "Pursue_Entertainment"):
+            add_hero_quest_lifecycle_callbacks(
+                merged,
+                [(("mx_adept",), "Quest_Resume", "Quest_Consider", "Quest_Reset", "Quest_Death")],
+                stock_hero_trees={"mx_adept": fallback_trees["mx_healer"]},
+                stock_reset_tasks=reset,
+                stock_unit_death=death,
+            )
 
     def test_foreach_return_scan_handles_blocks_single_statements_and_case(self):
         source = textwrap.dedent(
@@ -251,6 +335,83 @@ class GplParsingTests(unittest.TestCase):
         self.assertEqual(random_hero.span.extract(source), random_hero.text)
         self.assertEqual(confidence.span.extract(source), confidence.text)
         self.assertIsNone(parsed.get("function", "missing"))
+
+    def test_multiline_function_parameters_are_not_definitions(self):
+        source = textwrap.dedent("""\
+            function Choose(agent Parent,
+                function CanUse,
+                function CanReach
+            ) is boolean
+            declare
+                function Callback;
+            begin
+                return False;
+            end
+
+            function CanReach(agent Parent) is boolean
+            declare
+            begin
+                return True;
+            end
+            """)
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                original = source.replace("\n", newline)
+                parsed = parse_gpl(original, "callbacks.gpl")
+                self.assertEqual([item.name for item in parsed.items], ["Choose", "CanReach"])
+                self.assertEqual(parsed.render(), original)
+                require_complete_semantic_coverage(parsed)
+                first = parsed.require("function", "Choose")
+                self.assertEqual(first.span.start_line, 1)
+                self.assertEqual(first.span.end_line, 9)
+                self.assertEqual(first.span.extract(original), first.text)
+                self.assertIn("function CanReach" + newline, first.text)
+                emitted = merge_sources([], {"package": [parsed]}).emit_project_source_set()
+                reparsed = parse_gpl(emitted.gpl_text)
+                self.assertEqual([item.name for item in reparsed.items], ["Choose", "CanReach"])
+                self.assertEqual(reparsed.require("function", "Choose").text, first.text)
+
+    def test_function_signature_parenthesis_can_follow_comments_and_newlines(self):
+        source = textwrap.dedent("""\
+            FuNcTiOn Apply // signature comment
+            // The argument list can start on another line.
+            (
+                agent Parent,
+                FUNCTION Callback // last parameter
+            ) is boolean
+            declare
+                function Selected, Fallback;
+            begin
+                return False;
+            end
+            """)
+        parsed = parse_gpl(source)
+        self.assertEqual([item.name for item in parsed.items], ["Apply"])
+        self.assertEqual(parsed.render(), source)
+        require_complete_semantic_coverage(parsed)
+
+    def test_function_parameters_do_not_hide_missing_body_terminator(self):
+        source = textwrap.dedent("""\
+            function Broken(agent Parent,
+                function Callback) is boolean
+            begin
+                return False;
+
+            function Following() is boolean
+            begin
+                return True;
+            end
+            """)
+        with self.assertRaises(UnterminatedDefinitionError) as raised:
+            parse_gpl(source, "broken.gpl")
+        self.assertEqual(raised.exception.name, "Broken")
+        self.assertEqual(raised.exception.line, 1)
+
+    def test_standalone_function_variable_is_not_silently_merged_as_definition(self):
+        parsed = parse_gpl("function Callback;\n", "invalid-top-level.gpl")
+        self.assertEqual(parsed.items, ())
+        with self.assertRaisesRegex(ValueError, "unparsed semantic-source text"):
+            require_complete_semantic_coverage(parsed)
 
     def test_duplicate_gpl_names_are_case_insensitive_and_structured(self):
         source = textwrap.dedent(

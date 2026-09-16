@@ -111,6 +111,7 @@ bool ParseRegistry(
     }
     registry->nameGenerators.clear();
     registry->enchantmentRows.clear();
+    registry->mapFogQuery = false;
     if (error != nullptr) {
         error->clear();
     }
@@ -133,8 +134,13 @@ bool ParseRegistry(
         SetError(error, "runtime feature registry header is truncated");
         return false;
     }
-    if (version != kRegistryVersion) {
+    if (version != kRegistryVersion && version != 2) {
         SetError(error, "runtime feature registry schema version is unsupported");
+        return false;
+    }
+    std::uint32_t flags = 0;
+    if (version == 2 && (!ReadU32(bytes, size, &cursor, &flags) || (flags & ~1u) != 0)) {
+        SetError(error, "runtime feature registry flags are invalid or truncated");
         return false;
     }
     if (nameCount > kMaximumNameGeneratorCount) {
@@ -250,6 +256,7 @@ bool ParseRegistry(
     }
     registry->nameGenerators = std::move(names);
     registry->enchantmentRows = std::move(rows);
+    registry->mapFogQuery = (flags & 1u) != 0;
     return true;
 }
 

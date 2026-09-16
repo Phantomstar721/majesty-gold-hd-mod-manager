@@ -11,6 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from majesty_cam.manager.build import BuildPlan, ManagerBuildError, ManagerBuildResult
+from majesty_cam.compose import PackageInventory, SelectedMod
+from majesty_cam.package import ModDefinition, ModPackage, ModMetadata, LocalizedText
 from majesty_cam.manager.catalog import (
     Catalog,
     CatalogEntry,
@@ -29,13 +31,16 @@ from majesty_cam.manager.qol_service import (
     QolPatchSpec,
     QolService,
 )
-from majesty_cam.manager.startup_cache import StartupCache, qol_input_signature
+from majesty_cam.manager.startup_cache import (
+    StartupCache, qol_input_signature, package_input_metadata_signature,
+)
 from majesty_cam.intent_text import INTENT_REGISTRY_RELATIVE_PATH
 from majesty_cam.runtime_capabilities import (
     RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH,
     encode_runtime_capability_manifest,
 )
 from majesty_cam.runtime_features import (
+    MapFogQueryFeature,
     RuntimeFeatureRegistry,
     decode_runtime_feature_registry,
 )
@@ -54,6 +59,40 @@ VARIANT_B_ID = "10000000-0000-4000-8000-000000000002"
 
 
 class ManagerControllerTests(unittest.TestCase):
+    def test_scan_and_cached_rescan_plan_a_selected_map_query_package(self):
+        with TemporaryDirectory() as tmp:
+            paths = _manager_paths(Path(tmp))
+            package_root = paths.local_mods_root / "MapQueries"
+            package_root.mkdir()
+            definition = ModDefinition(3, HAUNT_ID, "MapQueries", "Map Queries", (),
+                                       runtime_features=(MapFogQueryFeature(),))
+            package = ModPackage(package_root, package_root / "package.mmxml",
+                                 ModMetadata(HAUNT_ID, (LocalizedText(None, "Map Queries"),), (), (), ()),
+                                 definition)
+            inventory = PackageInventory(SelectedMod("map-queries", package), (), (), (), ())
+            prepared = PreparedMergeMod(HAUNT_ID, "Map Queries", package_root, package_root,
+                                       "map-queries", package, 1000, (), None, False, None, (),
+                                       inventory=inventory, package_file_inputs=(),
+                                       source_metadata_signature=package_input_metadata_signature(package_root))
+            controller = ManagerController(paths=paths, registry=CompatibilityRegistry(specs={}))
+            controller._prepared_merge_cache[HAUNT_ID] = prepared
+            catalog = Catalog(entries=(_entry(HAUNT_ID, "Map Queries", package_root),))
+            # Discovery and stock files are fixtures; keep the real scan,
+            # replan, feature resolution, fingerprint, and cache paths.
+            with patch("majesty_cam.manager.controller.scan_catalog", return_value=catalog), \
+                    patch("majesty_cam.manager.build._fingerprint_stock_compose_inputs", return_value=()), \
+                    patch("majesty_cam.manager.build.discover_private_activity_texts", return_value=()), \
+                    patch("majesty_cam.manager.build.validate_controller_stock_evidence"), \
+                    patch("majesty_cam.manager.build.compose_package") as composer:
+                snapshot = controller.scan(inspect_qol=False)
+                first = controller.plan.fingerprint
+                self.assertTrue(snapshot.selections[HAUNT_ID])
+                self.assertTrue(controller.plan.runtime_feature_registry.map_fog_query)
+                self.assertEqual(controller.plan.issues, ())
+                controller.scan(inspect_qol=False)
+                self.assertEqual(controller.plan.fingerprint, first)
+                composer.assert_not_called()
+
     def test_failed_merge_replan_rolls_back_the_selection(self):
         with TemporaryDirectory() as tmp:
             paths = _manager_paths(Path(tmp))

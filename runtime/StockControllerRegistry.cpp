@@ -1,4 +1,5 @@
 #include "StockControllerRegistry.h"
+#include "StockBuildingControllerCatalog.h"
 
 #include <algorithm>
 #include <cctype>
@@ -853,7 +854,8 @@ bool ParseRegistry(
     if (version == 11) return Fail(error, "MMCR v11 live-agent lists lack per-row static variants; rebuild with the current Manager");
     if (version == 12) return Fail(error, "MMCR v12 live-agent lists lack the post-action panel policy; rebuild with the current Manager");
     if (version == 13) return Fail(error, "MMCR v13 live-agent lists lack the row-focus policy; rebuild with the current Manager");
-    if (version == 14 && counts[11] == 0) return Fail(error, "MMCR v14 without live-agent lists is noncanonical");
+    if ((version == 14 || version == 15 || version == 16) && counts[11] == 0)
+        return Fail(error, "MMCR live-agent-list version without live-agent lists is noncanonical");
     std::uint64_t total = 0;
     for (std::size_t index = 0; index < 12; ++index) total += counts[index];
     if (total > kMaximumRecordCount ||
@@ -1152,10 +1154,8 @@ bool ParseRegistry(
             !reader.ReadSymbol(&item.costCallbackSymbol) ||
             !reader.ReadSymbol(&item.actionCallbackSymbol) ||
             !reader.ReadU32(&item.parentControllerBase) ||
-            (item.parentControllerBase != 0x37305041u &&
-             item.parentControllerBase != 0x38305041u &&
-             item.parentControllerBase != 0x30315041u &&
-             item.parentControllerBase != 0x3930584Du) ||
+            !MajestyStockBuildingControllers::IsSupported(
+                item.parentControllerBase) ||
             !IsPrintableFourCC(item.parentDialogId) ||
             !IsPrintableFourCC(item.childDialogId) || item.openCommandId == 0 ||
             item.actionCommandId != 0x10000u + index ||
@@ -1177,9 +1177,8 @@ bool ParseRegistry(
             item.openCommandId == item.closeCommandId ||
             item.openCommandId == 0x22ABu || item.openCommandId == 0x22ACu ||
             item.closeCommandId == 0x22ABu || item.closeCommandId == 0x22ACu ||
-            (item.parentControllerBase != 0x37305041u &&
-             item.parentControllerBase != 0x30315041u &&
-             item.parentControllerBase != 0x3930584Du) ||
+            !MajestyStockBuildingControllers::IsSupported(
+                item.parentControllerBase) ||
             (!parsed.buildingOpenToggles.empty() &&
              parsed.buildingOpenToggles.back().toggleKey >= item.toggleKey)) {
             return Fail(error, "MMCR building open toggle is invalid or noncanonical");
@@ -1192,6 +1191,8 @@ bool ParseRegistry(
         std::uint32_t hasRowValue = 0;
         std::uint32_t stayOnPanelAfterAction = 0;
         std::uint32_t focusSelectedRowOnClick = 0;
+        std::uint32_t actionUsesParent = 0;
+        std::uint32_t dataRecordRows = 0;
         if (!reader.ReadLogical(&item.panelKey) ||
             !reader.ReadU32(&item.parentDialogId) || !reader.ReadU32(&item.childDialogId) ||
             !reader.ReadU32(&item.openCommandId))
@@ -1238,16 +1239,26 @@ bool ParseRegistry(
             !reader.ReadU32(&item.parentControllerBase) ||
             !reader.ReadU32(&stayOnPanelAfterAction) ||
             !reader.ReadU32(&focusSelectedRowOnClick) ||
+            (version >= 15 && !reader.ReadU32(&actionUsesParent)) ||
+            (version >= 16 && !reader.ReadU32(&dataRecordRows)) ||
+            dataRecordRows > 1 ||
             stayOnPanelAfterAction > 1 || focusSelectedRowOnClick > 1 ||
+            actionUsesParent > 1 ||
             !IsPrintableFourCC(item.parentDialogId) ||
             !IsPrintableFourCC(item.childDialogId) || item.openCommandId == 0 ||
-            (item.parentControllerBase != 0x37305041u &&
-             item.parentControllerBase != 0x38305041u &&
-             item.parentControllerBase != 0x30315041u &&
-             item.parentControllerBase != 0x3930584Du))
+            !MajestyStockBuildingControllers::IsSupported(
+                item.parentControllerBase))
             return Fail(error, "MMCR live-agent-list record is invalid");
         item.stayOnPanelAfterAction = stayOnPanelAfterAction != 0;
         item.focusSelectedRowOnClick = focusSelectedRowOnClick != 0;
+        item.actionUsesParent = actionUsesParent != 0;
+        item.dataRecordRows = dataRecordRows != 0;
+        if (item.dataRecordRows && (!item.actionUsesParent || item.focusSelectedRowOnClick ||
+            !item.stayOnPanelAfterAction ||
+            (!item.hasRowVariants && item.rowTitleIntentId == 0) ||
+            std::any_of(item.rowVariants.begin(), item.rowVariants.end(),
+                [](const LiveAgentListRowVariant& row) { return row.rowTitleIntentId == 0; })))
+            return Fail(error, "MMCR data-record list requires parent action, explicit titles, and no world focus");
         const std::uint32_t commandId = 0x20000u + index;
         if (item.actionCommandId != commandId ||
             (!parsed.liveAgentLists.empty() && parsed.liveAgentLists.back().panelKey >= item.panelKey))

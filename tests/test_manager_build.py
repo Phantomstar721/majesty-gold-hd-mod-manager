@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from majesty_cam.gpl import DefinitionKind
-from majesty_cam.compose import ComposeError
+from majesty_cam.compose import ComposeError, PackageInventory, SelectedMod
 from majesty_cam.intent_text import (
     INTENT_REGISTRY_RELATIVE_PATH,
     allocate_private_activity_text_ids,
@@ -25,6 +25,7 @@ from majesty_cam.runtime_capabilities import (
     encode_runtime_capability_manifest,
 )
 from majesty_cam.runtime_features import (
+    MapFogQueryFeature,
     RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH,
     encode_runtime_feature_registry,
 )
@@ -37,6 +38,7 @@ from majesty_cam.manager.build import (
     MANAGER_OUTPUT_SENTINEL,
     ManagerBuildError,
     _cleanup_stale_manager_artifacts,
+    _canonical_mod_definition,
     _parse_resolution_source,
     _publish_staging,
     _require_current_plan_sources,
@@ -63,7 +65,10 @@ from majesty_cam.manager.compatibility import (
     load_compatibility_registry,
 )
 from majesty_cam.manager.preflight import PreparedMergeMod
-from majesty_cam.package import ModDefinition
+from majesty_cam.package import (
+    ModDefinition, ModPackage, ModMetadata, LocalizedText,
+    parse_mod_definition, mod_definition_mapping,
+)
 
 
 HAUNT_ID = "8C48289E-7C70-4426-8913-133F3544A182"
@@ -72,6 +77,41 @@ OTHER_ID = "48CDD934-B338-4373-A4A4-A99A8E7F917F"
 
 
 class ManagerBuildPlanTests(unittest.TestCase):
+    def test_map_query_package_gets_a_stable_feature_sensitive_scan_plan(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = CompatibilityRegistry(specs={})
+            definition = ModDefinition(3, OTHER_ID, "MapQueries", "Map Queries", (),
+                                       runtime_features=(MapFogQueryFeature(),))
+            package = ModPackage(root, root / "package.mmxml",
+                                 ModMetadata(OTHER_ID, (LocalizedText(None, "Map Queries"),), (), (), ()),
+                                 definition)
+            prepared = replace(_prepared(OTHER_ID, "Map Queries", root, registry=registry),
+                               package=package, package_file_inputs=(),
+                               inventory=PackageInventory(SelectedMod("other-cam", package), (), (), (), ()))
+            catalog = Catalog(entries=(_merge_entry(OTHER_ID, "Map Queries", root),))
+            with patch("majesty_cam.manager.build.prepare_merge_package", return_value=prepared):
+                first = create_build_plan(catalog, {OTHER_ID: True}, registry=registry)
+                again = create_build_plan(catalog, {OTHER_ID: True}, registry=registry)
+            self.assertEqual(first.issues, ())
+            self.assertTrue(first.runtime_feature_registry.map_fog_query)
+            self.assertIn("stock.map-fog-query.v1", first.runtime_capabilities)
+            self.assertEqual(first.fingerprint, again.fingerprint)
+            changed_package = replace(package, definition=replace(definition, runtime_features=()))
+            without_map = replace(prepared, package=changed_package,
+                                  inventory=replace(prepared.inventory, selected=SelectedMod("other-cam", changed_package)))
+            with patch("majesty_cam.manager.build.prepare_merge_package", return_value=without_map):
+                changed = create_build_plan(catalog, {OTHER_ID: True}, registry=registry)
+            self.assertNotEqual(first.fingerprint, changed.fingerprint)
+
+    def test_fingerprint_uses_the_package_serializer_for_all_documented_features(self):
+        value = json.loads((REPO_ROOT / "docs/examples/mod-definition-v3-all-features.json").read_text())
+        value["runtime_features"].append({"type": "stock.map-fog-query.v1"})
+        definition = parse_mod_definition(value)
+        canonical = _canonical_mod_definition(definition)
+        self.assertEqual(canonical, mod_definition_mapping(definition))
+        self.assertEqual(parse_mod_definition(canonical), definition)
+
     def test_abandoned_manager_staging_is_removed_without_touching_foreign_data(self):
         with TemporaryDirectory() as tmp:
             mods = Path(tmp) / "Mods"

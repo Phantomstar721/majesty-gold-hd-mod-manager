@@ -117,7 +117,7 @@ int main() {
     assert(args[1] == kMx05DialogId);
     args[1] = dispatch->parentDialogId;
     ResolveDialogFactoryRequest(args + 1);
-    assert(args[1] == kAp08DialogId);
+    assert(args[1] == 0x38305041u);
     args[1] = dispatch->childDialogId;
     ResolveDialogFactoryRequest(args + 1);
     assert(args[1] == kMx05DialogId);

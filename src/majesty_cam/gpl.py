@@ -278,7 +278,11 @@ class SemanticMergeResult:
 
 
 _FUNCTION_START_RE = re.compile(
-    r"^[ \t]*function[ \t]+([A-Za-z_][A-Za-z0-9_]*)\b",
+    # GPL also uses `function Name` for callback parameters and local
+    # variables (e.g. stock Set_Spire_Levels). Only definitions introduce
+    # an argument list. This runs on masked code, so comments/newlines
+    # between the name and '(' remain valid without changing source spans.
+    r"^[ \t]*function[ \t]+([A-Za-z_][A-Za-z0-9_]*)\b(?=\s*\()",
     re.IGNORECASE | re.MULTILINE,
 )
 _PROTOTYPE_START_RE = re.compile(
@@ -902,36 +906,39 @@ def add_purchase_bazaar_tail_callbacks(
 
 def add_hero_quest_lifecycle_callbacks(
     result: SemanticMergeResult,
-    hooks: Iterable[tuple[Sequence[str], str, str, str]],
+    hooks: Iterable[tuple[Sequence[str], str, str, str, str]],
     *,
     stock_hero_trees: Mapping[str, SemanticItem],
     stock_reset_tasks: Optional[SemanticItem] = None,
     stock_unit_death: Optional[SemanticItem] = None,
     source_name: str = "<hero-quest lifecycle composition>",
 ) -> SemanticMergeResult:
-    """Splice package callbacks into three exact stock hero boundaries.
+    """Splice package callbacks into four exact stock hero boundaries.
 
-    Decision callbacks run after ``Check_Nearby`` declines and immediately
-    before the unchanged ``Check_rewards`` call.  Reset callbacks run before
-    stock ``Reset_Tasks`` clears Target/scripts, and death callbacks run after
-    stock ``DeleteAllEffectors`` and before ``IGDeathScript``.  A TRUE decision
-    callback owns the task it just installed and short-circuits only that
-    decision-tree cascade.
+    Resume callbacks run after ``Check_Nearby`` declines and immediately
+    before the unchanged ``Check_rewards`` call.  Consider callbacks run after
+    stock ``Pursue_Entertainment`` declines; Healer and Monk use their audited
+    post-``Purchase_Bazaar`` continuation because those two stock trees omit
+    entertainment.  Reset callbacks run before stock ``Reset_Tasks`` clears
+    Target/scripts, and death callbacks run after stock
+    ``DeleteAllEffectors`` and before ``IGDeathScript``.  A TRUE boolean
+    callback owns the task it just installed and short-circuits only the
+    remaining stock decision-tree cascade.
     """
 
     requested = []
     seen = set()
-    for raw_scripts, decision, reset, death in hooks:
+    for raw_scripts, resume, consider, reset, death in hooks:
         scripts = tuple(sorted({script.casefold() for script in raw_scripts}))
         if not scripts:
             raise ValueError("hero-quest lifecycle requires at least one hero script")
-        for symbol in (decision, reset, death):
+        for symbol in (resume, consider, reset, death):
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", symbol):
                 raise ValueError(f"invalid hero-quest callback symbol: {symbol!r}")
             if symbol.casefold() in seen:
                 raise ValueError(f"duplicate hero-quest callback symbol: {symbol!r}")
             seen.add(symbol.casefold())
-        requested.append((scripts, decision, reset, death))
+        requested.append((scripts, resume, consider, reset, death))
     if not requested:
         return result
 
@@ -942,9 +949,9 @@ def add_hero_quest_lifecycle_callbacks(
         for item in items
         if item.kind is DefinitionKind.FUNCTION
     }
-    for _, decision, reset, death in requested:
+    for _, resume, consider, reset, death in requested:
         for symbol, returns_boolean in (
-            (decision, True), (reset, False), (death, False),
+            (resume, True), (consider, True), (reset, False), (death, False),
         ):
             item = functions.get(symbol.casefold())
             if item is None:
@@ -965,16 +972,20 @@ def add_hero_quest_lifecycle_callbacks(
                     f"hero-quest callback {symbol!r} must use signature {expected}"
                 )
 
-    by_script: dict[str, list[str]] = {}
+    by_script: dict[str, tuple[list[str], list[str]]] = {}
     reset_symbols = []
     death_symbols = []
-    for scripts, decision, reset, death in requested:
+    for scripts, resume, consider, reset, death in requested:
         for script in scripts:
-            by_script.setdefault(script, []).append(decision)
+            resume_callbacks, consider_callbacks = by_script.setdefault(
+                script, ([], [])
+            )
+            resume_callbacks.append(resume)
+            consider_callbacks.append(consider)
         reset_symbols.append(reset)
         death_symbols.append(death)
 
-    for script, callbacks in sorted(by_script.items()):
+    for script, (resume_callbacks, consider_callbacks) in sorted(by_script.items()):
         stock = stock_hero_trees.get(script)
         if stock is None:
             raise ValueError(f"unsupported or missing stock hero decision tree: {script}")
@@ -1001,20 +1012,64 @@ def add_hero_quest_lifecycle_callbacks(
         ):
             raise ValueError(
                 f"{script} does not contain exactly one recognized "
-                "Check_Nearby/Check_rewards decision anchor"
+                "Check_Nearby/Check_rewards resume anchor"
             )
+        pursue_matches = list(re.finditer(
+            r"^[ \t]*if\s*\(\s*\$pursue_entertainment\s*\(\s*thisagent\s*\)\s*==\s*False\s*\)[ \t]*\r?$",
+            masked_target, re.IGNORECASE | re.MULTILINE,
+        ))
+        bazaar_matches = list(re.finditer(
+            r"^[ \t]*if\s*\(\s*\$Purchase_bazaar\s*\(\s*thisagent\s*,\s*70\s*\)\s*==\s*False\s*\)[ \t]*\r?$",
+            masked_target, re.IGNORECASE | re.MULTILINE,
+        ))
+        if script in {"mx_healer", "mx_monk"}:
+            if pursue_matches or len(bazaar_matches) != 1:
+                raise ValueError(
+                    f"{script} does not contain its recognized stock "
+                    "post-Purchase_Bazaar consideration anchor"
+                )
+            consider_match = bazaar_matches[0]
+        else:
+            if len(pursue_matches) != 1:
+                raise ValueError(
+                    f"{script} does not contain exactly one recognized stock "
+                    "post-Pursue_Entertainment consideration anchor"
+                )
+            consider_match = pursue_matches[0]
+
         reward_match = reward_matches[0]
         newline = "\r\n" if "\r\n" in target.text else "\n"
         reward_line = target.text[reward_match.start():reward_match.end()]
-        indent = re.match(r"[ \t]*", reward_line).group(0)
-        insertion = "".join(
-            f"{indent}if (${symbol}(ThisAgent) == False){newline}{newline}"
-            for symbol in callbacks
+        resume_indent = re.match(r"[ \t]*", reward_line).group(0)
+        resume_insertion = "".join(
+            f"{resume_indent}if (${symbol}(ThisAgent) == False){newline}{newline}"
+            for symbol in resume_callbacks
+        )
+        consider_line = target.text[
+            consider_match.start():consider_match.end()
+        ]
+        consider_indent = re.match(r"[ \t]*", consider_line).group(0)
+        next_code = re.search(r"\S", target.text[consider_match.end():])
+        if next_code is None:
+            raise ValueError(
+                f"{script} stock consideration anchor has no continuation"
+            )
+        consider_insert_at = consider_match.end() + next_code.start()
+        consider_insertion = "".join(
+            f"{consider_indent}if (${symbol}(ThisAgent) == False){newline}{newline}"
+            for symbol in consider_callbacks
+        )
+        updated_text = (
+            target.text[:consider_insert_at] + consider_insertion
+            + target.text[consider_insert_at:]
+        )
+        updated_text = (
+            updated_text[:reward_match.start()] + resume_insertion
+            + updated_text[reward_match.start():]
         )
         updated = replace(
             target,
-            text=(target.text[:reward_match.start()] + insertion
-                  + target.text[reward_match.start():]),
+            text=updated_text,
             source_name=source_name,
             span=None,
         )

@@ -35,19 +35,12 @@ from ..intent_text import (
     PrivateActivityTextBinding,
     decode_intent_registry,
 )
-from ..gpl_features import (
-    StockControlledFollowerSpeedSync,
-    StockGplmxPurchaseEquipmentTail,
-    StockGplmxPurchaseBazaarTail,
-    StockHeroQuestLifecycle,
-    gpl_feature_mapping,
-)
 from ..package import (
-    EnchantmentRowFeature,
+    ModDefinition,
     ModPackage,
-    NameGeneratorFeature,
     PackageFormatError,
     load_package,
+    mod_definition_mapping,
 )
 from ..runtime_capabilities import (
     PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY,
@@ -62,9 +55,7 @@ from ..runtime_features import (
     encode_runtime_feature_registry,
 )
 from ..stock_controller_features import (
-    ControllerFeatureError,
     LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY,
-    controller_feature_mapping,
 )
 from ..stock_controller_registry import (
     CONTROLLER_REGISTRY_RELATIVE_PATH,
@@ -1352,72 +1343,10 @@ def _plan_fingerprint(
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _canonical_mod_definition(definition: object | None) -> object | None:
+def _canonical_mod_definition(definition: ModDefinition | None) -> dict | None:
     """Return the exact semantic definition content used by package loading."""
 
-    if definition is None:
-        return None
-    value = {
-        "schema_version": definition.schema_version,
-        "mod_id": definition.mod_id,
-        "internal_name": definition.internal_name,
-        "display_name": definition.display_name,
-        "custom_buildings": [
-            dict(
-                {
-                "local_name": building.local_name,
-                "controller_base": building.controller_base,
-                "panel_resource_template": building.panel_resource_template,
-                },
-                **(
-                    {"dialog_id": building.dialog_id}
-                    if definition.schema_version < 3
-                    else {}
-                ),
-            )
-            for building in definition.custom_buildings
-        ],
-    }
-    if definition.schema_version == 2:
-        value["runtime_capabilities"] = list(definition.runtime_capabilities)
-    elif definition.schema_version == 3:
-        value["runtime_features"] = [
-            _canonical_runtime_feature(feature)
-            for feature in definition.runtime_features
-        ]
-    return value
-
-
-def _canonical_runtime_feature(feature: object) -> dict:
-    if isinstance(feature, NameGeneratorFeature):
-        return {
-            "type": "stock.name-generator.v1",
-            "generator_id": feature.generator_id,
-            "name_tables": list(feature.name_part_ids),
-        }
-    if isinstance(
-        feature,
-        (
-            StockGplmxPurchaseEquipmentTail,
-            StockGplmxPurchaseBazaarTail,
-            StockControlledFollowerSpeedSync,
-            StockHeroQuestLifecycle,
-        ),
-    ):
-        return gpl_feature_mapping(feature)
-    try:
-        return controller_feature_mapping(feature)
-    except ControllerFeatureError:
-        pass
-    if isinstance(feature, EnchantmentRowFeature):
-        return {
-            "type": "stock.ap78-enchantment-row.v1",
-            "overlay_id": feature.overlay_id,
-            "display_text": feature.display_text,
-        }
-    raise ManagerBuildError(
-        f"cannot fingerprint unsupported runtime feature {type(feature).__name__}"
-    )
+    return None if definition is None else mod_definition_mapping(definition)
 
 
 def _require_current_plan_sources(

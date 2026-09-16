@@ -85,6 +85,14 @@ offset conversion.
 | Name-generator constructor | `0x0010AB70` | `0x0011B0C0` |
 | Name-registry map insertion | `0x0010FB70` | `0x001200C0` |
 
+Parent-owned generic controls do not assume the shared guild class. The static
+stock-building catalog records all 39 supported primary DialogIDs, their 24
+distinct public/beta vtables, exact entry counts, and destructor/setup/control/
+event slots. Runtime preflight reads only the catalog entries selected by the
+current MMCR. A live parent must match the selected stock vtable before the
+Manager clones it. Unused catalog entries install no hook and perform no
+runtime work.
+
 The normalized instruction windows around each pair match the same stock
 lifecycle. The simulation-clock mapping is additionally confirmed in each
 build's state-3 update: the clock is read, advanced from the same simulation

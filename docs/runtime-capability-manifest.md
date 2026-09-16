@@ -7,7 +7,7 @@ Manager generates three deterministic files:
 - `DataMX/majesty_mod_manager_capabilities.bin` (`MMCP`) selects the runtime
   hook groups needed by the composed package.
 - `DataMX/majesty_mod_manager_features.bin` (`MMFR`) supplies the validated
-  private name-generator and AP78-row records consumed by those hook groups.
+  private name-generator and AP78-row records, plus optional map-query flags.
 - `DataMX/majesty_mod_manager_controllers.bin` (`MMCR`) supplies the validated,
   manager-resolved recipes for the supported stock controller lifecycles.
 
@@ -57,8 +57,9 @@ DLL therefore cannot silently run a package that needs a newer hook.
 | `stock.name-generator.v1` | Requires at least one validated MMFR name-generator record and installs the shared stock registry-completion extension. |
 | `stock.ap78-enchantment-row.v1` | Requires at least one validated MMFR AP78 row and installs the shared scoped AP78 presenter extension. |
 | `stock.controller-recipes.v1` | Requires at least one resolved MMCR recipe and installs only the stock-controller hook groups selected by those records. |
+| `stock.map-fog-query.v1` | Requires the MMFR map-query flag and registers read-only, bounded native GPL map queries. |
 
-The manager derives the last three capability names from the generated
+The manager derives the last four capability names from the generated
 registries. A package cannot enable one merely by copying the capability string
 into its definition. Conversely, a non-empty corresponding registry without
 its generic capability is rejected before any hook is installed.
@@ -72,7 +73,7 @@ same generic records described below and emits only the canonical generic MMCP
 capabilities. New packages describe typed runtime features instead of using
 these aliases.
 
-## MMFR v1
+## MMFR v1-v2
 
 MMFR is an immutable, data-only registry. It cannot carry a DLL, path, RVA,
 patch byte, callback, or instruction.
@@ -110,7 +111,13 @@ Arbitrary validated records within these bounds share the same two stock hook
 groups. The runtime does not contain an `NM18`, `NM19`, Alchemist, Phantom, or
 specific-overlay branch.
 
-## MMCR v2-v4
+Version 2 adds one little-endian `u32` flags field immediately after the two
+section counts, before any records. Bit 0 enables `stock.map-fog-query.v1`;
+all other bits must be zero. The writer retains v1 unless map queries are
+requested. See [data-record lists and bounded map queries](stock-data-record-list-and-map-query.md)
+for the GPL function signatures, input bounds, and explicit continuation status.
+
+## MMCR controller recipes
 
 MMCR is likewise manager-owned and data-only. Its path is supplied through
 `MAJESTY_MOD_MANAGER_CONTROLLERS`; package JSON is never parsed inside Majesty.
@@ -135,12 +142,18 @@ counts in this order:
 11. MX22 building open/closed toggles (v4); and
 12. MX05 live-agent-list panels with bounded static row variants, an optional
     post-action stay-on-panel policy, and an optional row-click focus policy
-    (v14).
+    (v14), plus optional parent-scoped actions (v15), or independent data-record
+    rows (v16).
 
 The writer retains canonical v2 when neither newer section is needed, uses v3
 when occupant panels are present, and uses v4 when building toggles are
-present. It uses v14 only when at least one live-agent list is present. A
-newer-version header with an empty final section is noncanonical.
+present. It uses v14 when a live-agent list retains selected-row action scope;
+a list that requests parent action scope uses v15. Independent data-record
+lists use v16, which adds a boolean `u32` record-row flag after each list's
+action-scope field. They require explicit titles, parent-scoped actions,
+stay-on-panel behavior, and no world refocus; their keys never resolve as Units.
+Other list recipes retain their existing versions. A newer-version header with
+an empty final section is noncanonical.
 
 Records are deterministically sorted within their section and refer to an
 existing panel through a manager-qualified `panel_key`. The parser validates

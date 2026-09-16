@@ -7,7 +7,7 @@
 
 namespace MajestyStockControllers {
 
-constexpr std::uint32_t kRegistryVersion = 14;
+constexpr std::uint32_t kRegistryVersion = 16;
 constexpr std::uint32_t kMaximumRecordCount = 256;
 constexpr std::uint32_t kMaximumPanelCount = 32;
 constexpr std::uint32_t kMaximumLiveAgentListVariants = 64;
@@ -176,6 +176,8 @@ struct LiveAgentListRecord {
     std::uint32_t parentControllerBase;
     bool stayOnPanelAfterAction;
     bool focusSelectedRowOnClick;
+    bool actionUsesParent;
+    bool dataRecordRows;
 };
 
 struct Registry {
@@ -234,7 +236,7 @@ struct Registry {
         std::uint32_t privateMode) const;
 };
 
-// Parses manager-owned MMCR v2/v3/v4/v14 registries without Win32 or executable
+// Parses manager-owned MMCR v2/v3/v4/v14/v15/v16 registries without Win32 or executable
 // dependencies.  Records are immutable alternatives for the existing stock-
 // shaped singleton sessions; the registry does not create per-mod controllers,
 // parallel AP99 owners, queued Rage commands, or parallel target sessions.

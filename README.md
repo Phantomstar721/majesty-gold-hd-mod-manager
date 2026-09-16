@@ -140,9 +140,11 @@ collision-free internal ID for the generated profile, and rewrites those
 references together. Set `custom_buildings` to an empty array when the mod has
 no custom building. `controller_base` and `panel_resource_template` identify
 the stock Majesty building behavior and panel layout that a declared building
-follows; the supported pairs are `AP07`/`AP10`, `AP10`/`AP10`, and
-`MX09`/`MX09`. The MX09 pair is used with the typed AP41 reward-panel recipe
-described in the complete contract.
+follows. All 39 stock primary-building controllers are cataloged for both
+supported game versions. Normally both fields use the same stock DialogID;
+`AP07`/`AP10` remains supported for the established generic guild layout. See
+the complete contract for the accepted controller list. The `MX09` pair is
+used with the typed AP41 reward-panel recipe described there.
 
 Leave `runtime_features` empty unless the mod uses one of the optional,
 reusable stock-behavior recipes documented below. Normal custom buildings and
@@ -181,16 +183,24 @@ actions, AP69 sovereign-target actions, and MX09/AP41 reward panels with
 private Fl00-shaped hostile-monster reward flags. It can also clone MX22's
 per-building open/closed controls, populate generic MX05 live-agent lists with
 bounded package-declared static row variants, optional stay-on-panel actions,
-and optional suppression of row-click world focus, and append package-owned boolean
-choices to the end of stock GPLMx `Purchase_Equipment` or `Purchase_Bazaar`. Their linked
-logical keys are local to the package. Visible controls are reserved within
-their own authored panel;
-global engine identities such as private descriptor commands, packed
-attributes, callback symbols, private modes, and private units are checked
+optional parent-scoped panel actions that remain usable with zero rows, and
+optional suppression of row-click world focus, and append package-owned boolean
+choices to the end of stock GPLMx `Purchase_Equipment` or `Purchase_Bazaar`.
+It can also attach package-owned resume, consideration, reset, and death
+callbacks to the exact stock hero-task lifecycle without replacing hero trees.
+For lists that do not represent world objects, use the separate
+[data-record list and bounded map-query interfaces](docs/stock-data-record-list-and-map-query.md).
+Records can describe coordinates or other package-owned data, with optional
+values/rewards and no world refocus. Map queries read stock explored terrain
+only when called and enforce an explicit per-call search budget.
+Linked logical keys are local to the package. Visible controls are reserved
+within their own authored panel; global engine identities such as private
+descriptor commands, packed attributes, callback symbols, private modes, and
+private units are checked
 across the complete selection. See the
 [complete merge-mod contract](docs/manager-merge-contract.md#stock-controller-recipes)
 for the exact JSON fields, required resources, and stock lifecycle limits. A
-complete parser-checked file showing every supported recipe is available as
+parser-checked collection of recipe examples is available as
 [mod-definition-v3-all-features.json](docs/examples/mod-definition-v3-all-features.json).
 Copy only the recipes your package needs. Its package-owned controls and IDs
 are illustrative and must match the resources the package ships. Fields named

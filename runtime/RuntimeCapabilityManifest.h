@@ -23,6 +23,7 @@ constexpr char kGenericEnchantmentRow[] =
     "stock.ap78-enchantment-row.v1";
 constexpr char kGenericControllerRecipes[] =
     "stock.controller-recipes.v1";
+constexpr char kMapFogQuery[] = "stock.map-fog-query.v1";
 
 struct Manifest {
     std::vector<std::string> capabilities;

@@ -267,7 +267,10 @@ class OccupantPanelTests(unittest.TestCase):
                 )
 
     def test_parent_classes_and_parent_child_aliasing(self):
-        for base in ("AP07", "AP08", "AP10", "MX09"):
+        for base in (
+            "AP01", "AP07", "AP08", "AP10", "AP31", "APa9",
+            "MX00", "MX09", "MX22",
+        ):
             r = resolve_stock_controller_registry((feature(),), {"visitors": (0x31303042, 0x31303050)},
                 occupant_parent_bases={"visitors": base})
             self.assertEqual(decode_stock_controller_registry(encode_stock_controller_registry(r)).occupant_action_panels[0].parent_controller_base, base)
@@ -346,7 +349,9 @@ class OccupantPanelTests(unittest.TestCase):
                     replace(parent, panel_resource_template="AP10"),
                 ),
             )
-            with self.assertRaisesRegex(ComposeError, "AP08/AP08"):
+            with self.assertRaisesRegex(
+                ComposeError, "cataloged stock primary-building controller"
+            ):
                 resolve_controller_registry((inventory,))
 
     def test_required_controls_rejected_before_launch(self):

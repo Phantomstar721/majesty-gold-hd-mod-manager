@@ -19,6 +19,7 @@ constexpr const char* kSupportedCapabilities[] = {
     kGenericNameGenerator,
     kGenericVisitorLists,
     kPrivateActivityText,
+    kMapFogQuery,
 };
 
 void SetError(std::string* error, const char* message) {

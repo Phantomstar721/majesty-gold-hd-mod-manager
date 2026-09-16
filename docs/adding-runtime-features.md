@@ -23,6 +23,7 @@ exactly these feature types:
 - `stock.mx09-ap41-reward-panel.v1`;
 - `stock.mx04-mx05-occupant-action-panel.v1`;
 - `stock.mx22-building-open-toggle.v1`;
+- `stock.hero-quest-lifecycle.v1`;
 - `stock.gplmx-purchase-equipment-tail.v1`;
 - `stock.gplmx-purchase-bazaar-tail.v1`;
 - `stock.ap41-fl00-hostile-monster-flag.v1`;

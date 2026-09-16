@@ -125,6 +125,9 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
             row_status_first_draw_call,
             row_status_second_draw_call,
             row_status_draw,
+            child_control,
+            child_refresh,
+            shared_list_refresh,
         ) = [int(value, 16) for value in re.findall(r"0x[0-9A-Fa-f]+", body)]
 
         self.assertEqual(image.timestamp, timestamp)
@@ -250,6 +253,9 @@ class QuestBoardRuntimeProfileTests(unittest.TestCase):
         child_table = struct.unpack("<15I", image.read(child_vtable, 15 * 4))
         for slot, expected in zip((0, 1, 3, 8, 11, 14), child_slots):
             self.assertEqual(child_table[slot] - image.base, expected)
+        self.assertEqual(child_control, child_slots[2])
+        self.assertEqual(child_refresh, child_slots[5])
+        self.assertEqual(image.target(child_refresh + 0x03), shared_list_refresh)
 
         setup = image.read(child_slots[1], 0x45)
         self.assertEqual(image.target(child_slots[1] + 0x33), shared_list_setup)

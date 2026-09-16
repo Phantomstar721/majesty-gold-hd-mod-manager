@@ -120,6 +120,10 @@ from .stock_cam import (
     StockCamError,
     load_effective_stock_named_resources,
 )
+from .stock_building_controllers import (
+    is_stock_building_controller,
+    is_stock_building_controller_pair,
+)
 from .stock_gpl import (
     StockGplError,
     load_verified_stock_semantic_sources,
@@ -139,6 +143,8 @@ from .runtime_features import (
     NameGeneratorFeature,
     RuntimeFeature,
     RuntimeFeatureRegistry,
+    MapFogQueryFeature,
+    MAP_QUERY_RUNTIME_CAPABILITY,
     decode_runtime_feature_registry,
     derive_feature_runtime_capabilities,
     encode_runtime_feature_registry,
@@ -433,7 +439,7 @@ class GplComposeResult:
         tuple[str, str, str, int, tuple[str, ...]], ...
     ] = ()
     hero_quest_lifecycles: tuple[
-        tuple[str, str, tuple[str, ...], str, str, str], ...
+        tuple[str, str, tuple[str, ...], str, str, str, str], ...
     ] = ()
 
 
@@ -446,6 +452,8 @@ class GplFeatureEvidence:
     movement_rate_modifier_per_tier: int = 0
     marker_effectors: tuple[str, ...] = ()
     hero_scripts: tuple[str, ...] = ()
+    resume_callback_symbol: str = ""
+    consider_callback_symbol: str = ""
     reset_callback_symbol: str = ""
     death_callback_symbol: str = ""
 
@@ -4784,7 +4792,8 @@ def merge_gpl_resources(
                 (
                     (
                         item.hero_scripts,
-                        item.callback_symbol,
+                        item.resume_callback_symbol,
+                        item.consider_callback_symbol,
                         item.reset_callback_symbol,
                         item.death_callback_symbol,
                     )
@@ -4844,7 +4853,8 @@ def merge_gpl_resources(
                 item.mod_id,
                 item.feature_key,
                 item.hero_scripts,
-                item.callback_symbol,
+                item.resume_callback_symbol,
+                item.consider_callback_symbol,
                 item.reset_callback_symbol,
                 item.death_callback_symbol,
             )
@@ -4953,10 +4963,11 @@ def validate_gpl_feature_evidence(
                 else:
                     lifecycle = "hero_quest"
                     feature_key = feature.feature_key
-                    callback_symbol = feature.decision_callback_symbol
+                    callback_symbol = feature.resume_callback_symbol
             required_symbols = (
                 (
-                    feature.decision_callback_symbol,
+                    feature.resume_callback_symbol,
+                    feature.consider_callback_symbol,
                     feature.reset_callback_symbol,
                     feature.death_callback_symbol,
                 )
@@ -4994,9 +5005,14 @@ def validate_gpl_feature_evidence(
                 )
             elif isinstance(feature, StockHeroQuestLifecycle):
                 _require_boolean_agent_callback_signature(
-                    matches_by_symbol[feature.decision_callback_symbol][0].text,
-                    feature.decision_callback_symbol,
-                    "Hero-quest decision callback",
+                    matches_by_symbol[feature.resume_callback_symbol][0].text,
+                    feature.resume_callback_symbol,
+                    "Hero-quest resume callback",
+                )
+                _require_boolean_agent_callback_signature(
+                    matches_by_symbol[feature.consider_callback_symbol][0].text,
+                    feature.consider_callback_symbol,
+                    "Hero-quest consideration callback",
                 )
                 _require_void_agent_callback_signature(
                     matches_by_symbol[feature.reset_callback_symbol][0].text,
@@ -5046,6 +5062,16 @@ def validate_gpl_feature_evidence(
                         feature.hero_scripts
                         if isinstance(feature, StockHeroQuestLifecycle)
                         else ()
+                    ),
+                    resume_callback_symbol=(
+                        feature.resume_callback_symbol
+                        if isinstance(feature, StockHeroQuestLifecycle)
+                        else ""
+                    ),
+                    consider_callback_symbol=(
+                        feature.consider_callback_symbol
+                        if isinstance(feature, StockHeroQuestLifecycle)
+                        else ""
                     ),
                     reset_callback_symbol=(
                         feature.reset_callback_symbol
@@ -5135,7 +5161,8 @@ def validate_gpl_feature_evidence(
         initial = merge_sources([], parsed_by_owner)
         protected = {
             "reset_tasks", "unit_call_deathscript",
-            *(item.callback_symbol.casefold() for item in hero_quest),
+            *(item.resume_callback_symbol.casefold() for item in hero_quest),
+            *(item.consider_callback_symbol.casefold() for item in hero_quest),
             *(item.reset_callback_symbol.casefold() for item in hero_quest),
             *(item.death_callback_symbol.casefold() for item in hero_quest),
         }
@@ -5161,7 +5188,8 @@ def validate_gpl_feature_evidence(
                 merged,
                 (
                     (
-                        item.hero_scripts, item.callback_symbol,
+                        item.hero_scripts, item.resume_callback_symbol,
+                        item.consider_callback_symbol,
                         item.reset_callback_symbol, item.death_callback_symbol,
                     )
                     for item in hero_quest
@@ -5431,7 +5459,7 @@ def resolve_runtime_feature_registry(
             *(
                 feature
                 for feature in definition.runtime_features
-                if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature))
+                if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature))
             ),
             *legacy_runtime_features(definition.runtime_capabilities),
         )
@@ -5486,6 +5514,9 @@ def resolve_runtime_feature_registry(
 
     owners: dict[tuple[str, str], tuple[str, RuntimeFeature]] = {}
     for owner, feature in claims:
+        if isinstance(feature, MapFogQueryFeature):
+            # This is one shared read-only interface, not a resource claim.
+            continue
         if isinstance(feature, NameGeneratorFeature):
             key = ("name-generator", feature.generator_id)
         elif isinstance(feature, EnchantmentRowFeature):
@@ -5560,6 +5591,8 @@ def _runtime_feature_evidence_errors(
     inventory: PackageInventory,
     feature: RuntimeFeature,
 ) -> tuple[str, ...]:
+    if isinstance(feature, MapFogQueryFeature):
+        return ()
     errors: list[str] = []
     description_elements: list[ET.Element] = []
     for path in inventory.descriptions:
@@ -6137,10 +6170,10 @@ def _require_controller_feature_evidence(
                     f"{feature.toggle_key!r} parent_building "
                     f"{feature.parent_building!r} is not declared"
                 )
-            if parent.controller_base not in ("AP07", "AP10", "MX09"):
+            if not is_stock_building_controller(parent.controller_base):
                 raise ComposeError(
-                    "building open toggles require an AP07, AP10, or MX09 "
-                    "parent controller"
+                    "building open toggles require a cataloged stock "
+                    "primary-building parent controller"
                 )
         elif isinstance(feature, StockAp10Ap69SecondaryPanel):
             parent = declared_buildings.get(feature.parent_building)
@@ -6223,18 +6256,13 @@ def _require_controller_feature_evidence(
                         f"{feature.source_dialog_id}; found {len(matches)}"
                     )
             if isinstance(feature, StockMx04Mx05OccupantActionPanel):
-                if (
+                if not is_stock_building_controller_pair(
                     parent.controller_base,
                     parent.panel_resource_template,
-                ) not in {
-                    ("AP07", "AP10"),
-                    ("AP08", "AP08"),
-                    ("AP10", "AP10"),
-                    ("MX09", "MX09"),
-                }:
+                ):
                     raise ComposeError(
-                        "occupant panels require an AP07/AP10, AP08/AP08, "
-                        "AP10/AP10, or MX09/MX09 parent building"
+                        "occupant panels require a cataloged stock "
+                        "primary-building controller and matching panel template"
                     )
                 for symbol in (feature.cost_callback_symbol, feature.action_callback_symbol):
                     matches = gpl_functions.get(symbol.casefold(), ())
@@ -6249,18 +6277,13 @@ def _require_controller_feature_evidence(
                         item.text, symbol, symbol == feature.cost_callback_symbol
                     )
             elif isinstance(feature, StockMx05LiveAgentListPanel):
-                if (
+                if not is_stock_building_controller_pair(
                     parent.controller_base,
                     parent.panel_resource_template,
-                ) not in {
-                    ("AP07", "AP10"),
-                    ("AP08", "AP08"),
-                    ("AP10", "AP10"),
-                    ("MX09", "MX09"),
-                }:
+                ):
                     raise ComposeError(
-                        "live-agent-list panels require an AP07/AP10, AP08/AP08, "
-                        "AP10/AP10, or MX09/MX09 stock parent lifecycle"
+                        "live-agent-list panels require a cataloged stock "
+                        "primary-building controller and matching panel template"
                     )
                 callbacks = [
                     (feature.row_count_callback_symbol, ("agent",), "integer"),
@@ -7227,6 +7250,8 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
             "generated enchantment-row feature registry and generic MMCP hook "
             "selection disagree"
         )
+    if runtime_features.map_fog_query != (MAP_QUERY_RUNTIME_CAPABILITY in runtime_capabilities):
+        raise ComposeError("generated map-query registry and MMCP hook selection disagree")
     controller_path = root / CONTROLLER_REGISTRY_RELATIVE_PATH
     if not controller_path.is_file():
         raise ComposeError(
@@ -7801,6 +7826,7 @@ def _build_report(
                 "enchantment_row_count": len(
                     runtime_feature_registry.enchantment_rows
                 ),
+                "map_fog_query": runtime_feature_registry.map_fog_query,
             },
             "controller_registry": {
                 "path": CONTROLLER_REGISTRY_RELATIVE_PATH.as_posix(),
@@ -8018,11 +8044,12 @@ def _build_report(
                         "source_mod_id": mod_id,
                         "feature_key": feature_key,
                         "hero_scripts": list(hero_scripts),
-                        "decision_callback_symbol": decision,
+                        "resume_callback_symbol": resume,
+                        "consider_callback_symbol": consider,
                         "reset_callback_symbol": reset,
                         "death_callback_symbol": death,
                     }
-                    for mod_id, feature_key, hero_scripts, decision, reset, death in (
+                    for mod_id, feature_key, hero_scripts, resume, consider, reset, death in (
                         gpl.hero_quest_lifecycles
                     )
                 ],

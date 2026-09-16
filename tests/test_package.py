@@ -70,6 +70,7 @@ class PackageTests(unittest.TestCase):
                 "action_callback_symbol": "QB_Refresh",
                 "stay_on_panel_after_action": True,
                 "focus_selected_row_on_click": False,
+                "action_agent_scope": "parent",
             }],
         }
         parsed = parse_mod_definition(value)
@@ -82,6 +83,11 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(board.row_variants, ())
         self.assertTrue(board.stay_on_panel_after_action)
         self.assertFalse(board.focus_selected_row_on_click)
+        self.assertEqual(board.action_agent_scope, "parent")
+
+        value["runtime_features"][0]["action_agent_scope"] = "row"
+        with self.assertRaisesRegex(PackageFormatError, "action_agent_scope"):
+            parse_mod_definition(value)
 
     def test_definition_v3_parses_static_live_agent_list_variants(self):
         value = {
@@ -126,6 +132,7 @@ class PackageTests(unittest.TestCase):
         ))
         self.assertFalse(board.stay_on_panel_after_action)
         self.assertTrue(board.focus_selected_row_on_click)
+        self.assertEqual(board.action_agent_scope, "selected-row")
 
     def test_definition_v3_rejects_obsolete_quest_board_agent_contract(self):
         value = {
@@ -219,7 +226,8 @@ class PackageTests(unittest.TestCase):
                     "type": "stock.hero-quest-lifecycle.v1",
                     "feature_key": "guild-quests",
                     "hero_scripts": ["mx_ranger", "mx_adept"],
-                    "decision_callback_symbol": "Guild_Quest_Decide",
+                    "resume_callback_symbol": "Guild_Quest_Resume",
+                    "consider_callback_symbol": "Guild_Quest_Consider",
                     "reset_callback_symbol": "Guild_Quest_Reset",
                     "death_callback_symbol": "Guild_Quest_Death",
                 },
@@ -238,6 +246,14 @@ class PackageTests(unittest.TestCase):
         )
         self.assertIsInstance(parsed.runtime_features[4], StockHeroQuestLifecycle)
         self.assertEqual(parsed.runtime_features[4].hero_scripts, ("mx_adept", "mx_ranger"))
+        self.assertEqual(
+            parsed.runtime_features[4].resume_callback_symbol,
+            "Guild_Quest_Resume",
+        )
+        self.assertEqual(
+            parsed.runtime_features[4].consider_callback_symbol,
+            "Guild_Quest_Consider",
+        )
         self.assertEqual(_validate_definition_object(parsed), parsed)
 
     def test_loads_manifest_and_default_definition_in_declared_order(self):
@@ -781,6 +797,39 @@ class PackageTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(PackageFormatError, "unsupported stock"):
             parse_mod_definition(value)
+
+    def test_definition_v3_accepts_cataloged_stock_building_controllers(self):
+        for controller in ("AP01", "AP31", "APa9", "MX00", "MX22"):
+            with self.subTest(controller=controller):
+                parsed = parse_mod_definition({
+                    "schema_version": 3,
+                    "mod_id": MOD_ID,
+                    "internal_name": "CatalogFixture",
+                    "display_name": "Catalog Fixture",
+                    "custom_buildings": [{
+                        "local_name": "CatalogBuilding",
+                        "controller_base": controller,
+                        "panel_resource_template": controller,
+                    }],
+                    "runtime_features": [],
+                })
+                self.assertEqual(
+                    parsed.custom_buildings[0].controller_base, controller
+                )
+
+        parsed = parse_mod_definition({
+            "schema_version": 3,
+            "mod_id": MOD_ID,
+            "internal_name": "LegacyAliasFixture",
+            "display_name": "Legacy Alias Fixture",
+            "custom_buildings": [{
+                "local_name": "CatalogBuilding",
+                "controller_base": "AP07",
+                "panel_resource_template": "AP10",
+            }],
+            "runtime_features": [],
+        })
+        self.assertEqual(parsed.custom_buildings[0].controller_base, "AP07")
 
     def test_rejects_duplicate_json_keys_and_definition_id_mismatch(self):
         with TemporaryDirectory() as tmp:

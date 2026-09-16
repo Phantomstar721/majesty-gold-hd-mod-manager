@@ -16,8 +16,10 @@
 #include "ControllerLifecycleRegistry.h"
 #include "FreestyleCamRuntime.h"
 #include "IntentTextRegistry.h"
+#include "MapQueryRuntime.h"
 #include "RuntimeCapabilityManifest.h"
 #include "RuntimeFeatureRegistry.h"
+#include "StockBuildingControllerCatalog.h"
 #include "StockControllerRegistry.h"
 
 namespace {
@@ -258,7 +260,7 @@ bool g_questBoardPopulationRequested = false;
 bool g_activeQuestBoardFaulted = false;
 constexpr std::uint32_t kMx05DialogId = 0x3530584D;
 bool ValidateOccupantPanelProfile();
-bool ValidateAp08ParentProfile();
+bool ValidateSelectedParentControllerProfiles();
 bool ValidateQuestBoardProfile();
 bool OccupantCallMatches(std::uintptr_t callRva, std::uintptr_t targetRva);
 bool QuestSummaryCallMatches(
@@ -275,8 +277,8 @@ bool OpenQuestBoardPanel(void* controller, std::uint32_t command, int* result);
 bool IsLiveQuestBoardController(
     const void* controller,
     const QuestBoard* expectedBoard);
+void __fastcall QuestBoardRefresh(void* controller, void*);
 constexpr std::uint32_t kAp10DialogId = 0x30315041;
-constexpr std::uint32_t kAp08DialogId = 0x38305041;
 constexpr std::uint32_t kAp69DialogId = 0x39365041;
 constexpr std::uint32_t kAp41DialogId = 0x31345041;
 constexpr std::uint32_t kMx09DialogId = 0x3930584D;
@@ -318,11 +320,6 @@ constexpr unsigned char kStockUnknownDialogEpilogue[
 // RTTI-backed table. Runtime code copies the live table instead of selecting
 // either address.
 constexpr std::size_t kAp10VtableEntries = 17;
-// Public AP08 vtable 0x0073D37C and beta2 vtable 0x00756054 each contain
-// exactly 13 executable entries through +0x30.  The following word begins
-// string data.  Slots 1, 3, and 8 retain the same setup, command, and event
-// roles used by the other streamed building controllers.
-constexpr std::size_t kAp08VtableEntries = 13;
 constexpr std::size_t kAp69VtableEntries = 11;
 
 std::uintptr_t g_resumeWithController = 0;
@@ -396,6 +393,7 @@ constexpr std::uint32_t kFirstQuestOfferIntentId = 0x70000000u;
 constexpr std::size_t kMaximumQuestOffers = 64;
 struct QuestOfferPresentation {
     void* agent;
+    std::uint32_t recordKey = 0;
     std::string name;
     std::string detail;
     std::string summaryTemplate;
@@ -404,6 +402,7 @@ struct QuestOfferPresentation {
 };
 QuestOfferPresentation g_questOfferPresentations[kMaximumQuestOffers] = {};
 std::size_t g_questOfferPresentationCount = 0;
+int g_renderedDataRecordRevision = -1;
 const QuestOfferPresentation* g_paintingQuestOffer = nullptr;
 bool g_suppressQuestStatusIconsForCurrentRow = false;
 
@@ -519,6 +518,7 @@ ControllerEvent g_stockAp69Event = nullptr;
 ControllerSetup g_stockParentSetup = nullptr;
 ControllerControl g_stockParentControl = nullptr;
 ControllerEvent g_stockParentEvent = nullptr;
+ControllerControl g_stockQuestBoardControl = nullptr;
 ControllerControl g_stockQuestBoardSharedControl = nullptr;
 ControllerActivity g_stockParentActivity = nullptr;
 GameUpdate g_stockGameUpdate = nullptr;
@@ -1454,21 +1454,8 @@ bool ValidateMajestyBuildProfile() {
     if (!g_stockControllerRegistry.occupantActionPanels.empty() ||
         !g_stockControllerRegistry.liveAgentLists.empty()) {
         if (!ValidateOccupantPanelProfile()) return false;
-        const bool occupantHasAp08Parent = std::any_of(
-            g_stockControllerRegistry.occupantActionPanels.begin(),
-            g_stockControllerRegistry.occupantActionPanels.end(),
-            [](const OccupantPanel& panel) {
-                return panel.parentControllerBase == kAp08DialogId;
-            });
-        const bool listHasAp08Parent = std::any_of(
-            g_stockControllerRegistry.liveAgentLists.begin(),
-            g_stockControllerRegistry.liveAgentLists.end(),
-            [](const QuestBoard& panel) {
-                return panel.parentControllerBase == kAp08DialogId;
-            });
-        if ((occupantHasAp08Parent || listHasAp08Parent) &&
-            !ValidateAp08ParentProfile()) return false;
     }
+    if (!ValidateSelectedParentControllerProfiles()) return false;
     if (!g_stockControllerRegistry.liveAgentLists.empty() &&
         !ValidateQuestBoardProfile()) return false;
     // Preflight every site selected by MMCP before installing any hook from
@@ -3693,6 +3680,7 @@ void __fastcall SecondaryPanelControllerEvent(
 }
 
 void ClearSecondaryPanelControllerOwnedState() {
+    g_renderedDataRecordRevision = -1;
     g_activeOccupantPanel = nullptr;
     g_activeQuestBoard = nullptr;
     g_activeQuestBoardFaulted = false;
@@ -3701,6 +3689,7 @@ void ClearSecondaryPanelControllerOwnedState() {
     g_questBoardPopulationRequested = false;
     for (std::size_t index = 0; index < kMaximumQuestOffers; ++index) {
         g_questOfferPresentations[index].agent = nullptr;
+        g_questOfferPresentations[index].recordKey = 0;
         g_questOfferPresentations[index].name.clear();
         g_questOfferPresentations[index].detail.clear();
         g_questOfferPresentations[index].summaryTemplate.clear();
@@ -3915,6 +3904,18 @@ bool InstallParentPanelControllerVtable(std::uint32_t controller) {
     auto*** objectVtable = reinterpret_cast<void***>(controller);
     auto** stockVtable = *objectVtable;
     if (g_stockParentControl == nullptr) {
+        const auto* catalogRecord =
+            MajestyStockBuildingControllers::Find(kAp10DialogId);
+        const auto* catalogProfile = MajestyStockBuildingControllers::Profile(
+            catalogRecord, g_buildProfile != &kPublicBuildProfile);
+        if (catalogProfile == nullptr ||
+            catalogProfile->entryCount != kAp10VtableEntries ||
+            stockVtable != reinterpret_cast<void**>(
+                g_imageBase + catalogProfile->vtableRva)) {
+            WriteLog(
+                "Refused the private AP10 parent because it is not the cataloged stock class.");
+            return false;
+        }
         std::memcpy(
             g_parentControllerVtable,
             stockVtable,
@@ -4275,11 +4276,26 @@ bool InstallRewardParentControllerVtable(std::uint32_t controller) {
     auto*** objectVtable = reinterpret_cast<void***>(controller);
     auto** stockVtable = *objectVtable;
     if (g_stockRewardParentControl == nullptr) {
-        std::memcpy(g_rewardParentVtable, stockVtable, sizeof(g_rewardParentVtable));
+        const auto* catalogRecord =
+            MajestyStockBuildingControllers::Find(kMx09DialogId);
+        const auto* catalogProfile = MajestyStockBuildingControllers::Profile(
+            catalogRecord, g_buildProfile != &kPublicBuildProfile);
+        if (catalogProfile == nullptr ||
+            catalogProfile->entryCount > kAp10VtableEntries ||
+            stockVtable != reinterpret_cast<void**>(
+                g_imageBase + catalogProfile->vtableRva)) {
+            WriteLog(
+                "Refused the private reward parent because it is not the cataloged stock MX09 class.");
+            return false;
+        }
+        std::memcpy(
+            g_rewardParentVtable,
+            stockVtable,
+            catalogProfile->entryCount * sizeof(void*));
         if (!MajestyControllerLifecycle::RegisterManagedVtable(
                 g_rewardParentVtable,
                 stockVtable,
-                kAp10VtableEntries,
+                catalogProfile->entryCount,
                 &g_parentController,
                 &ParentPanelControllerDestroyed,
                 nullptr)) {
@@ -4364,6 +4380,9 @@ struct QuestBoardBuildProfile {
     std::uintptr_t rowStatusFirstDrawCall;
     std::uintptr_t rowStatusSecondDrawCall;
     std::uintptr_t rowStatusDraw;
+    std::uintptr_t childControl;
+    std::uintptr_t childRefresh;
+    std::uintptr_t sharedListRefresh;
 };
 constexpr QuestBoardBuildProfile kPublicQuestBoard = {
     0x000BBDB0, 0x00163680, 0x00162C40, 0x00162C60,
@@ -4372,6 +4391,7 @@ constexpr QuestBoardBuildProfile kPublicQuestBoard = {
     0x00098485, 0x000422F0, 0x0009873D,
     0x000988A9, 0x0009886F, 0x0009863A, 0x00098609, 0x00024020,
     0x00098916, 0x000989F0, 0x000989EB, 0x00098A8C, 0x00272850,
+    0x000BC0C0, 0x000BC1D0, 0x00097E20,
 };
 constexpr QuestBoardBuildProfile kBeta2QuestBoard = {
     0x000BC7F0, 0x001797B0, 0x00178D70, 0x00178D90,
@@ -4380,20 +4400,69 @@ constexpr QuestBoardBuildProfile kBeta2QuestBoard = {
     0x00098AB5, 0x00043200, 0x00098D6D,
     0x00098ED9, 0x00098E9F, 0x00098C6A, 0x00098C39, 0x00024FF0,
     0x00098F46, 0x00099020, 0x0009901B, 0x000990BC, 0x00287CB0,
+    0x000BCB00, 0x000BCC10, 0x00098640,
 };
 const QuestBoardBuildProfile& QuestBoardProfile() {
     return g_buildProfile == &kPublicBuildProfile
         ? kPublicQuestBoard : kBeta2QuestBoard;
 }
 
-bool ValidateAp08ParentProfile() {
-    auto** parentVtable = reinterpret_cast<void**>(
-        g_imageBase + QuestBoardProfile().parentVtable);
-    return parentVtable[0] != nullptr && parentVtable[1] != nullptr &&
-        parentVtable[3] != nullptr && parentVtable[8] != nullptr &&
-        reinterpret_cast<std::uintptr_t>(parentVtable[12]) >= g_imageBase &&
-        reinterpret_cast<std::uintptr_t>(parentVtable[12]) <
-            g_imageBase + 0x00400000u;
+bool ValidateSelectedParentControllerProfiles() {
+    std::vector<std::uint32_t> selected;
+    if (!g_stockControllerRegistry.panels.empty()) {
+        selected.push_back(kAp10DialogId);
+    }
+    if (!g_stockControllerRegistry.rewardPanels.empty()) {
+        selected.push_back(kMx09DialogId);
+    }
+    for (const auto& panel : g_stockControllerRegistry.occupantActionPanels) {
+        selected.push_back(panel.parentControllerBase);
+    }
+    for (const auto& panel : g_stockControllerRegistry.liveAgentLists) {
+        selected.push_back(panel.parentControllerBase);
+    }
+    for (const auto& toggle : g_stockControllerRegistry.buildingOpenToggles) {
+        selected.push_back(toggle.parentControllerBase);
+    }
+    std::sort(selected.begin(), selected.end());
+    selected.erase(std::unique(selected.begin(), selected.end()), selected.end());
+
+    const bool beta2 = g_buildProfile != &kPublicBuildProfile;
+    for (const auto controllerId : selected) {
+        const auto* record = MajestyStockBuildingControllers::Find(controllerId);
+        const auto* profile = MajestyStockBuildingControllers::Profile(record, beta2);
+        if (profile == nullptr || profile->entryCount <= 8 ||
+            profile->entryCount > kAp10VtableEntries) {
+            WriteLog(
+                "Manager parent controller catalog is missing a safe stock class boundary.");
+            return false;
+        }
+        auto** table = reinterpret_cast<void**>(
+            g_imageBase + profile->vtableRva);
+        const std::uintptr_t expected[] = {
+            profile->destructorRva,
+            profile->setupRva,
+            profile->controlRva,
+            profile->eventRva,
+        };
+        const std::size_t slots[] = {0, 1, 3, 8};
+        for (std::size_t index = 0; index < 4; ++index) {
+            if (reinterpret_cast<std::uintptr_t>(table[slots[index]]) !=
+                    g_imageBase + expected[index]) {
+                char message[224] = {};
+                std::snprintf(
+                    message,
+                    sizeof(message),
+                    "Runtime profile %s rejected stock parent 0x%08lX: vtable slot %lu differs from the audited class.",
+                    g_buildProfile->id,
+                    static_cast<unsigned long>(controllerId),
+                    static_cast<unsigned long>(slots[index]));
+                WriteLog(message);
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 // GplType's stock runtime tags are part of the evaluator ABI.  Never invoke a
@@ -4457,9 +4526,13 @@ bool ValidateQuestBoardProfile() {
         g_imageBase + profile.rowStatusFirstBlock + 0x3Fu +
         secondStatusRelative;
     const bool mx05ListShape = populationInImage &&
+        reinterpret_cast<std::uintptr_t>(childVtable[3]) ==
+            g_imageBase + profile.childControl &&
         reinterpret_cast<std::uintptr_t>(childVtable[14]) >= g_imageBase &&
         reinterpret_cast<std::uintptr_t>(childVtable[14]) <
             g_imageBase + 0x00400000u &&
+        reinterpret_cast<std::uintptr_t>(childVtable[14]) ==
+            g_imageBase + profile.childRefresh &&
         eraseTarget >= g_imageBase && eraseTarget < g_imageBase + 0x00400000u &&
         insertTarget >= g_imageBase && insertTarget < g_imageBase + 0x00400000u;
     return ValidateOccupantPanelProfile() &&
@@ -4549,7 +4622,9 @@ bool ValidateQuestBoardProfile() {
         OccupantCallMatches(
             profile.rowStatusFirstDrawCall, profile.rowStatusDraw) &&
         OccupantCallMatches(
-            profile.rowStatusSecondDrawCall, profile.rowStatusDraw);
+            profile.rowStatusSecondDrawCall, profile.rowStatusDraw) &&
+        OccupantCallMatches(
+            profile.childRefresh + 0x03, profile.sharedListRefresh);
 }
 
 bool EvaluateQuestBoardScalar(
@@ -4696,7 +4771,8 @@ bool ValidateOccupantPanelProfile() {
         g_stockControllerRegistry.liveAgentLists.end(),
         [](const QuestBoard& panel) {
             return panel.stayOnPanelAfterAction ||
-                !panel.focusSelectedRowOnClick;
+                !panel.focusSelectedRowOnClick ||
+                panel.actionUsesParent;
         });
     const bool sharedControlShape = !customHandoffPolicyRequested || (
         MatchesProfileBytes(
@@ -4746,6 +4822,28 @@ bool ValidateOccupantPanelProfile() {
 void* OccupantString(void* destination, const char* symbol) {
     using Construct = void* (__thiscall*)(void*, const char*);
     return reinterpret_cast<Construct>(g_imageBase + OccupantProfile().stringConstructor)(destination, symbol);
+}
+bool SetControllerControlText(
+    std::uint32_t controller,
+    std::uint32_t controlId,
+    const char* text) {
+    if (controller == 0 || text == nullptr) return false;
+    void* panel = *reinterpret_cast<void**>(controller + 0x24);
+    if (panel == nullptr) return false;
+    auto** vtable = *reinterpret_cast<void***>(panel);
+    if (vtable == nullptr || vtable[0x50 / sizeof(void*)] == nullptr) {
+        return false;
+    }
+    std::uint32_t nativeString[3] = {};
+    OccupantString(nativeString, text);
+    using SetControlText = void (__thiscall*)(
+        void*, std::uint32_t, const void*);
+    reinterpret_cast<SetControlText>(vtable[0x50 / sizeof(void*)])(
+        panel, controlId, nativeString);
+    using DestroyString = void (__thiscall*)(void*);
+    reinterpret_cast<DestroyString>(
+        g_imageBase + QuestBoardProfile().stringDestructor)(nativeString);
+    return true;
 }
 void* __fastcall OccupantCostString(void* destination, void*, const char* stockSymbol) {
     const char* symbol = stockSymbol;
@@ -5116,6 +5214,7 @@ using QuestVectorInsert = void* (__thiscall*)(
     void*, void*, void*, std::uint32_t*, std::uint32_t*);
 ControllerSetup g_stockQuestBoardPopulate = nullptr;
 ControllerSetup g_stockQuestBoardRefresh = nullptr;
+ControllerSetup g_stockQuestBoardSharedRefresh = nullptr;
 QuestVectorErase g_stockQuestVectorErase = nullptr;
 QuestVectorInsert g_stockQuestVectorInsert = nullptr;
 
@@ -5236,6 +5335,10 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
             "Live-agent-list rows disabled: the package revision callback could not be evaluated.");
         return;
     }
+    if (revision > 0x7FFFFFFFu) {
+        FaultQuestBoardPresentation(value, "List rows disabled: revision must be a nonnegative signed integer.");
+        return;
+    }
     g_questBoardPopulationRequested = false;
     g_requestedQuestRevision = -1;
     char contextTrace[256] = {};
@@ -5305,7 +5408,14 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
     for (std::size_t index = 0; index < count; ++index) {
         const std::uint32_t row = static_cast<std::uint32_t>(index + 1);
         void* rowAgent = nullptr;
-        if (!QueryQuestBoardAgent(
+        std::uint32_t recordKey = 0;
+        if (board->dataRecordRows) {
+            if (!QueryQuestBoard(board->rowAgentIdCallbackSymbol.c_str(), parent, row,
+                                 &recordKey, false) || recordKey == 0 || recordKey > 0x7FFFFFFFu) {
+                FaultQuestBoardPresentation(value, "Data-record list disabled: row keys must be positive signed integers.");
+                return;
+            }
+        } else if (!QueryQuestBoardAgent(
                 board->rowAgentIdCallbackSymbol.c_str(), parent, row,
                 &rowAgent, false)) {
             QueryQuestBoardAgent(
@@ -5317,10 +5427,11 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
             return;
         }
         for (std::size_t prior = 0; prior < index; ++prior) {
-            if (presentations[prior].agent == rowAgent) {
+            if (board->dataRecordRows ? presentations[prior].recordKey == recordKey
+                                      : presentations[prior].agent == rowAgent) {
                 FaultQuestBoardPresentation(
                     value,
-                    "Live-agent-list rows disabled: every row must return a distinct live agent.");
+                    "List rows disabled: every row must return a distinct identity.");
                 return;
             }
         }
@@ -5346,6 +5457,7 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
         }
         auto& presentation = presentations[index];
         presentation.agent = rowAgent;
+        presentation.recordKey = recordKey;
         if (rowTitleView != nullptr) {
             presentation.name.assign(rowTitleView->data, rowTitleView->length);
         }
@@ -5408,7 +5520,7 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
         agents[index] = static_cast<std::uint32_t>(
             reinterpret_cast<std::uintptr_t>(rowAgent));
     }
-    if (!ReplaceQuestListVector(value, agents, count)) {
+    if (!ReplaceQuestListVector(value, agents, board->dataRecordRows ? 0 : count)) {
         FaultQuestBoardPresentation(
             value,
             "Live-agent-list rows disabled: stock MX05 rejected the replacement agent vector.");
@@ -5420,6 +5532,7 @@ void __fastcall QuestBoardPopulate(void* controller, void*) {
     g_questOfferPresentationCount = count;
     for (std::size_t index = 0; index < count; ++index) {
         g_questOfferPresentations[index].agent = presentations[index].agent;
+        g_questOfferPresentations[index].recordKey = presentations[index].recordKey;
         g_questOfferPresentations[index].name =
             std::move(presentations[index].name);
         g_questOfferPresentations[index].detail =
@@ -5463,7 +5576,8 @@ void __fastcall QuestBoardEvent(
 
     if (a3 == 0x09435358u) {
         // This is the complete stock MX05 branch: one virtual slot-14 list
-        // refresh and return. Slot 14 and all presentation remain stock.
+        // refresh and return. The installed slot preserves stock-selected or
+        // declared parent-scoped cost presentation as appropriate.
         return;
     }
 
@@ -5491,13 +5605,226 @@ void __fastcall QuestBoardEvent(
         "Live-agent-list revision changed: previous=%d current=%lu; invoking stock MX05 refresh.",
         g_activeQuestRevision, static_cast<unsigned long>(revision));
     WriteLog(revisionTrace);
-    if (g_stockQuestBoardRefresh == nullptr) {
+    if (g_stockQuestBoardRefresh == nullptr ||
+        (board->actionUsesParent &&
+         g_stockQuestBoardSharedRefresh == nullptr)) {
         StopUnsafeManagerRuntimeLaunch(
             "A live-agent-list controller lost MX05's native refresh virtual.");
     }
     g_requestedQuestRevision = static_cast<int>(revision);
     g_questBoardPopulationRequested = true;
-    g_stockQuestBoardRefresh(controller);
+    QuestBoardRefresh(controller, nullptr);
+}
+
+bool QueryQuestBoardParentActionCost(
+    void* controller,
+    const QuestBoard* board,
+    std::uint32_t* cost,
+    bool trace) {
+    if (!IsLiveQuestBoardController(controller, board) ||
+        !board->actionUsesParent || cost == nullptr) {
+        return false;
+    }
+    auto* parent = NativePanelContext(
+        reinterpret_cast<std::uint32_t>(controller));
+    return parent != nullptr && QueryQuestBoard(
+        board->actionCostCallbackSymbol.c_str(), parent, 0, cost, trace) &&
+        *cost <= 0x7FFFFFFFu;
+}
+
+bool PresentQuestBoardParentActionStock(
+    std::uint32_t controller,
+    std::uint32_t cost,
+    bool affordable) {
+    SendControllerMessage(
+        controller, 0x138Bu, 0x0Au, affordable ? 0u : 1u, 0u);
+    char price[24] = {};
+    std::snprintf(
+        price, sizeof(price), "%lu", static_cast<unsigned long>(cost));
+    return SetControllerControlText(controller, 0x1F46u, price);
+}
+using QuestBoardParentActionPresenter = bool (*)(
+    std::uint32_t, std::uint32_t, bool);
+QuestBoardParentActionPresenter g_questBoardParentActionPresenter =
+    &PresentQuestBoardParentActionStock;
+
+void RefreshQuestBoardParentAction(void* controller) {
+    const auto* board = g_activeQuestBoard;
+    if (board == nullptr || !board->actionUsesParent ||
+        g_activeQuestBoardFaulted) {
+        return;
+    }
+    std::uint32_t cost = 0;
+    if (!QueryQuestBoardParentActionCost(controller, board, &cost, false)) {
+        QueryQuestBoardParentActionCost(controller, board, &cost, true);
+        FaultQuestBoardPresentation(
+            reinterpret_cast<std::uint32_t>(controller),
+            "Live-agent-list parent action disabled: its action-cost callback did not return a bounded integer.");
+        return;
+    }
+    const int gold = StockCurrentPlayerGold();
+    if (!g_questBoardParentActionPresenter(
+            reinterpret_cast<std::uint32_t>(controller),
+            cost,
+            gold >= 0 && static_cast<std::uint32_t>(gold) >= cost)) {
+        FaultQuestBoardPresentation(
+            reinterpret_cast<std::uint32_t>(controller),
+            "Live-agent-list parent action disabled: MX05 rejected its stock price presentation.");
+    }
+}
+
+int __fastcall QuestBoardControl(
+    void* controller, void*, std::uint32_t controlId) {
+    const auto* board = g_activeQuestBoard;
+    if (board != nullptr && board->dataRecordRows && IsLiveQuestBoardController(controller, board)) {
+        // MX05's row-click branch calls its Unit-based cost evaluator before
+        // the common focus handoff. Never enter it for data rows. Likewise its
+        // detail/tabs/selection-transfer commands are native Unit operations.
+        if (controlId == 0x1388u || (controlId >= 0x138Cu && controlId <= 0x138Fu) ||
+            controlId == 0x1F40u || controlId == 0x1F41u) return 0;
+        if (controlId == 0x138Bu && g_activeQuestBoardFaulted) return 0;
+    }
+    if (controlId != 0x138Bu || board == nullptr ||
+        !board->actionUsesParent || g_activeQuestBoardFaulted ||
+        !IsLiveQuestBoardController(controller, board)) {
+        return g_stockQuestBoardControl(controller, controlId);
+    }
+    auto* parent = NativePanelContext(
+        reinterpret_cast<std::uint32_t>(controller));
+    std::uint32_t cost = 0;
+    if (parent == nullptr || !QueryQuestBoardParentActionCost(
+            controller, board, &cost, false)) {
+        QueryQuestBoardParentActionCost(controller, board, &cost, true);
+        FaultQuestBoardPresentation(
+            reinterpret_cast<std::uint32_t>(controller),
+            "Live-agent-list parent action refused: its parent or cost callback is invalid.");
+        return 0;
+    }
+    const int gold = StockCurrentPlayerGold();
+    if (gold < 0 || static_cast<std::uint32_t>(gold) < cost) {
+        RefreshQuestBoardParentAction(controller);
+        return 0;
+    }
+    const std::uint32_t parentHandle =
+        *reinterpret_cast<const std::uint32_t*>(parent + 0x70);
+    if (parentHandle == 0) {
+        FaultQuestBoardPresentation(
+            reinterpret_cast<std::uint32_t>(controller),
+            "Live-agent-list parent action refused: its stock parent handle is unavailable.");
+        return 0;
+    }
+    // This is MX05's existing four-word paid-action packet. The package's
+    // declared parent action uses the live parent building for both handles;
+    // queued validation, debit, callback routing, event refresh, and cleanup
+    // remain in the unchanged stock 0x15 executor lifecycle.
+    SubmitOccupantAction(
+        0x15u, parentHandle, parentHandle, cost);
+    if (g_questOfferPresentationCount == 0 ||
+        board->stayOnPanelAfterAction) {
+        // An empty list has no valid stock world-focus target. The existing
+        // non-transition result keeps the child alive for revision refresh.
+        return 0;
+    }
+    return g_stockQuestBoardSharedControl(controller, controlId);
+}
+
+bool RefreshDataRecordListStock(void* controller) {
+    const auto value = reinterpret_cast<std::uint32_t>(controller);
+    void* panel = *reinterpret_cast<void**>(value + 0x24);
+    if (panel == nullptr) return false;
+    void* dialog = *reinterpret_cast<void**>(static_cast<unsigned char*>(panel)+4);
+    if (dialog == nullptr) return false;
+    using Find = void* (__thiscall*)(void*, std::uint32_t);
+    void* list = reinterpret_cast<Find>(g_imageBase +
+        (g_buildProfile == &kPublicBuildProfile ? 0x002524C0 : 0x00267920))(dialog, 0x1388u);
+    if (list == nullptr) return false;
+    const auto nativeVtable = g_imageBase +
+        (g_buildProfile == &kPublicBuildProfile ? 0x0034F76C : 0x00369844);
+    if (*reinterpret_cast<std::uintptr_t*>(list) != nativeVtable) return false;
+    // Literal CYDialogListboxItem message dispatch. Clear only MX05's
+    // Unit-specific callback; its native text painter, scrollbar, mouse and
+    // keyboard selection, owned strings, and destruction stay stock.
+    SendControllerMessage(value, 0x1388u, 7u, 0u, 0u);
+    QuestBoardPopulate(controller, nullptr);
+    const int revision = g_activeQuestBoardFaulted ? -2 : g_activeQuestRevision;
+    if (g_renderedDataRecordRevision == revision) return true;
+    auto send = [list](std::uint32_t message, std::uint32_t first, std::uint32_t second) {
+        using Message = std::uint32_t (__thiscall*)(void*, std::uint32_t, std::uint32_t, std::uint32_t);
+        return reinterpret_cast<Message>((*static_cast<void***>(list))[0x9C/4])(list, message, first, second);
+    };
+    const auto oldCount = send(0x18u, 0, 0);
+    if (oldCount > kMaximumQuestOffers) return false;
+    const auto selected = send(0x22u, 0, 0);
+    const auto top = *reinterpret_cast<std::uint32_t*>(static_cast<unsigned char*>(list)+0x64);
+    std::uint32_t selectedKey = 0, topKey = 0;
+    if (selected < oldCount) send(0x37u, selected, reinterpret_cast<std::uint32_t>(&selectedKey));
+    if (top < oldCount) send(0x37u, top, reinterpret_cast<std::uint32_t>(&topKey));
+    for (std::uint32_t i = 0; i < oldCount; ++i) send(0x27u, 0, 0);
+    if (send(0x18u, 0, 0) != 0) return false;
+    // The stock list's row height and icon inset, as used by shared MX05
+    // refresh. Text-only records reserve three lines and no icon column.
+    *reinterpret_cast<int*>(static_cast<unsigned char*>(list)+0x50) = 48;
+    *reinterpret_cast<int*>(static_cast<unsigned char*>(list)+0x58) = 0;
+    int selectedIndex = -1, topIndex = 0;
+    const auto count = g_activeQuestBoardFaulted ? 0 : g_questOfferPresentationCount;
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& row = g_questOfferPresentations[i];
+        using Insert = int (__thiscall*)(void*, std::uint32_t, int, int);
+        const int index = reinterpret_cast<Insert>((*static_cast<void***>(panel))[0x34/4])(
+            panel, 0x1388u, -1, 0);
+        if (index < 0 || static_cast<std::size_t>(index) >= kMaximumQuestOffers) return false;
+        char text[512] = {};
+        std::snprintf(text, sizeof(text), row.summaryTemplate.c_str(), row.name.c_str());
+        std::uint32_t nativeString[3] = {};
+        using Construct = void* (__thiscall*)(void*, const char*);
+        using Destroy = void (__thiscall*)(void*);
+        reinterpret_cast<Construct>(g_imageBase+OccupantProfile().stringConstructor)(nativeString, text);
+        send(0x60u, index, reinterpret_cast<std::uint32_t>(nativeString));
+        reinterpret_cast<Destroy>(g_imageBase+QuestBoardProfile().stringDestructor)(nativeString);
+        send(0x25u, index, row.recordKey);
+        if (row.recordKey == selectedKey) selectedIndex = index;
+        if (row.recordKey == topKey) topIndex = index;
+    }
+    send(0x1Bu, static_cast<std::uint32_t>(selectedIndex), 0);
+    send(0x21u, static_cast<std::uint32_t>(topIndex), 1);
+    using Link = void (__thiscall*)(void*, std::uint32_t, std::uint32_t, int, int);
+    reinterpret_cast<Link>((*static_cast<void***>(panel))[0x28/4])(panel, 0x1392u, 0x1388u, 1, 0);
+    g_renderedDataRecordRevision = revision;
+    return true;
+}
+
+void __fastcall QuestBoardRefresh(void* controller, void*) {
+    const auto* board = g_activeQuestBoard;
+    if (board != nullptr && board->dataRecordRows && IsLiveQuestBoardController(controller, board)) {
+        if (!RefreshDataRecordListStock(controller)) {
+            FaultQuestBoardPresentation(reinterpret_cast<std::uint32_t>(controller),
+                "Data-record list disabled: the native text-list operation failed.");
+        }
+    } else if (board != nullptr && board->actionUsesParent &&
+        IsLiveQuestBoardController(controller, board)) {
+        // Stock MX05 slot 14 is exactly a shared list refresh followed by its
+        // selected-row cost presenter. Parent-scoped actions must not expose
+        // a transient row to the package callback, so preserve the first
+        // stock half and replace only the incompatible selected-row quote.
+        g_stockQuestBoardSharedRefresh(controller);
+    } else {
+        g_stockQuestBoardRefresh(controller);
+    }
+    RefreshQuestBoardParentAction(controller);
+}
+
+ControllerSetup g_stockQuestBoardSetup = nullptr;
+void __fastcall QuestBoardSetup(void* controller, void*) {
+    g_stockQuestBoardSetup(controller);
+    const auto* board = g_activeQuestBoard;
+    if (board != nullptr && board->dataRecordRows && IsLiveQuestBoardController(controller, board)) {
+        const auto value = reinterpret_cast<std::uint32_t>(controller);
+        // Shared stock setup hides the bottom action when its Unit vector is
+        // empty. Independent records deliberately leave that vector empty;
+        // the parent-scoped action does not require a selected row.
+        SetControllerControlVisible(value, 0x138Bu, true);
+        RefreshQuestBoardParentAction(controller);
+    }
 }
 
 bool InstallQuestBoardChildVtable(std::uint32_t controller) {
@@ -5513,10 +5840,15 @@ bool InstallQuestBoardChildVtable(std::uint32_t controller) {
                 &SecondaryPanelControllerDestroyed, nullptr)) return false;
         g_stockQuestBoardEvent =
             reinterpret_cast<ControllerEvent>(stock[8]);
+        g_stockQuestBoardSetup = reinterpret_cast<ControllerSetup>(stock[1]);
+        g_stockQuestBoardControl =
+            reinterpret_cast<ControllerControl>(stock[3]);
         g_stockQuestBoardPopulate =
             reinterpret_cast<ControllerSetup>(stock[11]);
         g_stockQuestBoardRefresh =
             reinterpret_cast<ControllerSetup>(stock[14]);
+        g_stockQuestBoardSharedRefresh = reinterpret_cast<ControllerSetup>(
+            g_imageBase + QuestBoardProfile().sharedListRefresh);
         const auto* population =
             reinterpret_cast<const unsigned char*>(stock[11]);
         const auto eraseTarget = RelativeCallTarget(population + 0x3F);
@@ -5529,14 +5861,15 @@ bool InstallQuestBoardChildVtable(std::uint32_t controller) {
             reinterpret_cast<QuestVectorErase>(eraseTarget);
         g_stockQuestVectorInsert =
             reinterpret_cast<QuestVectorInsert>(insertTarget);
+        table[1] = reinterpret_cast<void*>(&QuestBoardSetup);
+        table[3] = reinterpret_cast<void*>(&QuestBoardControl);
         table[8] = reinterpret_cast<void*>(&QuestBoardEvent);
         table[11] = reinterpret_cast<void*>(&QuestBoardPopulate);
-        // Slot 14 is MX05's high-frequency stock paint/update path. Keep its
-        // vtable entry byte-for-byte stock; slot 11 has its own explicit
-        // first-open/revision gate for package population.
+        table[14] = reinterpret_cast<void*>(&QuestBoardRefresh);
     }
     *object = table;
     InterlockedExchange(&g_childController, static_cast<LONG>(controller));
+    g_renderedDataRecordRevision = -1;
     return true;
 }
 
@@ -5602,15 +5935,18 @@ bool InstallOccupantParentVtable(std::uint32_t controller) {
             : g_parentOpenToggleRecord != nullptr
                 ? g_parentOpenToggleRecord->parentControllerBase
                 : 0;
-    entry->entryCount = declaredBase == kAp08DialogId
-        ? kAp08VtableEntries : kAp10VtableEntries;
-    if (declaredBase == 0 ||
-        (declaredBase == kAp08DialogId &&
-         entry->stock != reinterpret_cast<void**>(
-             g_imageBase + QuestBoardProfile().parentVtable))) {
+    const auto* catalogRecord =
+        MajestyStockBuildingControllers::Find(declaredBase);
+    const auto* catalogProfile = MajestyStockBuildingControllers::Profile(
+        catalogRecord, g_buildProfile != &kPublicBuildProfile);
+    if (catalogProfile == nullptr ||
+        catalogProfile->entryCount > kAp10VtableEntries ||
+        entry->stock != reinterpret_cast<void**>(
+            g_imageBase + catalogProfile->vtableRva)) {
         delete entry;
         return false;
     }
+    entry->entryCount = catalogProfile->entryCount;
     std::memcpy(
         entry->table, entry->stock, entry->entryCount * sizeof(void*));
     if (!MajestyControllerLifecycle::RegisterManagedVtable(entry->table, entry->stock,
@@ -6749,6 +7085,7 @@ DWORD WINAPI InitializeRuntime(void*) {
         HasRuntimeCapability(
             MajestyRuntimeCapabilities::kGenericEnchantmentRow);
     if (requestedNameGeneratorHook != privateNameGenerators ||
+        HasRuntimeCapability(MajestyRuntimeCapabilities::kMapFogQuery) != g_runtimeFeatureRegistry.mapFogQuery ||
         requestedEnchantmentRowHook != privateEnchantmentRows ||
         requestedStockControllerRecipes != stockControllerRecipes) {
         StopUnsafeManagerRuntimeLaunch(
@@ -6762,6 +7099,11 @@ DWORD WINAPI InitializeRuntime(void*) {
     if (privateRewardFlagRecipes && !PrepareRewardFlagRuntimeRecords()) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: private reward flag callbacks could not be prepared from stock Fl00.");
+    }
+    if (g_runtimeFeatureRegistry.mapFogQuery) {
+        RequireManagerRuntimeInstall(
+            InstallMapQueryRuntime(g_imageBase, g_buildProfile == &kPublicBuildProfile),
+            managerLaunch, "The stock GPL map-query registration boundary did not match its profile.");
     }
 
     if (privateActivityText) {

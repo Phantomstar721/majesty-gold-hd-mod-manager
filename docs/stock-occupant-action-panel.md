@@ -11,9 +11,9 @@ It does not identify a particular guild, Workshop item, UUID, or unit type.
    A package's opener makes that same call with its manager-resolved child ID.
    The factory aliases the child controller class to MX05 while retaining
    the package-owned streamed menu/string resources and building context.
-   The parent retains its declared AP07, AP08, AP10, or MX09 class. AP08 uses
-   its exact 13-entry parent vtable; the other supported parent classes retain
-   their exact 17-entry boundary.
+   The parent retains its declared cataloged stock primary-building class. The
+   runtime verifies its exact public/beta vtable and preserves that class's
+   audited 11-, 13-, 14-, or 17-entry boundary.
 2. MX05 allocates `0x4C` bytes and constructs the normal list controller. It
    sets list mode `1`, binds the current player with the stock zero secondary
    filter, installs the ordinary list callback, and performs stock setup. The

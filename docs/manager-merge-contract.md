@@ -94,12 +94,21 @@ matching `SMNU` and `STRT`, allocates a collision-free internal ID, and rewrites
 the Description and both CAM resources together. Set `custom_buildings` to `[]`
 when the mod has no custom building.
 
-The currently proved building combinations are `AP07` controller behavior with
-an `AP10` panel template, `AP10` controller behavior with an `AP10` panel
-template, and `MX09` controller behavior with an `MX09` panel template when
-paired with the typed AP41 reward-panel recipe below. Other FourCCs are not
-guesses or extension points; they require a
-stock-lifecycle implementation in the Mod Manager first.
+The Manager catalogs every stock primary-building controller present in both
+supported executables:
+
+`AP01`, `AP02`, `AP05`, `AP06`, `AP07`, `AP08`, `AP10`, `AP14`, `AP17`,
+`AP19`, `AP23`, `AP24`, `AP25`, `AP26`, `AP28`, `AP31`, `AP39`, `AP47`,
+`AP48`, `AP51`, `AP52`, `AP53`, `AP54`, `AP76`, `AP96`, `APa9`, `APb2`,
+`APb3`, `APb7`, `APb8`, `APc3`, `APc4`, `MX00`, `MX02`, `MX04`, `MX06`,
+`MX08`, `MX09`, and `MX22`.
+
+Normally `controller_base` and `panel_resource_template` use the same ID,
+meaning the package cloned that stock building's behavior and primary panel.
+The established `AP07` controller with an `AP10` template is also accepted.
+Other cross-pairings are rejected because sharing a C++ class does not prove
+that two panel command layouts are interchangeable. `MX09` is the parent used
+with the typed AP41 reward-panel recipe below.
 
 The controller's construction, dispatch, state ownership, callbacks, cleanup,
 cancellation, and UI refresh lifecycle must be traced to its declared stock
@@ -251,13 +260,13 @@ queued payment/action lifecycle. Add this record to `runtime_features`:
 }
 ```
 
-The parent must be a declared custom building using one of the supported
-controller/template pairs: `AP07`/`AP10`, `AP08`/`AP08`, `AP10`/`AP10`, or
-`MX09`/`MX09`. Its private opener must emit `open_command_id`. AP08 parents keep
-their complete 13-entry stock controller boundary; selecting AP08 does not turn
-this recipe into a quest board. Multiple panels can share a building, including
-an existing research or reward panel, with distinct keys, child resources, and
-opener commands.
+The parent must be a declared custom building using a cataloged stock
+primary-building controller and its matching stock panel template. Its private
+opener must emit `open_command_id`. Every parent keeps its exact audited stock
+controller boundary; choosing a controller does not change this recipe's MX05
+child behavior. Multiple panels can share a building, including an existing
+research or reward panel, with distinct keys, child resources, and opener
+commands.
 
 Supply package-owned `SMNU/VP01` and `STRT/VP01` cloned from stock `MX05`.
 Change text, art, and layout but keep its local control IDs: `0x1388` list,
@@ -318,13 +327,14 @@ live agents through MX05's native list lifecycle:
   "action_cost_callback_symbol": "YourMod_Action_Cost",
   "action_callback_symbol": "YourMod_Action_After_Debit",
   "stay_on_panel_after_action": true,
-  "focus_selected_row_on_click": false
+  "focus_selected_row_on_click": false,
+  "action_agent_scope": "parent"
 }
 ```
 
-The parent must be a declared custom building using `AP07`/`AP10`,
-`AP08`/`AP08`, `AP10`/`AP10`, or `MX09`/`MX09` as its controller/template
-pair. The package owns one exact
+The parent must be a declared custom building using a cataloged stock
+primary-building controller and its matching stock panel template. The package
+owns one exact
 stock-shaped MX05 child SMNU/STRT pair and may choose the label of its one
 native bottom action. The Manager allocates the final child and queued-action
 IDs.
@@ -338,8 +348,11 @@ same optional `row_title_text`/`row_text` on every row, or set both to null and
 provide up to 64 package-declared `row_variants` plus an integer
 `row_variant_callback_symbol`. That callback returns a one-based variant index
 for `(Parent, Row)`; it never returns text. The optional per-row integer plus
-suffix is rendered on its own reward line. MX05 passes the selected row agent
-to the action cost and after-debit callbacks. The optional
+suffix is rendered on its own reward line. `action_agent_scope` optionally
+selects `"selected-row"` (the default) or `"parent"`. Selected-row scope passes
+the selected row agent to both action callbacks. Parent scope passes the durable
+parent building regardless of selection and keeps the paid bottom action usable
+with zero rows; use it for panel-global actions such as Refresh. The optional
 `stay_on_panel_after_action` boolean defaults to `false`. Set it to `true` when
 a successful action should keep this child list open instead of using MX05's
 stock post-submit transfer of world selection to the selected row. It does not
@@ -353,8 +366,8 @@ See [the generic MX05 live-agent-list proof](stock-quest-board-panel.md) for
 the exact resource geometry, callback signatures, stock lifecycle, and fault
 bounds.
 
-An `AP07`, `AP10`, or `MX09` building can use MX22's persistent open/closed
-state and paired-control presentation:
+Any cataloged stock primary-building controller can use MX22's persistent
+open/closed state and paired-control presentation:
 
 ```json
 {
@@ -383,6 +396,42 @@ does not submit Embassy order `0x16` or create an Embassy recruit order; those
 side effects belong only to the Embassy. Toggle keys, parents, and commands
 must remain unambiguous across the complete merged selection. See
 [the building-toggle lifecycle](stock-building-open-toggle.md).
+
+A package can attach a private hero task to Majesty's complete stock hero
+decision lifecycle without replacing any hero decision tree:
+
+```json
+{
+  "type": "stock.hero-quest-lifecycle.v1",
+  "feature_key": "private-hero-tasks",
+  "hero_scripts": ["mx_adept", "mx_ranger"],
+  "resume_callback_symbol": "YourMod_ResumeHeroTask",
+  "consider_callback_symbol": "YourMod_ConsiderHeroTask",
+  "reset_callback_symbol": "YourMod_ResetHeroTask",
+  "death_callback_symbol": "YourMod_HeroDeath"
+}
+```
+
+`hero_scripts` contains one to sixteen distinct stock script names from
+`mx_adept`, `mx_barbarian`, `mx_cultist`, `mx_discord`, `mx_dwarf`, `mx_elf`,
+`mx_gnome`, `mx_healer`, `mx_monk`, `mx_paladin`, `mx_priestess`, `mx_ranger`,
+`mx_rogue`, `mx_solarus`, `mx_warrior`, and `mx_wizard`. There is no class
+eligibility rule beyond that explicit package declaration.
+
+The resume and consideration callbacks must each be a package-owned GPL
+function with signature `Function Name(agent ThisAgent) is boolean`. Resume is
+called after unchanged `Check_Nearby` declines and before unchanged
+`Check_rewards`. Consideration is called after unchanged
+`Pursue_Entertainment` declines. Stock Healer and Monk intentionally omit that
+choice, so their consideration callback instead runs immediately after their
+unchanged `Purchase_Bazaar` choice declines. Returning `FALSE` preserves every
+following stock branch; return `TRUE` only after installing a complete private
+task. The reset and death callbacks must each use the void signature
+`Function Name(agent ThisAgent)`. They run at the stock `Reset_Tasks` entry and
+after `DeleteAllEffectors` but before `IGDeathScript`, respectively. All four
+symbols must be distinct, must exist exactly once in package GPL source, and
+must not collide with another selected package. Missing, duplicated, or
+modified stock anchors fail closed.
 
 A package can add a low-priority hero purchase choice without replacing the
 whole stock `Purchase_Equipment` function:

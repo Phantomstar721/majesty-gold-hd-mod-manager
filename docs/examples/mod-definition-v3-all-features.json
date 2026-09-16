@@ -61,6 +61,15 @@
       "callback_symbol": "Example_Post_Bazaar_Visit_Check"
     },
     {
+      "type": "stock.hero-quest-lifecycle.v1",
+      "feature_key": "private-hero-tasks",
+      "hero_scripts": ["mx_adept", "mx_ranger"],
+      "resume_callback_symbol": "Example_ResumeHeroTask",
+      "consider_callback_symbol": "Example_ConsiderHeroTask",
+      "reset_callback_symbol": "Example_ResetHeroTask",
+      "death_callback_symbol": "Example_HeroDeath"
+    },
+    {
       "type": "stock.ap10-ap69-secondary-panel.v1",
       "panel_key": "crafting-panel",
       "parent_building": "ExampleCraftingGuild",

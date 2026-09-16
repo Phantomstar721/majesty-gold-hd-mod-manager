@@ -22,9 +22,11 @@ from .gpl_features import (
 from .runtime_features import (
     EnchantmentRowFeature,
     NameGeneratorFeature,
+    MapFogQueryFeature,
     RuntimeFeature,
     normalize_runtime_features,
 )
+from .stock_building_controllers import is_stock_building_controller_pair
 from .stock_controller_features import (
     ControllerFeature,
     ControllerFeatureError,
@@ -428,19 +430,14 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 building.panel_resource_template,
                 f"{context}.panel_resource_template",
             )
-            if (
+            if not is_stock_building_controller_pair(
                 building.controller_base,
                 building.panel_resource_template,
-            ) not in {
-                ("AP07", "AP10"),
-                ("AP08", "AP08"),
-                ("AP10", "AP10"),
-                ("MX09", "MX09"),
-            }:
+            ):
                 raise PackageFormatError(
                     f"{context} requests an unsupported stock controller/panel "
-                    "combination; supported combinations are AP07/AP10, "
-                    "AP08/AP08, AP10/AP10, and MX09/MX09"
+                    "combination; use a cataloged stock primary-building "
+                    "controller with its matching stock panel template"
                 )
         else:
             assert building.dialog_id is not None
@@ -506,6 +503,10 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 name_part_ids=(tables[0], tables[1], tables[2], tables[3]),
             )
             feature_key = (feature_type, generator_id.casefold())
+        elif feature_type == "stock.map-fog-query.v1":
+            _require_exact_fields(raw_feature, {"type"}, context)
+            feature = MapFogQueryFeature()
+            feature_key = (feature_type, "shared")
         elif feature_type == "stock.ap78-enchantment-row.v1":
             _require_exact_fields(
                 raw_feature, {"type", "overlay_id", "display_text"}, context
@@ -567,6 +568,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 "stock.ap10-ap69-secondary-panel.v1",
                 "stock.mx04-mx05-occupant-action-panel.v1",
                 "stock.mx05-live-agent-list-panel.v1",
+                "stock.mx05-data-record-list-panel.v1",
                 "stock.mx09-ap41-reward-panel.v1",
                 "stock.ap17-upgrade-research-gate.v1",
             }:
@@ -591,7 +593,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 f"duplicate runtime feature identity: {feature_key[1]!r}"
             )
         seen_feature_keys.add(feature_key)
-        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature)):
+        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature)):
             try:
                 normalize_runtime_features((feature,))
             except ValueError as exc:
@@ -1026,6 +1028,16 @@ def _select_definition(
 
 
 def _validate_definition_object(definition: ModDefinition) -> ModDefinition:
+    return parse_mod_definition(mod_definition_mapping(definition))
+
+
+def mod_definition_mapping(definition: ModDefinition) -> dict:
+    """Canonical package-definition data shared by validation and fingerprints.
+
+    Keep every supported feature's mapping in this one serialization path;
+    consumers must not maintain a separate feature-type whitelist.
+    """
+
     value = {
         "schema_version": definition.schema_version,
         "mod_id": definition.mod_id,
@@ -1054,10 +1066,12 @@ def _validate_definition_object(definition: ModDefinition) -> ModDefinition:
             _runtime_feature_mapping(feature)
             for feature in definition.runtime_features
         ]
-    return parse_mod_definition(value)
+    return value
 
 
 def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
+    if isinstance(feature, MapFogQueryFeature):
+        return {"type": "stock.map-fog-query.v1"}
     if isinstance(feature, NameGeneratorFeature):
         return {
             "type": "stock.name-generator.v1",
@@ -1208,5 +1222,6 @@ __all__ = [
     "load_mod_definition",
     "load_package",
     "load_standard_component",
+    "mod_definition_mapping",
     "parse_mod_definition",
 ]

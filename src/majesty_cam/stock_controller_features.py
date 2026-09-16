@@ -172,7 +172,22 @@ class StockMx05LiveAgentListPanel:
     row_variants: Tuple[LiveAgentListRowVariant, ...] = ()
     stay_on_panel_after_action: bool = False
     focus_selected_row_on_click: bool = True
+    action_agent_scope: str = "selected-row"
     type: str = "stock.mx05-live-agent-list-panel.v1"
+
+
+@dataclass(frozen=True)
+class StockMx05DataRecordListPanel(StockMx05LiveAgentListPanel):
+    """MX05 presentation with native text rows, never native Unit pointers.
+
+    The shared carrier keeps the legacy identity-slot name internally; JSON
+    uses row_key_callback_symbol. This distinct type never changes live rows.
+    """
+
+    stay_on_panel_after_action: bool = True
+    focus_selected_row_on_click: bool = False
+    action_agent_scope: str = "parent"
+    type: str = "stock.mx05-data-record-list-panel.v1"
 
 
 @dataclass(frozen=True)
@@ -333,6 +348,7 @@ _FEATURE_TYPES = {
     "stock.mx22-building-open-toggle.v1": StockMx22BuildingOpenToggle,
     "stock.mx04-mx05-occupant-action-panel.v1": StockMx04Mx05OccupantActionPanel,
     "stock.mx05-live-agent-list-panel.v1": StockMx05LiveAgentListPanel,
+    "stock.mx05-data-record-list-panel.v1": StockMx05DataRecordListPanel,
     "stock.ap10-ap69-secondary-panel.v1": StockAp10Ap69SecondaryPanel,
     "stock.mx09-ap41-reward-panel.v1": StockMx09Ap41RewardPanel,
     "stock.ap41-fl00-hostile-monster-flag.v1": StockAp41Fl00HostileMonsterFlag,
@@ -525,6 +541,9 @@ def parse_controller_feature(value: Mapping[str, object]) -> ControllerFeature:
         )
     cls = _FEATURE_TYPES[feature_type]
     expected = {field.name for field in fields(cls)}
+    if cls is StockMx05DataRecordListPanel:
+        expected.remove("row_agent_id_callback_symbol")
+        expected.add("row_key_callback_symbol")
     actual = set(value)
     optional = (
         {
@@ -532,8 +551,9 @@ def parse_controller_feature(value: Mapping[str, object]) -> ControllerFeature:
             "row_variants",
             "stay_on_panel_after_action",
             "focus_selected_row_on_click",
+            "action_agent_scope",
         }
-        if cls is StockMx05LiveAgentListPanel else set()
+        if issubclass(cls, StockMx05LiveAgentListPanel) else set()
     )
     if not expected - optional <= actual or actual - expected:
         missing = sorted((expected - optional) - actual)
@@ -547,6 +567,8 @@ def parse_controller_feature(value: Mapping[str, object]) -> ControllerFeature:
             "controller feature fields are invalid: " + "; ".join(details)
         )
     arguments = dict(value)
+    if cls is StockMx05DataRecordListPanel:
+        arguments["row_agent_id_callback_symbol"] = arguments.pop("row_key_callback_symbol")
     if cls is StockAp17UpgradeResearchGate:
         raw_requirements = arguments["requirements"]
         if not isinstance(raw_requirements, (list, tuple)):
@@ -567,13 +589,15 @@ def parse_controller_feature(value: Mapping[str, object]) -> ControllerFeature:
                 )
             )
         arguments["requirements"] = tuple(parsed_requirements)
-    elif cls is StockMx05LiveAgentListPanel:
+    elif issubclass(cls, StockMx05LiveAgentListPanel):
         # These fields extend v1 without invalidating existing packages that
         # use one static title/detail for every row.
         arguments.setdefault("row_variant_callback_symbol", None)
         arguments.setdefault("row_variants", ())
-        arguments.setdefault("stay_on_panel_after_action", False)
-        arguments.setdefault("focus_selected_row_on_click", True)
+        records = cls is StockMx05DataRecordListPanel
+        arguments.setdefault("stay_on_panel_after_action", records)
+        arguments.setdefault("focus_selected_row_on_click", not records)
+        arguments.setdefault("action_agent_scope", "parent" if records else "selected-row")
         raw_variants = arguments["row_variants"]
         if not isinstance(raw_variants, (list, tuple)):
             raise ControllerFeatureError("row_variants must be an array")
@@ -605,6 +629,8 @@ def controller_feature_mapping(feature: ControllerFeature) -> dict:
 
     feature = _validate_feature(feature)
     value = asdict(feature)
+    if isinstance(feature, StockMx05DataRecordListPanel):
+        value["row_key_callback_symbol"] = value.pop("row_agent_id_callback_symbol")
     if isinstance(feature, StockAp17UpgradeResearchGate):
         value["requirements"] = [
             asdict(requirement) for requirement in feature.requirements
@@ -713,6 +739,15 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
             if feature.cost_callback_symbol.casefold() == feature.action_callback_symbol.casefold():
                 raise ControllerFeatureError("occupant cost and action callbacks must be distinct")
         elif isinstance(feature, StockMx05LiveAgentListPanel):
+            if isinstance(feature, StockMx05DataRecordListPanel):
+                if feature.focus_selected_row_on_click or feature.action_agent_scope != "parent":
+                    raise ControllerFeatureError("data-record lists require no world focus and parent-scoped actions")
+                if not feature.stay_on_panel_after_action:
+                    raise ControllerFeatureError("data-record lists require stay_on_panel_after_action")
+                if (not feature.row_variants and feature.row_title_text is None) or any(
+                    variant.title_text is None for variant in feature.row_variants
+                ):
+                    raise ControllerFeatureError("every data-record row requires an explicit title")
             if type(feature.stay_on_panel_after_action) is not bool:
                 raise ControllerFeatureError(
                     "stay_on_panel_after_action must be true or false"
@@ -720,6 +755,10 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
             if type(feature.focus_selected_row_on_click) is not bool:
                 raise ControllerFeatureError(
                     "focus_selected_row_on_click must be true or false"
+                )
+            if feature.action_agent_scope not in {"selected-row", "parent"}:
+                raise ControllerFeatureError(
+                    "action_agent_scope must be 'selected-row' or 'parent'"
                 )
             paired_value_fields = (
                 feature.row_value_callback_symbol is not None,
@@ -1487,6 +1526,7 @@ __all__ = [
     "MAX_LIVE_AGENT_LIST_VARIANTS",
     "StockAp10Ap69SecondaryPanel",
     "StockMx05LiveAgentListPanel",
+    "StockMx05DataRecordListPanel",
     "StockAp17UpgradeResearchGate",
     "StockAp22ResourceMeter",
     "StockAp24RageCommandAction",

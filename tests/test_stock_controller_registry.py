@@ -88,6 +88,25 @@ class StockControllerRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(ControllerRegistryError, "row-focus policy"):
             decode_stock_controller_registry(bytes(invalid_focus_policy))
 
+        parent_scoped = resolve_stock_controller_registry(
+            (replace(feature, action_agent_scope="parent"),),
+            {"offers": (parent, child)},
+            occupant_parent_bases={"offers": "AP08"},
+            list_text_ids={"offers": LiveAgentListTextIds(
+                0, 0x68000001, 0x68000002
+            )},
+        )
+        parent_payload = encode_stock_controller_registry(parent_scoped)
+        self.assertEqual(struct.unpack_from("<I", parent_payload, 4)[0], 15)
+        self.assertTrue(parent_scoped.live_agent_lists[0].action_uses_parent)
+        self.assertEqual(
+            decode_stock_controller_registry(parent_payload), parent_scoped
+        )
+        invalid_agent_scope = bytearray(parent_payload)
+        struct.pack_into("<I", invalid_agent_scope, len(invalid_agent_scope) - 4, 2)
+        with self.assertRaisesRegex(ControllerRegistryError, "action-agent scope"):
+            decode_stock_controller_registry(bytes(invalid_agent_scope))
+
         with self.assertRaisesRegex(ControllerRegistryError, "manager-allocated"):
             encode_stock_controller_registry(replace(
                 registry,
@@ -172,7 +191,7 @@ class StockControllerRegistryTests(unittest.TestCase):
             "Rows_Variant",
         )
 
-    def test_building_open_toggle_round_trips_in_v4_without_package_identity(self) -> None:
+    def test_building_open_toggle_round_trips_with_ap08_parent(self) -> None:
         feature = StockMx22BuildingOpenToggle(
             toggle_key="rentals",
             parent_building="private-zoo",
@@ -183,7 +202,7 @@ class StockControllerRegistryTests(unittest.TestCase):
         registry = resolve_stock_controller_registry(
             (feature,),
             {},
-            toggle_parents={"rentals": (parent, "MX09")},
+            toggle_parents={"rentals": (parent, "AP08")},
         )
 
         payload = encode_stock_controller_registry(registry)
@@ -194,6 +213,7 @@ class StockControllerRegistryTests(unittest.TestCase):
         self.assertEqual(version, 4)
         self.assertEqual(counts[-2:], [0, 1])
         self.assertEqual(registry.building_open_toggles[0].parent_dialog_id, parent)
+        self.assertEqual(registry.building_open_toggles[0].parent_controller_base, "AP08")
         self.assertNotIn(b"private-zoo", payload)
 
     def setUp(self) -> None:

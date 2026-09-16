@@ -39,7 +39,8 @@ class RuntimeFeatureRegistryTests(unittest.TestCase):
             lifecycle = StockHeroQuestLifecycle(
                 feature_key="quests",
                 hero_scripts=("mx_ranger",),
-                decision_callback_symbol="Quest_Decide",
+                resume_callback_symbol="Quest_Resume",
+                consider_callback_symbol="Quest_Consider",
                 reset_callback_symbol="Quest_Reset",
                 death_callback_symbol="Quest_Death",
             )
@@ -243,7 +244,7 @@ class RuntimeFeatureRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "magic"):
             decode_runtime_feature_registry(struct.pack("<4sIII", b"NOPE", 1, 0, 0))
         with self.assertRaisesRegex(ValueError, "version"):
-            decode_runtime_feature_registry(struct.pack("<4sIII", b"MMFR", 2, 0, 0))
+            decode_runtime_feature_registry(struct.pack("<4sIII", b"MMFR", 99, 0, 0))
         with self.assertRaisesRegex(ValueError, "name generators"):
             decode_runtime_feature_registry(struct.pack("<4sIII", b"MMFR", 1, 257, 0))
         with self.assertRaisesRegex(ValueError, "enchantment rows"):

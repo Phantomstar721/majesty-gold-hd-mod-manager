@@ -588,6 +588,23 @@ int main() {
             ap08Occupants.data(), ap08Occupants.size(), &registry, &error) ||
         registry.occupantActionPanels.size() != 1 ||
         registry.occupantActionPanels[0].parentControllerBase != ap08) return 45;
+    auto ap31Occupants = occupants;
+    const std::uint32_t ap31 = FourCC("AP31");
+    for (std::size_t index = 0; index < 4; ++index) {
+        ap31Occupants[ap31Occupants.size() - 4 + index] =
+            static_cast<unsigned char>((ap31 >> (index * 8)) & 0xFF);
+    }
+    if (!MajestyStockControllers::ParseRegistry(
+            ap31Occupants.data(), ap31Occupants.size(), &registry, &error) ||
+        registry.occupantActionPanels.size() != 1 ||
+        registry.occupantActionPanels[0].parentControllerBase != ap31) return 55;
+    auto unknownParent = occupants;
+    const std::uint32_t ap03 = FourCC("AP03");
+    for (std::size_t index = 0; index < 4; ++index) {
+        unknownParent[unknownParent.size() - 4 + index] =
+            static_cast<unsigned char>((ap03 >> (index * 8)) & 0xFF);
+    }
+    if (!ExpectInvalid(unknownParent, "occupant panel")) return 56;
     for (std::size_t size = 0; size < occupants.size(); ++size) {
         if (MajestyStockControllers::ParseRegistry(occupants.data(), size, &registry, &error)) return 37;
     }
@@ -602,10 +619,11 @@ int main() {
     AppendU32(&toggles, FourCC("Z001"));
     AppendU32(&toggles, 0x5D01);
     AppendU32(&toggles, 0x5D02);
-    AppendU32(&toggles, FourCC("MX09"));
+    AppendU32(&toggles, FourCC("AP08"));
     if (!MajestyStockControllers::ParseRegistry(
             toggles.data(), toggles.size(), &registry, &error) ||
         registry.buildingOpenToggles.size() != 1 ||
+        registry.buildingOpenToggles[0].parentControllerBase != FourCC("AP08") ||
         registry.FindBuildingOpenToggleByParent(FourCC("Z001")) == nullptr) {
         std::fprintf(stderr, "Generic building-toggle MMCR rejected: %s\n", error.c_str());
         return 39;
@@ -616,7 +634,7 @@ int main() {
     }
 
     auto quests = Header(0, 0, 0, 0, 0, 0, 0);
-    quests[4] = 14;
+    quests[4] = 15;
     AppendU32(&quests, 0);  // occupant panels
     AppendU32(&quests, 0);  // building toggles
     AppendU32(&quests, 1);  // live-agent lists
@@ -654,6 +672,7 @@ int main() {
     AppendU32(&quests, FourCC("AP08"));
     AppendU32(&quests, 1);  // remain on this child after a successful action
     AppendU32(&quests, 0);  // do not focus the selected row's world target
+    AppendU32(&quests, 1);  // quote and execute the action against its parent
     if (!MajestyStockControllers::ParseRegistry(
             quests.data(), quests.size(), &registry, &error) ||
         registry.liveAgentLists.size() != 1 ||
@@ -661,6 +680,7 @@ int main() {
         registry.liveAgentLists[0].rowVariants.size() != 2 ||
         !registry.liveAgentLists[0].stayOnPanelAfterAction ||
         registry.liveAgentLists[0].focusSelectedRowOnClick ||
+        !registry.liveAgentLists[0].actionUsesParent ||
         registry.FindLiveAgentListByChild(FourCC("QBP1")) == nullptr ||
         registry.FindLiveAgentListByParent(FourCC("AGP1")) == nullptr ||
         registry.FindLiveAgentListByCommand(0x20000) == nullptr) {
@@ -668,11 +688,31 @@ int main() {
         return 41;
     }
     auto invalidStayPolicy = quests;
-    invalidStayPolicy[invalidStayPolicy.size() - 8] = 2;
+    auto dataRecords = quests;
+    dataRecords[4] = 16;
+    AppendU32(&dataRecords, 1);
+    if (!MajestyStockControllers::ParseRegistry(dataRecords.data(), dataRecords.size(), &registry, &error) ||
+        !registry.liveAgentLists[0].dataRecordRows) return 57;
+    dataRecords[dataRecords.size()-8] = 0; // invalid selected-row action scope
+    if (!ExpectInvalid(dataRecords, "data-record list")) return 58;
+    invalidStayPolicy[invalidStayPolicy.size() - 12] = 2;
     if (!ExpectInvalid(invalidStayPolicy, "live-agent-list record")) return 52;
     auto invalidFocusPolicy = quests;
-    invalidFocusPolicy[invalidFocusPolicy.size() - 4] = 2;
+    invalidFocusPolicy[invalidFocusPolicy.size() - 8] = 2;
     if (!ExpectInvalid(invalidFocusPolicy, "live-agent-list record")) return 53;
+    auto invalidActionScope = quests;
+    invalidActionScope[invalidActionScope.size() - 4] = 2;
+    if (!ExpectInvalid(invalidActionScope, "live-agent-list record")) return 55;
+    auto v14Quests = quests;
+    v14Quests[4] = 14;
+    v14Quests.resize(v14Quests.size() - 4);
+    if (!MajestyStockControllers::ParseRegistry(
+            v14Quests.data(), v14Quests.size(), &registry, &error) ||
+        registry.liveAgentLists.size() != 1 ||
+        registry.liveAgentLists[0].actionUsesParent) {
+        std::fprintf(stderr, "MMCR v14 compatibility rejected: %s\n", error.c_str());
+        return 56;
+    }
     std::vector<unsigned char> obsoleteQuests = quests;
     obsoleteQuests[4] = 13;
     if (!ExpectInvalid(obsoleteQuests, "v13 live-agent lists")) return 54;

@@ -164,7 +164,7 @@ try {
         "runtime feature registry contains trailing bytes", "FindEnchantmentRow"
     ) "Runtime feature registry contract"
     Assert-ContainsAny @($controllerSource, $controllerHeader) @(
-        "kRegistryVersion = 14", "kMaximumRecordCount = 256",
+        "kRegistryVersion = 15", "kMaximumRecordCount = 256",
         "kMaximumPanelCount = 32", "kMaximumRegistryBytes = 512u * 1024u",
         "ParseRegistry", "FindPanelByParentDialog", "FindPanelByChildDialog",
         "FindRewardPanelByParentDialog", "FindHostileMonsterFlagByMode",
@@ -177,7 +177,8 @@ try {
         "MMCR private sovereign mode collides with a stock mode",
         "!buildingFamilies.insert(item->buildingFamilyId).second",
         "stockTargetModes.find(*mode)", "stockExecutorModes.find(*mode)",
-        "FindLiveAgentListByCommand", "MMCR v13 live-agent lists lack the row-focus policy",
+        "FindLiveAgentListByCommand", "actionUsesParent",
+        "MMCR v13 live-agent lists lack the row-focus policy",
         "MMCR v12 live-agent lists lack the post-action panel policy",
         "MMCR v11 live-agent lists lack per-row static variants",
         "MMCR v10 one-row quest lists are unsupported",
@@ -269,6 +270,22 @@ try {
         "A requested private name generator could not be registered",
         "StopUnsafeManagerRuntimeLaunch", "SignalManagerRuntimeReady"
     ) "Generic native runtime contract"
+    $profileValidation = Get-SourceSpan $runtimeSource `
+        "bool ValidateMajestyBuildProfile()" `
+        "bool __cdecl ResolveManagerIntentText("
+    Assert-ContainsAny @($profileValidation) @(
+        "!ValidateSelectedParentControllerProfiles()"
+    ) "Cataloged parent-controller runtime preflight"
+    $parentCatalogValidation = Get-SourceSpan $runtimeSource `
+        "bool ValidateSelectedParentControllerProfiles()" `
+        "// GplType's stock runtime tags"
+    Assert-ContainsAny @($parentCatalogValidation) @(
+        "occupantActionPanels", "liveAgentLists", "buildingOpenToggles",
+        "MajestyStockBuildingControllers::Find(controllerId)",
+        "profile->entryCount", "profile->vtableRva",
+        "profile->destructorRva", "profile->setupRva",
+        "profile->controlRva", "profile->eventRva"
+    ) "Selected parent-controller catalog validation"
 
     foreach ($forbidden in @(
         "CGAL", "CGBR", "Alchemist", "Weapon Oil", "Phoenix", "Vigor",
@@ -544,16 +561,27 @@ try {
         "bool InstallQuestBoardChildVtable(std::uint32_t controller) {" `
         "struct OccupantParentClass"
     Assert-ContainsAny @($questChildInstall) @(
+        "table[3] = reinterpret_cast<void*>(&QuestBoardControl);",
         "table[8] = reinterpret_cast<void*>(&QuestBoardEvent);",
-        "table[11] = reinterpret_cast<void*>(&QuestBoardPopulate);"
+        "table[11] = reinterpret_cast<void*>(&QuestBoardPopulate);",
+        "table[14] = reinterpret_cast<void*>(&QuestBoardRefresh);"
     ) "MX05 quest lifecycle hooks"
-    foreach ($forbiddenQuestChildOverride in @(
-        "table[3] =", "table[10] =", "table[14] ="
-    )) {
+    foreach ($forbiddenQuestChildOverride in @("table[10] =")) {
         if ($questChildInstall.Contains($forbiddenQuestChildOverride)) {
             throw "Quest-board MX05 child replaces a stock virtual: $forbiddenQuestChildOverride"
         }
     }
+    $questParentAction = Get-SourceSpan $runtimeSource `
+        "bool QueryQuestBoardParentActionCost(" `
+        "bool InstallQuestBoardChildVtable("
+    Assert-ContainsAny @($questParentAction) @(
+        "board->actionUsesParent",
+        "board->actionCostCallbackSymbol.c_str()",
+        "parentHandle, parentHandle, cost",
+        "g_stockQuestBoardControl(controller, controlId)",
+        "g_stockQuestBoardRefresh(controller);",
+        "g_stockQuestBoardSharedControl(controller, controlId)"
+    ) "Package-declared parent-scoped MX05 bottom action"
     Assert-ContainsAny @($runtimeSource) @(
         "Live-agent-list callback resolve:",
         "the row-count callback did not return an integer",
@@ -577,9 +605,10 @@ try {
         "bool InstallOccupantChildVtable(std::uint32_t controller) {"
     Assert-ContainsAny @($occupantParentInstall) @(
         "g_parentOccupantPanel->parentControllerBase",
-        "declaredBase == kAp08DialogId",
-        "kAp08VtableEntries"
-    ) "Declared AP08 occupant parent boundary"
+        "MajestyStockBuildingControllers::Find(declaredBase)",
+        "catalogProfile->entryCount",
+        "catalogProfile->vtableRva"
+    ) "Declared stock parent catalog boundary"
     $occupantChildInstall = Get-SourceSpan $runtimeSource `
         "bool InstallOccupantChildVtable(std::uint32_t controller) {" `
         "bool InstallRewardPanelControllerVtable(std::uint32_t controller) {"
@@ -596,14 +625,14 @@ try {
     }
     $questEvent = Get-SourceSpan $runtimeSource `
         "void __fastcall QuestBoardEvent(" `
-        "bool InstallQuestBoardChildVtable("
+        "bool QueryQuestBoardParentActionCost("
     Assert-Ordered $questEvent @(
         "g_stockQuestBoardEvent(",
         "if (a3 == 0x09435358u)",
         "return;",
         "if (g_activeQuestRevision == static_cast<int>(revision)) return;",
         "g_questBoardPopulationRequested = true;",
-        "g_stockQuestBoardRefresh(controller);"
+        "QuestBoardRefresh(controller, nullptr);"
     ) "MX05 stock XSCX and revision refresh"
     foreach ($forbiddenQuestEventWrite in @(
         "SetControllerControlInteger(", "SendControllerMessage("

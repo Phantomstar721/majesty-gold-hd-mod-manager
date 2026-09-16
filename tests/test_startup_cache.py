@@ -31,6 +31,7 @@ from majesty_cam.manager.qol_service import (
     resolve_qol_patch,
 )
 from majesty_cam.manager.startup_cache import (
+    _manager_cache_identity_paths,
     StartupCache,
     catalog_input_signature,
     metadata_signature,
@@ -42,6 +43,24 @@ MOD_ID = "8C48289E-7C70-4426-8913-133F3544A182"
 
 
 class StartupCacheTests(unittest.TestCase):
+    def test_source_parser_changes_invalidate_cached_checks(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            parser = root / "gpl.py"
+            parser.write_text("old parser", encoding="ascii")
+            manager_module = root / "manager" / "startup_cache.py"
+            with patch("majesty_cam.manager.startup_cache.__file__", str(manager_module)), \
+                    patch.object(sys, "frozen", False, create=True):
+                paths = _manager_cache_identity_paths()
+                self.assertIn(parser.resolve(), paths)
+                before = metadata_signature(paths)
+                parser.write_text("corrected callback parser", encoding="ascii")
+                self.assertNotEqual(metadata_signature(paths), before)
+
+    def test_packaged_cache_identity_remains_executable_only(self):
+        with patch.object(sys, "frozen", True, create=True):
+            self.assertEqual(_manager_cache_identity_paths(), (Path(sys.executable),))
+
     def test_catalog_round_trip_and_installed_content_change_invalidation(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)

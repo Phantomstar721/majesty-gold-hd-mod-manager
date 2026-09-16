@@ -30,6 +30,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
                 "stock.mx22-building-open-toggle.v1",
                 "stock.gplmx-purchase-equipment-tail.v1",
                 "stock.gplmx-purchase-bazaar-tail.v1",
+                "stock.hero-quest-lifecycle.v1",
                 "stock.ap22-resource-meter.v1",
                 "stock.ap99-research-row.v1",
                 "stock.ap17-upgrade-research-gate.v1",
