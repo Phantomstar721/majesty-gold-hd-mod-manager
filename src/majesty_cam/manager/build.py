@@ -23,6 +23,7 @@ from ..compose import (
     validate_gpl_feature_evidence,
     validate_composed_package,
 )
+from ..gameplay_events import event_stock_paths
 from ..gpl import (
     DefinitionKind,
     SemanticItem,
@@ -596,7 +597,7 @@ def create_build_plan(
     stock_compose_inputs: tuple[tuple[str, str], ...] = ()
     if game_path is not None and prepared and all(item.ready for item in prepared):
         try:
-            stock_compose_inputs = _fingerprint_stock_compose_inputs(game_path)
+            stock_compose_inputs = _fingerprint_stock_compose_inputs(game_path, prepared)
             if all(item.inventory is not None for item in prepared):
                 private_activity_texts = discover_private_activity_texts(
                     game_path,
@@ -1364,7 +1365,7 @@ def _require_current_plan_sources(
     ):
         return
     try:
-        stock_compose_inputs = _fingerprint_stock_compose_inputs(game_path)
+        stock_compose_inputs = _fingerprint_stock_compose_inputs(game_path, plan.selected_merge)
         current = _plan_fingerprint(
             plan.selected_merge,
             owner_resolutions=plan.resolution_owners,
@@ -1432,13 +1433,17 @@ def _plan_source_metadata_signature(
 
 def _fingerprint_stock_compose_inputs(
     game_path: Path,
+    prepared: Sequence[PreparedMergeMod] = (),
 ) -> tuple[tuple[str, str], ...]:
     return tuple(
         (
             item.relative_path.as_posix(),
             item.sha256 if item.present else "absent",
         )
-        for item in snapshot_stock_compose_inputs(game_path)
+        for item in snapshot_stock_compose_inputs(game_path, extra_relative_paths=event_stock_paths(
+            feature for prepared_item in prepared
+            for feature in getattr(getattr(prepared_item.selected_mod.package, "definition", None),
+                                   "runtime_features", ())))
     )
 
 

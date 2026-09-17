@@ -9,6 +9,7 @@ apply/remove orchestration.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -96,6 +97,10 @@ BETA2_BRANCH = MajestyBranch(
 )
 
 SUPPORTED_BRANCHES = (PUBLIC_BRANCH, BETA2_BRANCH)
+
+# Change this if status interpretation changes independently of the shipped
+# scripts/specs. UI/runtime rebuilds do not change canonical patch evidence.
+QOL_INSPECTION_CACHE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -343,11 +348,24 @@ class QolService:
 
     def inspect(self) -> QolCatalogSnapshot:
         branch = detect_majesty_branch(self.game_executable)
-        utilities = tuple(
-            self._inspect_resolved(resolve_qol_patch(self.repo_root, spec), branch)
-            for spec in self.specs
-        )
+        patches = tuple(resolve_qol_patch(self.repo_root, spec) for spec in self.specs)
+        # Canonical dry-runs are independent and read-only. Bound the cold
+        # inspection to three processes; retain separate PowerShell scopes and
+        # each command's timeout rather than sharing script globals/runspaces.
+        if branch is not None and len(patches) > 1:
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                utilities = tuple(executor.map(lambda patch: self._inspect_resolved(patch, branch), patches))
+        else:
+            utilities = tuple(self._inspect_resolved(patch, branch) for patch in patches)
         return QolCatalogSnapshot(self.game_executable, branch, utilities)
+
+    def refresh_preferences(self, snapshot: QolCatalogSnapshot) -> QolCatalogSnapshot:
+        """Refresh cheap per-user settings without invalidating binary checks."""
+        return QolCatalogSnapshot(snapshot.game_executable, snapshot.branch, tuple(
+            self._inspect_resolved(status.patch, snapshot.branch)
+            if status.patch.spec.preference_only else status
+            for status in snapshot.utilities
+        ))
 
     def inspect_patch(self, key: str) -> QolUtilityStatus:
         spec = self._spec(key)

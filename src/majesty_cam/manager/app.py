@@ -18,7 +18,7 @@ from typing import Callable, Iterable, Mapping, Optional
 from .catalog import CatalogEntry, CatalogKind, CatalogSource, IssueSeverity
 from .brand_assets import BrandAssets, ensure_brand_assets
 from .controller import ControllerSnapshot, ManagerController
-from .build import standard_content_conflicts
+from .build import BuildIssue, standard_content_conflicts
 from .preflight import PreparedMergeMod
 from .shortcuts import ShortcutError, create_manager_desktop_shortcut
 from .workshop import open_workshop_item
@@ -1472,13 +1472,16 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.blocked_cache.clear()
             self._run_task(
                 "Looking for installed content",
-                lambda progress: self.controller.scan(force_refresh=force_refresh),
+                lambda progress: self.controller.scan(force_refresh=force_refresh, progress=progress),
                 self._scan_finished,
             )
 
         @Slot()
         def build(self) -> None:
             if self._busy or self.snapshot is None:
+                return
+            if any(issue.code not in _STANDARD_CONFLICT_ISSUES for issue in self.snapshot.plan.issues):
+                self._show_build_issues()
                 return
             force_review = any(
                 issue.code == "conflicting_standard_order_choices"
@@ -1499,6 +1502,40 @@ if _PYSIDE_IMPORT_ERROR is None:
                 lambda progress: self.controller.build(progress=progress),
                 self._build_finished,
             )
+
+        def _show_build_issues(self) -> None:
+            if self._busy or self.snapshot is None or not self.snapshot.plan.issues:
+                return
+            snapshot = self.snapshot
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Icon.Warning)
+            dialog.setWindowTitle(f"{APP_NAME} — Review Issues")
+            dialog.setTextFormat(Qt.TextFormat.PlainText)
+            dialog.setText("The selected mods cannot be prepared yet.")
+            dialog.setInformativeText("\n\n".join(
+                _build_issue_description(snapshot, issue) for issue in snapshot.plan.issues
+            ))
+            dialog.setDetailedText("\n\n".join(
+                f"[{issue.code}] {issue.message}"
+                + (f"\nFile: {issue.path}" if issue.path else "")
+                for issue in snapshot.plan.issues
+            ))
+            conflicts = None
+            if any(issue.code in _STANDARD_CONFLICT_ISSUES for issue in snapshot.plan.issues):
+                conflicts = dialog.addButton("Review Conflicts…", QMessageBox.ButtonRole.ActionRole)
+            qos = None
+            if _missing_required_qol_helpers(snapshot):
+                qos = dialog.addButton("Quality of Life", QMessageBox.ButtonRole.ActionRole)
+            rescan = dialog.addButton("Rescan Content", QMessageBox.ButtonRole.ActionRole)
+            dialog.addButton(QMessageBox.StandardButton.Close)
+            dialog.exec()
+            clicked = dialog.clickedButton()
+            if conflicts is not None and clicked is conflicts:
+                self._resolve_selected_conflicts(force_review=True)
+            elif qos is not None and clicked is qos:
+                self.tabs.setCurrentWidget(self.qol_page)
+            elif clicked is rescan:
+                self.scan()
 
         @Slot(str)
         def _show_conflicts(self, content_id: str) -> None:
@@ -2001,10 +2038,11 @@ if _PYSIDE_IMPORT_ERROR is None:
                 return
             required_qol_ready = not _missing_required_qol_helpers(snapshot)
             if snapshot.plan.issues:
-                self.build_state.setText("One of your choices needs attention")
+                count = len(snapshot.plan.issues)
+                self.build_state.setText(f"Cannot prepare — {count} {'issue' if count == 1 else 'issues'} to review")
                 self.build_state.setToolTip(
-                    "\n".join(
-                        _player_issue_text(issue.code, issue.message)
+                    "\n\n".join(
+                        _build_issue_description(snapshot, issue)
                         for issue in snapshot.plan.issues
                     )
                 )
@@ -2026,14 +2064,10 @@ if _PYSIDE_IMPORT_ERROR is None:
                     else ""
                 )
 
-            conflict_issue_codes = {
-                "unresolved_standard_overlap",
-                "conflicting_standard_order_choices",
-            }
             conflict_issues = tuple(
                 issue
                 for issue in snapshot.plan.issues
-                if issue.code in conflict_issue_codes
+                if issue.code in _STANDARD_CONFLICT_ISSUES
             )
             only_conflicts = bool(conflict_issues) and len(conflict_issues) == len(
                 snapshot.plan.issues
@@ -2041,19 +2075,24 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.build_button.setText(
                 "Review Conflicts"
                 if only_conflicts
+                else "Review Issues"
+                if snapshot.plan.issues
                 else "Prepare Again"
                 if snapshot.managed_build is not None
                 else "Prepare Selected Mods"
             )
             self.build_button.setEnabled(
-                required_qol_ready and (snapshot.can_build or only_conflicts)
+                bool(snapshot.plan.issues) or (required_qol_ready and snapshot.can_build)
             )
+            _set_dynamic_property(self.build_button, "role", "attention" if snapshot.plan.issues else "outline")
             self.build_button.setToolTip(
                 (
-                    "Install the required patches on the Quality of Life tab first."
-                    if not required_qol_ready
-                    else "Review overlapping game changes and choose which Mod loads last."
+                    "Review overlapping game changes and choose which Mod loads last."
                     if only_conflicts
+                    else "Show the exact problems blocking this selection and the affected mods."
+                    if snapshot.plan.issues
+                    else "Install the required patches on the Quality of Life tab first."
+                    if not required_qol_ready
                     else "Combine the selected Merge mods into one setup Majesty can load."
                     if snapshot.plan.has_merge
                     else "Select at least one supported Merge mod to build a setup."
@@ -2210,6 +2249,20 @@ def _game_change_label(key: str) -> str:
 def _is_phantoms_haunt(entry: "CatalogEntry") -> bool:
     raw_id = entry.content_id or entry.raw_content_id or ""
     return str(raw_id).strip().strip("{}").casefold() == PHANTOMS_HAUNT_ID
+
+
+_STANDARD_CONFLICT_ISSUES = frozenset((
+    "unresolved_standard_overlap", "conflicting_standard_order_choices",
+))
+
+
+def _build_issue_description(snapshot: ControllerSnapshot, issue: BuildIssue) -> str:
+    entry = next((entry for entry in snapshot.catalog.entries
+                  if issue.content_id and entry.content_id == issue.content_id), None)
+    title = entry.display_name if entry is not None else "Selected combination"
+    friendly = _player_issue_text(issue.code, issue.message)
+    detail = "" if friendly == issue.message or not issue.message else f"\nReason: {issue.message}"
+    return f"{title}\n{friendly}{detail}"
 
 
 def _player_issue_text(code: str, message: str) -> str:

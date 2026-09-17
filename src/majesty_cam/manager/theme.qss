@@ -161,6 +161,18 @@ QPushButton[role="outline"]:hover {
     border-color: #d1ae60;
 }
 
+QPushButton[role="attention"] {
+    color: #ffb3a9;
+    background-color: #3b1c1f;
+    border-color: #bd665b;
+}
+
+QPushButton[role="attention"]:hover {
+    color: #fff0eb;
+    background-color: #572326;
+    border-color: #f09987;
+}
+
 QPushButton[role="primary"] {
     min-height: 40px;
     padding: 0 20px;

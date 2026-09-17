@@ -80,6 +80,6 @@ class DataRecordInterfaces(unittest.TestCase):
         self.assertIn("stock.map-fog-query.v1", derive_feature_runtime_capabilities((), registry))
         self.assertNotIn("stock.map-fog-query.v1", derive_feature_runtime_capabilities(
             ("stock.map-fog-query.v1",), normalize_runtime_features()))
-        for broken in (payload[:-1], payload[:-4]+struct.pack("<I",2)):
+        for broken in (payload[:-1], payload[:-4]+struct.pack("<I",4)):
             with self.assertRaises(ValueError):
                 decode_runtime_feature_registry(broken)

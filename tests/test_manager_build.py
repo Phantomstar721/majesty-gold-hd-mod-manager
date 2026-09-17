@@ -26,6 +26,7 @@ from majesty_cam.runtime_capabilities import (
 )
 from majesty_cam.runtime_features import (
     MapFogQueryFeature,
+    MovementQueryFeature,
     RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH,
     encode_runtime_feature_registry,
 )
@@ -78,11 +79,17 @@ OTHER_ID = "48CDD934-B338-4373-A4A4-A99A8E7F917F"
 
 class ManagerBuildPlanTests(unittest.TestCase):
     def test_map_query_package_gets_a_stable_feature_sensitive_scan_plan(self):
+        self._query_feature_scan_plan(MapFogQueryFeature(), "map_fog_query", "stock.map-fog-query.v1")
+
+    def test_movement_query_package_gets_a_stable_feature_sensitive_scan_plan(self):
+        self._query_feature_scan_plan(MovementQueryFeature(), "movement_query", "stock.movement-query.v1")
+
+    def _query_feature_scan_plan(self, feature, flag, capability):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             registry = CompatibilityRegistry(specs={})
             definition = ModDefinition(3, OTHER_ID, "MapQueries", "Map Queries", (),
-                                       runtime_features=(MapFogQueryFeature(),))
+                                       runtime_features=(feature,))
             package = ModPackage(root, root / "package.mmxml",
                                  ModMetadata(OTHER_ID, (LocalizedText(None, "Map Queries"),), (), (), ()),
                                  definition)
@@ -94,8 +101,8 @@ class ManagerBuildPlanTests(unittest.TestCase):
                 first = create_build_plan(catalog, {OTHER_ID: True}, registry=registry)
                 again = create_build_plan(catalog, {OTHER_ID: True}, registry=registry)
             self.assertEqual(first.issues, ())
-            self.assertTrue(first.runtime_feature_registry.map_fog_query)
-            self.assertIn("stock.map-fog-query.v1", first.runtime_capabilities)
+            self.assertTrue(getattr(first.runtime_feature_registry, flag))
+            self.assertIn(capability, first.runtime_capabilities)
             self.assertEqual(first.fingerprint, again.fingerprint)
             changed_package = replace(package, definition=replace(definition, runtime_features=()))
             without_map = replace(prepared, package=changed_package,

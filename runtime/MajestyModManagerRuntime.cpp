@@ -7140,6 +7140,7 @@ DWORD WINAPI InitializeRuntime(void*) {
             MajestyRuntimeCapabilities::kGenericEnchantmentRow);
     if (requestedNameGeneratorHook != privateNameGenerators ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kMapFogQuery) != g_runtimeFeatureRegistry.mapFogQuery ||
+        HasRuntimeCapability(MajestyRuntimeCapabilities::kMovementQuery) != g_runtimeFeatureRegistry.movementQuery ||
         requestedEnchantmentRowHook != privateEnchantmentRows ||
         requestedStockControllerRecipes != stockControllerRecipes) {
         StopUnsafeManagerRuntimeLaunch(
@@ -7154,10 +7155,11 @@ DWORD WINAPI InitializeRuntime(void*) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: private reward flag callbacks could not be prepared from stock Fl00.");
     }
-    if (g_runtimeFeatureRegistry.mapFogQuery) {
+    if (g_runtimeFeatureRegistry.mapFogQuery || g_runtimeFeatureRegistry.movementQuery) {
         RequireManagerRuntimeInstall(
-            InstallMapQueryRuntime(g_imageBase, g_buildProfile == &kPublicBuildProfile),
-            managerLaunch, "The stock GPL map-query registration boundary did not match its profile.");
+            InstallMapQueryRuntime(g_imageBase, g_buildProfile == &kPublicBuildProfile,
+                g_runtimeFeatureRegistry.mapFogQuery, g_runtimeFeatureRegistry.movementQuery),
+            managerLaunch, "The stock GPL read-only query registration boundary did not match its profile.");
     }
 
     if (privateActivityText) {

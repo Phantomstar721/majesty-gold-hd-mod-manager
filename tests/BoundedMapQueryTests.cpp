@@ -203,7 +203,9 @@ void Run() {
     Fog(&args); assert(values[0].x == -1);
 }
 }
+#include "MovementQueryTests.h"
 int main() {
+    MovementTest::Run();
     VerifyOutwardTraversal();
     NativeTest::VerifyOptionalPathCostUnit();
     NativeTest::Run();

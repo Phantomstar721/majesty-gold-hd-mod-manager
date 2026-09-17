@@ -8,6 +8,10 @@ from typing import Mapping, Optional, Sequence, Tuple, Union
 import xml.etree.ElementTree as ET
 
 from .runtime_capabilities import is_runtime_capability_name
+from .shared_features import (
+    SHARED_FEATURE_TYPES, SharedFeature, StockGameplayEventObserver,
+    StockActivityDuration, parse_shared_feature, shared_feature_mapping,
+)
 from .gpl_features import (
     GplFeature,
     GplFeatureError,
@@ -23,6 +27,7 @@ from .runtime_features import (
     EnchantmentRowFeature,
     NameGeneratorFeature,
     MapFogQueryFeature,
+    MovementQueryFeature,
     RuntimeFeature,
     normalize_runtime_features,
 )
@@ -186,7 +191,7 @@ class CustomBuildingDefinition:
 # Backward-compatible descriptive alias for the schema's AP78-specific record
 # name; the runtime module intentionally uses the reusable shorter class name.
 Ap78EnchantmentRowFeature = EnchantmentRowFeature
-PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature, GplFeature]
+PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature, GplFeature, SharedFeature]
 
 
 @dataclass(frozen=True)
@@ -507,6 +512,10 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             _require_exact_fields(raw_feature, {"type"}, context)
             feature = MapFogQueryFeature()
             feature_key = (feature_type, "shared")
+        elif feature_type == "stock.movement-query.v1":
+            _require_exact_fields(raw_feature, {"type"}, context)
+            feature = MovementQueryFeature()
+            feature_key = (feature_type, "shared")
         elif feature_type == "stock.ap78-enchantment-row.v1":
             _require_exact_fields(
                 raw_feature, {"type", "overlay_id", "display_text"}, context
@@ -522,6 +531,12 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 display_text=display_text,
             )
             feature_key = (feature_type, overlay_id.casefold())
+        elif feature_type in SHARED_FEATURE_TYPES:
+            try:
+                feature = parse_shared_feature(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context} is invalid: {exc}") from exc
+            feature_key = (feature_type, feature.feature_key.casefold())
         elif feature_type in {
             "stock.gplmx-purchase-equipment-tail.v1",
             "stock.gplmx-purchase-bazaar-tail.v1",
@@ -593,7 +608,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 f"duplicate runtime feature identity: {feature_key[1]!r}"
             )
         seen_feature_keys.add(feature_key)
-        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature)):
+        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature)):
             try:
                 normalize_runtime_features((feature,))
             except ValueError as exc:
@@ -1072,6 +1087,8 @@ def mod_definition_mapping(definition: ModDefinition) -> dict:
 def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
     if isinstance(feature, MapFogQueryFeature):
         return {"type": "stock.map-fog-query.v1"}
+    if isinstance(feature, MovementQueryFeature):
+        return {"type": "stock.movement-query.v1"}
     if isinstance(feature, NameGeneratorFeature):
         return {
             "type": "stock.name-generator.v1",
@@ -1084,6 +1101,8 @@ def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
             "overlay_id": feature.overlay_id,
             "display_text": feature.display_text,
         }
+    if isinstance(feature, (StockGameplayEventObserver, StockActivityDuration)):
+        return shared_feature_mapping(feature)
     if isinstance(
         feature,
         (

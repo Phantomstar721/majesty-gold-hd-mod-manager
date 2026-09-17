@@ -5,6 +5,7 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
+import threading
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
@@ -113,6 +114,33 @@ class MajestyBranchDetectionTests(unittest.TestCase):
 
 
 class QolServiceTests(unittest.TestCase):
+    def test_cold_inspection_is_bounded_parallel_and_preserves_spec_order(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            specs = tuple(replace(QOL_PATCHES[1], key=f"helper-{i}") for i in range(6))
+            service = QolService(repo_root=root, game_executable=root / "MajestyHD.exe", specs=specs)
+            barrier = threading.Barrier(3, timeout=5)
+            active = maximum = 0
+            lock = threading.Lock()
+
+            def inspect(patch, branch):
+                nonlocal active, maximum
+                self.assertEqual(branch, PUBLIC_BRANCH)
+                with lock:
+                    active += 1
+                    maximum = max(maximum, active)
+                barrier.wait()
+                with lock:
+                    active -= 1
+                barrier.wait()
+                return patch.spec.key
+
+            with patch("majesty_cam.manager.qol_service.detect_majesty_branch", return_value=PUBLIC_BRANCH), \
+                    patch.object(service, "_inspect_resolved", side_effect=inspect):
+                result = service.inspect()
+            self.assertEqual(result.utilities, tuple(spec.key for spec in specs))
+            self.assertEqual(maximum, 3)
+
     @unittest.skipUnless(sys.platform == "win32", "Windows process flags")
     def test_default_powershell_runner_hides_its_console_window(self):
         with TemporaryDirectory() as tmp:

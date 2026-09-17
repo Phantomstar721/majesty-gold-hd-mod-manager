@@ -7,7 +7,7 @@ Manager generates three deterministic files:
 - `DataMX/majesty_mod_manager_capabilities.bin` (`MMCP`) selects the runtime
   hook groups needed by the composed package.
 - `DataMX/majesty_mod_manager_features.bin` (`MMFR`) supplies the validated
-  private name-generator and AP78-row records, plus optional map-query flags.
+  private name-generator and AP78-row records, plus optional read-only query flags.
 - `DataMX/majesty_mod_manager_controllers.bin` (`MMCR`) supplies the validated,
   manager-resolved recipes for the supported stock controller lifecycles.
 
@@ -58,8 +58,9 @@ DLL therefore cannot silently run a package that needs a newer hook.
 | `stock.ap78-enchantment-row.v1` | Requires at least one validated MMFR AP78 row and installs the shared scoped AP78 presenter extension. |
 | `stock.controller-recipes.v1` | Requires at least one resolved MMCR recipe and installs only the stock-controller hook groups selected by those records. |
 | `stock.map-fog-query.v1` | Requires the MMFR map-query flag and registers read-only, bounded native GPL map queries. |
+| `stock.movement-query.v1` | Requires the MMFR movement-query flag and registers read-only native unit/description locomotion queries. |
 
-The manager derives the last four capability names from the generated
+The manager derives these data-driven capability names from the generated
 registries. A package cannot enable one merely by copying the capability string
 into its definition. Conversely, a non-empty corresponding registry without
 its generic capability is rejected before any hook is installed.
@@ -113,9 +114,14 @@ specific-overlay branch.
 
 Version 2 adds one little-endian `u32` flags field immediately after the two
 section counts, before any records. Bit 0 enables `stock.map-fog-query.v1`;
-all other bits must be zero. The writer retains v1 unless map queries are
+bit 1 enables `stock.movement-query.v1`. All other bits must be zero.
+The writer retains v1 unless either native query feature is
 requested. See [data-record lists and bounded map queries](stock-data-record-list-and-map-query.md)
 for the GPL function signatures, input bounds, and explicit continuation status.
+See [movement-rate queries](stock-movement-query.md) for normal/effective live
+unit rates, named-description rates, and failure values. Both features share one
+stock GPL registration adapter; movement-only use does not enable map queries
+or modify stock PathCost.
 
 ## MMCR controller recipes
 

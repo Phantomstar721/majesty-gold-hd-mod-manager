@@ -3,6 +3,7 @@
 #include <windows.h>
 #include "MapQueryRuntime.h"
 #include "BoundedMapQuery.h"
+#include "MovementRate.h"
 #include <cstring>
 #include <limits>
 
@@ -20,6 +21,22 @@ constexpr Profile kBeta = {
     0x2ED50, 0x3E3FD4, 0x1D1930, 0x1D3BD0, 0x1D3980};
 std::uintptr_t g_base = 0;
 const Profile* g_profile = nullptr;
+bool g_mapQuery = false, g_movementQuery = false;
+
+struct MovementProfile {
+    std::uintptr_t changeType, resolveUnit, findDescription, descriptionsGlobal;
+    std::uintptr_t baseInterval, effectiveInterval, packedAttribute, clockGlobal;
+    std::uintptr_t step, movementConstructor, movementVtable, movementDerived;
+};
+constexpr MovementProfile kMovementPublic = {
+    0x031BB0, 0x158B20, 0x1AE060, 0x3C5304,
+    0x1BA0F0, 0x0479E0, 0x1B9FD0, 0x3C52D0,
+    0x1CDE80, 0x202F50, 0x34A240, 0x203460};
+constexpr MovementProfile kMovementBeta = {
+    0x032B10, 0x16EC60, 0x1C3000, 0x3E3E8C,
+    0x1CF090, 0x0488F0, 0x1CEF70, 0x3E3E58,
+    0x1E3060, 0x218290, 0x364310, 0x2187A0};
+const MovementProfile* g_movementProfile = nullptr;
 
 template<class T> T Read(const void* base, std::size_t offset) {
     T value{};
@@ -139,6 +156,131 @@ void __cdecl Frontier(void* arguments) {
             CurrentMap(), owner, start, *cursor, work, *output));
     }
 }
+
+int MovementQuantum() {
+    const void* clock = *reinterpret_cast<void**>(g_base+g_movementProfile->clockGlobal);
+    if (clock == nullptr) return MajestyMovement::kInvalidData;
+    const int quantum = Read<int>(clock, 0x20);
+    // Native Q16 conversion shifts the quantum into a signed 32-bit word.
+    return quantum > 0 && quantum <= 32767 ? quantum : MajestyMovement::kInvalidData;
+}
+const void* LinearMovement(const void* descriptor) {
+    if (descriptor == nullptr || Read<int>(descriptor, 8) != 1) return nullptr;
+    const void* engine = Read<void*>(descriptor, 0x14);
+    return engine != nullptr && Read<std::uintptr_t>(engine, 0) ==
+        g_base+g_movementProfile->movementVtable ? engine : nullptr;
+}
+int UnitMovementRate(void* value, int mode) {
+    using namespace MajestyMovement;
+    if (value == nullptr || (mode != 0 && mode != 1)) return kInvalid;
+    using Reference = void* (__thiscall*)(void*);
+    void* reference = reinterpret_cast<Reference>((*static_cast<void***>(value))[0x5C/4])(value);
+    if (reference == nullptr) return kInvalid;
+    // The stock nonthrowing resolver writes only its disposable +0C cache.
+    // Borrow the identity in a local reference, never retain a caller's handle.
+    std::uint32_t temporary[4] = {};
+    temporary[2] = Read<std::uint32_t>(reference, 8);
+    void* unit = reinterpret_cast<Reference>(g_base+g_movementProfile->resolveUnit)(temporary);
+    if (unit == nullptr) return kInvalid;
+    const void* movement = LinearMovement(Read<void*>(unit, 0x54));
+    if (movement == nullptr) return kUnsupported;
+    const auto intervalMethod = Read<std::uintptr_t>(Read<void*>(unit, 0), 0x158);
+    if (intervalMethod != g_base+g_movementProfile->effectiveInterval) return kUnsupported;
+    const int quantum = MovementQuantum();
+    if (quantum <= 0) return kInvalidData;
+    int interval = NormalInterval(Read<int>(movement, 0x0C), quantum);
+    if (interval <= 0) return kInvalidData;
+    if (mode == 1) {
+        using Attribute = int (__thiscall*)(void*, std::uint32_t, int);
+        const int modifier = reinterpret_cast<Attribute>(g_base+g_movementProfile->packedAttribute)(
+            unit, 0x22565041u, 0);
+        const std::int64_t sum = static_cast<std::int64_t>(Read<int>(movement, 0x0C))+modifier;
+        if (sum < std::numeric_limits<int>::min() ||
+            sum > std::numeric_limits<int>::max()-quantum/2) return kInvalidData;
+        using Interval = int (__thiscall*)(void*);
+        interval = reinterpret_cast<Interval>(intervalMethod)(unit);
+    }
+    return Rate(Read<int>(movement, 0x10), interval);
+}
+int UnitTypeMovementRate(const char* name) {
+    using namespace MajestyMovement;
+    if (name == nullptr || *name == '\0') return kInvalid;
+    void* registry = *reinterpret_cast<void**>(g_base+g_movementProfile->descriptionsGlobal);
+    if (registry == nullptr) return kInvalid;
+    using Find = void* (__thiscall*)(void*, const char*);
+    const void* descriptor = reinterpret_cast<Find>(g_base+g_movementProfile->findDescription)(registry, name);
+    if (descriptor == nullptr) return kInvalid;
+    const int subtype = Read<int>(descriptor, 8);
+    if (subtype < 1 || subtype > 3) return kUnsupported;
+    const void* engine = Read<void*>(descriptor, 0x14);
+    if (engine == nullptr) return kUnsupported;
+    // Literal stock DUNT attachment traversal, not class-name special cases.
+    for (unsigned i = 0; i < 8; ++i) {
+        if (Read<std::uint32_t>(engine, 0xD4+i*12) != 1) continue;
+        const void* movement = LinearMovement(Read<void*>(engine, 0xD4+i*12+8));
+        if (movement == nullptr) return kUnsupported;
+        const int quantum = MovementQuantum();
+        if (quantum <= 0) return kInvalidData;
+        const int interval = NormalInterval(Read<int>(movement, 0x0C), quantum);
+        return Rate(Read<int>(movement, 0x10), interval);
+    }
+    return kUnsupported;
+}
+void __cdecl Movement(void* arguments) {
+    int* result = Integer(arguments, 0);
+    if (result == nullptr) return;
+    void* value = Argument(arguments, 1);
+    const int* mode = Integer(arguments, 2);
+    *result = value != nullptr && mode != nullptr
+        ? UnitMovementRate(value, *mode) : MajestyMovement::kInvalid;
+}
+void __cdecl TypeMovement(void* arguments) {
+    int* result = Integer(arguments, 0);
+    if (result == nullptr) return;
+    *result = MajestyMovement::kInvalid;
+    void* value = Argument(arguments, 1);
+    if (value == nullptr) return;
+    using String = const char** (__thiscall*)(void*);
+    const char** name = reinterpret_cast<String>((*static_cast<void***>(value))[0x30/4])(value);
+    if (name != nullptr) *result = UnitTypeMovementRate(*name);
+}
+bool ValidateMovementQuery() {
+    const auto& p = *g_movementProfile;
+    constexpr unsigned char interval[] = {0x8B,0x41,0x54,0x8B,0x48,0x14,0x8B,0x41,0x0C,0xC3};
+    constexpr unsigned char modifier[] = {0x6A,0,0x68,0x41,0x50,0x56,0x22};
+    constexpr unsigned char rounding[] = {0x8B,0x70,0x20,0x03,0xCF,0x3B,0xCE,0x7C,0x11,
+        0x8B,0xC6,0x99,0x2B,0xC2,0xD1,0xF8,0x03,0xC1,0x99,0xF7,0xFE,0x0F,0xAF,0xC6,
+        0x8B,0xC8,0x83,0xF9,1,0x5F,0x5E,0xB8,1,0,0,0,0x7E,2,0x8B,0xC1,0xC3};
+    constexpr unsigned char step[] = {0x53,0x55,0x56,0x57,0x8B,0x7C,0x24,0x18,
+        0x8B,0x47,0x54,0x8B,0x48,0x14,0x8B,0x41,0x10,0xC1,0xE0,0x10,
+        0x68,0,0,0x20,0,0x50};
+    constexpr unsigned char attachments[] = {0x8B,0x81,0x90,0,0,0,0x8B,0x48,8,
+        0x83,0xF9,1,0x74,0x0A,0x83,0xF9,2,0x74,5,0x83,0xF9,3,0x75,0x1B,
+        0x8B,0x40,0x14,0x8B,0x54,0x24,4,5,0xD4,0,0,0,0x33,0xC9,0x39,0x10,
+        0x74,0x0E,0x41,0x83,0xC0,0x0C,0x83,0xF9,8,0x7C,0xF3,0x33,0xC0,
+        0xC2,4,0,0x8B,0x40,8,0xC2,4,0};
+    constexpr unsigned char resolveIdentity[] = {0x56,0x8B,0xF1,0x8B,0x46,8,0x50};
+    constexpr unsigned char resolveDeleted[] = {0x89,0x46,0x0C,0x5E,0x85,0xC0,
+        0x74,0x0D,0x80,0x78,0x38,0,0x75,7,0x8B,0xC8};
+    constexpr unsigned char agentArgument[] = {0x8B,8,0x8B,1,0x8B,0x50,0x5C,0xFF,0xD2};
+    constexpr unsigned char stringArgument[] = {0x8B,8,0x8B,1,0x8B,0x50,0x30,0xFF,0xD2};
+    return Call(p.changeType+0x0E, g_profile->argumentAt) &&
+        Bytes(p.changeType+0x13, agentArgument, sizeof(agentArgument)) &&
+        Bytes(p.changeType+0x27, stringArgument, sizeof(stringArgument)) &&
+        Call(p.changeType+0x34, p.resolveUnit) && Call(p.changeType+0x69, p.findDescription) &&
+        Bytes(p.resolveUnit, resolveIdentity, sizeof(resolveIdentity)) &&
+        Bytes(p.resolveUnit+0x13, resolveDeleted, sizeof(resolveDeleted)) &&
+        Call(p.resolveUnit+7, g_profile->engine) &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.changeType), 0x64) == g_base+p.descriptionsGlobal &&
+        Bytes(p.baseInterval, interval, sizeof(interval)) &&
+        Bytes(p.baseInterval-0xE0, attachments, sizeof(attachments)) &&
+        Call(p.effectiveInterval+4, p.baseInterval) && Bytes(p.effectiveInterval+9, modifier, sizeof(modifier)) &&
+        Call(p.effectiveInterval+0x14, p.packedAttribute) &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.effectiveInterval), 0x1C) == g_base+p.clockGlobal &&
+        Bytes(p.effectiveInterval+0x20, rounding, sizeof(rounding)) && Bytes(p.step, step, sizeof(step)) &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.movementConstructor), 0x35) == g_base+p.movementVtable &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.movementVtable), 0x0C) == g_base+p.movementDerived;
+}
 void Register(const char* name, void (__cdecl* callback)(void*)) {
     using Construct = void* (__thiscall*)(void*, const char*);
     using Destroy = void (__thiscall*)(void*);
@@ -153,14 +295,25 @@ void Register(const char* name, void (__cdecl* callback)(void*)) {
 }
 void __cdecl RegisterAfterStock() {
     reinterpret_cast<void (__cdecl*)()>(g_base+g_profile->registration)();
-    Register("MM_MapFog", &Fog);
-    Register("MM_MapNextFrontier", &Frontier);
+    if (g_mapQuery) {
+        Register("MM_MapFog", &Fog);
+        Register("MM_MapNextFrontier", &Frontier);
+    }
+    if (g_movementQuery) {
+        Register("MM_UnitMovementRate", &Movement);
+        Register("MM_UnitTypeMovementRate", &TypeMovement);
+    }
 }
 }
 
-bool InstallMapQueryRuntime(std::uintptr_t imageBase, bool publicBuild) {
+bool InstallMapQueryRuntime(std::uintptr_t imageBase, bool publicBuild,
+                           bool mapQuery, bool movementQuery) {
+    if (!mapQuery && !movementQuery) return true;
     g_base = imageBase;
     g_profile = publicBuild ? &kPublic : &kBeta;
+    g_movementProfile = publicBuild ? &kMovementPublic : &kMovementBeta;
+    g_mapQuery = mapQuery;
+    g_movementQuery = movementQuery;
     // Pin the stock registration boundary and field accesses on both audited
     // builds. A different build is not permitted to guess its map layout.
     constexpr unsigned char extents[] = {0x8B,0x48,0x10,0x8B,0x81,0x88,0,0,0,
@@ -170,12 +323,13 @@ bool InstallMapQueryRuntime(std::uintptr_t imageBase, bool publicBuild) {
     constexpr unsigned char optionalUnitRead[] = {0x8B,0x00,0x8B,0x4C,0x24,0x1C};
     constexpr unsigned char averageUnitDefault[] = {0xC7,0x44,0x24,0x24,0,0,0,0};
     constexpr unsigned char averageUnitBranch[] = {0x8B,0x4C,0x24,0x24,0x85,0xC9,0x74,0x5F};
+    if (movementQuery && !ValidateMovementQuery()) return false;
     if (!Call(g_profile->registrationCall, g_profile->registration) ||
         !Call(g_profile->registration+0x7F1, g_profile->stringConstructor) ||
         !Call(g_profile->registration+0x800, g_profile->engine) ||
         !Call(g_profile->registration+0x814, g_profile->registerFunction) ||
         !Call(g_profile->registration+0x821, g_profile->stringDestructor) ||
-        !Call(g_profile->nearestHidden+0x2F, g_profile->argumentAt) ||
+        (mapQuery && (!Call(g_profile->nearestHidden+0x2F, g_profile->argumentAt) ||
         !Bytes(g_profile->pathCost+0x7B, optionalUnitLookup, sizeof(optionalUnitLookup)) ||
         !Call(g_profile->pathCost+0x81, g_profile->argumentAt) ||
         !Bytes(g_profile->pathCost+0x86, optionalUnitRead, sizeof(optionalUnitRead)) ||
@@ -184,9 +338,9 @@ bool InstallMapQueryRuntime(std::uintptr_t imageBase, bool publicBuild) {
         !Bytes(g_profile->boardExtents+0x1A, extents, sizeof(extents)) ||
         !Bytes(g_profile->nearestHidden+0x6F, nativeMap, sizeof(nativeMap)) ||
         Read<std::uint32_t>(reinterpret_cast<void*>(imageBase+g_profile->boardExtents), 6)
-            != imageBase+g_profile->worldGlobal) return false;
-    return RedirectCall(g_profile->pathCost+0x81,
-                        reinterpret_cast<const void*>(&OptionalPathCostUnit)) &&
+            != imageBase+g_profile->worldGlobal))) return false;
+    return (!mapQuery || RedirectCall(g_profile->pathCost+0x81,
+                        reinterpret_cast<const void*>(&OptionalPathCostUnit))) &&
         RedirectCall(g_profile->registrationCall,
                      reinterpret_cast<const void*>(&RegisterAfterStock));
 }

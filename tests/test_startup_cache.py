@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 import os
 import subprocess
@@ -43,6 +44,76 @@ MOD_ID = "8C48289E-7C70-4426-8913-133F3544A182"
 
 
 class StartupCacheTests(unittest.TestCase):
+    def test_qol_signature_tracks_evidence_not_preferences_or_manager_rebuilds(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            executable = root / "game/MajestyHD.exe"
+            executable.parent.mkdir()
+            executable.write_bytes(b"game")
+            prefs = root / "prefs"
+            prefs.write_text("preferences one")
+            spec = QolPatchSpec("fixture", "Fixture", "Fixture", "fixture-repo", "Fixture",
+                                "fixture", "Install.ps1", "Remove.ps1", "installed")
+            scripts = root / "repo/payload/qol/utilities/Fixture/scripts"
+            scripts.mkdir(parents=True)
+            install = scripts / "Install.ps1"
+            install.write_text("canonical installer")
+            (scripts / "Remove.ps1").write_text("canonical restorer")
+            common = scripts / "PatchCommon.ps1"
+            common.write_text("original helper")
+            service = QolService(repo_root=root / "repo", game_executable=executable,
+                                 prefs_path=prefs, specs=(spec,))
+            baseline = qol_input_signature(service)
+            prefs.write_text("ordinary gameplay rewrote preferences")
+            install.write_text("canonical installer") # identical re-staging
+            with patch("majesty_cam.manager.startup_cache._manager_cache_identity_paths",
+                       side_effect=AssertionError("unrelated Manager binary invalidated QOL")):
+                self.assertEqual(qol_input_signature(service), baseline)
+            common.write_text("updated helper")
+            self.assertNotEqual(qol_input_signature(service), baseline)
+            common.write_text("original helper")
+            self.assertEqual(qol_input_signature(service), baseline)
+            data = executable.parent / "Data"
+            data.mkdir()
+            ui = data / "UIData_English.dat"
+            ui.write_bytes(b"stock ui")
+            added = qol_input_signature(service)
+            self.assertNotEqual(added, baseline)
+            ui.write_bytes(b"changed ui")
+            self.assertNotEqual(qol_input_signature(service), added)
+            ui.unlink()
+            self.assertEqual(qol_input_signature(service), baseline)
+            service.specs = (replace(spec, name="Renamed", description="Edited display copy"),)
+            self.assertEqual(qol_input_signature(service), baseline)
+            service.specs = (replace(spec, installed_phrase="different interpretation"),)
+            self.assertNotEqual(qol_input_signature(service), baseline)
+
+    def test_cached_qol_preferences_are_live_and_script_errors_are_retried(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            spec = QolPatchSpec("skip", "Skip", "Skip", "fixture-repo", "Fixture",
+                                "fixture", "Install.ps1", "Remove.ps1", preference_only=True)
+            scripts = root / "payload/qol/utilities/Fixture"
+            scripts.mkdir(parents=True)
+            (scripts / "Install.ps1").write_text("installer")
+            (scripts / "Remove.ps1").write_text("restorer")
+            prefs = root / "prefs"
+            service = QolService(repo_root=root, game_executable=root / "MajestyHD.exe",
+                                 prefs_path=prefs, specs=(spec,),
+                                 runner=lambda command: self.fail("preference refresh spawned PowerShell"))
+            prefs.write_text("<Prefs><IntroVideo>1</IntroVideo></Prefs>")
+            snapshot = service.inspect()
+            signature = qol_input_signature(service)
+            cache = StartupCache.load(root / "cache.json")
+            cache.set_qol(signature, snapshot)
+            prefs.write_text("<Prefs><IntroVideo>0</IntroVideo></Prefs>")
+            self.assertEqual(qol_input_signature(service), signature)
+            restored = cache.get_qol(signature, service)
+            self.assertTrue(restored.get("skip").installed)
+            cache.set_qol(signature, replace(snapshot, utilities=(replace(
+                snapshot.utilities[0], state=QolUtilityState.ERROR, installed=None),)))
+            self.assertIsNone(cache.get_qol(signature, service))
+
     def test_source_parser_changes_invalidate_cached_checks(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
@@ -488,8 +559,12 @@ class StartupCacheTests(unittest.TestCase):
                 "majesty_cam.manager.controller.scan_catalog",
                 return_value=Catalog(entries=()),
             ), patch.object(service, "inspect", return_value=snapshot) as inspect:
-                first.scan()
-                second.scan()
+                phases = []
+                first.scan(progress=phases.append)
+                self.assertIn("Checking installed Quality of Life helpers", phases)
+                phases.clear()
+                second.scan(progress=phases.append)
+                self.assertNotIn("Checking installed Quality of Life helpers", phases)
                 second.scan(force_refresh=True)
 
             # Rescan Content refreshes mod discovery, not unchanged executable

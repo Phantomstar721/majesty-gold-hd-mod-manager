@@ -35,6 +35,7 @@ from .qol_service import (
     QolService,
     QolUtilityState,
     QolUtilityStatus,
+    QOL_INSPECTION_CACHE_VERSION,
     SUPPORTED_BRANCHES,
     resolve_qol_patch,
 )
@@ -191,11 +192,15 @@ class StartupCache:
                 )
         except (KeyError, TypeError, ValueError):
             return None
-        return QolCatalogSnapshot(
+        # A transient script timeout/error is not durable evidence. Let the
+        # next scan retry instead of pinning the user to a cached failure.
+        if any(status.state is QolUtilityState.ERROR for status in utilities):
+            return None
+        return service.refresh_preferences(QolCatalogSnapshot(
             game_executable=service.game_executable,
             branch=branch,
             utilities=tuple(utilities),
-        )
+        ))
 
     def set_qol(self, signature: str, snapshot: QolCatalogSnapshot) -> None:
         self.qol = {
@@ -309,23 +314,36 @@ def merge_preflight_signature(
 
 
 def qol_input_signature(service: QolService) -> str:
-    paths: list[Path] = [
-        *_manager_cache_identity_paths(),
-        service.game_executable,
-        service.prefs_path,
-    ]
+    # Preferences are read directly when restoring cached statuses. Neither
+    # changing game settings nor rebuilding an unrelated Manager UI/DLL makes
+    # installed executable patches different. Track actual game inputs and
+    # script *contents*, so copying identical helpers during packaging is cheap.
+    paths: list[Path] = [service.game_executable]
+    data = service.game_executable.parent / "Data"
+    paths.extend(data.glob("UIData_*.dat"))
+    scripts: dict[str, Path] = {}
+    context = ["qol-inspection-v2", str(QOL_INSPECTION_CACHE_VERSION),
+               json.dumps([(spec.key, spec.installed_phrase, spec.preference_only)
+                           for spec in service.specs])]
     for spec in service.specs:
         patch = resolve_qol_patch(service.repo_root, spec)
-        for path in (
-            patch.install_script,
-            patch.remove_script,
-            patch.license_path,
-        ):
+        context.extend((spec.key, str(patch.install_script), str(patch.remove_script)))
+        for path in (patch.install_script, patch.remove_script):
             if path is not None:
-                paths.append(path)
+                # The canonical scripts dot-source sibling build-profile,
+                # path-encoding and patch-common helpers. Those dependencies
+                # previously did not invalidate the cache at all.
+                for dependency in (path, *path.parent.glob("*.ps1")):
+                    scripts[str(dependency).casefold()] = dependency
+    for name, path in sorted(scripts.items()):
+        try:
+            identity = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            identity = type(exc).__name__
+        context.extend((name, identity))
     return metadata_signature(
         paths,
-        context=("qol-inspection-v1", *(spec.key for spec in service.specs)),
+        context=context,
     )
 
 

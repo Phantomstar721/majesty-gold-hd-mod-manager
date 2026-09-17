@@ -112,6 +112,7 @@ bool ParseRegistry(
     registry->nameGenerators.clear();
     registry->enchantmentRows.clear();
     registry->mapFogQuery = false;
+    registry->movementQuery = false;
     if (error != nullptr) {
         error->clear();
     }
@@ -139,7 +140,7 @@ bool ParseRegistry(
         return false;
     }
     std::uint32_t flags = 0;
-    if (version == 2 && (!ReadU32(bytes, size, &cursor, &flags) || (flags & ~1u) != 0)) {
+    if (version == 2 && (!ReadU32(bytes, size, &cursor, &flags) || (flags & ~3u) != 0)) {
         SetError(error, "runtime feature registry flags are invalid or truncated");
         return false;
     }
@@ -257,6 +258,7 @@ bool ParseRegistry(
     registry->nameGenerators = std::move(names);
     registry->enchantmentRows = std::move(rows);
     registry->mapFogQuery = (flags & 1u) != 0;
+    registry->movementQuery = (flags & 2u) != 0;
     return true;
 }
 

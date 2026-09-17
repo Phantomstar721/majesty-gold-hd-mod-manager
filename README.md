@@ -193,6 +193,10 @@ For lists that do not represent world objects, use the separate
 Records can describe coordinates or other package-owned data, with optional
 values/rewards and no world refocus. Map queries read stock explored terrain
 only when called and enforce an explicit per-call search budget.
+For native locomotion values, declare the read-only
+[movement-query feature](docs/stock-movement-query.md). It can read normal or
+effective movement rates for a live unit and normal rates for a named loaded
+unit type without spawning an instance or changing speed attributes.
 Linked logical keys are local to the package. Visible controls are reserved
 within their own authored panel; global engine identities such as private
 descriptor commands, packed attributes, callback symbols, private modes, and
@@ -252,6 +256,11 @@ cannot be combined.
 
 For the complete technical rules, see the
 [Merge mod authoring guide](docs/manager-merge-contract.md).
+
+Mods can also subscribe to stock gameplay events or time their own custom
+activities using [shared events and activity timers](docs/stock-events-and-activity-time.md).
+The mod supplies its eligibility and completion logic; the Manager supplies
+shared registration, pause/resume and cancellation handling.
 
 ## Compatibility and safety
 

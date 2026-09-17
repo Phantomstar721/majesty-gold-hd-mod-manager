@@ -124,6 +124,15 @@ its content and does not require its UUID to be added to the manager.
 
 ### Supported typed runtime features
 
+Source-composed shared services are also available:
+`stock.gameplay-event-observer.v1` reports actual stock potion consumption,
+reward-flag credit, caravan delivery and completed tournament participation.
+`stock.activity-duration.v1` measures a mod-defined activity using one shared
+stock-scheduled sampler, with independent progress, pause/resume, cancellation
+and terminal callbacks. Neither adds a native timer or a per-unit polling thread.
+See [shared events and activity time](stock-events-and-activity-time.md) for
+exact JSON records, GPL signatures, limits and lifecycle rules.
+
 A private stock name generator is declared as:
 
 ```json
@@ -739,7 +748,12 @@ relative path, SHA-256, and record count.
 Every generated profile also contains
 `DataMX/majesty_mod_manager_features.bin`. This deterministic MMFR registry is
 the manager-to-runtime data for the selected typed recipes. It contains bounded
-sorted name-generator and AP78-row records only. The manager validates and
+sorted name-generator and AP78-row records, plus explicit read-only query flags.
+Declare `{"type":"stock.movement-query.v1"}` to use native, read-only normal
+and effective locomotion rates for live units, or normal rates for loaded unit
+descriptions without spawning units. See [movement-rate queries](stock-movement-query.md)
+for the GPL signatures, units, supported native mechanism, and failure values.
+The manager validates and
 normalizes package JSON, translates recognized legacy aliases, detects
 cross-mod identity conflicts, and fingerprints the emitted bytes. The runtime
 parses MMFR again before installing any feature hook and rejects truncation,

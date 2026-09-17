@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from majesty_cam.manager import app as manager_app
-from majesty_cam.manager.build import BuildPlan
+from majesty_cam.manager.build import BuildIssue, BuildPlan
 from majesty_cam.manager.catalog import Catalog, CatalogEntry, CatalogKind, CatalogSource
 from majesty_cam.manager.controller import ControllerSnapshot
 
@@ -70,6 +70,17 @@ def _snapshot_with_required_qol(
 
 
 class PlayerIssueTextTests(unittest.TestCase):
+    def test_build_issue_keeps_affected_mod_and_specific_reason(self) -> None:
+        entry = CatalogEntry("example", "example", "Example Mod", CatalogKind.MERGE,
+                             CatalogSource.LOCAL_MODS, Path("example"), Path("example/mod.mmxml"), True, True)
+        snapshot = replace(_snapshot_with_required_qol("installed", "installed"),
+                           catalog=Catalog((entry,)))
+        text = manager_app._build_issue_description(snapshot, BuildIssue(
+            "missing_required_mod", "Example Mod requires Base Mod with its AI component enabled.",
+            content_id="example"))
+        self.assertIn("Example Mod", text)
+        self.assertIn("Base Mod with its AI component enabled", text)
+
     def test_foreach_return_preflight_uses_plain_player_language(self) -> None:
         rendered = manager_app._player_issue_text(
             "unsafe_gpl_foreach_return",
@@ -92,6 +103,57 @@ class ManagerAppLayoutTests(unittest.TestCase):
         from PySide6.QtWidgets import QApplication
 
         cls.application = QApplication.instance() or QApplication(["manager-ui-tests"])
+
+    def test_combination_blocker_remains_clickable_and_opens_reason_without_building(self):
+        controller = SimpleNamespace(paths=SimpleNamespace(game_path=Path("Z:/missing-majesty")))
+        with patch.object(manager_app.QTimer, "singleShot"):
+            window = manager_app.ManagerWindow(controller)
+        base = _snapshot_with_required_qol("installed", "installed")
+        issue = BuildIssue("unsafe_runtime_features", "SpecificFunction: incompatible callback boundary")
+        snapshot = replace(base, plan=replace(base.plan, issues=(issue,)), can_build=False, can_launch=False)
+        window.snapshot = snapshot
+        window._render_build_state(snapshot)
+        self.assertEqual(window.build_button.text(), "Review Issues")
+        self.assertTrue(window.build_button.isEnabled())
+        self.assertFalse(window.launch_button.isEnabled())
+        self.assertEqual(window.build_button.property("role"), "attention")
+        self.assertIn("1 issue", window.build_state.text())
+        with patch.object(window, "_run_task") as run, patch.object(
+            window, "_resolve_selected_conflicts") as resolve, patch.object(
+            manager_app.QMessageBox, "exec", return_value=0):
+            window.build_button.click()
+        run.assert_not_called()
+        resolve.assert_not_called()
+        dialog = window.findChildren(manager_app.QMessageBox)[-1]
+        self.assertIn(issue.message, dialog.informativeText())
+        self.assertIn(issue.code, dialog.detailedText())
+        # Reviewing a problem is not gated by missing game helpers either.
+        blocked = replace(snapshot, qol_utilities=_snapshot_with_required_qol("available", "installed").qol_utilities)
+        window._render_build_state(blocked)
+        self.assertTrue(window.build_button.isEnabled())
+        window._render_build_state(base)
+        self.assertEqual(window.build_button.property("role"), "outline")
+        self.assertNotEqual(window.build_button.text(), "Review Issues")
+        window.close()
+
+    def test_mixed_conflicts_and_other_issues_do_not_hide_review(self):
+        controller = SimpleNamespace(paths=SimpleNamespace(game_path=Path("Z:/missing-majesty")))
+        with patch.object(manager_app.QTimer, "singleShot"):
+            window = manager_app.ManagerWindow(controller)
+        base = _snapshot_with_required_qol("installed", "installed")
+        issues = (BuildIssue("unresolved_standard_overlap", "Two mods overlap"),
+                  BuildIssue("unsafe_runtime_features", "Specific callback is incompatible"))
+        snapshot = replace(base, plan=replace(base.plan, issues=issues), can_build=False, can_launch=False)
+        window.snapshot = snapshot
+        window._render_build_state(snapshot)
+        self.assertEqual(window.build_button.text(), "Review Issues")
+        self.assertTrue(window.build_button.isEnabled())
+        with patch.object(window, "_show_build_issues") as review, patch.object(
+            window, "_resolve_selected_conflicts") as conflicts:
+            window.build_button.click()
+        review.assert_called_once()
+        conflicts.assert_not_called()
+        window.close()
 
     def test_bundled_manager_icon_has_windows_sizes(self) -> None:
         self.assertTrue(manager_app._MANAGER_ICON_PATH.is_file())
@@ -176,7 +238,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
         class _Controller:
             paths = _Paths()
 
-            def scan(self, *, force_refresh=False):
+            def scan(self, *, force_refresh=False, progress=None):
                 return force_refresh
 
         with patch.object(manager_app.QTimer, "singleShot"):

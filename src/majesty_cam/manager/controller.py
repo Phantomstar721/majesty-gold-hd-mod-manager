@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import json
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 from ..intent_text import INTENT_REGISTRY_RELATIVE_PATH
 from ..runtime_capabilities import (
@@ -166,6 +166,7 @@ class ManagerController:
         *,
         inspect_qol: bool = True,
         force_refresh: bool = False,
+        progress: Callable[[str], None] | None = None,
     ) -> ControllerSnapshot:
         self.notices = []
         if force_refresh:
@@ -250,6 +251,8 @@ class ManagerController:
         self.standard_conflict_winners = dict(
             self.profile.standard_conflict_winners
         )
+        if progress:
+            progress("Checking selected mod compatibility")
         self._replan()
         self._qol_checked = inspect_qol
         if inspect_qol:
@@ -258,6 +261,8 @@ class ManagerController:
                 self._qol_input_signature = qol_signature
                 qol_catalog = cache.get_qol(qol_signature, self.qol_service)
                 if qol_catalog is None:
+                    if progress:
+                        progress("Checking installed Quality of Life helpers")
                     qol_catalog = self.qol_service.inspect()
                     cache.set_qol(qol_signature, qol_catalog)
                 self._set_qol_catalog(qol_catalog)
@@ -269,6 +274,8 @@ class ManagerController:
             self.qol_catalog = None
             self.qol_status = ()
             self._qol_input_signature = None
+        if progress:
+            progress("Checking the existing prepared setup")
         self._refresh_managed_build_cache(
             startup_cache=cache,
             allow_cached=True,

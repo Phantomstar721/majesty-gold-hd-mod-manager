@@ -27,6 +27,7 @@ struct Registry {
     std::vector<NameGeneratorRecord> nameGenerators;
     std::vector<EnchantmentRowRecord> enchantmentRows;
     bool mapFogQuery = false;
+    bool movementQuery = false;
 
     const EnchantmentRowRecord* FindEnchantmentRow(
         std::uint32_t overlayId) const;

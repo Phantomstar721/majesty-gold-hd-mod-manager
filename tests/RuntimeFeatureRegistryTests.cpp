@@ -224,6 +224,15 @@ int main() {
         !registry.mapFogQuery) return 22;
     mapQuery.back() = 2;
     if (!ExpectInvalid(mapQuery, "flags")) return 23;
+    for (unsigned flags = 0; flags <= 3; ++flags) {
+        auto queries = Header(2, 0, 0);
+        AppendU32(&queries, flags);
+        if (!MajestyRuntimeFeatures::ParseRegistry(queries.data(), queries.size(), &registry, &error) ||
+            registry.mapFogQuery != ((flags & 1) != 0) ||
+            registry.movementQuery != ((flags & 2) != 0)) return 24;
+    }
+    if (!MajestyRuntimeFeatures::ParseRegistry(empty.data(), empty.size(), &registry, &error) ||
+        registry.mapFogQuery || registry.movementQuery) return 25;
     std::puts("Runtime feature registry parser tests passed.");
     return 0;
 }

@@ -72,6 +72,13 @@ from .gpl_features import (
     StockGplmxPurchaseEquipmentTail,
     StockHeroQuestLifecycle,
 )
+from .shared_features import StockGameplayEventObserver, StockActivityDuration
+from .shared_composition import validate_shared_bindings, event_subscribers
+from .shared_features import shared_feature_mapping
+from .activity_time import add_activity_service
+from .gameplay_events import event_stock_paths
+from .gameplay_events import (EVENT_FUNCTIONS, STOCK_EVENT_FILES,
+                              add_gameplay_event_observers)
 from .intent_text import (
     ActivityTextDiscoveryPackage,
     INTENT_REGISTRY_RELATIVE_PATH,
@@ -145,6 +152,8 @@ from .runtime_features import (
     RuntimeFeatureRegistry,
     MapFogQueryFeature,
     MAP_QUERY_RUNTIME_CAPABILITY,
+    MovementQueryFeature,
+    MOVEMENT_QUERY_RUNTIME_CAPABILITY,
     decode_runtime_feature_registry,
     derive_feature_runtime_capabilities,
     encode_runtime_feature_registry,
@@ -441,6 +450,7 @@ class GplComposeResult:
     hero_quest_lifecycles: tuple[
         tuple[str, str, tuple[str, ...], str, str, str, str], ...
     ] = ()
+    shared_services: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1504,6 +1514,39 @@ def _load_stock_hero_quest_lifecycle_items(
         reset_source.require(DefinitionKind.FUNCTION, "reset_tasks"),
         death_source.require(DefinitionKind.FUNCTION, "Unit_Call_Deathscript"),
     )
+
+
+def _shared_bindings(inventories: Sequence[PackageInventory]):
+    packages = []
+    for inventory in inventories:
+        package = getattr(inventory.selected, "package", None)
+        definition = getattr(package, "definition", None)
+        features = tuple(feature for feature in getattr(definition, "runtime_features", ())
+                         if isinstance(feature, (StockGameplayEventObserver, StockActivityDuration)))
+        if features:
+            packages.append((_normalized_mod_uuid(package.mod_id), features,
+                             _parse_inventory_gpl_sources(inventory)))
+    if not packages:
+        return ()
+    try:
+        return validate_shared_bindings(packages)
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
+
+
+def _load_stock_gameplay_event_items(game_path: Path, events):
+    root = game_path / "SDK" / "OriginalQuests" / "GPLMx"
+    names = {name for event in events for name in EVENT_FUNCTIONS[event]}
+    sources = {}
+    result = {}
+    for name in sorted(names):
+        relative = STOCK_EVENT_FILES[name]
+        if relative not in sources:
+            source = _parse_semantic_source_file(root / relative)
+            require_complete_semantic_coverage(source)
+            sources[relative] = source
+        result[name] = sources[relative].require(DefinitionKind.FUNCTION, name)
+    return result
 
 
 def _detach_private_activity_texts(
@@ -4448,6 +4491,7 @@ def merge_gpl_resources(
     stock_hero_trees: Mapping[str, SemanticItem] | None = None,
     stock_reset_tasks: SemanticItem | None = None,
     stock_unit_death: SemanticItem | None = None,
+    stock_gameplay_event_items: Mapping[str, SemanticItem] | None = None,
 ) -> GplComposeResult:
     parsed_by_owner: dict[str, list[ParsedSemanticSource]] = {}
     for inventory in inventories:
@@ -4806,6 +4850,14 @@ def merge_gpl_resources(
             )
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
+    shared = _shared_bindings(inventories)
+    if shared:
+        try:
+            final = add_gameplay_event_observers(
+                final, event_subscribers(shared), stock_gameplay_event_items or {})
+            final = add_activity_service(final, shared)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
     if private_activity_texts:
         try:
             audit_private_activity_text_resolver_aliases(
@@ -4859,6 +4911,10 @@ def merge_gpl_resources(
                 item.death_callback_symbol,
             )
             for item in hero_quest_hooks
+        ),
+        shared_services=tuple(
+            {"source_mod_id": binding.mod_id, **shared_feature_mapping(binding.feature)}
+            for binding in shared
         ),
     )
 
@@ -4918,6 +4974,33 @@ def validate_gpl_feature_evidence(
 ) -> tuple[GplFeatureEvidence, ...]:
     """Validate and deterministically order source-composed GPL callbacks."""
 
+    shared = _shared_bindings(inventories)
+    events = event_subscribers(shared)
+    if shared:
+        # Detect reserved/generated-name collisions across *all* selected
+        # packages, including packages that do not declare a shared service.
+        protected_names = {item.normalized_name for item in
+            add_activity_service(SemanticMergeResult((), ()), shared).items}
+        if protected_names:
+            for inventory in inventories:
+                for source in _parse_inventory_gpl_sources(inventory):
+                    for item in source.items:
+                        if item.kind is DefinitionKind.FUNCTION and item.normalized_name in protected_names:
+                            raise ComposeError(f"activity service symbol collides with package: {item.name}")
+    if events and game_path is not None:
+        stock_events = _load_stock_gameplay_event_items(game_path, events)
+        protected = set(stock_events) | {
+            symbol.casefold() for symbols in events.values() for symbol in symbols}
+        relevant = {
+            inventory.selected.alias: [replace(source, items=tuple(
+                item for item in source.items if item.kind is DefinitionKind.FUNCTION
+                and item.normalized_name in protected))
+                for source in _parse_inventory_gpl_sources(inventory)]
+            for inventory in inventories}
+        try:
+            add_gameplay_event_observers(merge_sources([], relevant), events, stock_events)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
     callbacks: list[GplFeatureEvidence] = []
     seen_symbols: dict[tuple[str, str], str] = {}
     for inventory in inventories:
@@ -5287,7 +5370,8 @@ def compile_gpl(
             f"{process.stdout[-2000:]}{process.stderr[-2000:]}"
         )
     if not target.is_file() or target.stat().st_size == 0:
-        raise ComposeError(f"GPL compiler did not produce a non-empty target: {target}")
+        raise ComposeError(f"GPL compiler did not produce a non-empty target: {target}\n"
+                           f"{process.stdout[-2000:]}{process.stderr[-2000:]}")
     return CompiledGpl(
         target=target,
         size=target.stat().st_size,
@@ -5296,7 +5380,9 @@ def compile_gpl(
     )
 
 
-def snapshot_stock_compose_inputs(game_path: Path) -> tuple[StockComposeInput, ...]:
+def snapshot_stock_compose_inputs(
+    game_path: Path, *, extra_relative_paths: Sequence[Path] = (),
+) -> tuple[StockComposeInput, ...]:
     """Hash the complete, deterministic installed-stock composition input set.
 
     The fixed CAM/compiler/defines inputs are required.  Both stock Description
@@ -5314,6 +5400,7 @@ def snapshot_stock_compose_inputs(game_path: Path) -> tuple[StockComposeInput, .
     input_specs = (
         *((relative, True) for relative in required_relative_paths),
         *((relative, False) for relative in _STOCK_COMPOSE_OPTIONAL_INPUTS),
+        *((relative, True) for relative in extra_relative_paths),
     )
 
     snapshots: list[StockComposeInput] = []
@@ -5459,7 +5546,7 @@ def resolve_runtime_feature_registry(
             *(
                 feature
                 for feature in definition.runtime_features
-                if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature))
+                if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature))
             ),
             *legacy_runtime_features(definition.runtime_capabilities),
         )
@@ -5514,7 +5601,7 @@ def resolve_runtime_feature_registry(
 
     owners: dict[tuple[str, str], tuple[str, RuntimeFeature]] = {}
     for owner, feature in claims:
-        if isinstance(feature, MapFogQueryFeature):
+        if isinstance(feature, (MapFogQueryFeature, MovementQueryFeature)):
             # This is one shared read-only interface, not a resource claim.
             continue
         if isinstance(feature, NameGeneratorFeature):
@@ -5591,7 +5678,7 @@ def _runtime_feature_evidence_errors(
     inventory: PackageInventory,
     feature: RuntimeFeature,
 ) -> tuple[str, ...]:
-    if isinstance(feature, MapFogQueryFeature):
+    if isinstance(feature, (MapFogQueryFeature, MovementQueryFeature)):
         return ()
     errors: list[str] = []
     description_elements: list[ET.Element] = []
@@ -6507,6 +6594,7 @@ def prepare_final_gpl_resources(
         if has_hero_quest_lifecycle
         else (None, None, None)
     )
+    events = event_subscribers(_shared_bindings(inventories))
     return merge_gpl_resources(
         inventories,
         resolution_owners=resolution_owners,
@@ -6535,6 +6623,8 @@ def prepare_final_gpl_resources(
         stock_hero_trees=hero_quest_stock_items[0],
         stock_reset_tasks=hero_quest_stock_items[1],
         stock_unit_death=hero_quest_stock_items[2],
+        stock_gameplay_event_items=(
+            _load_stock_gameplay_event_items(game_path, events) if events else {}),
     )
 
 
@@ -7252,6 +7342,8 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
         )
     if runtime_features.map_fog_query != (MAP_QUERY_RUNTIME_CAPABILITY in runtime_capabilities):
         raise ComposeError("generated map-query registry and MMCP hook selection disagree")
+    if runtime_features.movement_query != (MOVEMENT_QUERY_RUNTIME_CAPABILITY in runtime_capabilities):
+        raise ComposeError("generated movement-query registry and MMCP hook selection disagree")
     controller_path = root / CONTROLLER_REGISTRY_RELATIVE_PATH
     if not controller_path.is_file():
         raise ComposeError(
@@ -7760,7 +7852,9 @@ def _build_report(
     staging: Path,
     validation: Mapping[str, object],
 ) -> dict:
-    stock_inputs = snapshot_stock_compose_inputs(game_path)
+    stock_inputs = snapshot_stock_compose_inputs(game_path, extra_relative_paths=event_stock_paths(
+        feature for selected in selected_mods
+        for feature in getattr(selected.package.definition, "runtime_features", ())))
     selected_payload = []
     for selected in selected_mods:
         files = [
@@ -7827,6 +7921,7 @@ def _build_report(
                     runtime_feature_registry.enchantment_rows
                 ),
                 "map_fog_query": runtime_feature_registry.map_fog_query,
+                "movement_query": runtime_feature_registry.movement_query,
             },
             "controller_registry": {
                 "path": CONTROLLER_REGISTRY_RELATIVE_PATH.as_posix(),
@@ -8053,6 +8148,7 @@ def _build_report(
                         gpl.hero_quest_lifecycles
                     )
                 ],
+                "shared_services": list(gpl.shared_services),
                 "compiled_bcd_size": compiled.size,
             },
             "art": {
