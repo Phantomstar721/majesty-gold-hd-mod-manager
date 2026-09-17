@@ -91,6 +91,35 @@ class OccupantPanelTests(unittest.TestCase):
                 owner="test", label="QB01",
             )
 
+            for data_rows in (False, True):
+                for hidden_index in range(5):
+                    hidden = list(records)
+                    value = bytearray(hidden[hidden_index])
+                    struct.pack_into("<2I", value, 8, 1500, 1500)
+                    hidden[hidden_index] = bytes(value)
+                    with self.subTest(data_rows=data_rows, hidden_index=hidden_index):
+                        arguments = dict(owner="test", label="QB01",
+                                         data_record_rows=data_rows)
+                        if data_rows and hidden_index == 2:
+                            _validate_mx05_live_agent_list_panel(
+                                Path("."), b"".join(hidden), labels, **arguments)
+                        else:
+                            with self.assertRaisesRegex(ComposeError, "exact stock MX05"):
+                                _validate_mx05_live_agent_list_panel(
+                                    Path("."), b"".join(hidden), labels, **arguments)
+
+            for rectangle in ((1500, 1500, 17, 17), (1500, 219, 16, 17),
+                              (34, 219, 16, 17)):
+                hidden = list(records)
+                value = bytearray(hidden[2])
+                struct.pack_into("<4I", value, 8, *rectangle)
+                hidden[2] = bytes(value)
+                with self.subTest(rectangle=rectangle):
+                    with self.assertRaisesRegex(ComposeError, "exact stock MX05"):
+                        _validate_mx05_live_agent_list_panel(
+                            Path("."), b"".join(hidden), labels,
+                            owner="test", label="QB01", data_record_rows=True)
+
         moved = list(records)
         moved_list = bytearray(moved[0])
         struct.pack_into("<4I", moved_list, 8, 10, 55, 164, 135)

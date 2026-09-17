@@ -913,7 +913,7 @@ def merge_named_resources(
 
 _MX05_NATIVE_LIST_CONTROL_ID = 0x1388
 _MX05_NATIVE_ACTION_CONTROL_ID = 0x138B
-_MX05_NATIVE_COIN_CONTROL_ID = 0x138C
+_MX05_NATIVE_VERBOSE_TOGGLE_CONTROL_ID = 0x138C
 _MX05_NATIVE_SCROLL_CONTROL_ID = 0x1392
 _MX05_NATIVE_PRICE_CONTROL_ID = 0x1F46
 
@@ -959,6 +959,7 @@ def _validate_mx05_live_agent_list_panel(
     *,
     owner: str,
     label: str,
+    data_record_rows: bool = False,
 ) -> None:
     """Require MX05's exact list and single native bottom-action shape."""
 
@@ -974,7 +975,7 @@ def _validate_mx05_live_agent_list_panel(
     shapes = {
         _MX05_NATIVE_LIST_CONTROL_ID: (0x90, (10, 55, 164, 160)),
         _MX05_NATIVE_ACTION_CONTROL_ID: (0xAC, (51, 219, 103, 21)),
-        _MX05_NATIVE_COIN_CONTROL_ID: (0x74, (33, 219, 16, 17)),
+        _MX05_NATIVE_VERBOSE_TOGGLE_CONTROL_ID: (0x74, (33, 219, 16, 17)),
         _MX05_NATIVE_SCROLL_CONTROL_ID: (0x54, (174, 51, 25, 167)),
         _MX05_NATIVE_PRICE_CONTROL_ID: (0xA8, (115, 222, 39, 16)),
     }
@@ -985,11 +986,17 @@ def _validate_mx05_live_agent_list_panel(
         )
         index = _smnu_record_index(records, control, owner=owner, label=label)
         record = records[index]
+        allowed_rectangles = (rectangle,)
+        # MX05's 0x138C toggles verbose Unit rows; it is not the action coin.
+        # Data-record rows suppress that native Unit command. Retain its exact
+        # record/size/order, allowing only the stock offscreen-hide position.
+        if data_record_rows and control == _MX05_NATIVE_VERBOSE_TOGGLE_CONTROL_ID:
+            allowed_rectangles += ((1500, 1500, 16, 17),)
         if (
             index != stock_index
             or len(record) != size
             or record[-4:] != b"\xff\xff\xff\xff"
-            or struct.unpack_from("<4I", record, 8) != rectangle
+            or struct.unpack_from("<4I", record, 8) not in allowed_rectangles
         ):
             raise ComposeError(
                 f"{owner}: SMNU/{label} control 0x{control:08X} must retain "
@@ -1086,6 +1093,7 @@ def _materialize_live_agent_list_panel_resources(
             strt_resource.entry.data,
             owner=panel.owner,
             label=_display_key(panel.source_dialog_id),
+            data_record_rows=board.data_record_rows,
         )
     return tuple(resources)
 

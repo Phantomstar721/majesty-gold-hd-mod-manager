@@ -208,6 +208,27 @@ row references.
 
 ## Verified stock boundaries
 
+### Optional hidden verbose toggle on data-record panels
+
+For `stock.mx05-data-record-list-panel.v1` only, the package may move control
+`0x138C` from `(33, 219, 16, 17)` to the stock offscreen-hide rectangle
+`(1500, 1500, 16, 17)`. Retain its native record, ID, order and dimensions.
+No additional feature field or runtime hook is required. The visible stock
+rectangle is also accepted. Live-agent panels retain the exact stock rectangle;
+all other geometry checks are unchanged, including action `0x138B` and price
+`0x1F46`.
+
+This is the verbose/short-list toggle, not a payment icon. Beta2 MX05 command
+`0x4BCB00` delegates it to `0x4995A0`; the `0x138C` branch at `0x4996F5`
+reads its checked state, calls `0x497910(1, checked)` and invokes list refresh
+through virtual `+0x38`. Setup at `0x499510` initializes its checked state
+from the stock list preference without repositioning it. Data-record mode
+already consumes this Unit-specific command in `QuestBoardControl`. Keeping
+the record offscreen preserves native construction and cleanup without adding
+a useless player-facing control or changing Refresh payment behavior.
+
+### Executable profiles
+
 The Manager profiles both supported executable builds. AP08 uses the public
 vtable at `0x0073D37C` and beta2 vtable at `0x00756054`, each with 13 entries.
 MX05 uses public table `0x0073EAC4` and beta2 table `0x007577AC`, each with 15
