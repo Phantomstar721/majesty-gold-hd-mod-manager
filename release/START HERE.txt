@@ -1,4 +1,4 @@
-MAJESTY MOD MANAGER
+MAJESTY MOD MANAGER 0.3.7
 
 Keep this entire folder together. "Majesty Mod Manager.exe" requires the
 nearby "_internal" folder and will not work if the EXE is moved by itself.
@@ -16,6 +16,12 @@ nearby "_internal" folder and will not work if the EXE is moved by itself.
 
 Always launch through the manager while using prepared Merge content. Your
 subscribed source mods and downloaded quests are left untouched.
+
+UPDATING
+Update the Manager and your selected mods with the game and Manager closed.
+Reopen the Manager, select Rescan Content, then Prepare Selected Mods (or
+Prepare Again) before launching. This refreshes your prepared package with
+the current mod content and Manager support.
 
 Windows may show a SmartScreen warning because this community-built app is not
 code-signed. Use "More info > Run anyway" only when this folder came from the

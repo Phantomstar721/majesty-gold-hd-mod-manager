@@ -27,6 +27,7 @@ from majesty_cam.runtime_capabilities import (
 from majesty_cam.runtime_features import (
     MapFogQueryFeature,
     MovementQueryFeature,
+    NativeTimingFeature,
     RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH,
     encode_runtime_feature_registry,
 )
@@ -83,6 +84,9 @@ class ManagerBuildPlanTests(unittest.TestCase):
 
     def test_movement_query_package_gets_a_stable_feature_sensitive_scan_plan(self):
         self._query_feature_scan_plan(MovementQueryFeature(), "movement_query", "stock.movement-query.v1")
+
+    def test_native_timing_package_gets_a_stable_feature_sensitive_scan_plan(self):
+        self._query_feature_scan_plan(NativeTimingFeature(), "native_timing", "stock.native-timing.v1")
 
     def _query_feature_scan_plan(self, feature, flag, capability):
         with TemporaryDirectory() as tmp:

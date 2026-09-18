@@ -56,7 +56,8 @@ Purchase, effector expiration and non-consumable enchantments are not events.
 
 `GPLMx/DecisionTrees/Modules/mx_check_rewards.gpl` owns Explore success and
 both Attack success paths. Their death/cancellation functions are not success
-notifications. Preserve Attack's `gavereward` guard and assignment order.
+notifications by themselves; Attack's target-death callback also contains a
+guarded success branch. Preserve Attack's `gavereward` guard and assignment order.
 `GPLMx/mx_Monster_Deaths.gpl` owns the actual stock distribution routines,
 including Ranger range, same-player Explore policy, and invisible/camouflaged
 recipients. Privately clone those distribution functions for the three flag
@@ -64,6 +65,38 @@ success calls and observe their actual recipients after `give_gold`; never
 replace ordinary monster loot. Notification reports the stock per-recipient
 share, including a zero share after integer division, not a recomputed reward.
 The flag is borrowed context and may disappear immediately after dispatch.
+
+### Attack-flag completion before payout
+
+`attack-flag-completed` observes `attack_flag_poll` and
+`Attack_flag_death_callback` in `GPLMx/DecisionTrees/Modules/mx_check_rewards.gpl`.
+The stock birth function starts its existing `activeScript` polling thread,
+sets `gavereward` false, and may change the flag owner's team. Both completion
+paths resolve `target` from the flag's native TargetID and require
+`gavereward != TRUE` plus `IsDead(target)`. Notify **inside that branch,
+immediately before** `playsound(ThisAgent, "completed_reward", "begin")`.
+
+The poll path sets `gavereward` true before distribution, deletes the flag,
+and returns. The target-death callback distributes first, then sets
+`gavereward` true, runs `check_revert_teams`, and returns; it does not delete
+the flag at that point. These differing orders remain literal. Flag removal
+still resets its heroes' tasks and reverts teams through stock `attack_flag_death`.
+The Manager adds no scheduling, cleanup, reward state or UI refresh.
+
+This is completion of the stock flag's objective, not proof of a gold transfer,
+a particular killer, or a custom capture outcome. It runs even with no eligible
+recipient, a share rounded to zero, or a zero-valued flag. Consumers requiring a
+positive bounty must inspect the flag's `ATTRIB_RewardCost` themselves. Both
+arguments are borrowed references: the target is already dead, and the flag
+may be deleted after the callback. Record bounded evidence promptly, before
+stock team reversion; do not delete agents, yield, change `gavereward`, trigger
+the same stock owner recursively, or replace a mod's authoritative death/capture
+confirmation. The existing stock guard owns duplicate suppression.
+
+`reward-flag-paid` may be selected alongside this event. Both observers are
+composed into each attack owner: completion runs first, while per-recipient
+credit remains after the native `give_gold` call. No observer replaces another.
+With no subscribers, no completion call or extra stock source input is added.
 
 ### Caravan delivery
 
@@ -102,6 +135,7 @@ Declarations reside in schema-v3 `runtime_features`.
 | --- | --- |
 | `potion-consumed` | `agent Consumer, string PotionIdentity` |
 | `reward-flag-paid` | `agent Flag, agent Recipient, integer Share` |
+| `attack-flag-completed` | `agent Flag, agent Target` |
 | `caravan-delivered` | `agent Caravan, agent Destination, integer Cargo` |
 | `tournament-completed` | `agent Participant, agent Fairgrounds, integer Event, integer Rank, integer Participants` |
 

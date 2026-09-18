@@ -626,6 +626,28 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
             return Fail(error, "MMCR live-agent-list parent controller conflicts");
         parentBases[item.parentDialogId] = item.parentControllerBase;
     }
+    std::set<std::string> recruitmentKeys;
+    std::set<std::uint32_t> recruitmentParents;
+    for (const auto& item : registry.privateRecruitments) {
+        if (panels.count(item.panelKey) || rewardPanelKeys.count(item.panelKey) ||
+            occupantKeys.count(item.panelKey) || listKeys.count(item.panelKey) ||
+            !recruitmentKeys.insert(item.panelKey).second ||
+            !recruitmentParents.insert(item.parentDialogId).second ||
+            (parentBases.count(item.parentDialogId) &&
+             parentBases[item.parentDialogId] != 0x32355041u))
+            return Fail(error, "MMCR private recruitment identity or parent conflicts");
+        for (const auto& command : parentCommands) {
+            if (command.first == item.parentDialogId &&
+                (command.second <= 0x22CEu || command.second == item.thirdPriceControlId))
+                return Fail(error, "MMCR private recruitment control collides with another recipe");
+        }
+        if (item.childDialogId &&
+            (!childDialogs.insert(item.childDialogId).second ||
+             !parentCommands.insert({item.parentDialogId, item.openCommandId}).second))
+            return Fail(error, "MMCR recruitment child or opener collides");
+        parentDialogs.insert(item.parentDialogId);
+    }
+    if (childDialogs.size() > kMaximumPanelCount) return Fail(error, "MMCR panel count is outside bounds");
     for (const auto child : childDialogs) {
         if (parentDialogs.count(child)) return Fail(error, "MMCR child dialog collides with a parent dialog");
     }
@@ -635,6 +657,7 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
 }  // namespace
 
 void Registry::Clear() {
+    privateRecruitments.clear();
     liveAgentLists.clear();
     buildingOpenToggles.clear();
     occupantActionPanels.clear();
@@ -647,6 +670,15 @@ void Registry::Clear() {
     sovereignTargetActions.clear();
     rewardPanels.clear();
     hostileMonsterFlags.clear();
+}
+
+const PrivateRecruitmentRecord* Registry::FindPrivateRecruitmentByParent(std::uint32_t id) const {
+    for (const auto& item : privateRecruitments) if (item.parentDialogId == id) return &item;
+    return nullptr;
+}
+const PrivateRecruitmentRecord* Registry::FindPrivateRecruitmentByChild(std::uint32_t id) const {
+    for (const auto& item : privateRecruitments) if (item.childDialogId && item.childDialogId == id) return &item;
+    return nullptr;
 }
 
 const SecondaryPanelRecord* Registry::FindPanelByKey(
@@ -836,10 +868,10 @@ bool ParseRegistry(
         return Fail(error, "MMCR registry magic is invalid");
     }
     std::uint32_t version = 0;
-    std::uint32_t counts[12] = {};
+    std::uint32_t counts[13] = {};
     if (!reader.ReadU32(&version)) return Fail(error, "MMCR header is truncated");
     if (version < 2 || version > kRegistryVersion) return Fail(error, "MMCR version is unsupported");
-    const std::size_t countSize = version >= 5 ? 12u : version == 4 ? 11u : version == 3 ? 10u : 9u;
+    const std::size_t countSize = version >= 17 ? 13u : version >= 5 ? 12u : version == 4 ? 11u : version == 3 ? 10u : 9u;
     for (std::size_t index = 0; index < countSize; ++index) {
         if (!reader.ReadU32(&counts[index])) return Fail(error, "MMCR header is truncated");
     }
@@ -856,8 +888,10 @@ bool ParseRegistry(
     if (version == 13) return Fail(error, "MMCR v13 live-agent lists lack the row-focus policy; rebuild with the current Manager");
     if ((version == 14 || version == 15 || version == 16) && counts[11] == 0)
         return Fail(error, "MMCR live-agent-list version without live-agent lists is noncanonical");
+    if (version >= 17 && counts[12] == 0)
+        return Fail(error, "MMCR v17 without private recruitment is noncanonical");
     std::uint64_t total = 0;
-    for (std::size_t index = 0; index < 12; ++index) total += counts[index];
+    for (std::size_t index = 0; index < 13; ++index) total += counts[index];
     if (total > kMaximumRecordCount ||
         static_cast<std::uint64_t>(counts[0]) + counts[7] + counts[9] + counts[11] > kMaximumPanelCount) {
         return Fail(error, "MMCR record count is outside supported bounds");
@@ -876,6 +910,7 @@ bool ParseRegistry(
     parsed.occupantActionPanels.reserve(counts[9]);
     parsed.buildingOpenToggles.reserve(counts[10]);
     parsed.liveAgentLists.reserve(counts[11]);
+    parsed.privateRecruitments.reserve(counts[12]);
 
     for (std::uint32_t index = 0; index < counts[0]; ++index) {
         SecondaryPanelRecord item = {};
@@ -1265,6 +1300,24 @@ bool ParseRegistry(
             return Fail(error, "MMCR live-agent-list record is noncanonical");
         parsed.liveAgentLists.push_back(std::move(item));
     }
+    for (std::uint32_t index = 0; index < counts[12]; ++index) {
+        PrivateRecruitmentRecord item = {};
+        if (!reader.ReadLogical(&item.panelKey) ||
+            !reader.ReadU32(&item.parentDialogId) ||
+            !reader.ReadU32(&item.thirdPriceControlId) ||
+            (version >= 18 && (!reader.ReadU32(&item.childDialogId) || !reader.ReadU32(&item.openCommandId))) ||
+            (item.childDialogId ? (!IsPrintableFourCC(item.childDialogId) || item.openCommandId <= 0x22CEu ||
+                item.openCommandId == item.thirdPriceControlId) : item.openCommandId != 0) ||
+            !IsPrintableFourCC(item.parentDialogId) ||
+            item.thirdPriceControlId <= 0x22CEu ||
+            (!parsed.privateRecruitments.empty() &&
+             parsed.privateRecruitments.back().panelKey >= item.panelKey))
+            return Fail(error, "MMCR private recruitment record is invalid or noncanonical");
+        parsed.privateRecruitments.push_back(std::move(item));
+    }
+    if (version == 18 && std::none_of(parsed.privateRecruitments.begin(), parsed.privateRecruitments.end(),
+            [](const PrivateRecruitmentRecord& item) { return item.childDialogId != 0; }))
+        return Fail(error, "MMCR v18 without recruitment children is noncanonical");
     if (reader.cursor() != size) return Fail(error, "MMCR registry contains trailing bytes");
     if (!ValidateComposition(parsed, error)) return false;
     *registry = std::move(parsed);

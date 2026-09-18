@@ -300,7 +300,7 @@ def collapse_art_archives(
                 if lineage.lineage_id in evidence
             )
             raise StockArtError(
-                f"{owner}: positional art ancestry is ambiguous between {labels}"
+                f"{owner}: {path.name}: positional art ancestry is ambiguous between {labels}"
             )
         lineage_id = next(iter(evidence))
         lineage = next(
@@ -407,7 +407,7 @@ def _structural_dependency_lineages(
     result: set[str] = set()
     images = _imag_entries(archive)
     tiles = _optional_section(archive, b"TILE")
-    for _provider_archive, lineage, analysis in providers:
+    for provider_archive, lineage, analysis in providers:
         stock_images = _imag_entries(lineage.effective)
         owned_images = {
             key: entry
@@ -422,6 +422,7 @@ def _structural_dependency_lineages(
             continue
 
         stock_tiles = _section(lineage.effective, b"TILE")
+        provider_tiles = _optional_section(provider_archive, b"TILE")
         candidate_tile_count = max(
             len(stock_tiles.entries),
             len(tiles.entries) if tiles is not None else 0,
@@ -453,7 +454,10 @@ def _structural_dependency_lineages(
             referenced_tiles.update(
                 reference.tile_index for reference in parsed.references
             )
-        if referenced_tiles.intersection(analysis.tile_delta.changed_indices):
+        if any(
+            _matching_positional_tile_slot(tiles, provider_tiles, stock_tiles, index)
+            for index in referenced_tiles.intersection(analysis.tile_delta.changed_indices)
+        ):
             result.add(lineage.lineage_id)
             continue
 
@@ -463,9 +467,36 @@ def _structural_dependency_lineages(
         provider_references = {
             reference.tile_index for reference in analysis.imag_references
         }
-        if archive_changed_tiles.intersection(provider_references):
+        if any(
+            _matching_positional_tile_slot(tiles, provider_tiles, stock_tiles, index)
+            for index in archive_changed_tiles.intersection(provider_references)
+        ):
             result.add(lineage.lineage_id)
     return frozenset(result)
+
+
+def _matching_positional_tile_slot(
+    candidate: CamSection | None,
+    provider: CamSection | None,
+    stock: CamSection,
+    index: int,
+) -> bool:
+    """Do not confuse equal indices in independent positional tables.
+
+    Stock IMAG references are local to an art family. A carried TILE slot,
+    including an empty native-fallthrough placeholder, retains the full CAM
+    record name. When both sides have a slot, differing names contradict a
+    dependency even if the integer index happens to be identical. This is the
+    same full-name/position evidence used by stock payload classification.
+
+    IMAG-only dependents have no slot identity to contradict a provider. They
+    may still join a unique supplier, but multiple candidates stay ambiguous.
+    """
+    if candidate is None or index >= len(candidate.entries):
+        return True
+    supplied = provider if provider is not None and index < len(provider.entries) else stock
+    return (index < len(supplied.entries)
+            and candidate.entries[index].name == supplied.entries[index].name)
 
 
 def _stock_cam_paths(root: Path) -> tuple[Path, ...]:
@@ -584,7 +615,7 @@ def _sparse_component_archive(
                 images[position] = entry
         overlay_tiles = _optional_section(overlay, b"TILE")
         if overlay_tiles is not None:
-            tiles = _overlay_positional(tiles, overlay_tiles)
+            tiles = _overlay_positional(tiles, overlay_tiles, preserve_inherited_names=True)
         overlay_palette = _palette_section(overlay)
         if overlay_palette is not None:
             if stock_palette is None or stock_palette.extension != overlay_palette.extension:
@@ -598,7 +629,7 @@ def _sparse_component_archive(
                     ),
                     padding=stock_palette.padding,
                 )
-            palette = _overlay_positional(palette, overlay_palette)
+            palette = _overlay_positional(palette, overlay_palette, preserve_inherited_names=True)
 
     # A value copied from an older stock ancestor is still an authored write
     # when it differs from the effective installed lineage.  Keep that write
@@ -757,12 +788,16 @@ def _private_positional_indices(
     )
 
 
-def _overlay_positional(base: CamSection, overlay: CamSection) -> CamSection:
+def _overlay_positional(base: CamSection, overlay: CamSection, *, preserve_inherited_names: bool = False) -> CamSection:
     output = list(base.entries)
     if len(output) < len(overlay.entries):
         output.extend(overlay.entries[len(output) :])
     for index, entry in enumerate(overlay.entries):
-        if entry.data:
+        if entry.data or (preserve_inherited_names and not output[index].data and entry.name.rstrip(b"\0")):
+            # Sparse metadata is not a native write. A named empty slot tells
+            # ancestry resolution WHICH stock image this ordinal inherited
+            # before expansion reused it. Never erase an earlier real payload,
+            # and never change stock dataset last-write/fallthrough semantics.
             output[index] = entry
     return CamSection(base.extension, tuple(output), padding=base.padding)
 

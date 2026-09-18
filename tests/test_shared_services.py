@@ -2,6 +2,7 @@
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import re
 import sys
 import unittest
 
@@ -50,6 +51,93 @@ def event_callbacks():
     return "\n".join("function " + feature.callback_symbol + "(" + ", ".join(
         kind + " Param" + str(i) for i, kind in enumerate(EVENT_SIGNATURES[feature.event]))
         + ")\ndeclare\nbegin\nend\n" for feature in events())
+
+
+class AttackFlagCompletionTests(unittest.TestCase):
+    event = "attack-flag-completed"
+    feature = StockGameplayEventObserver("bounty", event, "Example_Completed")
+    callbacks = '''function Example_Completed(agent Flag, agent Target)
+declare
+begin
+end
+function Other_Completed(agent Flag, agent Target)
+declare
+begin
+end
+function Example_Paid(agent Flag, agent Recipient, integer Share)
+declare
+begin
+end
+'''
+
+    def test_contract_requires_two_agents_and_void_return(self):
+        self.assertEqual(parse_shared_feature(shared_feature_mapping(self.feature)), self.feature)
+        for args, returns in (("agent Flag", ""), ("agent Flag, integer Target", ""),
+                              ("agent Flag, agent Target", " is boolean")):
+            source = parse_gpl(f"function Example_Completed({args}){returns}\ndeclare\nbegin\nend\n", "invalid")
+            with self.assertRaisesRegex(ValueError, "requires"):
+                validate_shared_bindings([(MOD, (self.feature,), (source,))])
+        callbacks = parse_gpl(self.callbacks, "example")
+        second = replace(self.feature, feature_key="another", callback_symbol="Other_Completed")
+        bindings = validate_shared_bindings([(MOD, (self.feature, second), (callbacks,))])
+        self.assertEqual(event_subscribers(bindings)[self.event], ("Other_Completed", "Example_Completed"))
+        self.assertEqual(event_stock_paths((self.feature,)), (
+            Path("SDK/OriginalQuests/GPLMx/DecisionTrees/Modules/mx_check_rewards.gpl"),))
+
+    @unittest.skipUnless((GAME / "SDK/Gplbcc.exe").is_file(), "requires installed stock SDK")
+    def test_completion_and_payout_preserve_both_entire_stock_owners(self):
+        callbacks = parse_gpl(self.callbacks, "example")
+        owners = ("attack_flag_poll", "attack_flag_death_callback")
+        for paid in (False, True):
+            for reverse in (False, True):
+                with self.subTest(paid=paid, reverse=reverse):
+                    subscribers = {self.event: ("Example_Completed", "Other_Completed")}
+                    if paid:
+                        subscribers["reward-flag-paid"] = ("Example_Paid",)
+                    if reverse:
+                        subscribers = dict(reversed(tuple(subscribers.items())))
+                    stock = _load_stock_gameplay_event_items(GAME, subscribers)
+                    final = add_gameplay_event_observers(SemanticMergeResult(callbacks.items, ()), subscribers, stock)
+                    functions = {item.normalized_name: item.text for item in final.items}
+                    for name in owners:
+                        text = functions[name]
+                        notify = "$Example_Completed(ThisAgent, target);\n\t$Other_Completed(ThisAgent, target);\n"
+                        self.assertEqual(text.count(notify), 1)
+                        self.assertRegex(text[text.index(notify) + len(notify):], r'^\$playsound\s*\(')
+                        before = stock_tokens(text[:text.index(notify)])
+                        self.assertIn(("if", "(", "$", "isdead", "(", "target", ")", ")", "begin"),
+                                      [before[i:i+9] for i in range(len(before)-8)])
+                        self.assertIn(('"gavereward"', '!', '=', 'true'),
+                                      [before[i:i+4] for i in range(len(before)-3)])
+                        # Remove ONLY our addition and restore the known payout
+                        # call identity: every original stock token must survive.
+                        restored = text.replace(notify, "").replace("$MM_Event_AttackGold", "$dropgoldinradius")
+                        self.assertEqual(stock_tokens(restored), stock_tokens(stock[name].text))
+                        self.assertEqual(text.count("$MM_Event_AttackGold"), int(paid))
+                    if paid:
+                        self.assertEqual(functions["mm_event_attackgold"].count("$Example_Paid("), 1)
+                        self.assertNotIn("Example_Completed", functions["explore_flag_poll"])
+                    else:
+                        self.assertEqual(set(functions), {"example_completed", "other_completed", "example_paid", *owners})
+
+    @unittest.skipUnless((GAME / "SDK/Gplbcc.exe").is_file(), "requires installed stock SDK")
+    def test_shared_owner_keeps_authored_prelude_but_rejects_gameplay_rewrites(self):
+        subscribers = {self.event: ("Example_Completed",), "reward-flag-paid": ("Example_Paid",)}
+        stock = _load_stock_gameplay_event_items(GAME, subscribers)
+        callbacks = parse_gpl(self.callbacks, "example")
+        owner = stock["attack_flag_poll"]
+        prelude = replace(owner, text=re.sub(r'\bbegin\b', 'begin\n$PrivatePrelude(thisagent);',
+                                            owner.text, count=1, flags=re.IGNORECASE))
+        initial = SemanticMergeResult((*callbacks.items, prelude), ())
+        final = add_gameplay_event_observers(initial, subscribers, stock)
+        text = next(item.text for item in final.items if item.normalized_name == "attack_flag_poll")
+        self.assertEqual(text.count("$PrivatePrelude("), 1)
+        self.assertEqual(text.count("$Example_Completed("), 1)
+        self.assertEqual(text.count("$MM_Event_AttackGold"), 1)
+        for name in ("attack_flag_poll", "attack_flag_death_callback"):
+            changed = replace(stock[name], text=stock[name].text.replace('"gavereward" != TRUE', '"gavereward" == TRUE'))
+            with self.assertRaisesRegex(ValueError, "stock gameplay-event owner"):
+                add_gameplay_event_observers(SemanticMergeResult((*callbacks.items, changed), ()), subscribers, stock)
 
 
 class SharedServiceTests(unittest.TestCase):

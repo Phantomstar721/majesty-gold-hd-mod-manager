@@ -23,6 +23,7 @@ NAME_GENERATOR_RUNTIME_CAPABILITY = "stock.name-generator.v1"
 ENCHANTMENT_ROW_RUNTIME_CAPABILITY = "stock.ap78-enchantment-row.v1"
 MAP_QUERY_RUNTIME_CAPABILITY = "stock.map-fog-query.v1"
 MOVEMENT_QUERY_RUNTIME_CAPABILITY = "stock.movement-query.v1"
+NATIVE_TIMING_RUNTIME_CAPABILITY = "stock.native-timing.v1"
 
 _MAGIC = b"MMFR"
 _VERSION = 1
@@ -71,8 +72,16 @@ class MovementQueryFeature:
     """Read-only native locomotion rates for units and unit descriptions."""
 
 
+@dataclass(frozen=True)
+class NativeTimingFeature:
+    """Stock clock/base periods, declared effects and learned-spell cooldowns."""
+
+    spell_ids: tuple[str, ...] = ()
+    effector_ids: tuple[str, ...] = ()
+
+
 RuntimeFeature = Union[NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature,
-                       MovementQueryFeature]
+                       MovementQueryFeature, NativeTimingFeature]
 
 
 @dataclass(frozen=True)
@@ -81,12 +90,14 @@ class RuntimeFeatureRegistry:
     enchantment_rows: tuple[EnchantmentRowFeature, ...] = ()
     map_fog_query: bool = False
     movement_query: bool = False
+    native_timing: NativeTimingFeature | None = None
 
     @property
     def features(self) -> tuple[RuntimeFeature, ...]:
         return (*self.name_generators, *self.enchantment_rows,
                 *((MapFogQueryFeature(),) if self.map_fog_query else ()),
-                *((MovementQueryFeature(),) if self.movement_query else ()))
+                *((MovementQueryFeature(),) if self.movement_query else ()),
+                *((self.native_timing,) if self.native_timing is not None else ()))
 
 
 def _fourcc_bytes(value: object, *, prefix: str | None = None) -> bytes:
@@ -159,6 +170,9 @@ def normalize_runtime_features(
     rows: dict[int, EnchantmentRowFeature] = {}
     map_fog_query = False
     movement_query = False
+    timing = False
+    timing_spells: set[int] = set()
+    timing_effectors: set[int] = set()
     for feature in expanded:
         if isinstance(feature, NameGeneratorFeature):
             generator_key = _fourcc_u32(feature.generator_id, prefix="NM")
@@ -212,9 +226,19 @@ def normalize_runtime_features(
             map_fog_query = True
         elif isinstance(feature, MovementQueryFeature):
             movement_query = True
+        elif isinstance(feature, NativeTimingFeature):
+            timing = True
+            for values, destination in ((feature.spell_ids, timing_spells),
+                                        (feature.effector_ids, timing_effectors)):
+                if not isinstance(values, tuple) or len(values) > 1024:
+                    raise ValueError("native timing IDs must be tuples of at most 1024 FourCCs")
+                keys = tuple(_fourcc_u32(value) for value in values)
+                if len(keys) != len(set(keys)):
+                    raise ValueError("native timing IDs must be unique within each declaration")
+                destination.update(keys)
         else:
             raise ValueError(
-                "runtime features must be name-generator, enchantment-row, or read-only query records"
+                "runtime features must be name-generator, enchantment-row, query, or native timing records"
             )
     if len(names) > _MAX_NAME_GENERATORS:
         raise ValueError(
@@ -226,11 +250,17 @@ def normalize_runtime_features(
             f"runtime feature registry has {len(rows)} enchantment rows; "
             f"maximum is {_MAX_ENCHANTMENT_ROWS}"
         )
+    if max(len(timing_spells), len(timing_effectors)) > 1024:
+        raise ValueError("native timing registry exceeds 1024 IDs per resource family")
     return RuntimeFeatureRegistry(
         name_generators=tuple(names[key] for key in sorted(names)),
         enchantment_rows=tuple(rows[key] for key in sorted(rows)),
         map_fog_query=map_fog_query,
         movement_query=movement_query,
+        native_timing=NativeTimingFeature(
+            tuple(_u32_fourcc(key) for key in sorted(timing_spells)),
+            tuple(_u32_fourcc(key) for key in sorted(timing_effectors)),
+        ) if timing else None,
     )
 
 
@@ -300,10 +330,13 @@ def derive_feature_runtime_capabilities(
     effective.discard(ENCHANTMENT_ROW_RUNTIME_CAPABILITY)
     effective.discard(MAP_QUERY_RUNTIME_CAPABILITY)
     effective.discard(MOVEMENT_QUERY_RUNTIME_CAPABILITY)
+    effective.discard(NATIVE_TIMING_RUNTIME_CAPABILITY)
     if registry.map_fog_query:
         effective.add(MAP_QUERY_RUNTIME_CAPABILITY)
     if registry.movement_query:
         effective.add(MOVEMENT_QUERY_RUNTIME_CAPABILITY)
+    if registry.native_timing is not None:
+        effective.add(NATIVE_TIMING_RUNTIME_CAPABILITY)
     if registry.name_generators:
         effective.add(NAME_GENERATOR_RUNTIME_CAPABILITY)
     if registry.enchantment_rows:
@@ -328,13 +361,16 @@ def encode_runtime_feature_registry(
     chunks = [
         _HEADER.pack(
             _MAGIC,
+            3 if registry.native_timing is not None else
             2 if registry.map_fog_query or registry.movement_query else _VERSION,
             len(registry.name_generators),
             len(registry.enchantment_rows),
         )
     ]
-    if registry.map_fog_query or registry.movement_query:
-        chunks.append(struct.pack("<I", int(registry.map_fog_query) | (int(registry.movement_query) << 1)))
+    if registry.map_fog_query or registry.movement_query or registry.native_timing is not None:
+        chunks.append(struct.pack("<I", int(registry.map_fog_query) |
+                                  (int(registry.movement_query) << 1) |
+                                  (int(registry.native_timing is not None) << 2)))
     for feature in registry.name_generators:
         chunks.append(
             _NAME_GENERATOR.pack(
@@ -355,6 +391,10 @@ def encode_runtime_feature_registry(
                 text,
             )
         )
+    if registry.native_timing is not None:
+        for values in (registry.native_timing.spell_ids, registry.native_timing.effector_ids):
+            chunks.append(struct.pack("<I", len(values)))
+            chunks.extend(struct.pack("<I", _fourcc_u32(value)) for value in values)
     payload = b"".join(chunks)
     if len(payload) > _MAX_REGISTRY_BYTES:
         raise ValueError(
@@ -375,7 +415,7 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
     magic, version, name_count, row_count = _HEADER.unpack_from(payload)
     if magic != _MAGIC:
         raise ValueError("runtime feature registry magic is invalid")
-    if version not in (1, 2):
+    if version not in (1, 2, 3):
         raise ValueError(f"unsupported runtime feature registry version: {version}")
     if name_count > _MAX_NAME_GENERATORS:
         raise ValueError(
@@ -388,11 +428,11 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
             f"maximum is {_MAX_ENCHANTMENT_ROWS}"
         )
 
-    header_size = _HEADER.size + (4 if version == 2 else 0)
+    header_size = _HEADER.size + (4 if version >= 2 else 0)
     if len(payload) < header_size:
         raise ValueError("runtime feature registry flags are truncated")
-    flags = struct.unpack_from("<I", payload, _HEADER.size)[0] if version == 2 else 0
-    if flags & ~3:
+    flags = struct.unpack_from("<I", payload, _HEADER.size)[0] if version >= 2 else 0
+    if flags & ~(7 if version == 3 else 3) or (version == 3 and not flags & 4):
         raise ValueError("runtime feature registry has unsupported flags")
     minimum_size = (
         header_size
@@ -464,11 +504,27 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
             )
         )
         previous_overlay = overlay_id
+    timing_features = ()
+    if flags & 4:
+        families = []
+        for _ in range(2):
+            if offset + 4 > len(payload):
+                raise ValueError("native timing resource count is truncated")
+            count = struct.unpack_from("<I", payload, offset)[0]
+            offset += 4
+            if count > 1024 or offset + 4 * count > len(payload):
+                raise ValueError("native timing resources are invalid or truncated")
+            keys = struct.unpack_from(f"<{count}I", payload, offset)
+            offset += 4 * count
+            if any(left >= right for left, right in zip(keys, keys[1:])):
+                raise ValueError("native timing IDs must be strictly sorted and unique")
+            families.append(tuple(_u32_fourcc(key) for key in keys))
+        timing_features = (NativeTimingFeature(*families),)
     if offset != len(payload):
         raise ValueError("runtime feature registry has trailing bytes")
     return normalize_runtime_features((*names, *rows,
         *((MapFogQueryFeature(),) if flags & 1 else ()),
-        *((MovementQueryFeature(),) if flags & 2 else ())))
+        *((MovementQueryFeature(),) if flags & 2 else ()), *timing_features))
 
 
 def write_runtime_feature_registry(
@@ -510,6 +566,8 @@ __all__ = [
     "MapFogQueryFeature",
     "MovementQueryFeature",
     "MOVEMENT_QUERY_RUNTIME_CAPABILITY",
+    "NativeTimingFeature",
+    "NATIVE_TIMING_RUNTIME_CAPABILITY",
     "MAP_QUERY_RUNTIME_CAPABILITY",
     "RuntimeFeatureRegistry",
     "decode_runtime_feature_registry",

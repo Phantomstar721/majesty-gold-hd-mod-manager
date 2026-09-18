@@ -33,6 +33,7 @@ EVENT_FUNCTIONS = {
     "reward-flag-paid": ("explore_flag_poll", "attack_flag_poll",
                          "attack_flag_death_callback", "dropgoldinradius",
                          "dropgoldinradius_sameplayer"),
+    "attack-flag-completed": ("attack_flag_poll", "attack_flag_death_callback"),
     "caravan-delivered": ("caravan_go_trade",),
     "tournament-completed": ("enter_tourney", "exit_fair"),
 }
@@ -198,7 +199,10 @@ def add_gameplay_event_observers(
                 and not _stock_preserving_prelude(reference.text, current.text)):
             raise ValueError(f"{name} ({current.source_name}): selected source changes the stock gameplay-event owner; "
                              "its success/cleanup boundary cannot be safely combined")
-        return current
+        # Prove the authored input, then continue from any edits already made
+        # by this composition. Two events can share one stock owner; starting
+        # from `current` again would silently discard its earlier observers.
+        return items.get(current.key, current)
 
     def save(item: SemanticItem, text: str) -> None:
         items[item.key] = replace(item, text=text, span=None,
@@ -256,6 +260,13 @@ def add_gameplay_event_observers(
         ):
             item = target(name)
             save(item, _once(item.text, r"\$" + original + r"\b", lambda _: "$" + private))
+
+    if "attack-flag-completed" in requested:
+        for name in EVENT_FUNCTIONS["attack-flag-completed"]:
+            item = target(name)
+            save(item, _once(item.text,
+                r'\$playsound\s*\(\s*thisagent\s*,\s*"completed_reward"\s*,\s*"begin"\s*\)\s*;',
+                lambda m: calls("attack-flag-completed", "ThisAgent, target") + "\n" + m.group()))
 
     if "caravan-delivered" in requested:
         item = target("caravan_go_trade")

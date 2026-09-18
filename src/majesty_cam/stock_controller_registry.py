@@ -38,6 +38,8 @@ from .stock_controller_features import (
     StockMx09Ap41RewardPanel,
     StockMx04Mx05OccupantActionPanel,
     StockMx22BuildingOpenToggle,
+    StockAp52PrivateRecruitment,
+    StockAp52RecruitmentPanel,
     StockAp17UpgradeResearchGate,
     StockAp22ResourceMeter,
     StockAp24RageCommandAction,
@@ -50,7 +52,7 @@ from .stock_controller_features import (
 
 
 CONTROLLER_REGISTRY_MAGIC = b"MMCR"
-CONTROLLER_REGISTRY_VERSION = 16
+CONTROLLER_REGISTRY_VERSION = 18
 STOCK_CONTROLLER_RUNTIME_CAPABILITY = "stock.controller-recipes.v1"
 CONTROLLER_REGISTRY_ENVIRONMENT = "MAJESTY_MOD_MANAGER_CONTROLLERS"
 CONTROLLER_REGISTRY_RELATIVE_PATH = Path(
@@ -62,6 +64,7 @@ _HEADER = struct.Struct("<4s10I")
 _OCCUPANT_HEADER = struct.Struct("<4s11I")
 _TOGGLE_HEADER = struct.Struct("<4s12I")
 _LIST_HEADER = struct.Struct("<4s13I")
+_RECRUITMENT_HEADER = struct.Struct("<4s14I")
 _U32 = struct.Struct("<I")
 _SECTIONS: Tuple[Type[ControllerFeature], ...] = (
     StockAp10Ap69SecondaryPanel,
@@ -76,6 +79,7 @@ _SECTIONS: Tuple[Type[ControllerFeature], ...] = (
     StockMx04Mx05OccupantActionPanel,
     StockMx22BuildingOpenToggle,
     StockMx05LiveAgentListPanel,
+    StockAp52PrivateRecruitment,
 )
 
 
@@ -121,6 +125,15 @@ class ResolvedBuildingOpenToggleRecord:
     open_command_id: int
     close_command_id: int
     parent_controller_base: str
+
+
+@dataclass(frozen=True)
+class ResolvedPrivateRecruitmentRecord:
+    panel_key: str
+    parent_dialog_id: int
+    third_price_control_id: int
+    child_dialog_id: int = 0
+    open_command_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -200,6 +213,14 @@ class ResolvedControllerRegistry:
     occupant_action_panels: Tuple[ResolvedOccupantActionPanelRecord, ...] = ()
     building_open_toggles: Tuple[ResolvedBuildingOpenToggleRecord, ...] = ()
     live_agent_lists: Tuple[ResolvedLiveAgentListRecord, ...] = ()
+    private_recruitments: Tuple[ResolvedPrivateRecruitmentRecord, ...] = ()
+
+    @property
+    def child_panels(self):
+        """Every secondary-panel owner, independent of its stock controller."""
+        return (*self.panels, *self.reward_panels, *self.occupant_action_panels,
+                *self.live_agent_lists, *(item for item in self.private_recruitments
+                                         if isinstance(item, ResolvedPrivateRecruitmentRecord) and item.child_dialog_id))
 
 
 def resolve_stock_controller_registry(
@@ -210,6 +231,7 @@ def resolve_stock_controller_registry(
     occupant_parent_bases: Mapping[str, str] | None = None,
     toggle_parents: Mapping[str, Tuple[int, str]] | None = None,
     list_text_ids: Mapping[str, LiveAgentListTextIds] | None = None,
+    recruitment_parents: Mapping[str, int] | None = None,
 ) -> ResolvedControllerRegistry:
     """Resolve author records to explicit parent/child dialog IDs.
 
@@ -224,7 +246,7 @@ def resolve_stock_controller_registry(
     except ControllerFeatureError as exc:
         raise ControllerRegistryError(str(exc)) from exc
     panel_features = tuple(item for item in features if isinstance(
-        item, (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
+        item, (StockAp52RecruitmentPanel, StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
                StockMx04Mx05OccupantActionPanel, StockMx05LiveAgentListPanel)
     ))
     expected = {item.panel_key for item in panel_features}
@@ -256,7 +278,9 @@ def resolve_stock_controller_registry(
         parent, child = value
         _resolved_dialog_id(parent, "parent_dialog_id")
         _resolved_dialog_id(child, "child_dialog_id")
-        if isinstance(item, StockAp10Ap69SecondaryPanel):
+        if isinstance(item, StockAp52RecruitmentPanel):
+            continue  # Serialized in the recruitment section with its parent.
+        elif isinstance(item, StockAp10Ap69SecondaryPanel):
             panels.append(ResolvedSecondaryPanelRecord(
                 item.panel_key, parent, child, item.building_family_id,
                 item.open_command_id,
@@ -363,6 +387,19 @@ def resolve_stock_controller_registry(
             item.toggle_key, parent, item.open_command_id,
             item.close_command_id, controller_base,
         ))
+    recruitment_features = tuple(item for item in features if isinstance(item, StockAp52PrivateRecruitment))
+    resolved_recruitment_parents = dict(recruitment_parents or {})
+    if set(resolved_recruitment_parents) != {item.panel_key for item in recruitment_features}:
+        raise ControllerRegistryError("resolved recruitment mapping must contain exactly every panel_key")
+    for item in recruitment_features:
+        if (isinstance(item, StockAp52RecruitmentPanel) and
+                panel_dialog_ids[item.panel_key][0] != resolved_recruitment_parents[item.panel_key]):
+            raise ControllerRegistryError("recruitment panel and building must resolve to the same parent")
+    recruitments = tuple(ResolvedPrivateRecruitmentRecord(
+        item.panel_key, resolved_recruitment_parents[item.panel_key], item.third_price_control_id,
+        panel_dialog_ids[item.panel_key][1] if isinstance(item, StockAp52RecruitmentPanel) else 0,
+        item.open_command_id if isinstance(item, StockAp52RecruitmentPanel) else 0,
+    ) for item in recruitment_features)
     prototypes = {} if flag_prototypes is None else dict(flag_prototypes)
     flag_features = tuple(
         item for item in features if isinstance(item, StockAp41Fl00HostileMonsterFlag)
@@ -407,6 +444,7 @@ def resolve_stock_controller_registry(
         occupant_action_panels=tuple(occupant_panels),
         building_open_toggles=tuple(toggles),
         live_agent_lists=tuple(live_agent_lists),
+        private_recruitments=recruitments,
     ))
 
 
@@ -520,7 +558,13 @@ def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> by
     ) else 14
     if any(item.data_record_rows for item in registry.live_agent_lists):
         version = 16
-    if registry.live_agent_lists:
+    if registry.private_recruitments:
+        version = 18 if any(item.child_dialog_id for item in registry.private_recruitments) else 17
+        sections += (registry.occupant_action_panels, registry.building_open_toggles,
+                     registry.live_agent_lists, registry.private_recruitments)
+        writer.data += _RECRUITMENT_HEADER.pack(
+            CONTROLLER_REGISTRY_MAGIC, version, *(len(section) for section in sections))
+    elif registry.live_agent_lists:
         sections += (registry.occupant_action_panels, registry.building_open_toggles,
                      registry.live_agent_lists)
         writer.data += _LIST_HEADER.pack(
@@ -605,7 +649,13 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
             "MMCR v13 live-agent lists lack the row-focus policy; "
             "rebuild with the current Manager"
         )
-    if version in (14, 15, 16):
+    if version in (17, 18):
+        if len(payload) < _RECRUITMENT_HEADER.size:
+            raise ControllerRegistryError(f"MMCR v{version} header is truncated")
+        magic, version, *counts = _RECRUITMENT_HEADER.unpack_from(payload)
+        if counts[12] == 0:
+            raise ControllerRegistryError(f"MMCR v{version} without private recruitment is noncanonical")
+    elif version in (14, 15, 16):
         if len(payload) < _LIST_HEADER.size:
             raise ControllerRegistryError(f"MMCR v{version} header is truncated")
         magic, version, *counts = _LIST_HEADER.unpack_from(payload)
@@ -635,7 +685,9 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
         raise ControllerRegistryError("MMCR panel count is outside bounds")
 
     reader = _Reader(payload)
-    if version in (14, 15, 16):
+    if version in (17, 18):
+        reader.cursor = _RECRUITMENT_HEADER.size
+    elif version in (14, 15, 16):
         reader.cursor = _LIST_HEADER.size
     elif version == 4:
         reader.cursor = _TOGGLE_HEADER.size
@@ -796,6 +848,12 @@ def _encode_feature(writer: _Writer, feature: object, version: int) -> None:
         writer.u32(feature.open_command_id)
         writer.u32(feature.close_command_id)
         writer.fourcc(feature.parent_controller_base)
+    elif isinstance(feature, ResolvedPrivateRecruitmentRecord):
+        writer.u32(feature.parent_dialog_id)
+        writer.u32(feature.third_price_control_id)
+        if version >= 18:
+            writer.u32(feature.child_dialog_id)
+            writer.u32(feature.open_command_id)
     elif isinstance(feature, ResolvedLiveAgentListRecord):
         writer.u32(feature.parent_dialog_id)
         writer.u32(feature.child_dialog_id)
@@ -849,6 +907,11 @@ def _decode_feature(
     version: int,
 ) -> object:
     panel = reader.logical("panel_key")
+    if kind is StockAp52PrivateRecruitment:
+        return ResolvedPrivateRecruitmentRecord(
+            panel, reader.u32("parent_dialog_id"), reader.u32("third_price_control_id"),
+            reader.u32("child_dialog_id") if version >= 18 else 0,
+            reader.u32("open_command_id") if version >= 18 else 0)
     if kind is StockMx04Mx05OccupantActionPanel:
         return ResolvedOccupantActionPanelRecord(
             panel, reader.u32("parent_dialog_id"), reader.u32("child_dialog_id"),
@@ -1035,13 +1098,13 @@ def _validate_resolved_registry(
         registry.occupant_action_panels,
         registry.building_open_toggles,
         registry.live_agent_lists,
+        registry.private_recruitments,
     )
     if any(not isinstance(section, tuple) for section in sections):
         raise ControllerRegistryError("MMCR resolved registry sections must be tuples")
     if sum(len(section) for section in sections) > MAX_CONTROLLER_FEATURES:
         raise ControllerRegistryError("MMCR record count is outside bounds")
-    if (len(registry.panels) + len(registry.reward_panels) +
-            len(registry.occupant_action_panels) + len(registry.live_agent_lists)) > MAX_SECONDARY_PANELS:
+    if len(registry.child_panels) > MAX_SECONDARY_PANELS:
         raise ControllerRegistryError("MMCR panel count is outside bounds")
 
     panels = {}
@@ -1281,6 +1344,41 @@ def _validate_resolved_registry(
             item.toggle_key, _resolved_parent_key(item.parent_dialog_id),
             item.open_command_id, item.close_command_id,
         ))
+    recruitment_by_key = {}
+    recruitment_parents = set()
+    for item in registry.private_recruitments:
+        if not isinstance(item, ResolvedPrivateRecruitmentRecord):
+            raise ControllerRegistryError("MMCR private recruitment record type is invalid")
+        _resolved_dialog_id(item.parent_dialog_id, "parent_dialog_id")
+        if item.panel_key in recruitment_by_key or item.panel_key in panels:
+            raise ControllerRegistryError("MMCR private recruitment panel_key is duplicated")
+        if item.parent_dialog_id in recruitment_parents:
+            raise ControllerRegistryError("MMCR private recruitment parent is duplicated")
+        if parent_bases.get(item.parent_dialog_id, "AP52") != "AP52":
+            raise ControllerRegistryError("MMCR private recruitment parent conflicts with another recipe")
+        if any(parent == item.parent_dialog_id and
+               (value <= 0x22CE or value == item.third_price_control_id)
+               for parent, value in parent_commands):
+            raise ControllerRegistryError("MMCR private recruitment control collides with another recipe")
+        recruitment_parents.add(item.parent_dialog_id)
+        recruitment_by_key[item.panel_key] = item
+        if item.child_dialog_id:
+            _resolved_dialog_id(item.child_dialog_id, "child_dialog_id")
+            if item.child_dialog_id in child_dialogs:
+                raise ControllerRegistryError("MMCR recruitment child dialog is duplicated")
+            if (item.parent_dialog_id, item.open_command_id) in parent_commands:
+                raise ControllerRegistryError("MMCR recruitment opener collides with another recipe")
+            child_dialogs.add(item.child_dialog_id)
+            parent_commands.add((item.parent_dialog_id, item.open_command_id))
+            author_features.append(StockAp52RecruitmentPanel(
+                item.panel_key, _resolved_parent_key(item.parent_dialog_id), item.third_price_control_id,
+                source_dialog_id=item.child_dialog_id.to_bytes(4, "little").decode("ascii"),
+                open_command_id=item.open_command_id))
+        else:
+            if item.open_command_id:
+                raise ControllerRegistryError("MMCR recruitment opener has no child")
+            author_features.append(StockAp52PrivateRecruitment(
+                item.panel_key, _resolved_parent_key(item.parent_dialog_id), item.third_price_control_id))
     flag_by_action = {}
     for item in registry.hostile_monster_flags:
         if not isinstance(item, ResolvedHostileMonsterFlagRecord):
@@ -1299,7 +1397,7 @@ def _validate_resolved_registry(
     normalized = normalize_controller_features(author_features)
     parent_ids = {item.parent_dialog_id for item in (
         *registry.panels, *registry.reward_panels, *registry.occupant_action_panels,
-        *registry.live_agent_lists,
+        *registry.live_agent_lists, *registry.building_open_toggles, *registry.private_recruitments,
     )}
     if parent_ids & child_dialogs:
         raise ControllerRegistryError("MMCR child dialog collides with a parent dialog")
@@ -1346,6 +1444,7 @@ def _validate_resolved_registry(
             list_by_key[item.panel_key] for item in normalized
             if isinstance(item, StockMx05LiveAgentListPanel)
         ),
+        private_recruitments=tuple(recruitment_by_key[key] for key in sorted(recruitment_by_key)),
     )
 
 

@@ -30,6 +30,7 @@ exactly these feature types:
 - `stock.ap22-resource-meter.v1`;
 - `stock.ap99-research-row.v1`;
 - `stock.ap17-upgrade-research-gate.v1`;
+- `stock.ap52-private-recruitment.v1` ([three-choice guild contract](stock-ap52-private-recruitment.md));
 - `stock.ap24-timed-rage-action.v1`;
 - `stock.ap24-rage-command-action.v1`; and
 - `stock.ap69-sovereign-target-action.v1`.

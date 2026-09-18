@@ -14,10 +14,9 @@ from ..runtime_capabilities import (
     decode_runtime_capability_manifest,
 )
 from ..runtime_features import (
-    ENCHANTMENT_ROW_RUNTIME_CAPABILITY,
-    NAME_GENERATOR_RUNTIME_CAPABILITY,
     RUNTIME_FEATURE_REGISTRY_ENV_VAR,
     decode_runtime_feature_registry,
+    derive_feature_runtime_capabilities,
     legacy_runtime_features,
 )
 from ..stock_controller_features import LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY
@@ -159,6 +158,7 @@ def launch_majesty(
             prepared_controllers.hostile_monster_flags,
             prepared_controllers.building_open_toggles,
             prepared_controllers.live_agent_lists,
+            prepared_controllers.private_recruitments,
         )
     )
     if legacy_runtime_features(prepared_capabilities) or (
@@ -169,10 +169,8 @@ def launch_majesty(
             "rebuild the managed profile."
         )
     feature_agreement = (
-        bool(prepared_features.name_generators)
-        == (NAME_GENERATOR_RUNTIME_CAPABILITY in prepared_capabilities)
-        and bool(prepared_features.enchantment_rows)
-        == (ENCHANTMENT_ROW_RUNTIME_CAPABILITY in prepared_capabilities)
+        set(derive_feature_runtime_capabilities(prepared_capabilities, prepared_features))
+        == set(prepared_capabilities)
         and bool(controller_count)
         == (STOCK_CONTROLLER_RUNTIME_CAPABILITY in prepared_capabilities)
     )

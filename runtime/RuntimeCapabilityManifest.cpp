@@ -21,6 +21,7 @@ constexpr const char* kSupportedCapabilities[] = {
     kPrivateActivityText,
     kMapFogQuery,
     kMovementQuery,
+    kNativeTiming,
 };
 
 void SetError(std::string* error, const char* message) {

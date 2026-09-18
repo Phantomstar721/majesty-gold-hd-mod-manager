@@ -28,12 +28,15 @@ struct Registry {
     std::vector<EnchantmentRowRecord> enchantmentRows;
     bool mapFogQuery = false;
     bool movementQuery = false;
+    bool nativeTiming = false;
+    std::vector<std::uint32_t> timingSpellIds;
+    std::vector<std::uint32_t> timingEffectorIds;
 
     const EnchantmentRowRecord* FindEnchantmentRow(
         std::uint32_t overlayId) const;
 };
 
-// Parses the manager-owned, deterministic MMFR v1 data format.  The parser is
+// Parses the manager-owned, deterministic MMFR v1-v3 data formats. The parser is
 // independent of Win32 and executable patching so every malformed boundary can
 // be tested before the injected runtime consumes it.
 bool ParseRegistry(

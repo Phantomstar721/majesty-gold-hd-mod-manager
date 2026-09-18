@@ -6,9 +6,8 @@ Majesty Gold HD Mod Manager is a Windows app for finding, organizing, and
 launching the **Majesty Gold HD** mods and quests you have installed or
 subscribed to through Steam Workshop.
 
-It also provides the extra support required by more complicated mods, such as
-custom guilds, so compatible mods can be used individually or together without
-overwriting one another.
+It also combines compatible Merge mods and supplies the game-side support
+needed by custom buildings, panels, and other advanced features.
 
 ## Features
 
@@ -20,6 +19,10 @@ overwriting one another.
   from being enabled together.
 - Clearly marks content that cannot be combined safely.
 - Prepares one playable package when selected mods need to be combined.
+- Combines independent changes within shared GPL functions and XML Descriptions,
+  and stops with conflict details when edits cannot be reconciled.
+- Supports reusable list, research, reward, and recruitment panels, including
+  single-panel layouts at lower resolutions.
 - Leaves subscribed mods and downloaded quests unchanged.
 - Installs and manages the supported Majesty quality-of-life patches.
 - Supports both maintained Steam versions of Majesty Gold HD.
@@ -48,6 +51,17 @@ If finding Steam's Workshop folder is inconvenient, download the latest
 complete ZIP from [GitHub Releases](https://github.com/Phantomstar721/majesty-gold-hd-mod-manager/releases/latest).
 After the first launch, **Desktop Shortcut** creates an optional shortcut to
 the manager without moving it away from its required support files.
+
+## Updating
+
+Close Majesty and the Manager before replacing or updating the application.
+Keep the complete folder together, including `_internal`. After Steam finishes
+downloading any updated mods, reopen the Manager, select **Rescan Content**,
+then **Prepare Selected Mods** (or **Prepare Again**) to refresh your generated
+package before launching.
+
+The [0.3.7 update notes](release/v0.3.7.md) cover the latest shared panel,
+hero-integration, timing, and merge improvements.
 
 ## Content tabs
 
@@ -153,65 +167,39 @@ automatically supplies shared building-slot, Freestyle, visitor-list, and
 compatible custom-text support. Unknown feature types and malformed or
 conflicting records are rejected rather than guessed.
 
-The currently supported author-declared recipes are:
+### Reusable capabilities
 
-```json
-"runtime_features": [
-  {
-    "type": "stock.name-generator.v1",
-    "generator_id": "NM42",
-    "name_tables": ["HN81", "HN82", "HN83", "HN84"]
-  },
-  {
-    "type": "stock.ap78-enchantment-row.v1",
-    "overlay_id": "OV42",
-    "display_text": "Example enchantment description"
-  }
-]
-```
+These features are package-declared, not tied to particular mod names or UUIDs:
 
-The name-generator recipe uses Majesty's stock name-registry construction and
-requires four private tables outside stock `HN01`–`HN68` plus a package
-Description that selects the
-declared `NM` generator. The enchantment-row recipe presents a package-owned
-Overlay addition through Majesty's stock AP78 enchantment row. Multiple
-non-conflicting declarations can be combined within the documented bounds.
+- **Stock-based panels and controls:** secondary panels, research rows, resource
+  meters, upgrade gates, building toggles, reward flags, private name tables,
+  and enchantment rows. Validated private artwork may replace stock-shaped
+  button images without changing their behavior. See the
+  [complete recipe contract](docs/manager-merge-contract.md#stock-controller-recipes).
+- **Lists:** live-agent or data-record rows, optional rewards, parent actions,
+  selectable row layouts, and control over staying on the panel or focusing a
+  world target. See [lists and bounded map queries](docs/stock-data-record-list-and-map-query.md).
+- **Recruitment:** three stock-driven choices on the main panel or a separate
+  recruitment panel, with native prices, capacity, progress, upgrades, and
+  bounded stock font options. See [private recruitment](docs/stock-ap52-private-recruitment.md).
+- **Hero integration:** stock-task callbacks, opt-in private hero participation
+  in selected task providers, and evaluation of renamed stock spells. See
+  [private hero integration](docs/private-hero-integration.md).
+- **Events and timing:** shared gameplay notifications, activity duration,
+  stock simulation-time queries, effect duration, and declared spell cooldown
+  completion. See [shared events and activity timers](docs/stock-events-and-activity-time.md)
+  and [native timing](docs/stock-native-timing.md).
+- **Read-only world queries:** bounded explored-map searches and stock unit
+  movement values, without spawning units or changing movement attributes.
+  See [movement queries](docs/stock-movement-query.md).
 
-The manager also supports data-only recipes for AP10/AP69 secondary panels,
-AP22 resource meters, AP99 research rows, AP17 upgrade gates, AP24 Rage-backed
-actions, AP69 sovereign-target actions, and MX09/AP41 reward panels with
-private Fl00-shaped hostile-monster reward flags. It can also clone MX22's
-per-building open/closed controls, populate generic MX05 live-agent lists with
-bounded package-declared static row variants, optional stay-on-panel actions,
-optional parent-scoped panel actions that remain usable with zero rows, and
-optional suppression of row-click world focus, and append package-owned boolean
-choices to the end of stock GPLMx `Purchase_Equipment` or `Purchase_Bazaar`.
-It can also attach package-owned resume, consideration, reset, and death
-callbacks to the exact stock hero-task lifecycle without replacing hero trees.
-For lists that do not represent world objects, use the separate
-[data-record list and bounded map-query interfaces](docs/stock-data-record-list-and-map-query.md).
-Records can describe coordinates or other package-owned data, with optional
-values/rewards and no world refocus. Map queries read stock explored terrain
-only when called and enforce an explicit per-call search budget.
-For native locomotion values, declare the read-only
-[movement-query feature](docs/stock-movement-query.md). It can read normal or
-effective movement rates for a live unit and normal rates for a named loaded
-unit type without spawning an instance or changing speed attributes.
-Linked logical keys are local to the package. Visible controls are reserved
-within their own authored panel; global engine identities such as private
-descriptor commands, packed attributes, callback symbols, private modes, and
-private units are checked
-across the complete selection. See the
-[complete merge-mod contract](docs/manager-merge-contract.md#stock-controller-recipes)
-for the exact JSON fields, required resources, and stock lifecycle limits. A
-parser-checked collection of recipe examples is available as
-[mod-definition-v3-all-features.json](docs/examples/mod-definition-v3-all-features.json).
-Copy only the recipes your package needs. Its package-owned controls and IDs
-are illustrative and must match the resources the package ships. Fields named
-`*_template_control_id` are different: they select one of the bounded stock
-Majesty templates proved for that recipe version, and cannot be replaced with
-an arbitrary private control. The complete contract lists the currently
-accepted stock templates and their required metadata.
+Each recipe has a bounded stock lifecycle and resource-ownership contract.
+Private controls and resources must match what the package ships; fields named
+`*_template_control_id` select documented stock templates, not arbitrary private
+controls. Cross-package engine identities are checked across the selection.
+Start with the [recipe examples](docs/examples/mod-definition-v3-all-features.json)
+and copy only the features your mod needs. The individual guides cover newer
+recipes not included in that example collection.
 
 If a mod needs native or DLL behavior that is not yet supported, do not bundle
 a private DLL or patch instructions. Propose the behavior as a reusable Mod
@@ -257,11 +245,6 @@ cannot be combined.
 For the complete technical rules, see the
 [Merge mod authoring guide](docs/manager-merge-contract.md).
 
-Mods can also subscribe to stock gameplay events or time their own custom
-activities using [shared events and activity timers](docs/stock-events-and-activity-time.md).
-The mod supplies its eligibility and completion logic; the Manager supplies
-shared registration, pause/resume and cancellation handling.
-
 ## Compatibility and safety
 
 The manager supports both maintained Steam versions:
@@ -273,6 +256,19 @@ The detected version and installation folder are shown at the top of the app.
 Use **Choose…** if you want the manager to use a different supported
 `MajestyHD.exe`.
 
+**Standard mods are not folded into the Merge package.** They retain Majesty's
+normal load order and may overlap one another or the prepared package. A
+Standard label does not mean conflict-free; follow the authors' requirements
+and review detected conflicts.
+
+For compatible Merge mods, independent script instructions and Description
+fields can combine against stock content. Competing edits still require an
+explicit resolution or an author update. Validation does not prove that every
+combination of gameplay rules will work together.
+
+The Manager runs as your current Windows user. Administrator approval is
+needed only when changing a game-file helper inside a protected installation.
+
 ## Building from source
 
 Python 3.9 or newer is required. Building the native runtime also requires the
@@ -281,16 +277,12 @@ x86 Visual C++ build tools and a Windows 10 SDK:
 ```powershell
 & ".\Setup - Majesty Mod Manager.bat"
 & ".\Launch - Majesty Mod Manager.bat"
-.\.venv\Scripts\python.exe -m unittest discover -s tests
+.\.venv\Scripts\python.exe -m unittest discover -s tests -q
 ```
 
-The complete release payload also uses the following public projects. By
-default, clone them beside this repository using these directory names:
-
-- `majesty-gold-hd-generic-visitor-lists`
-- `majesty-gold-hd-remember-active-mods`
-- `majesty-gold-hd-qol-utilities`
-- `majesty-gold-hd-custom-guild-phantoms-haunt`
+The complete release payload also uses public helper and compatibility-source
+projects. The [payload staging script](scripts/Stage-ModManagerPayload.ps1)
+lists the required repositories and their default sibling-directory names.
 
 `scripts\Stage-ModManagerPayload.ps1` and
 `scripts\Build-ModManagerExe.ps1` also accept explicit paths for each dependency
@@ -305,6 +297,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Build-ModManagerExe.ps1
 ```
 
 The finished application is written to `dist\Majesty Mod Manager`.
+`scripts\Stage-Workshop.ps1` stages that application under
+`dist\workshop-upload`; it does not upload automatically.
 
 Mod authors interested in making compatible content can read the
 [Merge mod authoring guide](docs/manager-merge-contract.md). Developers adding

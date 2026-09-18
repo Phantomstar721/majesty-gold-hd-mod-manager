@@ -204,8 +204,10 @@ void Run() {
 }
 }
 #include "MovementQueryTests.h"
+#include "NativeTimingTests.h"
 int main() {
     MovementTest::Run();
+    TimingTest::Run();
     VerifyOutwardTraversal();
     NativeTest::VerifyOptionalPathCostUnit();
     NativeTest::Run();

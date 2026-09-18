@@ -233,6 +233,25 @@ int main() {
     }
     if (!MajestyRuntimeFeatures::ParseRegistry(empty.data(), empty.size(), &registry, &error) ||
         registry.mapFogQuery || registry.movementQuery) return 25;
+    for (unsigned flags = 4; flags < 8; ++flags) {
+        auto timing = Header(3,0,0);
+        AppendU32(&timing,flags);
+        AppendU32(&timing,1); AppendU32(&timing,FourCC("Za01"));
+        AppendU32(&timing,1); AppendU32(&timing,FourCC("Ze01"));
+        if (!MajestyRuntimeFeatures::ParseRegistry(timing.data(),timing.size(),&registry,&error) ||
+            !registry.nativeTiming || registry.timingSpellIds != std::vector<std::uint32_t>{FourCC("Za01")} ||
+            registry.timingEffectorIds != std::vector<std::uint32_t>{FourCC("Ze01")} ||
+            registry.mapFogQuery != ((flags & 1) != 0) || registry.movementQuery != ((flags & 2) != 0)) return 26;
+        for (std::size_t size = 0; size < timing.size(); ++size) {
+            if (MajestyRuntimeFeatures::ParseRegistry(timing.data(),size,&registry,&error) ||
+                registry.nativeTiming || !registry.timingSpellIds.empty() || !registry.timingEffectorIds.empty()) return 27;
+        }
+    }
+    for (unsigned flags : {0u,1u,2u,3u,8u,0xffffffffu}) {
+        auto timing = Header(3,0,0); AppendU32(&timing,flags);
+        AppendU32(&timing,0); AppendU32(&timing,0);
+        if (!ExpectInvalid(timing,"flags")) return 28;
+    }
     std::puts("Runtime feature registry parser tests passed.");
     return 0;
 }

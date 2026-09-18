@@ -113,6 +113,9 @@ bool ParseRegistry(
     registry->enchantmentRows.clear();
     registry->mapFogQuery = false;
     registry->movementQuery = false;
+    registry->nativeTiming = false;
+    registry->timingSpellIds.clear();
+    registry->timingEffectorIds.clear();
     if (error != nullptr) {
         error->clear();
     }
@@ -135,12 +138,13 @@ bool ParseRegistry(
         SetError(error, "runtime feature registry header is truncated");
         return false;
     }
-    if (version != kRegistryVersion && version != 2) {
+    if (version != kRegistryVersion && version != 2 && version != 3) {
         SetError(error, "runtime feature registry schema version is unsupported");
         return false;
     }
     std::uint32_t flags = 0;
-    if (version == 2 && (!ReadU32(bytes, size, &cursor, &flags) || (flags & ~3u) != 0)) {
+    if (version >= 2 && (!ReadU32(bytes, size, &cursor, &flags) ||
+        (flags & ~(version == 3 ? 7u : 3u)) != 0 || (version == 3 && !(flags & 4u)))) {
         SetError(error, "runtime feature registry flags are invalid or truncated");
         return false;
     }
@@ -251,6 +255,28 @@ bool ParseRegistry(
         previousOverlay = overlayId;
         cursor += textLength;
     }
+    std::vector<std::uint32_t> spells, effectors;
+    if (flags & 4u) {
+        for (auto* family : {&spells, &effectors}) {
+            std::uint32_t count = 0, previous = 0;
+            if (!ReadU32(bytes, size, &cursor, &count) || count > 1024 ||
+                count > (size-cursor)/4) {
+                SetError(error, "native timing resource count is invalid or truncated");
+                return false;
+            }
+            family->reserve(count);
+            for (std::uint32_t i = 0; i < count; ++i) {
+                std::uint32_t id = 0;
+                if (!ReadU32(bytes, size, &cursor, &id) || !IsPrintableFourCC(id) ||
+                    (i != 0 && id <= previous)) {
+                    SetError(error, "native timing IDs must be sorted, unique printable FourCCs");
+                    return false;
+                }
+                family->push_back(id);
+                previous = id;
+            }
+        }
+    }
     if (cursor != size) {
         SetError(error, "runtime feature registry contains trailing bytes");
         return false;
@@ -259,6 +285,9 @@ bool ParseRegistry(
     registry->enchantmentRows = std::move(rows);
     registry->mapFogQuery = (flags & 1u) != 0;
     registry->movementQuery = (flags & 2u) != 0;
+    registry->nativeTiming = (flags & 4u) != 0;
+    registry->timingSpellIds = std::move(spells);
+    registry->timingEffectorIds = std::move(effectors);
     return true;
 }
 

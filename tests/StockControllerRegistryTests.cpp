@@ -744,6 +744,40 @@ int main() {
         if (MajestyStockControllers::ParseRegistry(
                 quests.data(), size, &registry, &error)) return 42;
     }
+    auto recruitment = Header(0, 0, 0, 0, 0, 0, 0);
+    recruitment[4] = 17;
+    AppendU32(&recruitment, 0); // occupant panels
+    AppendU32(&recruitment, 0); // toggles
+    AppendU32(&recruitment, 0); // lists
+    AppendU32(&recruitment, 1); // private recruitment
+    AppendString(&recruitment, "recruitment");
+    AppendU32(&recruitment, FourCC("ZZPN"));
+    AppendU32(&recruitment, 0x7301u);
+    if (!MajestyStockControllers::ParseRegistry(recruitment.data(), recruitment.size(), &registry, &error) ||
+        registry.privateRecruitments.size() != 1 ||
+        registry.FindPrivateRecruitmentByParent(FourCC("ZZPN")) == nullptr) return 70;
+    for (std::size_t size = 0; size < recruitment.size(); ++size) {
+        if (MajestyStockControllers::ParseRegistry(recruitment.data(), size, &registry, &error)) return 71;
+    }
+    auto recruitmentChild = recruitment;
+    recruitmentChild[4] = 18;
+    AppendU32(&recruitmentChild, FourCC("RCRT"));
+    AppendU32(&recruitmentChild, 0x7302u);
+    if (!MajestyStockControllers::ParseRegistry(recruitmentChild.data(), recruitmentChild.size(), &registry, &error) ||
+        registry.FindPrivateRecruitmentByChild(FourCC("RCRT")) == nullptr ||
+        registry.privateRecruitments[0].openCommandId != 0x7302u) return 73;
+    for (std::size_t size = 0; size < recruitmentChild.size(); ++size) {
+        if (MajestyStockControllers::ParseRegistry(recruitmentChild.data(), size, &registry, &error)) return 74;
+    }
+    auto invalidChild = recruitmentChild;
+    invalidChild[invalidChild.size()-4] = 1; // same ID as third price
+    if (!ExpectInvalid(invalidChild, "private recruitment record")) return 75;
+    invalidChild = recruitmentChild;
+    std::memcpy(invalidChild.data()+invalidChild.size()-8, "ZZPN", 4);
+    if (!ExpectInvalid(invalidChild, "child dialog")) return 76;
+    recruitment[recruitment.size()-4] = 0;
+    recruitment[recruitment.size()-3] = 0;
+    if (!ExpectInvalid(recruitment, "private recruitment record")) return 72;
     std::puts("Stock controller registry parser tests passed.");
     return 0;
 }

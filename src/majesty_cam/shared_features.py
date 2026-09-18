@@ -11,6 +11,7 @@ EVENT_SIGNATURES = {
     "reward-flag-paid": ("agent", "agent", "integer"),
     "caravan-delivered": ("agent", "agent", "integer"),
     "tournament-completed": ("agent", "agent", "integer", "integer", "integer"),
+    "attack-flag-completed": ("agent", "agent"),
 }
 EVENT_TYPE = "stock.gameplay-event-observer.v1"
 ACTIVITY_TYPE = "stock.activity-duration.v1"

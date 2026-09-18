@@ -155,7 +155,7 @@ void __cdecl SubmitBuilding(
     seenAgent = agent;
     seenPrice = price;
 }
-int __fastcall Fallback(void*, void*, std::uint32_t) { ++fallbackCount; return 23; }
+int __fastcall Fallback(void*, void*, std::uint32_t command) { seenCommand = command; ++fallbackCount; return 23; }
 int __fastcall StockQuestPostActionFocus(
     void* object, void*, std::uint32_t controlId) {
     assert(object == &child);
@@ -347,6 +347,7 @@ void Reset() {
     g_parentOpenToggleRecord = nullptr;
     g_parentOccupantPanel = nullptr;
     g_parentQuestBoard = nullptr;
+    g_parentRecruitment = nullptr;
     g_researchOwner = {};
     parent.context = child.context = contextA;
     replacementParent.context = replacementChild.context = contextB;
@@ -476,10 +477,119 @@ void Initialize() {
     g_stockControllerRegistry.buildingOpenToggles = {
         {"rentals", 0x31303042, 0x5D01, 0x5D02, kMx09DialogId}};
 }
+
+int recruitmentRefreshCount = 0;
+bool secondaryContainerAvailable = true;
+void __fastcall RecruitmentSetup(void* object, void*) {
+    auto* mode = reinterpret_cast<std::uint32_t*>(static_cast<unsigned char*>(object) + 0x30);
+    assert(*mode == 1); // literal AP69 setup prefix must precede stock layout
+    if (!secondaryContainerAvailable) *mode = 0; // native primary fallback
+}
+void __fastcall RecruitmentRefresh(void*, void*) { ++recruitmentRefreshCount; }
+void __fastcall RecruitmentEvent(
+    void* object, void*, std::uint32_t a1, std::uint32_t a2,
+    std::uint32_t notification, std::uint32_t a4) {
+    assert(object == &parent || object == &child);
+    assert(a1 == 1 && a2 == 2 && a4 == 4);
+    assert(notification == 0x0D425041u || notification == 0x09435358u);
+    ++parentEventCount;
+}
+void RecruitmentChildLifecycle() {
+    Reset();
+    g_stockControllerRegistry.privateRecruitments = {{"recruits", 0x30303052u, 0x7301u, 0x31303052u, 0x7302u}};
+    const auto* record = &g_stockControllerRegistry.privateRecruitments[0];
+    static OccupantParentClass mainClass = {}, childClass = {};
+    for (auto* item : {&mainClass, &childClass}) {
+        item->stock = nativeTable;
+        item->entryCount = 17;
+        item->thirdPrice = record->thirdPriceControlId;
+        item->recruitment.event = reinterpret_cast<void*>(&RecruitmentEvent);
+        std::memcpy(item->table, nativeTable, sizeof(nativeTable));
+        item->table[1] = reinterpret_cast<void*>(&OccupantParentSetup);
+        item->table[3] = reinterpret_cast<void*>(&OccupantParentControl);
+        g_occupantParentClasses.push_back(item);
+    }
+    mainClass.recruitmentMode = 1;
+    childClass.recruitmentMode = 2;
+    childClass.recruitment.setup = reinterpret_cast<void*>(&RecruitmentSetup);
+    for (auto& fn : childClass.recruitment.recruit) fn = reinterpret_cast<void*>(&RecruitmentRefresh);
+    assert(MajestyControllerLifecycle::RegisterManagedVtable(mainClass.table, nativeTable, 17,
+        &g_parentController, &ParentPanelControllerDestroyed, nullptr));
+    assert(MajestyControllerLifecycle::RegisterManagedVtable(childClass.table, nativeTable, 17,
+        &g_childController, &SecondaryPanelControllerDestroyed, nullptr));
+    parent.table = mainClass.table; child.table = childClass.table;
+    g_parentController = reinterpret_cast<LONG>(&parent);
+    g_parentRecruitment = record;
+    for (auto cmd : {0x1F48u,0x1389u,0x1388u,0x22CEu,0x1F49u})
+        assert(OccupantParentControl(&parent, nullptr, cmd) == 0);
+    assert(fallbackCount == 0);
+    // Main-panel stock repair/tax utilities, upgrades and roster remain native.
+    // 0x1F5B is repair-route toggle, not a recruitment cancellation command.
+    for (auto cmd : {0x1F58u,0x1F59u,0x1F5Au,0x1F5Bu,0x1F47u,0x1F44u}) {
+        const int before = fallbackCount;
+        assert(OccupantParentControl(&parent, nullptr, cmd) == 23);
+        assert(seenCommand == cmd && fallbackCount == before + 1);
+    }
+    PrivateRecruitmentRefresh(&parent, nullptr);
+    assert(recruitmentRefreshCount == 0 && visibleControlCount == 8);
+    for (std::size_t i = 0; i < visibleControlCount; ++i) assert(visibleValues[i] == 0);
+    for (int nativeResult : {0,1}) {
+        openResult = nativeResult;
+        assert(OccupantParentControl(&parent, nullptr, record->openCommandId) == nativeResult);
+        assert(seenDialog == record->childDialogId && g_activeRecruitment == record);
+    }
+    g_childController = reinterpret_cast<LONG>(&child);
+    for (bool secondary : {true,false}) {
+        secondaryContainerAvailable = secondary;
+        OccupantParentSetup(&child, nullptr);
+        const auto mode = *reinterpret_cast<std::uint32_t*>(reinterpret_cast<unsigned char*>(&child)+0x30);
+        assert(mode == (secondary ? 1u : 0u));
+    }
+    PrivateRecruitmentRefresh(&child, nullptr);
+    assert(recruitmentRefreshCount == 3);
+    for (auto cmd : {0x1F48u,0x1389u,0x1388u,0x1F40u,0x1F41u}) {
+        const int before = fallbackCount;
+        assert(OccupantParentControl(&child, nullptr, cmd) == 23);
+        assert(seenCommand == cmd && fallbackCount == before + 1);
+    }
+    const int beforeHidden = fallbackCount;
+    for (auto cmd : {0x1F47u,0x1F49u,0x22CEu,0x1F44u,0x1F58u,0x1F59u,0x1F5Au,0x1F5Bu})
+        assert(OccupantParentControl(&child, nullptr, cmd) == 0);
+    assert(fallbackCount == beforeHidden);
+    // Input filtering must not suppress native duration/tick refresh events.
+    for (auto* object : {&parent, &child}) {
+        for (auto notification : {0x0D425041u, 0x09435358u})
+            OccupantParentEvent(object, nullptr, 1, 2, notification, 4);
+    }
+    assert(parentEventCount == 4);
+    // Low resolution removes the main controller only. Back uses the child's
+    // own context even with no main controller or main recipe left alive.
+    Destroy(parent);
+    assert(g_parentController == 0 && g_parentRecruitment == nullptr);
+    assert(g_childController == reinterpret_cast<LONG>(&child) && g_activeRecruitment == record);
+    child.context = contextB;
+    assert(OccupantParentControl(&child, nullptr, 0x1F4Du) == 1);
+    assert(seenContext == contextB && seenDialog == record->parentDialogId);
+    // Delayed destruction cannot retire a replacement child's record.
+    replacementChild.table = childClass.table;
+    g_childController = reinterpret_cast<LONG>(&replacementChild);
+    Destroy(child);
+    assert(g_activeRecruitment == record);
+    Destroy(replacementChild);
+    assert(g_childController == 0 && g_activeRecruitment == nullptr);
+    for (auto& fn : childClass.recruitment.recruit) fn = nullptr;
+    childClass.recruitment.setup = nullptr; // these test doubles are not allocated code
+    mainClass.recruitment.event = childClass.recruitment.event = nullptr;
+    g_occupantParentClasses.clear();
+    g_stockControllerRegistry.privateRecruitments.clear();
+    parent.table = parentTable; child.table = replacementChild.table = childTable;
+    Reset();
+}
 }
 
 int main() {
     Initialize();
+    RecruitmentChildLifecycle();
     // 1. Single-panel replacement: native deletion of ONLY the parent preserves
     // the child's mapping, command ownership, player lookup, and research path.
     ResearchPair();

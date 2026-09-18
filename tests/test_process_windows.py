@@ -31,6 +31,9 @@ from majesty_cam.runtime_capabilities import (
 )
 from majesty_cam.runtime_features import (
     RUNTIME_FEATURE_REGISTRY_ENV_VAR,
+    NativeTimingFeature,
+    MapFogQueryFeature,
+    MovementQueryFeature,
     encode_runtime_feature_registry,
 )
 from majesty_cam.stock_controller_registry import (
@@ -323,6 +326,30 @@ class ManagerProcessWiringTests(unittest.TestCase):
                     runtime_feature_registry=_feature_registry(root),
                     controller_registry=controller,
                 )
+
+    def test_launch_rejects_native_service_manifest_disagreement_before_process_start(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = _manager_paths(root)
+            for path in (paths.game_executable, paths.runtime_launcher, paths.runtime_dll):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fixture")
+            for feature, capability in ((NativeTimingFeature(), "stock.native-timing.v1"),
+                                        (MapFogQueryFeature(), "stock.map-fog-query.v1"),
+                                        (MovementQueryFeature(), "stock.movement-query.v1")):
+                for selected in (True, False):
+                    caps = _capability_manifest(root)
+                    features = _feature_registry(root)
+                    if selected:
+                        features.write_bytes(encode_runtime_feature_registry((feature,)))
+                    else:
+                        caps.write_bytes(encode_runtime_capability_manifest((capability,)))
+                    with self.subTest(capability=capability, selected=selected), patch(
+                        "majesty_cam.manager.launch.subprocess.Popen"
+                    ) as popen, self.assertRaisesRegex(RuntimeError, "registries do not agree"):
+                        launch_majesty(paths, [MOD_ID], ensure_qol=False, capability_manifest=caps,
+                                       runtime_feature_registry=features, controller_registry=_controller_registry(root))
+                    popen.assert_not_called()
 
     def test_source_launcher_starts_powershell_hidden_and_keeps_gui_errors(self):
         batch = (REPO_ROOT / "Launch - Majesty Mod Manager.bat").read_text(

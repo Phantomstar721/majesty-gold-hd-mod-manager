@@ -4,6 +4,9 @@
 #include "MapQueryRuntime.h"
 #include "BoundedMapQuery.h"
 #include "MovementRate.h"
+#include "NativeTiming.h"
+#include "RuntimeFeatureRegistry.h"
+#include <algorithm>
 #include <cstring>
 #include <limits>
 
@@ -37,6 +40,25 @@ constexpr MovementProfile kMovementBeta = {
     0x1CF090, 0x0488F0, 0x1CEF70, 0x3E3E58,
     0x1E3060, 0x218290, 0x364310, 0x2187A0};
 const MovementProfile* g_movementProfile = nullptr;
+
+struct TimingProfile {
+    std::uintptr_t castSpell, available, checkEffector, clockGlobal;
+    std::uintptr_t actionCatalog, unitCatalog, findDescription, resolveUnit;
+    std::uintptr_t getEffector, getOrder, refreshEffector, expire, vehicleVtable;
+    std::uintptr_t actionBasePeriod, actionEffectivePeriod, actionConstructor, actionEngineVtable;
+};
+constexpr TimingProfile kTimingPublic = {
+    0x030280, 0x030050, 0x1BF6C0, 0x3C5454,
+    0x3C545C, 0x3C5304, 0x1AE060, 0x158B20,
+    0x1C95D0, 0x1C9E30, 0x20D6C0, 0x1FCE20, 0x33B08C,
+    0x1B9F80, 0x047AC0, 0x1AFBF0, 0x34754C};
+constexpr TimingProfile kTimingBeta = {
+    0x0311E0, 0x030FB0, 0x1D48A0, 0x3E3FDC,
+    0x3E3FE4, 0x3E3E8C, 0x1C3000, 0x16EC60,
+    0x1DE7B0, 0x1DF010, 0x222A00, 0x212160, 0x35414C,
+    0x1CEF20, 0x0489D0, 0x1C4B90, 0x3614AC};
+const TimingProfile* g_timingProfile = nullptr;
+const MajestyRuntimeFeatures::Registry* g_timing = nullptr;
 
 template<class T> T Read(const void* base, std::size_t offset) {
     T value{};
@@ -170,17 +192,21 @@ const void* LinearMovement(const void* descriptor) {
     return engine != nullptr && Read<std::uintptr_t>(engine, 0) ==
         g_base+g_movementProfile->movementVtable ? engine : nullptr;
 }
-int UnitMovementRate(void* value, int mode) {
-    using namespace MajestyMovement;
-    if (value == nullptr || (mode != 0 && mode != 1)) return kInvalid;
+void* ResolveLiveUnit(void* value, std::uintptr_t resolver) {
+    if (value == nullptr) return nullptr;
     using Reference = void* (__thiscall*)(void*);
     void* reference = reinterpret_cast<Reference>((*static_cast<void***>(value))[0x5C/4])(value);
-    if (reference == nullptr) return kInvalid;
+    if (reference == nullptr) return nullptr;
     // The stock nonthrowing resolver writes only its disposable +0C cache.
     // Borrow the identity in a local reference, never retain a caller's handle.
     std::uint32_t temporary[4] = {};
     temporary[2] = Read<std::uint32_t>(reference, 8);
-    void* unit = reinterpret_cast<Reference>(g_base+g_movementProfile->resolveUnit)(temporary);
+    return reinterpret_cast<Reference>(g_base+resolver)(temporary);
+}
+int UnitMovementRate(void* value, int mode) {
+    using namespace MajestyMovement;
+    if (value == nullptr || (mode != 0 && mode != 1)) return kInvalid;
+    void* unit = ResolveLiveUnit(value, g_movementProfile->resolveUnit);
     if (unit == nullptr) return kInvalid;
     const void* movement = LinearMovement(Read<void*>(unit, 0x54));
     if (movement == nullptr) return kUnsupported;
@@ -244,6 +270,206 @@ void __cdecl TypeMovement(void* arguments) {
     const char** name = reinterpret_cast<String>((*static_cast<void***>(value))[0x30/4])(value);
     if (name != nullptr) *result = UnitTypeMovementRate(*name);
 }
+
+std::uint32_t NativeSimulationTime() {
+    return *reinterpret_cast<volatile std::uint32_t*>(g_base+g_timingProfile->clockGlobal);
+}
+const void* LoadedAction(const char* name) {
+    if (name == nullptr || !*name) return nullptr;
+    void* catalog = *reinterpret_cast<void**>(g_base+g_timingProfile->actionCatalog);
+    if (catalog == nullptr) return nullptr;
+    using Find = void* (__thiscall*)(void*, const char*);
+    return reinterpret_cast<Find>(g_base+g_timingProfile->findDescription)(catalog,name);
+}
+int UnitMovementBasePeriod(void* value) {
+    using namespace MajestyNativeTiming;
+    void* unit = ResolveLiveUnit(value,g_movementProfile->resolveUnit);
+    if (unit == nullptr) return kInvalid;
+    const void* movement = LinearMovement(Read<void*>(unit,0x54));
+    if (movement == nullptr || Read<std::uintptr_t>(Read<void*>(unit,0),0x158) !=
+        g_base+g_movementProfile->effectiveInterval) return kUnsupported;
+    // Literal native base getter: no attribute modifier, quantum rounding,
+    // travel-distance conversion, or current-order mutation.
+    const int period = Read<int>(movement,0x0C);
+    return period < 0 ? kUnsupported : period;
+}
+int ActionBasePeriod(const char* name) {
+    using namespace MajestyNativeTiming;
+    const void* description = LoadedAction(name);
+    if (description == nullptr) return kInvalid;
+    if (Read<int>(description,8) != 1) return kUnsupported;
+    const void* engine = Read<void*>(description,0x14);
+    if (engine == nullptr || Read<std::uintptr_t>(engine,0) !=
+        g_base+g_timingProfile->actionEngineVtable) return kUnsupported;
+    // The stock getter takes an action description, NOT a unit. Rate.max is
+    // distinct from spell Game/TimeoutDuration and from animation duration.
+    const int period = Read<int>(engine,0x28);
+    return period < 0 ? kUnsupported : period;
+}
+void __cdecl MovementBasePeriod(void* arguments) {
+    int* result = Integer(arguments,0);
+    if (result != nullptr) *result = UnitMovementBasePeriod(Argument(arguments,1));
+}
+void __cdecl NamedActionBasePeriod(void* arguments) {
+    int* result = Integer(arguments,0);
+    if (result == nullptr) return;
+    void* value = Argument(arguments,1);
+    using String = const char** (__thiscall*)(void*);
+    const char** name = value == nullptr ? nullptr :
+        reinterpret_cast<String>((*static_cast<void***>(value))[0x30/4])(value);
+    *result = name == nullptr ? MajestyNativeTiming::kInvalid : ActionBasePeriod(*name);
+}
+const void* TimingDescription(const char* name, bool spell, int* status) {
+    using namespace MajestyNativeTiming;
+    *status = kInvalid;
+    if (g_timing == nullptr || !g_timing->nativeTiming || name == nullptr || !*name) return nullptr;
+    void* catalog = *reinterpret_cast<void**>(g_base+(spell ?
+        g_timingProfile->actionCatalog : g_timingProfile->unitCatalog));
+    if (catalog == nullptr) return nullptr;
+    using Find = void* (__thiscall*)(void*, const char*);
+    const void* description = reinterpret_cast<Find>(g_base+g_timingProfile->findDescription)(catalog,name);
+    if (description == nullptr) return nullptr;
+    const auto& ids = spell ? g_timing->timingSpellIds : g_timing->timingEffectorIds;
+    if (!std::binary_search(ids.begin(),ids.end(),Read<std::uint32_t>(description,4))) {
+        *status = kUndeclared;
+        return nullptr;
+    }
+    return description;
+}
+int EffectorRemaining(void* value, const char* name) {
+    using namespace MajestyNativeTiming;
+    int status = kInvalid;
+    const void* description = TimingDescription(name,false,&status);
+    if (description == nullptr) return status;
+    void* unit = ResolveLiveUnit(value,g_timingProfile->resolveUnit);
+    if (unit == nullptr) return kInvalid;
+    auto** table = *static_cast<void***>(unit);
+    if (reinterpret_cast<std::uintptr_t>(table[0x140/4]) != g_base+g_timingProfile->getEffector)
+        return kUnsupported;
+    using Effector = void* (__thiscall*)(void*,std::uint32_t);
+    void* effect = reinterpret_cast<Effector>(table[0x140/4])(unit,Read<std::uint32_t>(description,4));
+    if (effect == nullptr) return 0;
+    auto** effectTable = *static_cast<void***>(effect);
+    if (reinterpret_cast<std::uintptr_t>(effectTable[0x180/4]) != g_base+g_timingProfile->getOrder)
+        return kUnsupported;
+    using Order = void* (__thiscall*)(void*,int,int);
+    const void* order = reinterpret_cast<Order>(effectTable[0x180/4])(effect,1,9);
+    if (order == nullptr) return kNoExpiry;
+    // This is the CreateEffector timeout order, not an arbitrary action order.
+    if (Read<std::uint32_t>(order,0x10) != 9 || Read<std::uint32_t>(order,0x2C) != 0x100D)
+        return kUnsupported;
+    return Remaining(NativeSimulationTime(),Read<std::uint32_t>(order,8),
+        Read<std::uint32_t>(order,0x0C),Read<std::uint32_t>(order,0x18));
+}
+int CommitSpellCooldown(void* value, const char* name) {
+    using namespace MajestyNativeTiming;
+    int status = kInvalid;
+    const void* description = TimingDescription(name,true,&status);
+    if (description == nullptr) return status;
+    void* unit = ResolveLiveUnit(value,g_timingProfile->resolveUnit);
+    if (unit == nullptr) return kInvalid;
+    // Supported spell owners use stock VehicleRec. Never assume buildings or
+    // another native class has its spell list at the same offset.
+    if (Read<std::uintptr_t>(unit,0) != g_base+g_timingProfile->vehicleVtable) return kUnsupported;
+    const void* game = Read<void*>(description,0x18);
+    if (game == nullptr || Read<std::uint32_t>(game,0x0C) > 0x7FFFFFFFu) return kUnsupported;
+    const auto count = Read<std::uint32_t>(unit,0x180);
+    const void* head = Read<void*>(unit,0x17C);
+    if (head == nullptr || count > 65536) return kUnsupported;
+    void* node = Read<void*>(head,0);
+    const void* previous = head;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        if (node == nullptr || node == head || Read<void*>(node,4) != previous) return kUnsupported;
+        if (Read<std::uint32_t>(node,8) == Read<std::uint32_t>(description,4)) {
+            // Literal CastSpell write order. Preserve native availability and
+            // every other node field; no order dispatch or learned-list edit.
+            const auto timeout = Read<std::uint32_t>(game,0x0C);
+            const auto now = NativeSimulationTime();
+            std::memcpy(static_cast<unsigned char*>(node)+0x10,&timeout,4);
+            std::memcpy(static_cast<unsigned char*>(node)+0x0C,&now,4);
+            return 1;
+        }
+        previous = node;
+        node = Read<void*>(node,0);
+    }
+    return node == head ? 0 : kUnsupported;
+}
+void __cdecl SimulationTime(void* arguments) {
+    int* result = Integer(arguments,0);
+    if (result != nullptr) {
+        const auto now = NativeSimulationTime();
+        std::memcpy(result,&now,4); // raw DWORD bit pattern, including wrap
+    }
+}
+void __cdecl SimulationElapsed(void* arguments) {
+    int* result = Integer(arguments,0);
+    const int* started = Integer(arguments,1);
+    if (result != nullptr) *result = started == nullptr ? MajestyNativeTiming::kInvalid :
+        MajestyNativeTiming::Elapsed(NativeSimulationTime(),static_cast<std::uint32_t>(*started));
+}
+void TimingCall(void* arguments, bool commit) {
+    int* result = Integer(arguments,0);
+    if (result == nullptr) return;
+    void* unit = Argument(arguments,1);
+    void* value = Argument(arguments,2);
+    using String = const char** (__thiscall*)(void*);
+    const char** name = value == nullptr ? nullptr :
+        reinterpret_cast<String>((*static_cast<void***>(value))[0x30/4])(value);
+    // Consume all inputs before storing the return value (GPL may alias slots).
+    *result = name == nullptr ? MajestyNativeTiming::kInvalid :
+        commit ? CommitSpellCooldown(unit,*name) : EffectorRemaining(unit,*name);
+}
+void __cdecl RemainingEffector(void* arguments) { TimingCall(arguments,false); }
+void __cdecl CommitCooldown(void* arguments) { TimingCall(arguments,true); }
+
+bool ValidateNativeTiming() {
+    const auto& p = *g_timingProfile;
+    constexpr unsigned char actionPeriod[] = {0x8B,0x44,0x24,4,0x8B,0x48,0x14,
+        0x8B,0x41,0x28,0xC2,4,0};
+    constexpr unsigned char actionModifier[] = {0x6A,0,0x68,0x41,0x50,0x56,0x32};
+    constexpr unsigned char spellList[] = {0x8B,0x83,0x7C,1,0,0,0x8B,0,0x8B,0xB3,0x68,1,0,0,
+        0x8B,0xE8,0x8B,0xBB,0x7C,1,0,0,0x8B,0x83,0x68,1,0,0};
+    constexpr unsigned char spellDuration[] = {0x8B,0x54,0x24,0x14,0x8B,0x42,0x18,0x8B,0x40,0x0C};
+    constexpr unsigned char spellCommit[] = {0x89,0x45,0x10,0x8B,0x44,0x24,0x54,0x52,0x89,0x4D,0x0C};
+    constexpr unsigned char available[] = {0x2B,0x55,0x0C,0x8B,0x74,0x24,0x54,0x39,0x55,0x10};
+    constexpr unsigned char effectorGet[] = {0x8B,0x44,0x24,4,0x6A,1,0x50,0x81,0xC1,0xA4,0,0,0};
+    constexpr unsigned char orderGet[] = {0x8B,1,0x8B,0x54,0x24,4,0x8B,0x80,0x6C,1,0,0,0x52,
+        0xFF,0xD0,0x85,0xC0,0x74,0x11,0x8B,0x4C,0x24,8,0x8B,0x10,0x8B,0x52,0x2C,0x51,
+        0x8B,0xC8,0xFF,0xD2,0xC2,8,0,0x33,0xC0,0xC2,8,0};
+    constexpr unsigned char effectorRefresh[] = {0x8B,0x4C,0x24,4,0x8B,1,0x8B,0x90,0x80,1,0,0,
+        0x6A,9,0x6A,1,0xFF,0xD2};
+    constexpr unsigned char effectorWrite[] = {0x8B,0x54,0x24,8,0x89,0x48,8,0x89,0x50,0x0C,0xC3};
+    constexpr unsigned char expire[] = {0x2B,0x41,8,0x39,0x41,0x0C,0x77,0x0A,0xB8,1,0,0,0,
+        0x84,0x41,0x18,0x74,2,0x33,0xC0,0xC3};
+    constexpr unsigned char resolve[] = {0x56,0x8B,0xF1,0x8B,0x46,8,0x50};
+    constexpr unsigned char deleted[] = {0x89,0x46,0x0C,0x5E,0x85,0xC0,0x74,0x0D,
+        0x80,0x78,0x38,0,0x75,7,0x8B,0xC8};
+    return Bytes(p.actionBasePeriod,actionPeriod,sizeof(actionPeriod)) &&
+        Call(p.actionEffectivePeriod+9,p.actionBasePeriod) &&
+        Bytes(p.actionEffectivePeriod+0x0E,actionModifier,sizeof(actionModifier)) &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.actionConstructor),0x39) ==
+            g_base+p.actionEngineVtable &&
+        Call(p.castSpell+0x2F,g_profile->argumentAt) && Call(p.castSpell+0x55,p.resolveUnit) &&
+        Call(p.castSpell+0xA8,p.findDescription) && Call(p.checkEffector+0x5A,p.findDescription+0xA0) &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.castSpell),0xA3) == g_base+p.actionCatalog &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.checkEffector),0x53) == g_base+p.unitCatalog &&
+        Bytes(p.resolveUnit,resolve,sizeof(resolve)) && Bytes(p.resolveUnit+0x13,deleted,sizeof(deleted)) &&
+        Call(p.resolveUnit+7,g_profile->engine) &&
+        Bytes(p.castSpell+0x102,spellList,sizeof(spellList)) &&
+        Bytes(p.castSpell+0x190,spellDuration,sizeof(spellDuration)) &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.castSpell),0x19C) == g_base+p.clockGlobal &&
+        Bytes(p.castSpell+0x1A4,spellCommit,sizeof(spellCommit)) &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.available),0x1AF) == g_base+p.clockGlobal &&
+        Bytes(p.available+0x1B3,available,sizeof(available)) &&
+        Bytes(p.getEffector,effectorGet,sizeof(effectorGet)) && Bytes(p.getOrder,orderGet,sizeof(orderGet)) &&
+        Bytes(p.refreshEffector,effectorRefresh,sizeof(effectorRefresh)) &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.refreshEffector),0x14) == g_base+p.clockGlobal &&
+        Bytes(p.refreshEffector+0x18,effectorWrite,sizeof(effectorWrite)) &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.expire),1) == g_base+p.clockGlobal &&
+        Bytes(p.expire+5,expire,sizeof(expire)) &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.vehicleVtable),0x140) == g_base+p.getEffector &&
+        Read<std::uintptr_t>(reinterpret_cast<void*>(g_base+p.vehicleVtable),0x180) == g_base+p.getOrder;
+}
 bool ValidateMovementQuery() {
     const auto& p = *g_movementProfile;
     constexpr unsigned char interval[] = {0x8B,0x41,0x54,0x8B,0x48,0x14,0x8B,0x41,0x0C,0xC3};
@@ -303,15 +529,27 @@ void __cdecl RegisterAfterStock() {
         Register("MM_UnitMovementRate", &Movement);
         Register("MM_UnitTypeMovementRate", &TypeMovement);
     }
+    if (g_timing != nullptr) {
+        Register("MM_SimulationTime", &SimulationTime);
+        Register("MM_SimulationElapsed", &SimulationElapsed);
+        Register("MM_UnitMovementBasePeriod", &MovementBasePeriod);
+        Register("MM_ActionBasePeriod", &NamedActionBasePeriod);
+        if (!g_timing->timingEffectorIds.empty()) Register("MM_EffectorRemaining", &RemainingEffector);
+        if (!g_timing->timingSpellIds.empty()) Register("MM_CommitSpellCooldown", &CommitCooldown);
+    }
 }
 }
 
 bool InstallMapQueryRuntime(std::uintptr_t imageBase, bool publicBuild,
-                           bool mapQuery, bool movementQuery) {
-    if (!mapQuery && !movementQuery) return true;
+                           bool mapQuery, bool movementQuery,
+                           const MajestyRuntimeFeatures::Registry* timing) {
+    if (!mapQuery && !movementQuery && timing == nullptr) return true;
+    if (timing != nullptr && !timing->nativeTiming) return false;
     g_base = imageBase;
     g_profile = publicBuild ? &kPublic : &kBeta;
     g_movementProfile = publicBuild ? &kMovementPublic : &kMovementBeta;
+    g_timingProfile = publicBuild ? &kTimingPublic : &kTimingBeta;
+    g_timing = timing;
     g_mapQuery = mapQuery;
     g_movementQuery = movementQuery;
     // Pin the stock registration boundary and field accesses on both audited
@@ -323,7 +561,8 @@ bool InstallMapQueryRuntime(std::uintptr_t imageBase, bool publicBuild,
     constexpr unsigned char optionalUnitRead[] = {0x8B,0x00,0x8B,0x4C,0x24,0x1C};
     constexpr unsigned char averageUnitDefault[] = {0xC7,0x44,0x24,0x24,0,0,0,0};
     constexpr unsigned char averageUnitBranch[] = {0x8B,0x4C,0x24,0x24,0x85,0xC9,0x74,0x5F};
-    if (movementQuery && !ValidateMovementQuery()) return false;
+    if ((movementQuery || timing != nullptr) && !ValidateMovementQuery()) return false;
+    if (timing != nullptr && !ValidateNativeTiming()) return false;
     if (!Call(g_profile->registrationCall, g_profile->registration) ||
         !Call(g_profile->registration+0x7F1, g_profile->stringConstructor) ||
         !Call(g_profile->registration+0x800, g_profile->engine) ||

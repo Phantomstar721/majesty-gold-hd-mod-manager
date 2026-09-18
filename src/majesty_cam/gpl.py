@@ -174,6 +174,7 @@ class SemanticConflict:
     key: tuple[DefinitionKind, str]
     vanilla: Optional[SemanticItem]
     variants: tuple[MergeVariant, ...]
+    detail: str = ""
 
     @property
     def name(self) -> str:
@@ -185,8 +186,11 @@ class SemanticConflict:
 class SemanticMergeConflictError(ValueError):
     def __init__(self, conflicts: Sequence[SemanticConflict]):
         self.conflicts = tuple(conflicts)
-        labels = ", ".join(
-            f"{conflict.key[0].value}:{conflict.name}" for conflict in self.conflicts
+        labels = "\n".join(
+            f"{conflict.key[0].value}:{conflict.name} "
+            f"({', '.join(variant.side_name for variant in conflict.variants)})"
+            + (f": {conflict.detail}" if conflict.detail else "")
+            for conflict in self.conflicts
         )
         super().__init__(f"unresolved semantic merge conflicts: {labels}")
 
@@ -518,12 +522,15 @@ def merge_semantic_items(
     resolutions: Optional[
         Mapping[tuple[Union[DefinitionKind, str], str], SemanticItem]
     ] = None,
+    *,
+    function_ancestors: Optional[Mapping[tuple[DefinitionKind, str], SemanticItem]] = None,
 ) -> SemanticMergeResult:
     """Perform an N-way merge using vanilla as the common ancestor.
 
     Missing definitions on a mod side mean "no change", matching Majesty BCD
-    overlays. Divergent edits are never ordered or guessed: callers must provide
-    an explicit resolved item under the conflicting semantic key.
+    overlays. Stock-relative functions combine independent instruction edits;
+    competing edits require an explicit resolution. Supplemental ancestors are
+    comparison-only and never add unselected stock definitions to the output.
     """
 
     vanilla = tuple(vanilla_items)
@@ -578,17 +585,37 @@ def merge_semantic_items(
             used_resolutions.add(key)
             continue
 
+        ancestor = (function_ancestors or {}).get(key, base)
+        detail = ""
+        if key[0] is DefinitionKind.FUNCTION:
+            if ancestor is not None:
+                from .gpl_function_merge import FunctionMergeError, merge_function
+                try:
+                    text = merge_function(ancestor.text, {
+                        variant.side_name: variant.item.text for variant in variants
+                    })
+                    selected[key] = replace(
+                        variants[0].item, text=text, span=None,
+                        source_name="<stock-relative instruction merge>",
+                    )
+                    continue
+                except FunctionMergeError as exc:
+                    detail = str(exc)
+            else:
+                detail = "no common stock function was found; different new definitions cannot be combined"
+
         conflict_kind = (
             ConflictKind.DIVERGENT_MODIFICATION
-            if base is not None
+            if ancestor is not None
             else ConflictKind.DIVERGENT_ADDITION
         )
         conflicts.append(
             SemanticConflict(
                 kind=conflict_kind,
                 key=key,
-                vanilla=base,
+                vanilla=ancestor,
                 variants=tuple(variants),
+                detail=detail,
             )
         )
 
@@ -630,6 +657,8 @@ def merge_sources(
     resolutions: Optional[
         Mapping[tuple[Union[DefinitionKind, str], str], SemanticItem]
     ] = None,
+    *,
+    function_ancestors: Optional[Mapping[tuple[DefinitionKind, str], SemanticItem]] = None,
 ) -> SemanticMergeResult:
     """Flatten complete source sets and merge them with duplicate detection."""
 
@@ -640,7 +669,8 @@ def merge_sources(
         side_name: [item for source in sources for item in source.items]
         for side_name, sources in mod_sources.items()
     }
-    return merge_semantic_items(vanilla_items, flattened_mods, resolutions)
+    return merge_semantic_items(vanilla_items, flattened_mods, resolutions,
+                                function_ancestors=function_ancestors)
 
 
 _INVENTORY_EXPRESSION_RE = re.compile(r"^#[A-Za-z_][A-Za-z0-9_]*$")
@@ -904,11 +934,41 @@ def add_purchase_bazaar_tail_callbacks(
     )
 
 
+def hero_quest_anchor_matches(target: SemanticItem, stock_script: str):
+    """Recognize the two unchanged stock continuation boundaries, not names."""
+    masked = _mask_non_code(target.text)
+    if re.match(r"\s*function\s+" + re.escape(target.name) +
+                r"\s*\(\s*agent\s+thisagent\s*\)\s*(?:declare|begin)\b", masked, re.I) is None:
+        raise ValueError(f"{target.name}: quest participant must retain stock (agent ThisAgent) signature")
+    def matches(expression):
+        return list(re.finditer(r"^[ \t]*if\s*\(\s*\$" + expression +
+                               r"\s*==\s*False\s*\)[ \t]*\r?$", masked, re.I | re.M))
+    near = matches(r"check_nearby\s*\(\s*thisagent\s*\)")
+    rewards = matches(r"check_rewards\s*\(\s*thisagent\s*,\s*(?:TRUE|FALSE)\s*\)")
+    if (len(near) != 1 or len(rewards) != 1 or near[0].end() > rewards[0].start()
+            or masked[near[0].end():rewards[0].start()].strip()):
+        raise ValueError(f"{target.name} does not contain exactly one recognized Check_Nearby/Check_rewards resume anchor")
+    pursue = matches(r"pursue_entertainment\s*\(\s*thisagent\s*\)")
+    bazaar = matches(r"purchase_bazaar\s*\(\s*thisagent\s*,\s*70\s*\)")
+    if stock_script in {"mx_healer", "mx_monk"}:
+        if pursue or len(bazaar) != 1:
+            raise ValueError(f"{target.name} does not contain its recognized stock post-Purchase_Bazaar consideration anchor")
+        consider = bazaar[0]
+    else:
+        if len(pursue) != 1:
+            raise ValueError(f"{target.name} does not contain exactly one recognized stock post-Pursue_Entertainment consideration anchor")
+        consider = pursue[0]
+    if consider.start() <= rewards[0].end():
+        raise ValueError(f"{target.name} reverses the stock quest continuation order")
+    return rewards[0], consider
+
+
 def add_hero_quest_lifecycle_callbacks(
     result: SemanticMergeResult,
     hooks: Iterable[tuple[Sequence[str], str, str, str, str]],
     *,
     stock_hero_trees: Mapping[str, SemanticItem],
+    private_hero_trees: Optional[Mapping[str, tuple[str, SemanticItem]]] = None,
     stock_reset_tasks: Optional[SemanticItem] = None,
     stock_unit_death: Optional[SemanticItem] = None,
     source_name: str = "<hero-quest lifecycle composition>",
@@ -927,9 +987,13 @@ def add_hero_quest_lifecycle_callbacks(
     """
 
     requested = []
+    private_trees = dict(private_hero_trees or {})
     seen = set()
     for raw_scripts, resume, consider, reset, death in hooks:
-        scripts = tuple(sorted({script.casefold() for script in raw_scripts}))
+        stock_scripts = {script.casefold() for script in raw_scripts}
+        scripts = tuple(sorted(stock_scripts | {
+            script for script, (analogue, _) in private_trees.items() if analogue in stock_scripts
+        }))
         if not scripts:
             raise ValueError("hero-quest lifecycle requires at least one hero script")
         for symbol in (resume, consider, reset, death):
@@ -986,58 +1050,21 @@ def add_hero_quest_lifecycle_callbacks(
         death_symbols.append(death)
 
     for script, (resume_callbacks, consider_callbacks) in sorted(by_script.items()):
-        stock = stock_hero_trees.get(script)
+        analogue, private_item = private_trees.get(script, (script, None))
+        stock = stock_hero_trees.get(analogue)
         if stock is None:
             raise ValueError(f"unsupported or missing stock hero decision tree: {script}")
+        key = private_item.key if private_item is not None else stock.key
         target = next(
-            (item for item in items if item.key == stock.key),
+            (item for item in items if item.key == key),
             None,
         )
         if target is None:
+            if private_item is not None:
+                raise ValueError(f"declared private hero decision tree is absent: {script}")
             target = replace(stock, span=None)
             items.append(target)
-        masked_target = _mask_non_code(target.text)
-        near_matches = list(re.finditer(
-            r"^[ \t]*if\s*\(\s*\$check_nearby\s*\(\s*thisagent\s*\)\s*==\s*False\s*\)[ \t]*\r?$",
-            masked_target, re.IGNORECASE | re.MULTILINE,
-        ))
-        reward_matches = list(re.finditer(
-            r"^[ \t]*if\s*\(\s*\$Check_rewards\s*\(\s*thisagent\s*,\s*(?:TRUE|FALSE)\s*\)\s*==\s*False\s*\)[ \t]*\r?$",
-            masked_target, re.IGNORECASE | re.MULTILINE,
-        ))
-        if (
-            len(near_matches) != 1 or len(reward_matches) != 1
-            or near_matches[0].end() > reward_matches[0].start()
-            or masked_target[near_matches[0].end():reward_matches[0].start()].strip()
-        ):
-            raise ValueError(
-                f"{script} does not contain exactly one recognized "
-                "Check_Nearby/Check_rewards resume anchor"
-            )
-        pursue_matches = list(re.finditer(
-            r"^[ \t]*if\s*\(\s*\$pursue_entertainment\s*\(\s*thisagent\s*\)\s*==\s*False\s*\)[ \t]*\r?$",
-            masked_target, re.IGNORECASE | re.MULTILINE,
-        ))
-        bazaar_matches = list(re.finditer(
-            r"^[ \t]*if\s*\(\s*\$Purchase_bazaar\s*\(\s*thisagent\s*,\s*70\s*\)\s*==\s*False\s*\)[ \t]*\r?$",
-            masked_target, re.IGNORECASE | re.MULTILINE,
-        ))
-        if script in {"mx_healer", "mx_monk"}:
-            if pursue_matches or len(bazaar_matches) != 1:
-                raise ValueError(
-                    f"{script} does not contain its recognized stock "
-                    "post-Purchase_Bazaar consideration anchor"
-                )
-            consider_match = bazaar_matches[0]
-        else:
-            if len(pursue_matches) != 1:
-                raise ValueError(
-                    f"{script} does not contain exactly one recognized stock "
-                    "post-Pursue_Entertainment consideration anchor"
-                )
-            consider_match = pursue_matches[0]
-
-        reward_match = reward_matches[0]
+        reward_match, consider_match = hero_quest_anchor_matches(target, analogue)
         newline = "\r\n" if "\r\n" in target.text else "\n"
         reward_line = target.text[reward_match.start():reward_match.end()]
         resume_indent = re.match(r"[ \t]*", reward_line).group(0)

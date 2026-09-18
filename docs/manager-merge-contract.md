@@ -115,6 +115,13 @@ cancellation, and UI refresh lifecycle must be traced to its declared stock
 base. `controller_base` is not permission to replace that lifecycle with a
 custom watcher, timer, or hook.
 
+Catalog membership alone preserves the stock controller's restrictions.
+`AP52` retains its stock temple-gated recruitment unless a private owner
+declares `stock.ap52-private-recruitment.v1` (inline) or
+`stock.ap52-recruitment-panel.v1` (secondary panel). These recipes provide
+three indexed stock recruit rows and stock description-driven upgrades;
+see [the AP52 author contract](stock-ap52-private-recruitment.md).
+
 `runtime_features` contains typed, versioned stock-behavior recipes. Unknown
 types, unknown fields, malformed values, missing package resources, and
 conflicting feature identities make the mod red and nonselectable. The records
@@ -124,9 +131,22 @@ its content and does not require its UUID to be added to the manager.
 
 ### Supported typed runtime features
 
+Source-only recipes `stock.hero-quest-participant.v1` and
+`stock.spell-evaluation-equivalent.v1` integrate private hero trees with selected
+task providers and renamed stock spell evaluation. They introduce no native
+hook; see [private hero integration](private-hero-integration.md).
+
+`stock.native-timing.v1` exposes the stock simulation clock, read-only movement
+and named-action base periods, remaining duration for declared effects, and
+completion-time commit of a declared learned spell's native cooldown.
+It adds no timer, per-unit scheduler or replacement
+effector lifecycle. See [native timing](stock-native-timing.md) for resource
+ownership, API return values and completion/cancellation responsibilities.
+
 Source-composed shared services are also available:
 `stock.gameplay-event-observer.v1` reports actual stock potion consumption,
-reward-flag credit, caravan delivery and completed tournament participation.
+attack-flag completion, reward-flag credit, caravan delivery and completed
+tournament participation. Attack completion is independent of recipient payout.
 `stock.activity-duration.v1` measures a mod-defined activity using one shared
 stock-scheduled sampler, with independent progress, pause/resume, cancellation
 and terminal callbacks. Neither adds a native timer or a per-unit polling thread.
@@ -212,6 +232,8 @@ Additional records use the same `panel_key`. Their exact required fields are:
 | `stock.ap22-resource-meter.v1` | `resource_key`, `attribute_id`, `label_control_id`, `count_control_id`, `binding_control_id` |
 | `stock.ap99-research-row.v1` | `recipe_key`, `action_control_id`, `descriptor_template_control_id`, `completion_template_control_id`, `required_level`, `price`, `price_control_id`, `progress_control_id`, `active_display_control_id`, `icon_control_id`, `completion_text` |
 | `stock.ap17-upgrade-research-gate.v1` | `parent_building`, `upgrade_control_id`, `upgrade_price_control_id`, and `requirements`, an array of exact `{ "building_level": 1, "recipe_key": "local-recipe-key" }` objects |
+| `stock.ap52-private-recruitment.v1` | `parent_building`, `panel_key`, and `third_price_control_id`; requires a private AP52 family with three ordered Produces entries and the [stock-shaped controls](stock-ap52-private-recruitment.md) |
+| `stock.ap52-recruitment-panel.v1` | The inline recruitment fields plus `source_dialog_id` and `open_command_id`; moves those three rows to a package-owned secondary panel with stock Back and low-resolution replacement handling |
 | `stock.ap24-timed-rage-action.v1` | `action_key`, `action_control_id`, `descriptor_template_control_id`, `level_price_template_control_id`, `required_level`, `gold_cost`, `resource_key`, `resource_cost`, `callback_symbol`, `duration_ms`, `icon_control_id`, `price_control_id`, `progress_control_id`, `active_display_control_id` |
 | `stock.ap24-rage-command-action.v1` | `action_key`, `action_control_id`, `visual_template_control_id`, `completion_template_research_control_id`, `required_level`, `resource_key`, `resource_cost`, `callback_symbol`, `icon_control_id`, `price_control_id` |
 | `stock.ap69-sovereign-target-action.v1` | `action_key`, `visual_control_id`, `private_control_id`, `visual_template_control_id`, `target_template_control_id`, `stock_target_mode`, `stock_executor_mode`, `private_mode`, `private_unit_id`, `cursor_ordinal`, `required_level`, `resource_key`, `resource_cost`, `icon_control_id`, `price_control_id` |
@@ -395,9 +417,14 @@ layouts where MX22's fixed 139-pixel art cannot fit or is visually unsuitable.
 Every pair may change only to the two declared private command IDs and the
 package's own visible text and layout. The AP39 variant retains its exact stock
 `INBb` set `0x3F8`, image selector `0x52`, font, colors, opcodes, and record
-boundary. The AP10 variant retains the literal `INBb` art token and exact stock
-font, colors, opcodes, and record boundary while allowing a package-owned
-`INBb` image set with the stock 93x26 control geometry. Presentation families
+boundary. The AP10 variant retains exact stock font, colors, opcodes, caption
+bounds, and 93x26 control geometry. It may use a stock `INBb` set or a
+package-owned private IMAG/set validated as a literal `INBb` set-1009 analogue.
+Private artwork must retain all seven states, their four-frame sharing pattern,
+flags, offsets, and timing; all four 93x26 TILEs and their palettes must be
+present in the same package archive. This changes artwork, not the controller
+or command lifecycle, and does not require replacing global `INBb`.
+Presentation families
 cannot be mixed within a pair. The manager stores the state in stock
 `ATTRIB_EmbassyActiveFlag`, shows exactly the action that changes the current
 state, and refreshes it after stock setup, events, and ordinary commands. It
@@ -702,6 +729,14 @@ TILE-to-palette references must close over the generated palette table. Unknown
 IMAG layouts, direct or untyped positional references, truncated tables, and
 blind byte-pattern rewriting make the package nonselectable.
 
+Positional TILE indices are local to independent art tables. When inferring a
+dependency between CAM files, an equal tile number alone cannot override
+contradictory full TILE record names, including names retained on empty stock
+fallthrough slots. This applies both to an IMAG referencing another file's
+tiles and to a tile overlay supplying another file's IMAG. IMAG-only references
+may still identify a unique provider; multiple possible families remain an
+error. Filename declarations and final typed art validation remain in force.
+
 All custom payloads used by those records must be present and attributable to
 the package. A local merge report records source ownership and hashes; it does
 not grant permission to republish another author's assets or materialized stock
@@ -819,6 +854,8 @@ compares semantic records with the stock ancestor:
 
 - identical co-owned changes are accepted once;
 - independent keyed additions are unioned;
+- independent fields within an existing stock Description are combined;
+- independent instruction edits within a stock GPL function are combined;
 - whole-table deltas are combined by their documented typed key;
 - positional art collisions use deterministic allocation, with only audited
   references rewritten; and
@@ -830,6 +867,58 @@ semantic result. Today, GPL/DAT conflicts may use an explicit selected-owner
 resolution. Divergent Description, named CAM, and whole-table records must
 merge cleanly or stop until an equally explicit typed resolution is added.
 Unused, misspelled, or stale resolution rules also stop the build.
+
+Description reconciliation uses the effective Original + Northern Expansion
+stock definition already loaded for preparation. Distinct attributes and
+uniquely named child fields can contribute independent changes; for example,
+one package's sound fields can coexist with another's validation callback.
+Unchanged stock values do not erase another package's edits. An explicit
+resolution still takes precedence.
+
+Repeated sibling tags (such as Flags or Script) are ordered, atomic groups,
+not sets: different edits to the same group remain conflicts. Deleting a field
+while another package modifies it, differing additions with no common stock
+subtree, ambiguous insertion order, and competing values also remain blocked.
+Where field reconciliation identifies the conflict, the error includes its XML
+path. Private additions without a stock definition still require identical
+records or an explicit resolution. Reconciliation adds no stock records to the
+output merely to serve as baselines and does not change Standard-mod loading.
+It runs only for divergent shared Description records, not every scanned item.
+
+GPL function reconciliation likewise happens during Prepare, only when selected
+providers supply different versions of the same function and no explicit
+resolution already applies. The installed SDK's declared source projects are
+read in Majesty's Original + Northern Expansion load order to identify the
+common function ancestor. This is a source-level ancestor, not a recompiled
+proof that SDK source matches every installed BCD. No full stock compilation,
+recursive directory scan, runtime hooks, or background activity are added.
+Content-keyed bounded caches reuse source parsing without retaining stale file
+contents. Missing or unsupported ancestry remains a conflict.
+
+The instruction merger understands GPL `if`/`else`, `foreach`/`while` bodies,
+function signatures, and typed local declarations. Simple statements and
+condition expressions remain atomic: it does not splice competing arithmetic,
+arguments, or conditions token by token. Different statements and branches can
+change independently, and a condition change can coexist with additions inside
+its branch. Identical additions run once. Whitespace, comments, keyword case,
+and redundant begin/end grouping do not create conflicts; string contents are
+preserved literally. Rendered branches are explicitly grouped to retain their
+original ownership, including nested else clauses.
+
+Different insertions at the same position, deletion versus modification,
+competing edits to one statement/condition/local, ambiguous repeated or moved
+instructions, changed signatures alongside body edits, and unsupported source
+structures stop preparation with the function, participating mod names, and
+the competing instruction or reason. Unrelated stock functions are never
+emitted. No package names, gameplay events, or reward rules are hardcoded into
+this merger. It preserves authored changes; it cannot infer missing behavior
+or prove that independently authored gameplay rules are compatible at runtime.
+The normal GPL compiler remains the final language validation step.
+
+The merge report's `gpl.instruction_merges` records automatically combined
+functions, participating owners, stock source paths, and stock-function hashes,
+separately from explicit compatibility resolutions. This does not change
+Standard-mod classification or native load order.
 
 Explicit overlap resolutions currently come from checked-in compatibility
 metadata: selected-owner rules or supplied complete GPL/DAT semantic

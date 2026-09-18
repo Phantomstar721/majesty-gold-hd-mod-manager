@@ -2,6 +2,7 @@
 // process is opened and DllMain is not invoked by this console test.
 #include "../runtime/MajestyModManagerRuntime.cpp"
 #include <cassert>
+#include "PrivateRecruitmentTests.h"
 
 namespace {
 std::uint32_t g_seen[4] = {};
@@ -31,6 +32,7 @@ void* __fastcall RecordString(void* destination, void*, const char* symbol) {
 }
 
 int main() {
+    RunPrivateRecruitmentTests();
     g_stockControllerRegistry.occupantActionPanels = {
         {"stable", 0x31303042, 0x31303050, 0x4101, 0x10000, "Stable_Cost", "Stable_Action", 0x30315041},
         {"clinic", 0x32303042, 0x32303050, 0x4102, 0x10001, "Clinic_Cost", "Clinic_Action", 0x3930584D},

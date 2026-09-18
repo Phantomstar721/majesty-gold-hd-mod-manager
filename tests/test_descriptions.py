@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -203,6 +204,129 @@ class DescriptionMergeTests(unittest.TestCase):
             merge_descriptions(
                 stock, (("mod", '<Majesty version="2" />'),)
             )
+
+
+class DescriptionFieldMergeTests(unittest.TestCase):
+    base = ('<Description type="Action" subType="Standard" ID="TEST" Name="example">'
+            '<Engine><ImageSet value="Cast"/><Script GPLFunction="effect"/></Engine>'
+            '<Game><Flags value="IsSpell"/><Flags value="Visible"/>'
+            '<Rate min="10" max="100"/><ValidationScript value="stock_check"/></Game>'
+            '</Description>')
+
+    def merged(self, *variants, **kwargs):
+        return merge_descriptions(document(self.base),
+            tuple((f"owner{i}", document(value)) for i, value in enumerate(variants)), **kwargs)
+
+    def test_independent_sound_and_validation_edits_survive_in_both_orders(self):
+        sound = self.base.replace('<Script ', '<Sound value="Example"/><SoundPhase begin="Begin"/><Script ')
+        gate = self.base.replace('value="stock_check"', 'value="private_check"')
+        for variants in ((sound, gate), (gate, sound)):
+            result = self.merged(*variants)
+            element = result.document.records[0].to_element()
+            self.assertEqual([item.tag for item in element.find("Engine")],
+                             ["ImageSet", "Sound", "SoundPhase", "Script"])
+            self.assertEqual(element.find("./Engine/Sound").get("value"), "Example")
+            self.assertEqual(element.find("./Game/ValidationScript").get("value"), "private_check")
+            self.assertEqual(result.selections[0].owners, ("owner0", "owner1"))
+            self.assertEqual([item.get("value") for item in element.findall("./Game/Flags")],
+                             ["IsSpell", "Visible"])
+
+    def test_many_owners_same_and_independent_attributes(self):
+        first = self.base.replace('min="10"', 'min="20"')
+        second = self.base.replace('max="100"', 'max="200"')
+        third = self.base.replace('value="stock_check"', 'value="private_check"')
+        result = self.merged(first, second, third, first, self.base)
+        element = result.document.records[0].to_element()
+        self.assertEqual(element.find("./Game/Rate").attrib, {"min": "20", "max": "200"})
+        self.assertEqual(element.find("./Game/ValidationScript").get("value"), "private_check")
+        self.assertEqual(result.selections[0].owners, ("owner0", "owner1", "owner2", "owner3"))
+
+    def test_competing_attribute_reports_exact_field(self):
+        with self.assertRaises(DescriptionMergeConflict) as raised:
+            self.merged(self.base.replace('min="10"', 'min="20"'),
+                        self.base.replace('min="10"', 'min="30"'))
+        self.assertEqual(raised.exception.conflicts[0].fields, ("Description/Game/Rate/@min",))
+        self.assertIn("Description/Game/Rate/@min", str(raised.exception))
+
+    def test_repeated_groups_are_atomic_but_other_fields_can_merge(self):
+        flags = self.base.replace('value="Visible"', 'value="Hidden"')
+        gate = self.base.replace('value="stock_check"', 'value="private_check"')
+        self.merged(flags, gate)
+        with self.assertRaises(DescriptionMergeConflict):
+            self.merged(flags, self.base.replace('value="IsSpell"', 'value="Other"'))
+        # Even independently named Script entries cannot be paired by position.
+        scripts = self.base.replace('<Script GPLFunction="effect"/>',
+                                    '<Script type="0" GPLFunction="a"/><Script type="1" GPLFunction="b"/>')
+        with patch.object(self, "base", scripts), self.assertRaises(DescriptionMergeConflict):
+            self.merged(scripts.replace('GPLFunction="a"', 'GPLFunction="c"'),
+                        scripts.replace('GPLFunction="b"', 'GPLFunction="d"'))
+
+    def test_deletion_is_preserved_but_delete_versus_edit_conflicts(self):
+        removed = self.base.replace('<Rate min="10" max="100"/>', '')
+        gate = self.base.replace('value="stock_check"', 'value="private_check"')
+        self.assertIsNone(self.merged(removed, gate).document.records[0].to_element().find("./Game/Rate"))
+        with self.assertRaises(DescriptionMergeConflict):
+            self.merged(removed, self.base.replace('min="10"', 'min="20"'))
+        removed_attribute = self.base.replace(' min="10"', '')
+        changed_attribute = self.base.replace('max="100"', 'max="200"')
+        self.assertEqual(self.merged(removed_attribute, changed_attribute).document.records[0]
+                         .to_element().find("./Game/Rate").attrib, {"max": "200"})
+
+    def test_new_subtrees_need_identical_content_and_unambiguous_position(self):
+        first = self.base.replace('</Game>', '<New a="1"/></Game>')
+        second = self.base.replace('</Game>', '<New b="2"/></Game>')
+        with self.assertRaises(DescriptionMergeConflict):
+            self.merged(first, second)
+        # Neither package defines an order between New and Other.
+        ambiguous = self.base.replace('</Game>', '<Other value="2"/></Game>')
+        with self.assertRaisesRegex(DescriptionMergeConflict, r"child-order\(\)"):
+            self.merged(first, ambiguous)
+        anchored = self.base.replace('<Rate ', '<Earlier value="2"/><Rate ')
+        result = self.merged(first, anchored).document.records[0].to_element()
+        self.assertEqual([node.tag for node in result.find("Game")],
+                         ["Flags", "Flags", "Earlier", "Rate", "ValidationScript", "New"])
+
+    def test_reordered_or_interleaved_children_are_not_guessed(self):
+        reordered = self.base.replace('<Rate min="10" max="100"/><ValidationScript value="stock_check"/>',
+                                     '<ValidationScript value="stock_check"/><Rate min="10" max="100"/>')
+        with self.assertRaisesRegex(DescriptionMergeConflict, r"child-order\(\)"):
+            self.merged(reordered, self.base.replace('min="10"', 'min="20"'))
+        interleaved = self.base.replace('<Flags value="Visible"/>', '').replace(
+            '<ValidationScript', '<Flags value="Visible"/><ValidationScript')
+        with patch.object(self, "base", interleaved), self.assertRaisesRegex(DescriptionMergeConflict, r"children\(\)"):
+            self.merged(interleaved.replace('min="10"', 'min="20"'),
+                        interleaved.replace('value="Visible"', 'value="Hidden"'))
+
+    def test_text_changes_preserve_content_and_conflict_on_same_text(self):
+        base = self.base.replace('<Rate min="10" max="100"/>', '<Rate>stock text</Rate>')
+        with patch.object(self, "base", base):
+            result = self.merged(base.replace('stock text', 'new text'),
+                                 base.replace('value="stock_check"', 'value="private_check"'))
+            self.assertEqual(result.document.records[0].to_element().find("./Game/Rate").text, "new text")
+            with self.assertRaises(DescriptionMergeConflict):
+                self.merged(base.replace('stock text', 'first'), base.replace('stock text', 'second'))
+
+    def test_external_baseline_does_not_emit_unselected_stock_records(self):
+        stock = parse_descriptions(document(self.base, record("Unit", "OTHER", "stock")))
+        first = self.base.replace('min="10"', 'min="20"')
+        second = self.base.replace('max="100"', 'max="200"')
+        result = merge_descriptions("<Majesty/>", (("a", document(first)), ("b", document(second))),
+                                    field_merge_stock=stock.index)
+        self.assertEqual([item.key for item in result.document.records], [("Action", "TEST")])
+        with self.assertRaises(DescriptionMergeConflict):
+            merge_descriptions("<Majesty/>", (("a", document(first)), ("b", document(second))))
+
+    def test_explicit_resolution_still_takes_precedence(self):
+        first = self.base.replace('min="10"', 'min="20"')
+        second = self.base.replace('max="100"', 'max="200"')
+        result = self.merged(first, second, resolve=lambda conflict: "owner0")
+        self.assertEqual(result.document.records[0].to_element().find("./Game/Rate").get("max"), "100")
+
+    def test_single_or_identical_records_do_not_enter_field_reconciliation(self):
+        changed = self.base.replace('min="10"', 'min="20"')
+        with patch("majesty_cam.descriptions._merge_stock_fields", side_effect=AssertionError("unexpected field merge")):
+            self.merged(changed)
+            self.merged(changed, changed)
 
 
 if __name__ == "__main__":

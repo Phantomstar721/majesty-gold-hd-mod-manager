@@ -1,10 +1,16 @@
 Majesty Mod Manager makes it easy to organize and launch all of the Majesty Gold
 HD mods and quests you have installed or subscribed to.
 
-More complicated mods, such as custom guilds, need extra support. Install this
-manager and launch Majesty through it to use those mods individually or
-together. It automatically finds and organizes your mods and quests, remembers
-your choices, and prepares anything that needs extra support.
+Mods with custom buildings, panels, and other advanced features need extra
+support. Install this manager and launch Majesty through it to use them
+individually or together. It automatically finds and organizes your mods and
+quests, remembers your choices, and prepares anything that needs extra support.
+
+Update 0.3.7 adds shared panel, hero-integration, and timing capabilities, plus
+improvements to combining shared scripts, descriptions, and artwork.
+Close Majesty and the Manager before updating. Afterwards, reopen the Manager,
+select Rescan Content, and Prepare Selected Mods (or Prepare Again) before
+launching Majesty.
 
 First launch:
 

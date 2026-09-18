@@ -56,11 +56,34 @@ class StockHeroQuestLifecycle:
     type: str = "stock.hero-quest-lifecycle.v1"
 
 
+@dataclass(frozen=True)
+class StockHeroQuestParticipant:
+    """A package-owned hero tree opts into its stock analogue's providers."""
+
+    feature_key: str
+    hero_script: str
+    stock_hero_script: str
+    type: str = "stock.hero-quest-participant.v1"
+
+
+@dataclass(frozen=True)
+class StockSpellEvaluationEquivalent:
+    """A private spell uses its stock analogue's spell_extra_value clause."""
+
+    feature_key: str
+    private_spell: str
+    stock_spell: str
+    hero_title: str
+    type: str = "stock.spell-evaluation-equivalent.v1"
+
+
 GplFeature = Union[
     StockGplmxPurchaseEquipmentTail,
     StockGplmxPurchaseBazaarTail,
     StockControlledFollowerSpeedSync,
     StockHeroQuestLifecycle,
+    StockHeroQuestParticipant,
+    StockSpellEvaluationEquivalent,
 ]
 
 
@@ -76,6 +99,27 @@ _STOCK_HERO_SCRIPTS = frozenset(
 
 def parse_gpl_feature(value: Mapping[str, object]) -> GplFeature:
     feature_type = value.get("type")
+    if feature_type in {"stock.hero-quest-participant.v1", "stock.spell-evaluation-equivalent.v1"}:
+        fields = ("hero_script", "stock_hero_script") if feature_type == "stock.hero-quest-participant.v1" else ("private_spell", "stock_spell", "hero_title")
+        expected = {"type", "feature_key", *fields}
+        if set(value) != expected:
+            raise GplFeatureError(f"{feature_type}: missing {sorted(expected-set(value))}; unexpected {sorted(set(value)-expected)}")
+        key = value["feature_key"]
+        if not isinstance(key, str) or not _LOGICAL_KEY.fullmatch(key):
+            raise GplFeatureError("feature_key must be a logical identifier")
+        for field in fields:
+            text = value[field]
+            if not isinstance(text, str) or not _GPL_SYMBOL.fullmatch(text):
+                raise GplFeatureError(f"{field} must be a bounded GPL/Description name")
+        if feature_type == "stock.hero-quest-participant.v1":
+            stock = value["stock_hero_script"].casefold()
+            reserved = _STOCK_HERO_SCRIPTS | {script[3:] + "_tree" for script in _STOCK_HERO_SCRIPTS}
+            if stock not in _STOCK_HERO_SCRIPTS or value["hero_script"].casefold() in reserved:
+                raise GplFeatureError("quest participant must name a private tree and a supported stock hero tree")
+            return StockHeroQuestParticipant(key, value["hero_script"], stock)
+        if value["private_spell"].casefold() == value["stock_spell"].casefold():
+            raise GplFeatureError("private_spell must differ from stock_spell")
+        return StockSpellEvaluationEquivalent(key, value["private_spell"], value["stock_spell"], value["hero_title"])
     feature_classes = {
         "stock.gplmx-purchase-equipment-tail.v1": StockGplmxPurchaseEquipmentTail,
         "stock.gplmx-purchase-bazaar-tail.v1": StockGplmxPurchaseBazaarTail,
@@ -196,6 +240,16 @@ def normalize_gpl_features(features: Sequence[GplFeature]) -> Tuple[GplFeature, 
     keys: set[tuple[str, str]] = set()
     symbols: set[tuple[str, str]] = set()
     for feature in normalized:
+        if isinstance(feature, (StockHeroQuestParticipant, StockSpellEvaluationEquivalent)):
+            parse_gpl_feature(asdict(feature))
+            key = (feature.type, feature.feature_key.casefold())
+            symbol = (feature.type, (feature.hero_script if isinstance(feature, StockHeroQuestParticipant)
+                      else feature.hero_title + ":" + feature.private_spell).casefold())
+            if key in keys or symbol in symbols:
+                raise GplFeatureError(f"duplicate {feature.type} key or binding: {feature.feature_key}")
+            keys.add(key)
+            symbols.add(symbol)
+            continue
         logical_key = (
             feature.feature_key
             if isinstance(feature, (StockControlledFollowerSpeedSync, StockHeroQuestLifecycle))
@@ -239,6 +293,8 @@ def gpl_feature_mapping(feature: GplFeature) -> dict[str, object]:
             StockGplmxPurchaseBazaarTail,
             StockControlledFollowerSpeedSync,
             StockHeroQuestLifecycle,
+            StockHeroQuestParticipant,
+            StockSpellEvaluationEquivalent,
         ),
     ):
         raise GplFeatureError(f"unsupported GPL feature: {feature!r}")
@@ -246,6 +302,8 @@ def gpl_feature_mapping(feature: GplFeature) -> dict[str, object]:
 
 
 def _gpl_feature_sort_key(feature: GplFeature) -> tuple[str, str, str]:
+    if isinstance(feature, (StockHeroQuestParticipant, StockSpellEvaluationEquivalent)):
+        return feature.type, feature.feature_key.casefold(), ""
     if isinstance(feature, StockControlledFollowerSpeedSync):
         return (
             feature.type,
@@ -272,6 +330,8 @@ __all__ = [
     "StockGplmxPurchaseBazaarTail",
     "StockControlledFollowerSpeedSync",
     "StockHeroQuestLifecycle",
+    "StockHeroQuestParticipant",
+    "StockSpellEvaluationEquivalent",
     "gpl_feature_mapping",
     "normalize_gpl_features",
     "parse_gpl_feature",

@@ -17,6 +17,8 @@ from .gpl_features import (
     GplFeatureError,
     StockControlledFollowerSpeedSync,
     StockHeroQuestLifecycle,
+    StockHeroQuestParticipant,
+    StockSpellEvaluationEquivalent,
     StockGplmxPurchaseEquipmentTail,
     StockGplmxPurchaseBazaarTail,
     gpl_feature_mapping,
@@ -28,6 +30,7 @@ from .runtime_features import (
     NameGeneratorFeature,
     MapFogQueryFeature,
     MovementQueryFeature,
+    NativeTimingFeature,
     RuntimeFeature,
     normalize_runtime_features,
 )
@@ -516,6 +519,17 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             _require_exact_fields(raw_feature, {"type"}, context)
             feature = MovementQueryFeature()
             feature_key = (feature_type, "shared")
+        elif feature_type == "stock.native-timing.v1":
+            _require_exact_fields(raw_feature, {"type", "spell_ids", "effector_ids"}, context)
+            families = []
+            for field in ("spell_ids", "effector_ids"):
+                values = raw_feature[field]
+                if not isinstance(values, (list, tuple)):
+                    raise PackageFormatError(f"{context}.{field} must be an array")
+                families.append(tuple(_required_fourcc(value, f"{context}.{field}")
+                                      for value in values))
+            feature = NativeTimingFeature(*families)
+            feature_key = (feature_type, "shared")
         elif feature_type == "stock.ap78-enchantment-row.v1":
             _require_exact_fields(
                 raw_feature, {"type", "overlay_id", "display_text"}, context
@@ -542,6 +556,8 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             "stock.gplmx-purchase-bazaar-tail.v1",
             "stock.controlled-follower-speed-sync.v1",
             "stock.hero-quest-lifecycle.v1",
+            "stock.hero-quest-participant.v1",
+            "stock.spell-evaluation-equivalent.v1",
         }:
             try:
                 feature = parse_gpl_feature(raw_feature)
@@ -552,7 +568,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 feature_type,
                 (
                     feature.feature_key
-                    if isinstance(feature, (StockControlledFollowerSpeedSync, StockHeroQuestLifecycle))
+                    if isinstance(feature, (StockControlledFollowerSpeedSync, StockHeroQuestLifecycle, StockHeroQuestParticipant, StockSpellEvaluationEquivalent))
                     else feature.callback_key
                 ).casefold(),
             )
@@ -586,6 +602,8 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 "stock.mx05-data-record-list-panel.v1",
                 "stock.mx09-ap41-reward-panel.v1",
                 "stock.ap17-upgrade-research-gate.v1",
+                "stock.ap52-private-recruitment.v1",
+                "stock.ap52-recruitment-panel.v1",
             }:
                 local_identity = str(mapping["parent_building"])
             elif feature_type == "stock.mx22-building-open-toggle.v1":
@@ -608,7 +626,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 f"duplicate runtime feature identity: {feature_key[1]!r}"
             )
         seen_feature_keys.add(feature_key)
-        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature)):
+        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature)):
             try:
                 normalize_runtime_features((feature,))
             except ValueError as exc:
@@ -1089,6 +1107,9 @@ def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
         return {"type": "stock.map-fog-query.v1"}
     if isinstance(feature, MovementQueryFeature):
         return {"type": "stock.movement-query.v1"}
+    if isinstance(feature, NativeTimingFeature):
+        return {"type": "stock.native-timing.v1", "spell_ids": list(feature.spell_ids),
+                "effector_ids": list(feature.effector_ids)}
     if isinstance(feature, NameGeneratorFeature):
         return {
             "type": "stock.name-generator.v1",
@@ -1110,6 +1131,8 @@ def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
             StockGplmxPurchaseBazaarTail,
             StockControlledFollowerSpeedSync,
             StockHeroQuestLifecycle,
+            StockHeroQuestParticipant,
+            StockSpellEvaluationEquivalent,
         ),
     ):
         return gpl_feature_mapping(feature)

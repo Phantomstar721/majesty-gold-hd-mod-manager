@@ -21,10 +21,107 @@ from majesty_cam.stock_art import (
     classify_art_archive,
     collapse_art_archives,
     load_stock_art_lineages,
+    StockArtLineage,
+    _sparse_component_archive,
+    _overlay_positional,
 )
+from majesty_cam.art import analyze_art_archive
 
 
 class StockArtTests(unittest.TestCase):
+    def test_empty_named_inheritance_survives_sparse_collapse(self):
+        original = _named_tiles(_archive((_image(b"MAIN", 300, 1),),
+                                         (b"", _tile(0, marker=7)), palette=b"SPLT"), b"Adept")
+        expansion = _named_tiles(_archive((_image(b"MAIN", 300, 1),),
+                                          (b"", _tile(0, marker=90)), palette=b"SPLT"), b"Ratapult")
+        lineage = StockArtLineage("main", (Path("original.cam"),Path("expansion.cam")), (original,), expansion)
+        private = _named_tiles(_archive((_image(b"NEW1", 300, 1),), (b"", b"")), b"Adept")
+        sparse = _sparse_component_archive(lineage, (private,))
+        self.assertEqual(_section(sparse,b"TILE").entries[1].name, _section(original,b"TILE").entries[1].name)
+        analysis = analyze_art_archive(expansion,sparse,mod_id="private",fallthrough_ancestors=(original,))
+        change = next(item for item in analysis.tile_delta.changes if item.index == 1)
+        self.assertEqual(change.entry.data, _section(original,b"TILE").entries[1].data)
+        self.assertNotEqual(change.entry.data, _section(expansion,b"TILE").entries[1].data)
+        # Empty hints never replace an earlier actual authored payload, and
+        # native stock dataset overlays still ignore empty slots entirely.
+        written = _overlay_positional(_section(expansion,b"TILE"), _section(private,b"TILE"), preserve_inherited_names=True)
+        self.assertEqual(written.entries[1], _section(expansion,b"TILE").entries[1])
+        native = _overlay_positional(_section(expansion,b"TILE"), _section(private,b"TILE"))
+        self.assertEqual(native, _section(expansion,b"TILE"))
+
+    def test_equal_tile_indices_in_different_named_tables_are_not_dependencies(self):
+        # A panel's stock fallthrough slot and a world sprite may use the same
+        # number. Neither direction of dependency inference may join them.
+        for world_writes, ui_writes in ((True, False), (False, True)):
+            with self.subTest(world_writes=world_writes), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                game, stock_paths = _stock_game(root)
+                # These empty dependencies must name their actual stock
+                # family; arbitrary placeholder labels aren't ancestry proof.
+                for domain, family in (("main", b"world"), ("interface", b"panel")):
+                    write_cam(_named_tiles(read_cam(stock_paths[domain]), family), stock_paths[domain])
+                world = _named_tiles(_archive(
+                    (_image(b"MAIN", 2801, 1),),
+                    (b"", _tile(0, marker=110) if world_writes else b"", b""),
+                ), b"world")
+                panel = _named_tiles(_archive(
+                    (_image(b"NEW1", 2802, 1), _image(b"NEW2", 2803, 3)),
+                    (b"", _tile(0, marker=111) if ui_writes else b"", b"", _tile(0, marker=112)),
+                ), b"panel")
+                world_path = _write_cam(root / "world.cam", world)
+                panel_path = _write_cam(root / "example_interfacedata.cam", panel)
+                for paths in ((world_path, panel_path), (panel_path, world_path)):
+                    collapsed = collapse_art_archives(game, paths, owner="unrelated-tables")
+                    by_domain = {item.lineage.domain: item for item in collapsed}
+                    self.assertEqual(set(by_domain), {"main", "interface"})
+                    self.assertEqual(by_domain["main"].paths, (world_path,))
+                    self.assertEqual(by_domain["interface"].paths, (panel_path,))
+
+    def test_named_blank_slot_can_depend_on_matching_provider(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            game, _ = _stock_game(root)
+            provider = _named_tiles(_archive(
+                (_image(b"MAIN", 2811, 1),), (b"", _tile(0, marker=115), b""),
+            ), b"shared")
+            dependent = _named_tiles(_archive(
+                (_image(b"NEW1", 2812, 1),), (b"", b"", b""),
+            ), b"shared")
+            paths = (_write_cam(root / "one.cam", provider), _write_cam(root / "two.cam", dependent))
+            (collapsed,) = collapse_art_archives(game, paths, owner="named-dependency")
+            self.assertEqual(collapsed.lineage.domain, "main")
+            self.assertEqual(collapsed.paths, paths)
+
+    def test_named_table_contradiction_without_declaration_stays_unresolved(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            game, _ = _stock_game(root)
+            provider = _named_tiles(_archive(
+                (_image(b"MAIN", 2821, 1),), (b"", _tile(0, marker=115), b""),
+            ), b"world")
+            dependent = _named_tiles(_archive(
+                (_image(b"NEW1", 2822, 1),), (b"", b"", b""),
+            ), b"unrelated")
+            paths = (_write_cam(root / "one.cam", provider), _write_cam(root / "two.cam", dependent))
+            with self.assertRaisesRegex(StockArtError, "no provable installed stock lineage"):
+                collapse_art_archives(game, paths, owner="not-a-dependency")
+
+    def test_imag_only_multiple_suppliers_remain_ambiguous(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            game, _ = _stock_game(root)
+            world = _named_tiles(_archive(
+                (_image(b"MAIN", 2831, 1),), (b"", _tile(0, marker=115), b""),
+            ), b"world")
+            panel = _named_tiles(_archive(
+                (_image(b"CUR1", 2832, 1),), (b"", _tile(0, marker=116), b""),
+            ), b"panel")
+            unknown = CamArchive((CamSection(b"IMAG", (_image(b"NEW1", 2833, 1),)),))
+            paths = (_write_cam(root / "one.cam", world), _write_cam(root / "two.cam", panel),
+                     _write_cam(root / "ambiguous.cam", unknown))
+            with self.assertRaisesRegex(StockArtError, "ambiguous.cam: positional art ancestry is ambiguous"):
+                collapse_art_archives(game, paths, owner="unknown")
+
     def test_same_lineage_stock_overlay_preserves_positional_padding(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -491,6 +588,16 @@ def _archive(images, tiles, *, palette=None):
             )
         )
     return CamArchive(tuple(sections))
+
+
+def _named_tiles(archive: CamArchive, family: bytes) -> CamArchive:
+    return CamArchive(tuple(
+        CamSection(section.extension, tuple(
+            CamEntry(pad_name(index.to_bytes(4, "little") + family), entry.data)
+            for index, entry in enumerate(section.entries)
+        ), padding=section.padding) if section.extension == b"TILE" else section
+        for section in archive.sections
+    ))
 
 
 def _image(name: bytes, set_id: int, tile_index: int) -> CamEntry:

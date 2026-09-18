@@ -10,6 +10,7 @@ and recompiles an isolated mirror before exposing any semantic ancestor.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import hashlib
 from pathlib import Path, PureWindowsPath
 import re
@@ -151,11 +152,76 @@ _CACHE_LOCK = threading.Lock()
 _PROOF_CACHE: dict[tuple[str, str], StockGplProof] = {}
 
 
+def load_stock_function_ancestors(
+    game_path: Path, names: tuple[str, ...],
+) -> dict[tuple[DefinitionKind, str], SemanticItem]:
+    """Read common SDK ancestors only for functions with competing providers.
+
+    Follow the shipped project/load order, never filesystem enumeration order.
+    This is a source ancestor, NOT the expensive source/bytecode proof above:
+    no compiler subprocess, recursive scan, DAT parse, or full corpus parse.
+    Content-keyed bounded caches cannot retain stale source after an edit.
+    """
+    if not names:
+        return {}
+    root = Path(game_path).resolve(strict=True)
+    requested = {name.casefold() for name in names}
+    # Reuse the strict native dataset-order validation, with just its two inputs.
+    captured = tuple(_capture_file(root, path) for path in (_BASE_MANIFEST, _EXPANSION_MANIFEST))
+    _validate_runtime_manifests(_StockSnapshot(root, captured, ""))
+    effective = {}
+    payloads = {}
+    for pair in STOCK_GPL_RUNTIME_PAIRS:
+        relative = _CORPUS_ROOT / pair.project_relative
+        project_path = _require_safe_file(root, relative)
+        project_text = project_path.read_text(encoding="cp1252")
+        for number, line in enumerate(project_text.splitlines(), 1):
+            if not line.strip():
+                continue
+            match = _PROJECT_ROW.fullmatch(line)
+            if match is None:
+                raise StockGplError(f"{project_path}:{number}: unsupported stock project row")
+            if match.group(1).casefold() != "source":
+                continue
+            source_relative = _safe_declared_relative(match.group(2), context=str(project_path))
+            if source_relative.suffix.casefold() != ".gpl":
+                raise StockGplError(f"unsupported stock GPL source: {source_relative}")
+            path = relative.parent / source_relative
+            if path not in payloads:
+                payloads[path] = _require_safe_file(root, path).read_bytes()
+            text, declared = _ancestor_source_text(str(root / path), payloads[path])
+            if requested.isdisjoint(declared):
+                continue
+            parsed = _ancestor_source_parse(str(root / path), payloads[path])
+            for item in parsed.items:
+                if item.kind is DefinitionKind.FUNCTION and item.normalized_name in requested:
+                    effective[item.key] = item
+    return effective
+
+
+@lru_cache(maxsize=512)
+def _ancestor_source_text(path: str, payload: bytes):
+    text = payload.decode("cp1252")
+    # This is only a cheap prefilter. The parser, not this regex, supplies items.
+    names = frozenset(re.findall(r"(?im)^\s*function\s+([a-z_][a-z_0-9]*)", text.casefold()))
+    return text, names
+
+
+@lru_cache(maxsize=32)
+def _ancestor_source_parse(path: str, payload: bytes):
+    text, _ = _ancestor_source_text(path, payload)
+    parsed = parse_gpl(text, path)
+    require_complete_semantic_coverage(parsed)
+    return parsed
+
+
 def clear_stock_gpl_cache() -> None:
     """Clear successful in-process proofs, primarily for deterministic tests."""
 
     with _CACHE_LOCK:
         _PROOF_CACHE.clear()
+    _ancestor_source_text.cache_clear()
+    _ancestor_source_parse.cache_clear()
 
 
 def snapshot_stock_gpl_inputs(game_path: Path) -> tuple[tuple[str, str], ...]:

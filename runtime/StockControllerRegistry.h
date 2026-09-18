@@ -7,7 +7,7 @@
 
 namespace MajestyStockControllers {
 
-constexpr std::uint32_t kRegistryVersion = 16;
+constexpr std::uint32_t kRegistryVersion = 18;
 constexpr std::uint32_t kMaximumRecordCount = 256;
 constexpr std::uint32_t kMaximumPanelCount = 32;
 constexpr std::uint32_t kMaximumLiveAgentListVariants = 64;
@@ -180,6 +180,14 @@ struct LiveAgentListRecord {
     bool dataRecordRows;
 };
 
+struct PrivateRecruitmentRecord {
+    std::string panelKey;
+    std::uint32_t parentDialogId;
+    std::uint32_t thirdPriceControlId;
+    std::uint32_t childDialogId = 0;
+    std::uint32_t openCommandId = 0;
+};
+
 struct Registry {
     std::vector<SecondaryPanelRecord> panels;
     std::vector<ResourceMeterRecord> meters;
@@ -193,8 +201,11 @@ struct Registry {
     std::vector<OccupantActionPanelRecord> occupantActionPanels;
     std::vector<BuildingOpenToggleRecord> buildingOpenToggles;
     std::vector<LiveAgentListRecord> liveAgentLists;
+    std::vector<PrivateRecruitmentRecord> privateRecruitments;
 
     void Clear();
+    const PrivateRecruitmentRecord* FindPrivateRecruitmentByParent(std::uint32_t id) const;
+    const PrivateRecruitmentRecord* FindPrivateRecruitmentByChild(std::uint32_t id) const;
     const OccupantActionPanelRecord* FindOccupantPanelByChild(std::uint32_t id) const;
     const OccupantActionPanelRecord* FindOccupantPanelByParent(std::uint32_t id) const;
     const OccupantActionPanelRecord* FindOccupantPanelByCommand(std::uint32_t id) const;
@@ -236,7 +247,7 @@ struct Registry {
         std::uint32_t privateMode) const;
 };
 
-// Parses manager-owned MMCR v2/v3/v4/v14/v15/v16 registries without Win32 or executable
+// Parses manager-owned MMCR v2/v3/v4/v14/v15/v16/v17 registries without Win32 or executable
 // dependencies.  Records are immutable alternatives for the existing stock-
 // shaped singleton sessions; the registry does not create per-mod controllers,
 // parallel AP99 owners, queued Rage commands, or parallel target sessions.

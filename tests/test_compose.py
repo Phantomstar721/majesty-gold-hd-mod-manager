@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from majesty_cam.art import (
+    analyze_art_archive,
     compute_stock_relative_delta,
     find_positional_collisions,
     parse_stock_imag_tile_references,
@@ -27,6 +28,7 @@ from majesty_cam.compose import (
     SelectedMod,
     _blank_positional_section,
     _build_manifest,
+    _compose_art_domain,
     _derive_runtime_capabilities,
     _discard_incomplete_staging,
     _effective_analysis_tile_entries,
@@ -59,6 +61,7 @@ from majesty_cam.compose import (
     validate_controller_stock_evidence,
 )
 from majesty_cam.gpl import GplProjectSourceSet, parse_gpl
+from majesty_cam.descriptions import parse_descriptions
 from majesty_cam.intent_text import PrivateActivityTextBinding
 from majesty_cam.package import (
     CamLoad,
@@ -178,6 +181,99 @@ def typed_cursor_entry(set_id, tile_indices):
 
 def typed_imag_set_payload(tile_indices):
     return _split_imag_sets(typed_cursor_entry(1, tile_indices))[1][0][1]
+
+
+class DescriptionFieldCompositionTests(unittest.TestCase):
+    def test_source_description_merge_uses_stock_without_emitting_the_stock_document(self):
+        base = ('<Description type="Action" ID="TEST"><Engine><Script GPLFunction="effect"/></Engine>'
+                '<Game><ValidationScript value="stock_check"/></Game></Description>')
+        stock = parse_descriptions('<Majesty>' + base +
+            '<Description type="Unit" ID="UNSELECTED"/></Majesty>')
+        sound = base.replace('<Script ', '<Sound value="sound"/><Script ')
+        gate = base.replace('stock_check', 'private_check')
+        with TemporaryDirectory() as tmp:
+            inventories = []
+            for owner, record in (("sound", sound), ("gate", gate)):
+                path = Path(tmp) / (owner + ".xml")
+                path.write_text("<Majesty>" + record + "</Majesty>", encoding="utf-8")
+                inventories.append(SimpleNamespace(
+                    selected=SimpleNamespace(alias=owner, package=SimpleNamespace(
+                        definition=SimpleNamespace(schema_version=3, custom_buildings=()))),
+                    descriptions=(path,)))
+            result = merge_description_resources(inventories, dialog_resolutions=(), stock_records=stock.index)
+        self.assertEqual([record.key for record in result.document.records], [("Action", "TEST")])
+        element = result.document.records[0].to_element()
+        self.assertEqual(element.find("./Engine/Sound").get("value"), "sound")
+        self.assertEqual(element.find("./Game/ValidationScript").get("value"), "private_check")
+        self.assertEqual(result.selections[0].owners, ("sound", "gate"))
+
+
+class MixedPaletteCompositionTests(unittest.TestCase):
+    @staticmethod
+    def tile(palette, marker):
+        payload = bytearray(27)
+        struct.pack_into("<HHH", payload, 0, 1, 1, 1)
+        struct.pack_into("<HI", payload, 20, int(palette is None),
+                         26 if palette is None else palette)
+        payload[26] = marker
+        return bytes(payload)
+
+    @staticmethod
+    def archive(key, tile_index, payload, palettes):
+        image = replace(typed_cursor_entry(1000, (tile_index,)), name=pad_name(key))
+        sections = [CamSection(b"IMAG", (image,)),
+                    positional(b"TILE", (b"",) * tile_index + (payload,))]
+        if palettes is not None:
+            sections.append(positional(b"SPLT", palettes))
+        return CamArchive(tuple(sections))
+
+    def test_empty_palette_owner_coexists_with_real_palette_relocation(self):
+        stock = self.archive(b"STOK", 0, self.tile(0, 1), (b"stock",))
+        inline = self.tile(None, 11)
+        # Same-stock, sparse fallthrough, and absent palette sections must all
+        # keep the inline-colored art intact alongside external palette users.
+        for palettes in ((b"stock",), (b"",), None):
+            for reverse in (False, True):
+                with self.subTest(palettes=palettes, reverse=reverse):
+                    mods = [
+                        ("unchanged", self.archive(b"INLN", 1, inline, palettes)),
+                        ("first", self.archive(b"EXT1", 2, self.tile(1, 22), (b"", b"first"))),
+                        ("second", self.archive(b"EXT2", 3, self.tile(1, 33), (b"", b"second"))),
+                    ]
+                    if reverse:
+                        mods.reverse()
+                    analyses = tuple(analyze_art_archive(stock, archive, mod_id=owner)
+                                     for owner, archive in mods)
+                    unchanged = next(item for item in analyses if item.mod_id == "unchanged")
+                    self.assertTrue(unchanged.palette_delta is None or not unchanged.palette_delta.changed_indices)
+                    providers = tuple((SimpleNamespace(selected=SimpleNamespace(alias=owner)),
+                                       Path(owner + ".cam"), archive) for owner, archive in mods)
+                    result = _compose_art_domain("fixture", "main", stock, providers, analyses)
+                    allocation = result.report.palette_allocation
+                    self.assertEqual({item.mod_id for item in allocation.ranges}, {"first", "second"})
+                    sections = {section.extension: section for section in result.archive.sections}
+                    self.assertEqual(sections[b"TILE"].entries[1].data, inline)
+                    self.assertEqual(sections[b"SPLT"].entries[0].data, b"stock")
+                    for owner, tile_index, marker in (("first", 2, 22), ("second", 3, 33)):
+                        mapping = allocation.mapping_for(owner)
+                        expected_index = mapping.get(1, 1)
+                        actual = sections[b"TILE"].entries[tile_index].data
+                        self.assertEqual(struct.unpack_from("<I", actual, 22)[0], expected_index)
+                        self.assertEqual(actual[:22] + actual[26:], self.tile(1, marker)[:22] + bytes((marker,)))
+                        self.assertEqual(sections[b"SPLT"].entries[expected_index].data, owner.encode())
+                    self.assertEqual({owner for owner, _ in result.report.palette_reports},
+                                     {"first" if reverse else "second"})
+
+    def test_only_unchanged_palettes_do_not_allocate_a_palette_table(self):
+        stock = self.archive(b"STOK", 0, self.tile(0, 1), (b"stock",))
+        inline = self.tile(None, 11)
+        archive = self.archive(b"INLN", 1, inline, (b"stock",))
+        analysis = analyze_art_archive(stock, archive, mod_id="unchanged")
+        providers = ((SimpleNamespace(selected=SimpleNamespace(alias="unchanged")), Path("fixture.cam"), archive),)
+        result = _compose_art_domain("fixture", "main", stock, providers, (analysis,))
+        self.assertIsNone(result.report.palette_allocation)
+        self.assertNotIn(b"SPLT", {section.extension for section in result.archive.sections})
+        self.assertEqual(next(section for section in result.archive.sections if section.extension == b"TILE").entries[1].data, inline)
 
 
 class SecondaryImagLayerOwnershipTests(unittest.TestCase):

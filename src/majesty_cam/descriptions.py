@@ -91,6 +91,7 @@ class DescriptionConflict:
     key: DescriptionKey
     stock: Optional[DescriptionRecord]
     candidates: Tuple[DescriptionCandidate, ...]
+    fields: Tuple[str, ...] = ()
 
     @property
     def owners(self) -> Tuple[str, ...]:
@@ -104,6 +105,7 @@ class DescriptionMergeConflict(ValueError):
         self.conflicts = tuple(conflicts)
         summary = "; ".join(
             f"{conflict.key!r}: {', '.join(conflict.owners)}"
+            + (f" (conflicting field: {', '.join(conflict.fields)})" if conflict.fields else "")
             for conflict in self.conflicts
         )
         super().__init__(f"conflicting Description changes: {summary}")
@@ -223,14 +225,18 @@ def merge_descriptions(
     *,
     transform: Optional[RecordTransform] = None,
     resolve: Optional[ConflictResolver] = None,
+    field_merge_stock: Optional[Mapping[DescriptionKey, DescriptionRecord]] = None,
 ) -> DescriptionMergeResult:
     """Merge any number of Description documents as additions/stock deltas.
 
     Omission from a variant means "no change"; it does not delete a stock
     record. Stock order is retained, replacements stay in their stock slot,
     and additions follow variant order then source order. Identical semantic
-    changes are co-owned. Divergent changes require ``resolve`` or raise a
-    :class:`DescriptionMergeConflict` containing structured candidates.
+    changes are co-owned. Independent fields can be combined against stock;
+    competing or ambiguous edits require ``resolve`` or raise a structured
+    :class:`DescriptionMergeConflict`. ``field_merge_stock`` supplies additional
+    baselines for conflict reconciliation only, without emitting those stock
+    records or changing sparse-output ownership.
 
     ``transform`` receives a fresh element and is applied only to variant
     records before delta calculation. It must return a ``Description`` with
@@ -305,17 +311,20 @@ def merge_descriptions(
 
         conflict = DescriptionConflict(
             key=key,
-            stock=stock_index.get(key),
+            stock=stock_index.get(key) or (field_merge_stock or {}).get(key),
             candidates=tuple(candidates),
         )
-        if resolve is None:
-            unresolved.append(conflict)
+        choice = resolve(conflict) if resolve is not None else None
+        if choice is not None:
+            selected[key] = _resolve_conflict(conflict, choice)
             continue
-        choice = resolve(conflict)
-        if choice is None:
-            unresolved.append(conflict)
-            continue
-        selected[key] = _resolve_conflict(conflict, choice)
+        if conflict.stock is not None:
+            try:
+                selected[key] = _merge_stock_fields(conflict)
+                continue
+            except _FieldConflict as exc:
+                conflict = DescriptionConflict(key, conflict.stock, tuple(candidates), (exc.path,))
+        unresolved.append(conflict)
 
     if unresolved:
         raise DescriptionMergeConflict(unresolved)
@@ -543,6 +552,116 @@ def _candidate_groups(
             order.append(fingerprint)
         groups[fingerprint].append(candidate)
     return tuple(tuple(groups[fingerprint]) for fingerprint in order)
+
+
+class _FieldConflict(Exception):
+    def __init__(self, path: str) -> None:
+        self.path = path
+
+
+def _field_value(stock, variants, path):
+    changes = set(value for value in variants if value != stock)
+    if len(changes) > 1:
+        raise _FieldConflict(path)
+    return next(iter(changes), stock)
+
+
+def _child_groups(children: Sequence[ET.Element]) -> Optional[dict[str, list[ET.Element]]]:
+    """Only contiguous repeated tags have an unambiguous group position."""
+    groups = {}
+    previous = None
+    for child in children:
+        if child.tag != previous and child.tag in groups:
+            return None
+        groups.setdefault(child.tag, []).append(child)
+        previous = child.tag
+    return groups
+
+
+def _merge_element_fields(
+    stock: ET.Element, variants: Sequence[ET.Element], path: str
+) -> ET.Element:
+    fingerprint = lambda element: _element_fingerprint(element, include_tail=False)
+    baseline = fingerprint(stock)
+    changed = {}
+    for item in variants:
+        key = fingerprint(item)
+        if key != baseline:
+            changed[key] = item
+    if not changed:
+        return deepcopy(stock)
+    if len(changed) == 1:
+        return deepcopy(next(iter(changed.values())))
+    result = ET.Element(stock.tag)
+    for name in sorted(set(stock.attrib).union(*(item.attrib for item in variants))):
+        value = _field_value(stock.get(name), (item.get(name) for item in variants), path + "/@" + name)
+        if value is not None:
+            result.set(name, value)
+    result.text = _field_value(_meaningful_text(stock.text),
+                               (_meaningful_text(item.text) for item in variants), path + "/text()")
+    rows = [tuple(child for child in item if child.tag is not ET.Comment) for item in (stock, *variants)]
+    row_keys = [tuple(_element_fingerprint(child) for child in row) for row in rows]
+    changed_rows = {key: row for key, row in zip(row_keys[1:], rows[1:]) if key != row_keys[0]}
+    if len(changed_rows) <= 1:
+        result.extend(deepcopy(next(iter(changed_rows.values()), rows[0])))
+        return result
+    # Mixed text and noncontiguous repeated tags have no unique field address.
+    # Leave their entire ordered child sequence atomic instead of guessing.
+    if (any(_meaningful_text(child.tail) is not None for row in rows for child in row)
+            or any(_meaningful_text(item.text) is not None for item in (stock, *variants))):
+        raise _FieldConflict(path + "/children()")
+    groups = [_child_groups(row) for row in rows]
+    if any(group is None for group in groups):
+        raise _FieldConflict(path + "/children()")
+    base, *incoming = groups
+    merged = {}
+    for tag in sorted(set(base).union(*(item for item in incoming))):
+        original = base.get(tag, [])
+        alternatives = [item.get(tag, []) for item in incoming]
+        field_path = path + "/" + tag
+        if len(original) == 1 and all(len(row) == 1 for row in alternatives):
+            merged[tag] = (_merge_element_fields(original[0], [row[0] for row in alternatives], field_path),)
+        else:
+            # Add/delete and repeated sibling groups are atomic. In particular,
+            # two different edits to a newly added subtree have no stock base.
+            original_key = tuple(fingerprint(child) for child in original)
+            choices = {tuple(fingerprint(child) for child in row): row for row in alternatives}
+            key = _field_value(original_key, choices, field_path)
+            chosen = choices.get(key, original)
+            if chosen:
+                merged[tag] = tuple(deepcopy(child) for child in chosen)
+    # Preserve the authored relative order. Combining insertions is safe only
+    # when the source constraints determine a unique order, without cycles.
+    predecessors = {tag: set() for tag in merged}
+    for group in groups:
+        order = [tag for tag in group if tag in merged]
+        for first, second in zip(order, order[1:]):
+            predecessors[second].add(first)
+    while predecessors:
+        ready = [tag for tag, before in predecessors.items() if not before]
+        if len(ready) != 1:
+            raise _FieldConflict(path + "/child-order()")
+        tag = ready[0]
+        result.extend(merged[tag])
+        del predecessors[tag]
+        for before in predecessors.values():
+            before.discard(tag)
+    return result
+
+
+def _merge_stock_fields(conflict: DescriptionConflict) -> DescriptionSelection:
+    assert conflict.stock is not None
+    stock = _record_from_element(conflict.stock.to_element(), conflict.stock.source_index, "stock field baseline")
+    if stock.key != conflict.key:
+        raise DescriptionFormatError(f"stock field baseline key {stock.key!r} does not match {conflict.key!r}")
+    element = _merge_element_fields(stock.to_element(),
+                                    [candidate.record.to_element() for candidate in conflict.candidates],
+                                    "Description")
+    record = _record_from_element(element, stock.source_index, "stock-relative field merge")
+    return DescriptionSelection(conflict.key, record, tuple(
+        candidate.owner for candidate in conflict.candidates
+        if candidate.record._fingerprint != stock._fingerprint
+    ))
 
 
 def _resolve_conflict(

@@ -11,11 +11,19 @@ import shutil
 import struct
 import subprocess
 import tempfile
-from typing import Iterable, Mapping, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 import uuid
 import xml.etree.ElementTree as ET
 
 from ._subprocess import no_console_window_options
+from .private_recruitment import (
+    PrivateRecruitmentError,
+    validate_descriptions as validate_private_recruitment_descriptions,
+    validate_resolved_descriptions as validate_resolved_recruitment_descriptions,
+    validate_panel as validate_private_recruitment_panel,
+    records as private_recruitment_records,
+    control_record as private_recruitment_control,
+)
 from .art import (
     ArtArchiveAnalysis,
     ArtFormatError,
@@ -33,6 +41,7 @@ from .art import (
     parse_best_imag_tile_references,
     parse_imag_tile_references,
     parse_stock_imag_tile_references,
+    parse_tile_palette_reference,
     rewrite_parsed_imag_entries,
     rewrite_stock_imag_entries,
     rewrite_tile_palette_indices,
@@ -56,6 +65,7 @@ from .gpl import (
     SemanticConflict,
     SemanticItem,
     SemanticMergeResult,
+    SemanticMergeConflictError,
     add_controlled_follower_movement_adjustments,
     add_hero_quest_lifecycle_callbacks,
     add_inventory_death_drop_exclusions,
@@ -71,7 +81,10 @@ from .gpl_features import (
     StockGplmxPurchaseBazaarTail,
     StockGplmxPurchaseEquipmentTail,
     StockHeroQuestLifecycle,
+    StockHeroQuestParticipant,
+    StockSpellEvaluationEquivalent,
 )
+from .private_hero_gpl import validate_bindings as validate_private_hero_bindings, add_spell_evaluation_equivalents
 from .shared_features import StockGameplayEventObserver, StockActivityDuration
 from .shared_composition import validate_shared_bindings, event_subscribers
 from .shared_features import shared_feature_mapping
@@ -134,6 +147,7 @@ from .stock_building_controllers import (
 from .stock_gpl import (
     StockGplError,
     load_verified_stock_semantic_sources,
+    load_stock_function_ancestors,
 )
 from .semantic_diff3 import join_logical_lines, split_logical_lines
 from .runtime_capabilities import (
@@ -154,6 +168,8 @@ from .runtime_features import (
     MAP_QUERY_RUNTIME_CAPABILITY,
     MovementQueryFeature,
     MOVEMENT_QUERY_RUNTIME_CAPABILITY,
+    NativeTimingFeature,
+    NATIVE_TIMING_RUNTIME_CAPABILITY,
     decode_runtime_feature_registry,
     derive_feature_runtime_capabilities,
     encode_runtime_feature_registry,
@@ -170,6 +186,8 @@ from .stock_controller_features import (
     StockMx09Ap41RewardPanel,
     StockMx04Mx05OccupantActionPanel,
     StockMx22BuildingOpenToggle,
+    StockAp52PrivateRecruitment,
+    StockAp52RecruitmentPanel,
     StockAp17UpgradeResearchGate,
     StockAp22ResourceMeter,
     StockAp24RageCommandAction,
@@ -451,6 +469,7 @@ class GplComposeResult:
         tuple[str, str, tuple[str, ...], str, str, str, str], ...
     ] = ()
     shared_services: tuple[dict, ...] = ()
+    function_instruction_merges: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1524,6 +1543,27 @@ def _load_stock_hero_quest_lifecycle_items(
     )
 
 
+def _private_hero_bindings(inventories):
+    packages = []
+    for inventory in inventories:
+        definition = getattr(getattr(inventory.selected, "package", None), "definition", None)
+        features = tuple(item for item in getattr(definition, "runtime_features", ())
+                         if isinstance(item, (StockHeroQuestParticipant, StockSpellEvaluationEquivalent)))
+        if features:
+            descriptions = [record.to_element() for path in inventory.descriptions
+                            for record in _parse_description_file(path).records]
+            packages.append((inventory.selected.alias, features, _parse_inventory_gpl_sources(inventory), descriptions))
+    try:
+        return validate_private_hero_bindings(packages)
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
+
+
+def _load_stock_spell_evaluation(game_path):
+    source = _parse_semantic_source_file(game_path / "SDK/OriginalQuests/GPLMx/DecisionTrees/Modules/mx_target_eval.gpl")
+    return source.require(DefinitionKind.FUNCTION, "spell_extra_value")
+
+
 def _shared_bindings(inventories: Sequence[PackageInventory]):
     packages = []
     for inventory in inventories:
@@ -2309,7 +2349,9 @@ def _compose_art_domain(
             palette_allocation.mapping_for(owner)
             if (
                 palette_allocation is not None
-                and analysis_by_owner[owner].palette_delta is not None
+                # Only owners with effective palette changes were allocated.
+                # A carried stock/empty palette section needs no remapping.
+                and owner in palette_deltas
             )
             else {}
         )
@@ -2563,7 +2605,7 @@ def _compose_art_domain(
         for inventory, _path, _archive in providers:
             owner = inventory.selected.alias
             analysis = analysis_by_owner[owner]
-            if analysis.palette_delta is None:
+            if owner not in palette_deltas:
                 continue
             mapping = palette_allocation.mapping_for(owner)
             for change in analysis.palette_delta.changes:
@@ -3229,6 +3271,7 @@ def merge_description_resources(
     reserved_description_keys: Iterable[DescriptionKey] = (),
     reserved_description_names: Iterable[str] = (),
     resolutions: Mapping[DescriptionKey, DescriptionRecord] | None = None,
+    stock_records: Mapping[DescriptionKey, DescriptionRecord] | None = None,
 ) -> DescriptionMergeResult:
     """Merge every XML Description and apply only declared building DialogIDs."""
 
@@ -3328,6 +3371,7 @@ def merge_description_resources(
         variants,
         transform=transform,
         resolve=resolve if requested_resolutions else None,
+        field_merge_stock=stock_records,
     )
     unused = set(requested_resolutions) - used_resolutions
     if unused:
@@ -3856,11 +3900,10 @@ def validate_controller_stock_evidence(
     )
     if not needs_stock_proof:
         return
+    stock_descriptions = _load_effective_stock_descriptions(game_path)
     stock_building_ids = tuple(
         key[1]
-        for key, (record, _source) in _load_effective_stock_descriptions(
-            game_path
-        ).items()
+        for key, (record, _source) in stock_descriptions.items()
         if record.to_element().get("subType") == "Building"
     )
     deltas = tuple(description_stock_deltas or analyze_description_stock_deltas(
@@ -3940,11 +3983,7 @@ def validate_controller_stock_evidence(
                 f"{item.qualified_panel_key!r}"
             )
         panel_owners[item.qualified_panel_key] = item.owner
-    registry_panel_keys = {
-        item.panel_key for item in (*registry.panels, *registry.reward_panels,
-                                    *registry.occupant_action_panels,
-                                    *registry.live_agent_lists)
-    }
+    registry_panel_keys = {item.panel_key for item in registry.child_panels}
     if registry_panel_keys != set(panel_owners):
         raise ComposeError(
             "controller stock evidence requires exact manager-owned panel "
@@ -4001,6 +4040,9 @@ def validate_controller_stock_evidence(
         inventories,
         registry,
         controller_toggles,
+    )
+    _validate_authored_private_recruitment(
+        game_path, inventories, registry, stock_descriptions=stock_descriptions
     )
 
     for row in runtime_feature_registry.enchantment_rows:
@@ -4158,6 +4200,9 @@ def _validate_authored_building_toggle_controls(
             resolved_by_key[toggle.qualified_toggle_key],
             owner=toggle.owner,
             panel_label=source_text,
+            private_art_validator=lambda key, set_id: _validate_private_ap10_button_art(
+                inventory, key, set_id
+            ),
         )
 
 
@@ -4167,6 +4212,7 @@ def _validate_mx22_toggle_controls(
     *,
     owner: str,
     panel_label: str,
+    private_art_validator: Callable[[bytes, int], None] | None = None,
 ) -> None:
     """Require one audited stock presentation for the MX22 toggle lifecycle."""
 
@@ -4240,18 +4286,19 @@ def _validate_mx22_toggle_controls(
     # building-panel button.  It is the stock presentation analogue for a
     # narrow parent-panel row where neither MX22's fixed-width art nor AP39's
     # shorter action control is visually suitable.  Rectangle, string
-    # indices, and the INBb image set are package-owned presentation; the
-    # command becomes manager data.  The INBb token and every other stock
-    # opcode, font/color value, and record boundary remain literal.
+    # indices, and the image set are package-owned presentation; the command
+    # becomes manager data. A private art token additionally requires proof
+    # of package ownership and literal INBb set-1009 state/frame topology.
+    # Every other stock opcode, font/color value and boundary remains literal.
     ap10_prefix = (
         0x00, 0x02,
-        None, None, None, None,  # package layout rectangle
+        None, None, 93, 26,      # package position, exact stock dimensions
         0x2A, 0x16, 0x04, 0x44, 0x12, 0x07,
         None,                   # package label STRT index
         0x21,
         None,                   # package tooltip STRT index
-        0x0A, 0x02, 0x0C, 0x62424E49, 0x0D,
-        None,                   # package-owned INBb image set
+        0x0A, 0x02, 0x0C, None, 0x0D,
+        None,                   # stock or validated package-owned image set
         0x14, 0x01, 0x14, 0x08, 0x14, 0x04,
         0x03, 0x02, 0x03, 0x400, 0x05, 0x53, 0x06,
     )
@@ -4260,8 +4307,8 @@ def _validate_mx22_toggle_controls(
         0x8000003F, 0x40000000, 0x40000000,
         0x00000102, 0x5A, 0x10A, 0x43, 0xFFFFFFFF,
     )
-    ap10_counts = tuple(
-        _count_stock_control_clones(
+    ap10_matches = tuple(
+        _stock_control_clone_prefixes(
             values,
             command=command,
             prefix=ap10_prefix,
@@ -4269,12 +4316,20 @@ def _validate_mx22_toggle_controls(
         )
         for command in (toggle.open_command_id, toggle.close_command_id)
     )
+    ap10_counts = tuple(len(matches) for matches in ap10_matches)
 
-    if (
-        mx22_counts == (1, 1)
-        or ap39_counts == (1, 1)
-        or ap10_counts == (1, 1)
-    ):
+    if mx22_counts == (1, 1) or ap39_counts == (1, 1):
+        return
+    if ap10_counts == (1, 1):
+        for matches in ap10_matches:
+            token, set_id = matches[0][18], matches[0][20]
+            if token == 0x62424E49:  # existing stock INBb presentation
+                continue
+            if private_art_validator is None:
+                raise ComposeError(
+                    f"{owner}: audited AP10 private artwork requires package-owned IMAG/TILE evidence"
+                )
+            private_art_validator(token.to_bytes(4, "little"), set_id)
         return
     raise ComposeError(
         f"{owner}: SMNU/{panel_label} must contain one coherent pair of "
@@ -4295,7 +4350,21 @@ def _count_stock_control_clones(
     suffix: Sequence[int],
     required_prefix_values: Sequence[tuple[int, int]] = (),
 ) -> int:
-    matches = 0
+    return len(_stock_control_clone_prefixes(
+        values, command=command, prefix=prefix, suffix=suffix,
+        required_prefix_values=required_prefix_values,
+    ))
+
+
+def _stock_control_clone_prefixes(
+    values: Sequence[int],
+    *,
+    command: int,
+    prefix: Sequence[int | None],
+    suffix: Sequence[int],
+    required_prefix_values: Sequence[tuple[int, int]] = (),
+) -> tuple[tuple[int, ...], ...]:
+    matches = []
     for index, value in enumerate(values):
         if (
             value != command
@@ -4313,8 +4382,74 @@ def _count_stock_control_clones(
             continue
         if tuple(values[index + 1:index + 1 + len(suffix)]) != tuple(suffix):
             continue
-        matches += 1
-    return matches
+        matches.append(tuple(candidate))
+    return tuple(matches)
+
+
+def _validate_private_ap10_button_art(
+    inventory: PackageInventory, image_key: bytes, set_id: int,
+) -> None:
+    """Prove a private INBb/1009 analogue using already loaded package data.
+
+    The audited stock set has seven states sharing four 93x26 TILEs. Erase only
+    their low-16 indices, preserving their one-to-one alias pattern; the hash
+    then pins all state order, flags, offsets, geometry and frame timing.
+    No stock CAM read, raster rewrite or runtime adaptation is needed here.
+    """
+    owner = inventory.selected.alias
+    label = f"{owner}: private AP10 IMAG/{_display_key(image_key)} set {set_id}"
+    images = [resource for resource in inventory.resources
+              if resource.owner == owner and resource.section == b"IMAG" and resource.key == image_key]
+    if len(images) != 1:
+        raise ComposeError(f"{label} requires exactly one package-owned IMAG; found {len(images)}")
+    image = images[0]
+    tiles = [resource for resource in inventory.resources
+             if resource.owner == owner and resource.section == b"TILE"
+             and resource.source == image.source and resource.cam_order == image.cam_order]
+    if not tiles or len({resource.section_order for resource in tiles}) != 1:
+        raise ComposeError(f"{label} requires one TILE table in the same package archive")
+    tile_entries = {resource.entry_order: resource.entry for resource in tiles}
+    if len(tile_entries) != len(tiles) or set(tile_entries) != set(range(len(tiles))):
+        raise ComposeError(f"{label} has an incomplete or ambiguous TILE table")
+    try:
+        header, sets = _split_imag_sets(image.entry)
+        if header != struct.pack("<5I", 4, 0, 0, 0, 0):
+            raise ComposeError(f"{label} changed the stock IMAG header")
+        start = _imag_set_start(image.entry, set_id)
+        payload = bytearray(dict(sets)[set_id])
+        parsed = parse_stock_imag_tile_references(
+            image.entry.data, tile_count=len(tiles), entry_name=image.entry.name,
+        )
+        aliases: dict[int, int] = {}
+        for reference in parsed.references:
+            if reference.set_id != set_id:
+                continue
+            aliases.setdefault(reference.tile_index, len(aliases))
+            struct.pack_into("<H", payload, reference.offset - start, aliases[reference.tile_index])
+        if (len(aliases) != 4 or hashlib.sha256(payload).hexdigest() !=
+                "41a49ed628ab6f8b573c7059ad44d0398e85b9519ac142768349b2b335a450b2"):
+            raise ComposeError(f"{label} must preserve stock INBb/1009 seven-state frame topology")
+        for index in aliases:
+            tile = tile_entries[index].data
+            # Stock INBb/1009 uses version-3 93x26 frames with a zero origin.
+            if tile[:20] != struct.pack("<10H", 3, 26, 93, 0, 0, 0, 0, 0, 0, 0):
+                raise ComposeError(f"{label} TILE {index} must carry a stock-shaped 93x26 frame")
+            palette = parse_tile_palette_reference(tile, tile_index=index)
+            if palette is None:
+                if struct.unpack_from("<I", tile, 22)[0] + 1032 > len(tile):
+                    raise ComposeError(f"{label} TILE {index} has a truncated embedded palette")
+            else:
+                matches = [resource for resource in inventory.resources
+                           if resource.owner == owner and resource.source == image.source
+                           and resource.cam_order == image.cam_order
+                           and resource.section in (b"PALT", b"SPLT")
+                           and resource.entry_order == palette.palette_index and resource.entry.data]
+                if len(matches) != 1:
+                    raise ComposeError(f"{label} TILE {index} lacks its package-owned palette")
+    except ComposeError:
+        raise
+    except (ArtFormatError, ValueError, struct.error) as exc:
+        raise ComposeError(f"{label}: {exc}") from exc
 
 
 def _owned_smnu_payload(
@@ -4348,12 +4483,7 @@ def _validate_controller_panel_controls(
 ) -> None:
     parent_values = _smnu_dword_values(parent_payload, owner, parent_label)
     child_values = _smnu_dword_values(child_payload, owner, child_label)
-    panel = next((
-        item for item in (*registry.panels, *registry.reward_panels,
-                          *registry.occupant_action_panels,
-                          *registry.live_agent_lists)
-        if item.panel_key == panel_key
-    ), None)
+    panel = next((item for item in registry.child_panels if item.panel_key == panel_key), None)
     if panel is None:  # pragma: no cover - registry/panel ownership equality guards it
         raise ComposeError(f"controller registry has no panel {panel_key!r}")
 
@@ -4361,6 +4491,10 @@ def _validate_controller_panel_controls(
         ("secondary-panel open_command_id", panel.open_command_id),
     ]
     child_requirements: list[tuple[str, int]] = []
+    if panel in registry.private_recruitments:
+        child_requirements.extend((f"AP52 recruitment control {value:#x}", value)
+            for value in (0x1388, 0x1389, 0x1F48, 0x1752, 0x1F51,
+                          panel.third_price_control_id, 0x1F56, 0x1F57, 0x1F4D))
     # These are the controls stored literally in stock SMNU/MX05.  Other
     # controls used by the MX05 constructor/command paths are created or
     # resolved by code and therefore cannot be required as package-authored
@@ -4491,6 +4625,7 @@ def merge_gpl_resources(
     private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
     stock_integer_expression_sources: Sequence[ParsedSemanticSource] = (),
     stock_semantic_sources: Sequence[ParsedSemanticSource] = (),
+    stock_function_loader: Callable[[tuple[str, ...]], Mapping[tuple[DefinitionKind, str], SemanticItem]] | None = None,
     stock_purchase_equipment_source: ParsedSemanticSource | None = None,
     stock_purchase_bazaar_source: ParsedSemanticSource | None = None,
     stock_control_monster: SemanticItem | None = None,
@@ -4500,6 +4635,7 @@ def merge_gpl_resources(
     stock_reset_tasks: SemanticItem | None = None,
     stock_unit_death: SemanticItem | None = None,
     stock_gameplay_event_items: Mapping[str, SemanticItem] | None = None,
+    stock_spell_evaluation: SemanticItem | None = None,
 ) -> GplComposeResult:
     parsed_by_owner: dict[str, list[ParsedSemanticSource]] = {}
     for inventory in inventories:
@@ -4757,8 +4893,35 @@ def merge_gpl_resources(
             # non-stock resolution which merely selects one lone Standard
             # change over package-carried stock ancestry remains native.
             required_patch_keys.add(key)
-    final = merge_sources([], parsed_by_owner, resolutions or None)
-    final.require_clean()
+    function_ancestors = dict(stock_items)
+    unresolved_functions = tuple(conflict.name for conflict in initial.conflicts
+        if conflict.key[0] is DefinitionKind.FUNCTION
+        and conflict.key not in resolutions and conflict.key not in function_ancestors)
+    if unresolved_functions and stock_function_loader is not None:
+        try:
+            function_ancestors.update(stock_function_loader(unresolved_functions))
+        except (OSError, StockGplError, ValueError) as exc:
+            raise ComposeError(f"Cannot compare conflicting scripts with stock: {exc}") from exc
+    final = merge_sources([], parsed_by_owner, resolutions or None,
+                          function_ancestors=function_ancestors)
+    if final.conflicts:
+        labels = {inventory.selected.alias: getattr(
+            getattr(inventory.selected, "package", None), "display_name", inventory.selected.alias)
+            for inventory in inventories}
+        message = str(SemanticMergeConflictError(final.conflicts))
+        for owner in sorted(labels, key=len, reverse=True):
+            message = message.replace(owner, labels[owner])
+        raise ComposeError(message)
+    instruction_merges = []
+    for conflict in initial.conflicts:
+        if conflict.key not in resolutions:
+            ancestor = function_ancestors[conflict.key]
+            instruction_merges.append({
+                "function": conflict.name,
+                "owners": [variant.side_name for variant in conflict.variants],
+                "stock_source": ancestor.source_name,
+                "stock_function_sha256": hashlib.sha256(ancestor.text.encode("utf-8")).hexdigest(),
+            })
     before_generated_features = {item.key: item.text for item in final.items}
     final = add_inventory_death_drop_exclusions(
         final,
@@ -4833,6 +4996,7 @@ def merge_gpl_resources(
             )
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
+    private_trees, spell_equivalents = _private_hero_bindings(inventories)
     if hero_quest_hooks:
         if stock_hero_trees is None:
             raise ComposeError(
@@ -4852,10 +5016,16 @@ def merge_gpl_resources(
                     for item in hero_quest_hooks
                 ),
                 stock_hero_trees=stock_hero_trees,
+                private_hero_trees=private_trees,
                 stock_reset_tasks=stock_reset_tasks,
                 stock_unit_death=stock_unit_death,
                 source_name="<CAM Manager stock hero-quest lifecycle composition>",
             )
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+    if spell_equivalents:
+        try:
+            final = add_spell_evaluation_equivalents(final, spell_equivalents, stock_spell_evaluation)
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
     shared = _shared_bindings(inventories)
@@ -4924,6 +5094,7 @@ def merge_gpl_resources(
             {"source_mod_id": binding.mod_id, **shared_feature_mapping(binding.feature)}
             for binding in shared
         ),
+        function_instruction_merges=tuple(instruction_merges),
     )
 
 
@@ -4982,6 +5153,13 @@ def validate_gpl_feature_evidence(
 ) -> tuple[GplFeatureEvidence, ...]:
     """Validate and deterministically order source-composed GPL callbacks."""
 
+    private_trees, spell_equivalents = _private_hero_bindings(inventories)
+    if spell_equivalents and game_path is not None:
+        try:
+            add_spell_evaluation_equivalents(SemanticMergeResult((), ()), spell_equivalents,
+                                            _load_stock_spell_evaluation(game_path))
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
     shared = _shared_bindings(inventories)
     events = event_subscribers(shared)
     if shared:
@@ -5252,6 +5430,7 @@ def validate_gpl_feature_evidence(
         initial = merge_sources([], parsed_by_owner)
         protected = {
             "reset_tasks", "unit_call_deathscript",
+            *private_trees,
             *(item.resume_callback_symbol.casefold() for item in hero_quest),
             *(item.consider_callback_symbol.casefold() for item in hero_quest),
             *(item.reset_callback_symbol.casefold() for item in hero_quest),
@@ -5286,6 +5465,7 @@ def validate_gpl_feature_evidence(
                     for item in hero_quest
                 ),
                 stock_hero_trees=trees,
+                private_hero_trees=private_trees,
                 stock_reset_tasks=reset_item,
                 stock_unit_death=death_item,
             )
@@ -5554,7 +5734,7 @@ def resolve_runtime_feature_registry(
             *(
                 feature
                 for feature in definition.runtime_features
-                if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature))
+                if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature))
             ),
             *legacy_runtime_features(definition.runtime_capabilities),
         )
@@ -5611,6 +5791,16 @@ def resolve_runtime_feature_registry(
     for owner, feature in claims:
         if isinstance(feature, (MapFogQueryFeature, MovementQueryFeature)):
             # This is one shared read-only interface, not a resource claim.
+            continue
+        if isinstance(feature, NativeTimingFeature):
+            for kind, values in (("timing-spell", feature.spell_ids),
+                                 ("timing-effector", feature.effector_ids)):
+                for value in values:
+                    key = (kind, value)
+                    prior = owners.get(key)
+                    if prior is not None and prior[0] != owner:
+                        raise ComposeError(f"native timing resource {value!r} is claimed by both {prior[0]} and {owner}")
+                    owners[key] = (owner, feature)
             continue
         if isinstance(feature, NameGeneratorFeature):
             key = ("name-generator", feature.generator_id)
@@ -5688,13 +5878,44 @@ def _runtime_feature_evidence_errors(
 ) -> tuple[str, ...]:
     if isinstance(feature, (MapFogQueryFeature, MovementQueryFeature)):
         return ()
+    if isinstance(feature, NativeTimingFeature) and not (feature.spell_ids or feature.effector_ids):
+        return ()
     errors: list[str] = []
     description_elements: list[ET.Element] = []
     for path in inventory.descriptions:
         document = _parse_description_file(path)
         description_elements.extend(record.to_element() for record in document.records)
 
-    if isinstance(feature, NameGeneratorFeature):
+    if isinstance(feature, NativeTimingFeature):
+        for kind, values, resource_type, subtype in (
+            ("spell", feature.spell_ids, "Action", "Standard"),
+            ("effector", feature.effector_ids, "Unit", "Overlay"),
+        ):
+            for value in values:
+                matches = [element for element in description_elements
+                           if element.get("ID") == value and element.get("type") == resource_type
+                           and element.get("subType") == subtype]
+                if len(matches) != 1:
+                    errors.append(f"native timing {kind} {value} requires exactly one package-owned {resource_type}/{subtype} Description")
+                    continue
+                name = matches[0].get("Name", "")
+                if not name or sum(element.get("type") == resource_type and
+                                   element.get("Name", "").casefold() == name.casefold()
+                                   for element in description_elements) != 1:
+                    errors.append(f"native timing {kind} {value} requires an unambiguous Description Name")
+                if kind == "spell":
+                    flag_fields = matches[0].findall("./Game/Flags")
+                    timeout_fields = matches[0].findall("./Game/TimeoutDuration")
+                    if len(matches[0].findall("Game")) != 1 or len(flag_fields) != 1 or len(timeout_fields) != 1:
+                        errors.append(f"native timing spell {value} requires one unambiguous Game/Flags and Game/TimeoutDuration")
+                        continue
+                    flags, timeout = flag_fields[0], timeout_fields[0]
+                    raw_timeout = "" if timeout is None else timeout.get("value", "")
+                    if flags is None or "IsSpell" not in re.split(r"[\s|,]+", flags.get("value", "")):
+                        errors.append(f"native timing spell {value} must declare Game/Flags IsSpell")
+                    if re.fullmatch(r"[0-9]{1,10}", raw_timeout) is None or int(raw_timeout) > 0x7FFFFFFF:
+                        errors.append(f"native timing spell {value} must declare a nonnegative signed-32-bit TimeoutDuration")
+    elif isinstance(feature, NameGeneratorFeature):
         for table in feature.name_part_ids:
             key = table.encode("ascii")
             matches = [
@@ -5826,10 +6047,12 @@ def resolve_controller_registry(
     qualified: list[ControllerFeature] = []
     mappings: dict[tuple[str, str, str], ControllerKeyMapping] = {}
     qualified_origins: dict[str, tuple[str, str]] = {}
-    panel_types = (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
+    panel_types = (StockAp52RecruitmentPanel, StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
                    StockMx04Mx05OccupantActionPanel, StockMx05LiveAgentListPanel)
     raw_panels: dict[str, tuple[PackageInventory, ControllerFeature]] = {}
     raw_toggles: dict[str, tuple[PackageInventory, StockMx22BuildingOpenToggle]] = {}
+    raw_recruitments: dict[str, tuple[PackageInventory, StockAp52PrivateRecruitment]] = {}
+    recruitment_parents: dict[str, int] = {}
     flag_prototypes: dict[str, str] = {}
     list_text_ids: dict[str, LiveAgentListTextIds] = {}
     list_private_texts: list[PrivateLiteralTextRecord] = []
@@ -5858,6 +6081,8 @@ def resolve_controller_registry(
 
         resolved_feature = _qualify_controller_feature(feature, qualify)
         qualified.append(resolved_feature)
+        if isinstance(feature, StockAp52PrivateRecruitment):
+            raw_recruitments[resolved_feature.panel_key] = (inventory, feature)
         if isinstance(feature, panel_types):
             raw_panels[resolved_feature.panel_key] = (inventory, feature)
             if isinstance(feature, StockMx05LiveAgentListPanel):
@@ -5924,6 +6149,8 @@ def resolve_controller_registry(
                     for runtime_id, (_field, text) in zip(pair, fields)
                     if runtime_id != 0 and text is not None
                 )
+        elif isinstance(feature, StockAp52PrivateRecruitment):
+            raw_recruitments[resolved_feature.panel_key] = (inventory, feature)
         elif isinstance(feature, StockMx22BuildingOpenToggle):
             raw_toggles[resolved_feature.toggle_key] = (inventory, feature)
         elif isinstance(feature, StockAp41Fl00HostileMonsterFlag):
@@ -6061,6 +6288,13 @@ def resolve_controller_registry(
             )
         )
     for feature in normalized:
+        if isinstance(feature, StockAp52PrivateRecruitment):
+            inventory, raw = raw_recruitments[feature.panel_key]
+            parent = building_by_owner.get((inventory.selected.alias, raw.parent_building))
+            if parent is None:
+                raise ComposeError(f"{inventory.selected.alias}: private recruitment parent is not declared")
+            recruitment_parents[feature.panel_key] = int.from_bytes(parent.resolved_dialog_id, "little")
+            continue
         if not isinstance(feature, StockMx22BuildingOpenToggle):
             continue
         inventory, raw = raw_toggles[feature.toggle_key]
@@ -6093,6 +6327,7 @@ def resolve_controller_registry(
             occupant_parent_bases=occupant_parent_bases,
             toggle_parents=toggle_parents,
             list_text_ids=list_text_ids,
+            recruitment_parents=recruitment_parents,
         )
     except ControllerRegistryError as exc:
         raise ComposeError(f"resolved controller registry is unsafe: {exc}") from exc
@@ -6118,6 +6353,7 @@ def resolve_controller_registry(
 
 
 _CONTROLLER_FEATURE_CLASSES = (
+    StockAp52PrivateRecruitment,
     StockMx05LiveAgentListPanel,
     StockMx04Mx05OccupantActionPanel,
     StockMx22BuildingOpenToggle,
@@ -6166,7 +6402,7 @@ def _qualify_controller_feature(feature: ControllerFeature, qualify) -> Controll
             parent_building=qualify("parent_building", feature.parent_building),
         )
     panel = qualify("panel", feature.panel_key)
-    if isinstance(feature, StockAp10Ap69SecondaryPanel):
+    if isinstance(feature, (StockAp10Ap69SecondaryPanel, StockAp52PrivateRecruitment)):
         return replace(
             feature,
             panel_key=panel,
@@ -6227,6 +6463,66 @@ def _qualify_controller_feature(feature: ControllerFeature, qualify) -> Controll
     raise ComposeError(f"unsupported controller feature: {feature!r}")
 
 
+def _require_private_recruitment_descriptions(inventory, feature, descriptions):
+    try:
+        return validate_private_recruitment_descriptions(descriptions, feature.parent_building)
+    except PrivateRecruitmentError as exc:
+        raise ComposeError(f"{inventory.selected.alias}: {exc}") from exc
+
+
+def _validate_authored_private_recruitment(game_path, inventories, registry, *, stock_descriptions=None):
+    if not registry.private_recruitments:
+        return
+    resolved = {item.panel_key: item for item in registry.private_recruitments}
+    proved = set()
+    stock_path = game_path / "Data" / "textdata.cam"
+    archive = read_cam(stock_path)
+    templates = {}
+    for key in (b"AP52", b"AP53", b"AP10", b"AP69"):
+        matches = [entry.data for section in archive.sections if section.extension == b"SMNU"
+                   for entry in section.entries if entry.name[:4] == key]
+        if len(matches) != 1:
+            raise ComposeError(f"private recruitment requires one stock SMNU/{key.decode()}")
+        templates[key] = matches[0]
+    if stock_descriptions is None:
+        stock_descriptions = _load_effective_stock_descriptions(game_path)
+    stock_characters = {element.get("Name") for record, _ in stock_descriptions.values()
+                        for element in (record.to_element(),) if element.get("subType") == "Character"}
+    for inventory in inventories:
+        definition = inventory.selected.package.definition
+        if definition is None:
+            continue
+        features = [item for item in definition.runtime_features if isinstance(item, StockAp52PrivateRecruitment)]
+        if not features:
+            continue
+        descriptions = [record.to_element() for path in inventory.descriptions
+                        for record in _parse_description_file(path).records]
+        characters = set(stock_characters)
+        characters.update(record.get("Name") for record in descriptions if record.get("subType") == "Character")
+        for feature in features:
+            key = _qualified_controller_key(_normalized_mod_uuid(inventory.selected.package.mod_id), feature.panel_key)
+            if key not in resolved or key in proved or resolved[key].third_price_control_id != feature.third_price_control_id:
+                raise ComposeError("private recruitment registry does not match package-owned declarations")
+            chain = _require_private_recruitment_descriptions(inventory, feature, descriptions)
+            choices = [item.get("ID") for item in chain[0].findall("./Game/Produces/Unit")]
+            if any(choice not in characters for choice in choices):
+                raise ComposeError(f"{inventory.selected.alias}: private recruitment Produces references an unknown Character")
+            source = chain[0].find("./Game/DialogID").get("value").encode("ascii")
+            payload = _owned_smnu_payload(inventory, source, "private recruitment parent")
+            try:
+                if isinstance(feature, StockAp52RecruitmentPanel):
+                    from .private_recruitment import validate_secondary_panel
+                    child = _owned_smnu_payload(inventory, feature.source_dialog_id.encode("ascii"), "recruitment child")
+                    validate_secondary_panel(payload, child, templates, feature.third_price_control_id, feature.open_command_id)
+                else:
+                    validate_private_recruitment_panel(payload, templates[b"AP52"], templates[b"AP53"], feature.third_price_control_id)
+            except PrivateRecruitmentError as exc:
+                raise ComposeError(f"{inventory.selected.alias}: {exc}") from exc
+            proved.add(key)
+    if proved != set(resolved):
+        raise ComposeError("private recruitment registry lacks package ownership evidence")
+
+
 def _require_controller_feature_evidence(
     inventory: PackageInventory,
     features: Sequence[ControllerFeature],
@@ -6243,7 +6539,8 @@ def _require_controller_feature_evidence(
         document = _parse_description_file(path)
         descriptions.extend(record.to_element() for record in document.records)
     gpl_functions: dict[str, list[str]] = {}
-    callback_sources = _parse_inventory_gpl_sources(inventory)
+    callback_sources = () if all(isinstance(feature, (StockAp52PrivateRecruitment, StockMx22BuildingOpenToggle))
+                                 for feature in normalized) else _parse_inventory_gpl_sources(inventory)
     for source in callback_sources:
         for item in source.items:
             if item.kind is DefinitionKind.FUNCTION:
@@ -6257,7 +6554,17 @@ def _require_controller_feature_evidence(
         item.local_name: item for item in definition.custom_buildings
     }
     for feature in normalized:
-        if isinstance(feature, StockMx22BuildingOpenToggle):
+        if isinstance(feature, StockAp52PrivateRecruitment):
+            parent = declared_buildings.get(feature.parent_building)
+            if parent is None or (parent.controller_base, parent.panel_resource_template) != ("AP52", "AP52"):
+                raise ComposeError("private recruitment requires a declared AP52 building and AP52 template")
+            _require_private_recruitment_descriptions(inventory, feature, descriptions)
+            if isinstance(feature, StockAp52RecruitmentPanel):
+                source = feature.source_dialog_id.encode("ascii")
+                for section in (b"SMNU", b"STRT"):
+                    if sum(resource.section == section and resource.key == source for resource in inventory.resources) != 1:
+                        raise ComposeError("recruitment child requires exactly one package-owned SMNU/STRT pair")
+        elif isinstance(feature, StockMx22BuildingOpenToggle):
             parent = declared_buildings.get(feature.parent_building)
             if parent is None:
                 raise ComposeError(
@@ -6541,7 +6848,7 @@ def _require_v3_panel_declaration_completeness(
     for feature in controller_features:
         if isinstance(feature, (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
                                 StockMx04Mx05OccupantActionPanel,
-                                StockMx05LiveAgentListPanel)):
+                                StockMx05LiveAgentListPanel, StockAp52RecruitmentPanel)):
             declare(
                 feature.source_dialog_id.encode("ascii"),
                 f"secondary panel {feature.panel_key!r}",
@@ -6610,6 +6917,7 @@ def prepare_final_gpl_resources(
         inventory_death_drop_exclusions=inventory_death_drop_exclusions,
         private_activity_texts=private_activity_texts,
         stock_semantic_sources=stock_semantic_sources,
+        stock_function_loader=lambda names: load_stock_function_ancestors(game_path, names),
         stock_integer_expression_sources=(
             (_load_stock_activity_text_expression_source(game_path),)
             if private_activity_texts
@@ -6633,6 +6941,11 @@ def prepare_final_gpl_resources(
         stock_unit_death=hero_quest_stock_items[2],
         stock_gameplay_event_items=(
             _load_stock_gameplay_event_items(game_path, events) if events else {}),
+        stock_spell_evaluation=(
+            _load_stock_spell_evaluation(game_path)
+            if any(isinstance(feature, StockSpellEvaluationEquivalent)
+                   for inventory in inventories for feature in inventory.selected.package.definition.runtime_features)
+            else None),
     )
 
 
@@ -6814,9 +7127,13 @@ def compose_package(
             key=str.casefold,
         )
     )
+    stock_description_records = {
+        key: value[0]
+        for key, value in _load_effective_stock_descriptions(game_path).items()
+    }
     stock_description_keys = (
         tuple(
-            set(_load_effective_stock_descriptions(game_path))
+            set(stock_description_records)
             | set(reserved_description_keys)
         )
         if controlled_follower_markers
@@ -6829,14 +7146,12 @@ def compose_package(
         reserved_description_keys=stock_description_keys,
         reserved_description_names=reserved_description_names,
         resolutions=description_resolutions,
+        stock_records=stock_description_records,
     )
     descriptions = filter_passthrough_descriptions(
         descriptions,
         inventories,
-        stock_records={
-            key: value[0]
-            for key, value in _load_effective_stock_descriptions(game_path).items()
-        },
+        stock_records=stock_description_records,
         forced_keys=(description_resolutions or {}),
     )
     strings = merge_string_resources(
@@ -7029,6 +7344,7 @@ def _controller_record_count(registry: ResolvedControllerRegistry) -> int:
             registry.hostile_monster_flags,
             registry.building_open_toggles,
             registry.live_agent_lists,
+            registry.private_recruitments,
         )
     )
 
@@ -7352,6 +7668,8 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
         raise ComposeError("generated map-query registry and MMCP hook selection disagree")
     if runtime_features.movement_query != (MOVEMENT_QUERY_RUNTIME_CAPABILITY in runtime_capabilities):
         raise ComposeError("generated movement-query registry and MMCP hook selection disagree")
+    if (runtime_features.native_timing is not None) != (NATIVE_TIMING_RUNTIME_CAPABILITY in runtime_capabilities):
+        raise ComposeError("generated native-timing registry and MMCP hook selection disagree")
     controller_path = root / CONTROLLER_REGISTRY_RELATIVE_PATH
     if not controller_path.is_file():
         raise ComposeError(
@@ -7516,6 +7834,33 @@ def _validate_generated_runtime_evidence(
         document = _parse_description_file(path)
         descriptions.extend(record.to_element() for record in document.records)
 
+    for recruitment in controller_registry.private_recruitments:
+        parent = recruitment.parent_dialog_id.to_bytes(4, "little")
+        if parent not in building_dialogs:
+            raise ComposeError("generated private recruitment parent has no building owner")
+        try:
+            chain = validate_resolved_recruitment_descriptions(descriptions, parent.decode("ascii"))
+            if chain[0].find("./Game/DialogID").get("value").encode("ascii") != parent:
+                raise PrivateRecruitmentError("generated private recruitment parent mapping disagrees")
+            panel = private_recruitment_records(_owned_smnu_payload(inventory, parent, "generated private recruitment"))
+            for control in (0x1F48, 0x1389, 0x1388, 0x1752, 0x1F51,
+                            recruitment.third_price_control_id, 0x1F1B, 0x1F0D,
+                            0x1F1C, 0x1F19, 0x1F52, 0x1F1A, 0x1F56, 0x1F57,
+                            0x1E28, 0x1F47, 0x1F4F):
+                private_recruitment_control(panel, control)
+            if recruitment.child_dialog_id:
+                child = recruitment.child_dialog_id.to_bytes(4, "little")
+                if child in building_dialogs:
+                    raise PrivateRecruitmentError("generated recruitment child overlaps a building panel")
+                _require_generated_dialog_pair(inventory, child, "recruitment child")
+                private_recruitment_control(panel, recruitment.open_command_id)
+                sub = private_recruitment_records(_owned_smnu_payload(inventory, child, "generated recruitment child"))
+                for control in (0x1F48, 0x1389, 0x1388, 0x1752, 0x1F51,
+                                recruitment.third_price_control_id, 0x1F56, 0x1F57, 0x1F4D):
+                    private_recruitment_control(sub, control)
+        except PrivateRecruitmentError as exc:
+            raise ComposeError(str(exc)) from exc
+
     gpl_functions: dict[str, int] = {}
     gpl_function_texts: dict[str, str] = {}
     for source in _parse_inventory_gpl_sources(inventory):
@@ -7663,6 +8008,9 @@ def _validate_generated_runtime_evidence(
             toggle,
             owner="generated",
             panel_label=_display_key(parent),
+            private_art_validator=lambda key, set_id: _validate_private_ap10_button_art(
+                inventory, key, set_id
+            ),
         )
     callbacks = (
         *controller_registry.timed_rage_actions,
@@ -7930,6 +8278,10 @@ def _build_report(
                 ),
                 "map_fog_query": runtime_feature_registry.map_fog_query,
                 "movement_query": runtime_feature_registry.movement_query,
+                "native_timing": None if runtime_feature_registry.native_timing is None else {
+                    "spell_ids": list(runtime_feature_registry.native_timing.spell_ids),
+                    "effector_ids": list(runtime_feature_registry.native_timing.effector_ids),
+                },
             },
             "controller_registry": {
                 "path": CONTROLLER_REGISTRY_RELATIVE_PATH.as_posix(),
@@ -8087,6 +8439,7 @@ def _build_report(
                 for selection in sound_selections
             ],
             "gpl": {
+                "instruction_merges": list(gpl.function_instruction_merges),
                 "conflicts": [
                     {
                         "kind": conflict.key[0].value,

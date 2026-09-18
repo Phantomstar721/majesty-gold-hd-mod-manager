@@ -17,12 +17,52 @@ from majesty_cam.stock_gpl import (
     STOCK_GPL_RUNTIME_PAIRS,
     StockGplError,
     clear_stock_gpl_cache,
+    load_stock_function_ancestors,
     snapshot_stock_gpl_inputs,
     verify_stock_gpl,
 )
 
 
 _PROJECT_ROW = re.compile(r'\s*(?:source|data)\s*=\s*"([^"]+)"\s*')
+
+
+class StockFunctionAncestorTests(unittest.TestCase):
+    def test_lazy_lookup_uses_effective_project_order_without_compilation(self):
+        with TemporaryDirectory() as tmp:
+            game, _, sources = _stock_game(Path(tmp))
+            with patch('majesty_cam.stock_gpl.subprocess.run', side_effect=AssertionError('no compiler')):
+                result = load_stock_function_ancestors(game, ('Shared',))
+            self.assertEqual(len(result), 1)
+            self.assertIn('Result = 6', next(iter(result.values())).text)
+            self.assertEqual(load_stock_function_ancestors(game, ('Absent',)), {})
+            self.assertEqual(load_stock_function_ancestors(Path('missing-game'), ()), {})
+
+    def test_changed_source_and_project_are_not_hidden_by_cache(self):
+        with TemporaryDirectory() as tmp:
+            game, _, sources = _stock_game(Path(tmp))
+            load_stock_function_ancestors(game, ('Shared',))
+            sources[-1].write_text(_function(9), encoding='cp1252')
+            self.assertIn('Result = 9', next(iter(load_stock_function_ancestors(game, ('Shared',)).values())).text)
+            project = game / 'SDK/OriginalQuests' / STOCK_GPL_RUNTIME_PAIRS[-1].project_relative
+            project.write_text('source="source_5.gpl"\n', encoding='cp1252')
+            self.assertIn('Result = 5', next(iter(load_stock_function_ancestors(game, ('Shared',)).values())).text)
+
+    def test_unsafe_paths_unknown_load_order_and_unparsed_ancestor_are_rejected(self):
+        with TemporaryDirectory() as tmp:
+            game, _, sources = _stock_game(Path(tmp))
+            project = game / 'SDK/OriginalQuests' / STOCK_GPL_RUNTIME_PAIRS[-1].project_relative
+            original = project.read_text()
+            project.write_text('source="../outside.gpl"\n', encoding='cp1252')
+            with self.assertRaisesRegex(StockGplError, 'safe relative path'):
+                load_stock_function_ancestors(game, ('Shared',))
+            project.write_text(original, encoding='cp1252')
+            sources[-1].write_text('unsupported directive\n' + _function(6), encoding='cp1252')
+            with self.assertRaisesRegex(ValueError, 'unparsed'):
+                load_stock_function_ancestors(game, ('Shared',))
+            manifest = game / 'Data/MajestyDatasetDefinitions.xml'
+            manifest.write_text(manifest.read_text().replace('Bytecode.bcd', 'Other.bcd'),encoding='utf-8')
+            with self.assertRaisesRegex(StockGplError, 'load order'):
+                load_stock_function_ancestors(game, ('Shared',))
 
 
 class _FakeCompiler:

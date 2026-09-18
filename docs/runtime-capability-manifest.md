@@ -1,5 +1,12 @@
 # Mod Manager runtime registries
 
+MMCR v18 adds optional child DialogID/opener fields to private recruitment
+records; inline-only recruitment stays v17. The child retains AP52's native
+17-slot class and uses stock secondary-container layout and Back ownership.
+See [private AP52 recruitment](stock-ap52-private-recruitment.md).
+The [private hero source recipes](private-hero-integration.md) emit GPL only;
+they add no runtime hook or registry record.
+
 The injected runtime does not infer native behavior from package names, mod
 UUIDs, or the presence of individual CAM resources. For every launch, the Mod
 Manager generates three deterministic files:
@@ -7,7 +14,8 @@ Manager generates three deterministic files:
 - `DataMX/majesty_mod_manager_capabilities.bin` (`MMCP`) selects the runtime
   hook groups needed by the composed package.
 - `DataMX/majesty_mod_manager_features.bin` (`MMFR`) supplies the validated
-  private name-generator and AP78-row records, plus optional read-only query flags.
+  private name-generator and AP78-row records, optional query flags and declared
+  resources for native timing services.
 - `DataMX/majesty_mod_manager_controllers.bin` (`MMCR`) supplies the validated,
   manager-resolved recipes for the supported stock controller lifecycles.
 
@@ -59,6 +67,7 @@ DLL therefore cannot silently run a package that needs a newer hook.
 | `stock.controller-recipes.v1` | Requires at least one resolved MMCR recipe and installs only the stock-controller hook groups selected by those records. |
 | `stock.map-fog-query.v1` | Requires the MMFR map-query flag and registers read-only, bounded native GPL map queries. |
 | `stock.movement-query.v1` | Requires the MMFR movement-query flag and registers read-only native unit/description locomotion queries. |
+| `stock.native-timing.v1` | Requires MMFR v3 timing selection and registers the stock clock, read-only movement/action base periods, declared effector-time queries and learned-spell cooldown commits. |
 
 The manager derives these data-driven capability names from the generated
 registries. A package cannot enable one merely by copying the capability string
@@ -74,7 +83,7 @@ same generic records described below and emits only the canonical generic MMCP
 capabilities. New packages describe typed runtime features instead of using
 these aliases.
 
-## MMFR v1-v2
+## MMFR v1-v3
 
 MMFR is an immutable, data-only registry. It cannot carry a DLL, path, RVA,
 patch byte, callback, or instruction.
@@ -123,6 +132,16 @@ unit rates, named-description rates, and failure values. Both features share one
 stock GPL registration adapter; movement-only use does not enable map queries
 or modify stock PathCost.
 
+MMFR v3 is emitted only for `stock.native-timing.v1`. It retains the v2 layout,
+requires flag bit 2, and appends two resource families after the AP78 rows:
+`u32 spell_count`, that many `u32` action FourCCs, then `u32 effector_count`
+and that many overlay FourCCs. Each family is strictly numerically increasing,
+unique and limited to 1024 printable FourCCs. Empty families select clock and
+read-only base-period support. Bits above 2, missing bit 2 in v3, truncation and trailing bytes fail
+closed. V1/v2 output is unchanged when timing is unselected. The native timing
+interface shares the same single GPL registration adapter; it adds no scheduler
+or background work. See [native timing](stock-native-timing.md).
+
 ## MMCR controller recipes
 
 MMCR is likewise manager-owned and data-only. Its path is supplied through
@@ -149,7 +168,8 @@ counts in this order:
 12. MX05 live-agent-list panels with bounded static row variants, an optional
     post-action stay-on-panel policy, and an optional row-click focus policy
     (v14), plus optional parent-scoped actions (v15), or independent data-record
-    rows (v16).
+    rows (v16); and
+13. AP52 private three-choice recruitment presenters (v17).
 
 The writer retains canonical v2 when neither newer section is needed, uses v3
 when occupant panels are present, and uses v4 when building toggles are
@@ -158,7 +178,11 @@ a list that requests parent action scope uses v15. Independent data-record
 lists use v16, which adds a boolean `u32` record-row flag after each list's
 action-scope field. They require explicit titles, parent-scoped actions,
 stay-on-panel behavior, and no world refocus; their keys never resolve as Units.
-Other list recipes retain their existing versions. A newer-version header with
+Private AP52 recruitment uses v17 with a thirteenth section count. Each record
+stores its qualified panel key, resolved parent dialog ID and private third
+price control ID. Hero choices, prices, capacity and upgrades are not duplicated
+in MMCR; they remain in the native descriptions.
+Other recipes retain their existing versions. A newer-version header with
 an empty final section is noncanonical.
 
 Records are deterministically sorted within their section and refer to an

@@ -21,6 +21,7 @@
 #include "RuntimeFeatureRegistry.h"
 #include "StockBuildingControllerCatalog.h"
 #include "StockControllerRegistry.h"
+#include "PrivateRecruitment.h"
 
 namespace {
 
@@ -271,7 +272,7 @@ std::uintptr_t RelativeCallTarget(const unsigned char* call);
 bool InstallOccupantPanelRoute();
 bool InstallOccupantChildVtable(std::uint32_t controller);
 bool InstallQuestBoardChildVtable(std::uint32_t controller);
-bool InstallOccupantParentVtable(std::uint32_t controller);
+bool InstallOccupantParentVtable(std::uint32_t controller, bool recruitmentChild = false);
 bool OpenOccupantPanel(void* controller, std::uint32_t command, int* result);
 bool OpenQuestBoardPanel(void* controller, std::uint32_t command, int* result);
 bool IsLiveQuestBoardController(
@@ -424,6 +425,8 @@ const MajestyStockControllers::SecondaryPanelRecord* g_activePanelRecord = nullp
 const MajestyStockControllers::RewardPanelRecord* g_parentRewardPanelRecord = nullptr;
 const MajestyStockControllers::RewardPanelRecord* g_activeRewardPanelRecord = nullptr;
 const MajestyStockControllers::BuildingOpenToggleRecord* g_parentOpenToggleRecord = nullptr;
+const MajestyStockControllers::PrivateRecruitmentRecord* g_parentRecruitment = nullptr;
+const MajestyStockControllers::PrivateRecruitmentRecord* g_activeRecruitment = nullptr;
 const MajestyStockControllers::TimedRageActionRecord* g_activeTimedRageAction = nullptr;
 LONG g_timedRageActive = 0;
 const MajestyStockControllers::TimedRageActionRecord* g_pendingTimedRageAction = nullptr;
@@ -922,7 +925,8 @@ StockControllerRegistryState LoadStockControllerRegistry() {
             g_stockControllerRegistry.rewardPanels.size() +
             g_stockControllerRegistry.occupantActionPanels.size() +
             g_stockControllerRegistry.buildingOpenToggles.size() +
-            g_stockControllerRegistry.liveAgentLists.size()),
+            g_stockControllerRegistry.liveAgentLists.size() +
+            g_stockControllerRegistry.privateRecruitments.size()),
         static_cast<unsigned int>(
             g_stockControllerRegistry.meters.size() +
             g_stockControllerRegistry.researchRows.size() +
@@ -934,7 +938,8 @@ StockControllerRegistryState LoadStockControllerRegistry() {
             g_stockControllerRegistry.occupantActionPanels.size() +
             g_stockControllerRegistry.hostileMonsterFlags.size() +
             g_stockControllerRegistry.buildingOpenToggles.size() +
-            g_stockControllerRegistry.liveAgentLists.size()));
+            g_stockControllerRegistry.liveAgentLists.size() +
+            g_stockControllerRegistry.privateRecruitments.size()));
     WriteLog(message);
     return StockControllerRegistryState::Loaded;
 }
@@ -3682,6 +3687,7 @@ void __fastcall SecondaryPanelControllerEvent(
 }
 
 void ClearSecondaryPanelControllerOwnedState() {
+    g_activeRecruitment = nullptr;
     g_renderedDataRecordRevision = -1;
     g_activeOccupantPanel = nullptr;
     g_activeQuestBoard = nullptr;
@@ -3898,6 +3904,7 @@ void __cdecl ParentPanelControllerDestroyed(void*, void*) {
     g_parentPanelRecord = nullptr;
     g_parentRewardPanelRecord = nullptr;
     g_parentOpenToggleRecord = nullptr;
+    g_parentRecruitment = nullptr;
     WriteLog(
         "Invalidated manager-owned parent-controller state at Majesty's stock teardown boundary.");
 }
@@ -4411,6 +4418,14 @@ const QuestBoardBuildProfile& QuestBoardProfile() {
 
 bool ValidateSelectedParentControllerProfiles() {
     std::vector<std::uint32_t> selected;
+    if (!g_stockControllerRegistry.privateRecruitments.empty()) {
+        selected.push_back(0x32355041u);
+        if (!MajestyPrivateRecruitment::Validate(
+                g_imageBase, g_buildProfile != &kPublicBuildProfile)) {
+            WriteLog("Private AP52 recruitment refused: audited stock presenter bytes changed.");
+            return false;
+        }
+    }
     if (!g_stockControllerRegistry.panels.empty()) {
         selected.push_back(kAp10DialogId);
     }
@@ -5931,6 +5946,9 @@ struct OccupantParentClass {
     void* table[kAp10VtableEntries];
     void** stock;
     std::size_t entryCount;
+    std::uint32_t thirdPrice = 0;
+    unsigned recruitmentMode = 0; // 0 inline, 1 parent opener, 2 secondary recruitment
+    MajestyPrivateRecruitment::Presenters recruitment;
 };
 std::vector<OccupantParentClass*> g_occupantParentClasses;
 OccupantParentClass* FindOccupantParentClass(void* controller) {
@@ -5946,16 +5964,42 @@ void __fastcall OccupantParentSetup(void* controller, void*) {
         StopUnsafeManagerRuntimeLaunch(
             "Private generic parent lost its stock setup class.");
     }
-    reinterpret_cast<ControllerSetup>(entry->stock[1])(controller);
-    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
+    // Literal AP69 setup prefix: request the secondary container; the common
+    // stock layout helper reached by AP52 setup owns single-panel fallback.
+    if (entry->recruitmentMode == 2)
+        *reinterpret_cast<std::uint32_t*>(static_cast<unsigned char*>(controller) + 0x30) = 1;
+    reinterpret_cast<ControllerSetup>(entry->thirdPrice ? entry->recruitment.setup : entry->stock[1])(controller);
+    if (entry->recruitmentMode != 2)
+        RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
 }
 int __fastcall OccupantParentControl(void* controller, void*, std::uint32_t command) {
+    auto* entry = FindOccupantParentClass(controller);
+    const bool recruitCommand = command == 0x1F48u || command == 0x1389u || command == 0x1388u;
+    if (entry != nullptr && entry->recruitmentMode == 2) {
+        if (command == 0x1F4Du && g_activeRecruitment != nullptr &&
+            reinterpret_cast<std::uint32_t>(controller) == static_cast<std::uint32_t>(g_childController))
+            return ReturnToPrivateParent(controller, g_activeRecruitment->parentDialogId);
+        // Hidden utilities/upgrades never acquire input ownership in the child.
+        // In particular, 0x1F5B toggles the repair route; it is not recruit cancel.
+        // Recruitment progress/cancellation belongs to native order notifications.
+        if (!recruitCommand && command != 0x1F40u && command != 0x1F41u) return 0;
+        return reinterpret_cast<ControllerControl>(entry->stock[3])(controller, command);
+    }
+    if (entry != nullptr && entry->recruitmentMode == 1) {
+        if (recruitCommand) return 0;
+        if (g_parentRecruitment != nullptr && command == g_parentRecruitment->openCommandId &&
+            reinterpret_cast<std::uint32_t>(controller) == static_cast<std::uint32_t>(g_parentController)) {
+            using Open = int (__thiscall*)(void*, std::uint32_t, std::uint32_t);
+            return reinterpret_cast<Open>(g_imageBase + g_buildProfile->openDialogRva)(
+                controller, g_parentRecruitment->childDialogId, 0);
+        }
+    }
     int openResult = 0;
     if (HandleBuildingOpenToggle(controller, command, &openResult)) return openResult;
     if (OpenOccupantPanel(controller, command, &openResult)) return openResult;
     if (OpenQuestBoardPanel(controller, command, &openResult)) return openResult;
-    auto* entry = FindOccupantParentClass(controller);
     if (entry != nullptr) {
+        if (entry->thirdPrice && (command == 0x1F49u || command == 0x22CEu)) return 0;
         const int result = reinterpret_cast<ControllerControl>(
             entry->stock[3])(controller, command);
         RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
@@ -5971,24 +6015,50 @@ void __fastcall OccupantParentEvent(
         StopUnsafeManagerRuntimeLaunch(
             "Private generic parent lost its stock event class.");
     }
-    reinterpret_cast<ControllerEvent>(entry->stock[8])(
+    reinterpret_cast<ControllerEvent>(entry->thirdPrice ? entry->recruitment.event : entry->stock[8])(
         controller, a1, a2, a3, a4);
-    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
+    if (entry->recruitmentMode != 2)
+        RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
 }
-bool InstallOccupantParentVtable(std::uint32_t controller) {
+void __fastcall PrivateRecruitmentRefresh(void* controller, void*) {
+    const auto* entry = FindOccupantParentClass(controller);
+    if (entry == nullptr || !entry->thirdPrice) return;
+    if (entry->recruitmentMode == 1) {
+        for (auto id : {0x1F48u, 0x1389u, 0x1388u, 0x1752u, 0x1F51u, 0x1F56u, 0x1F57u})
+            SetControllerControlVisible(reinterpret_cast<std::uint32_t>(controller), id, false);
+        SetControllerControlVisible(reinterpret_cast<std::uint32_t>(controller), entry->thirdPrice, false);
+        return;
+    }
+    entry->recruitment.Refresh(controller);
+}
+void __fastcall PrivateRecruitmentNoCounts(void*, void*) {}
+bool __fastcall PrivateRecruitmentTooltip(
+    void* controller, void*, std::uint32_t command, std::uint32_t a2, void* text) {
+    const auto* entry = FindOccupantParentClass(controller);
+    if (entry == nullptr || !entry->thirdPrice) return false;
+    if (command == 0x1F48u || command == 0x1389u || command == 0x1388u)
+        return entry->recruitmentMode != 1 && entry->recruitment.Describe(controller, command, a2, text);
+    return reinterpret_cast<MajestyPrivateRecruitment::Tooltip>(entry->stock[2])(controller, command, a2, text);
+}
+bool InstallOccupantParentVtable(std::uint32_t controller, bool recruitmentChild) {
     auto*** object = reinterpret_cast<void***>(controller);
+    const auto* recruitment = recruitmentChild ? g_activeRecruitment : g_parentRecruitment;
+    const auto thirdPrice = recruitment == nullptr ? 0u : recruitment->thirdPriceControlId;
+    const unsigned recruitmentMode = recruitmentChild ? 2u : recruitment && recruitment->childDialogId ? 1u : 0u;
     for (const auto* entry : g_occupantParentClasses) {
-        if (entry->stock == *object) { *object = const_cast<void**>(entry->table); return true; }
+        if (entry->stock == *object && entry->thirdPrice == thirdPrice && entry->recruitmentMode == recruitmentMode) {
+            *object = const_cast<void**>(entry->table); return true;
+        }
     }
     auto* entry = new OccupantParentClass();
     entry->stock = *object;
-    const std::uint32_t declaredBase = g_parentQuestBoard != nullptr
+    const std::uint32_t declaredBase = recruitmentChild ? 0x32355041u : g_parentQuestBoard != nullptr
         ? g_parentQuestBoard->parentControllerBase
         : g_parentOccupantPanel != nullptr
             ? g_parentOccupantPanel->parentControllerBase
             : g_parentOpenToggleRecord != nullptr
                 ? g_parentOpenToggleRecord->parentControllerBase
-                : 0;
+                : g_parentRecruitment != nullptr ? 0x32355041u : 0;
     const auto* catalogRecord =
         MajestyStockBuildingControllers::Find(declaredBase);
     const auto* catalogProfile = MajestyStockBuildingControllers::Profile(
@@ -6001,17 +6071,29 @@ bool InstallOccupantParentVtable(std::uint32_t controller) {
         return false;
     }
     entry->entryCount = catalogProfile->entryCount;
+    entry->thirdPrice = thirdPrice;
+    entry->recruitmentMode = recruitmentMode;
+    if (thirdPrice && !entry->recruitment.Initialize(
+            g_imageBase, g_buildProfile != &kPublicBuildProfile, thirdPrice)) {
+        delete entry;
+        return false;
+    }
     std::memcpy(
         entry->table, entry->stock, entry->entryCount * sizeof(void*));
     if (!MajestyControllerLifecycle::RegisterManagedVtable(entry->table, entry->stock,
-            entry->entryCount, &g_parentController,
-            &ParentPanelControllerDestroyed, nullptr)) {
+            entry->entryCount, recruitmentChild ? &g_childController : &g_parentController,
+            recruitmentChild ? &SecondaryPanelControllerDestroyed : &ParentPanelControllerDestroyed, nullptr)) {
         delete entry;
         return false;
     }
     entry->table[1] = reinterpret_cast<void*>(&OccupantParentSetup);
     entry->table[3] = reinterpret_cast<void*>(&OccupantParentControl);
     entry->table[8] = reinterpret_cast<void*>(&OccupantParentEvent);
+    if (thirdPrice) {
+        entry->table[2] = reinterpret_cast<void*>(&PrivateRecruitmentTooltip);
+        entry->table[13] = reinterpret_cast<void*>(&PrivateRecruitmentRefresh);
+        entry->table[16] = recruitmentChild ? reinterpret_cast<void*>(&PrivateRecruitmentNoCounts) : entry->recruitment.count;
+    }
     g_occupantParentClasses.push_back(entry);
     *object = entry->table;
     return true;
@@ -6251,12 +6333,17 @@ extern "C" void __stdcall CaptureSecondaryController(
             StopUnsafeManagerRuntimeLaunch(
                 "A resolved parent controller could not install its stock-lifecycle vtable clone.");
         }
-        // The factory result hook runs after the stock controller's initial
-        // setup presenter. The proven MX22 toggle can be initialized here
+        // The factory result hook runs after construction, before the final
+        // virtual setup call. The proven MX22 toggle can be initialized here
         // because it reads only native building state. Package GPL callbacks
         // are deferred to the installed stock AP08 event lifecycle, after the
         // controller has been inserted and is live.
         RefreshBuildingOpenToggle(controller);
+        if (g_parentRecruitment != nullptr) {
+            auto** table = *reinterpret_cast<void***>(controller);
+            reinterpret_cast<ControllerSetup>(table[13])(reinterpret_cast<void*>(controller));
+            reinterpret_cast<ControllerSetup>(table[16])(reinterpret_cast<void*>(controller));
+        }
         WriteLog(
             "Captured a manager parent and installed its declared stock-class command guard.");
         return;
@@ -6264,7 +6351,9 @@ extern "C" void __stdcall CaptureSecondaryController(
     if (InterlockedExchange(&g_captureChildController, 0) == 1) {
         InterlockedExchange(
             &g_secondaryPanelHandle, static_cast<LONG>(creationHandle));
-        const bool installed = g_activeQuestBoard != nullptr
+        const bool installed = g_activeRecruitment != nullptr
+            ? InstallOccupantParentVtable(controller, true)
+            : g_activeQuestBoard != nullptr
             ? InstallQuestBoardChildVtable(controller)
             : g_activeOccupantPanel != nullptr
             ? InstallOccupantChildVtable(controller)
@@ -6276,6 +6365,7 @@ extern "C" void __stdcall CaptureSecondaryController(
             StopUnsafeManagerRuntimeLaunch(
                 "A resolved secondary controller could not install its stock-lifecycle vtable clone.");
         }
+        InterlockedExchange(&g_childController, static_cast<LONG>(controller));
         WriteLog("Captured a manager secondary controller and installed its scoped vtable.");
     }
 }
@@ -6380,6 +6470,10 @@ void LogDialogFactoryRequest(
 
 extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) {
     const std::uint32_t requested = *idAddress;
+    if (g_stockControllerRegistry.FindPrivateRecruitmentByChild(requested) != nullptr) {
+        *idAddress = 0x32355041u;
+        return;
+    }
     if (g_stockControllerRegistry.FindLiveAgentListByChild(requested) != nullptr) {
         *idAddress = kMx05DialogId;
         LogDialogFactoryRequest(
@@ -6405,6 +6499,10 @@ extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) 
     if (occupantParent != nullptr) {
         *idAddress = occupantParent->parentControllerBase;
         LogDialogFactoryRequest(idAddress, requested, " Preserved declared stock occupant-parent controller.");
+        return;
+    }
+    if (g_stockControllerRegistry.FindPrivateRecruitmentByParent(requested) != nullptr) {
+        *idAddress = 0x32355041u;
         return;
     }
     const auto* toggleParent =
@@ -6516,13 +6614,15 @@ extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments)
     const auto* rewardChild = g_stockControllerRegistry.FindRewardPanelByChildDialog(requested);
     const auto* occupantChild = g_stockControllerRegistry.FindOccupantPanelByChild(requested);
     const auto* questChild = g_stockControllerRegistry.FindLiveAgentListByChild(requested);
+    const auto* recruitmentChild = g_stockControllerRegistry.FindPrivateRecruitmentByChild(requested);
     if (requestedChild != nullptr || rewardChild != nullptr ||
-        occupantChild != nullptr || questChild != nullptr) {
+        occupantChild != nullptr || questChild != nullptr || recruitmentChild != nullptr) {
         // A new private child takes the tracked child slot. An older child's
         // delayed destructor cannot clear this new mapping (exact-instance
         // lifecycle guard). The parent slot is independent.
         InterlockedExchange(&g_childController, 0);
         ClearSecondaryPanelControllerOwnedState();
+        g_activeRecruitment = recruitmentChild;
         g_activePanelRecord = requestedChild;
         g_activeRewardPanelRecord = rewardChild;
         g_activeRewardFlagState = rewardChild == nullptr
@@ -6542,11 +6642,12 @@ extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments)
     const auto* rewardParent = g_stockControllerRegistry.FindRewardPanelByParentDialog(requested);
     const auto* occupantParent = g_stockControllerRegistry.FindOccupantPanelByParent(requested);
     const auto* questParent = g_stockControllerRegistry.FindLiveAgentListByParent(requested);
+    const auto* recruitmentParent = g_stockControllerRegistry.FindPrivateRecruitmentByParent(requested);
     const auto* toggleParent =
         g_stockControllerRegistry.FindBuildingOpenToggleByParent(requested);
     if (requestedParent != nullptr || rewardParent != nullptr ||
         occupantParent != nullptr || questParent != nullptr ||
-        toggleParent != nullptr) {
+        toggleParent != nullptr || recruitmentParent != nullptr) {
         // Only a parent creation changes parent recipes. AP91 Visitors, member
         // lists, and auxiliary notices must not erase a surviving parent's
         // occupant/reward/research openers.
@@ -6555,6 +6656,7 @@ extern "C" void __stdcall ResolveDialogCreationRequest(std::uint32_t* arguments)
         g_parentOccupantPanel = occupantParent;
         g_parentQuestBoard = questParent;
         g_parentOpenToggleRecord = toggleParent;
+        g_parentRecruitment = recruitmentParent;
         InterlockedExchange(&g_captureParentController, 1);
         WriteLog("Creation entry captured a resolved parent dialog.");
         return;
@@ -7119,7 +7221,8 @@ DWORD WINAPI InitializeRuntime(void*) {
         !g_stockControllerRegistry.occupantActionPanels.empty() ||
         !g_stockControllerRegistry.rewardPanels.empty() ||
         !g_stockControllerRegistry.buildingOpenToggles.empty() ||
-        !g_stockControllerRegistry.liveAgentLists.empty();
+        !g_stockControllerRegistry.liveAgentLists.empty() ||
+        !g_stockControllerRegistry.privateRecruitments.empty();
     const bool ap10Ap69ControllerRecipes =
         !g_stockControllerRegistry.panels.empty();
     const bool privateRewardFlagRecipes =
@@ -7141,6 +7244,7 @@ DWORD WINAPI InitializeRuntime(void*) {
     if (requestedNameGeneratorHook != privateNameGenerators ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kMapFogQuery) != g_runtimeFeatureRegistry.mapFogQuery ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kMovementQuery) != g_runtimeFeatureRegistry.movementQuery ||
+        HasRuntimeCapability(MajestyRuntimeCapabilities::kNativeTiming) != g_runtimeFeatureRegistry.nativeTiming ||
         requestedEnchantmentRowHook != privateEnchantmentRows ||
         requestedStockControllerRecipes != stockControllerRecipes) {
         StopUnsafeManagerRuntimeLaunch(
@@ -7155,11 +7259,13 @@ DWORD WINAPI InitializeRuntime(void*) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: private reward flag callbacks could not be prepared from stock Fl00.");
     }
-    if (g_runtimeFeatureRegistry.mapFogQuery || g_runtimeFeatureRegistry.movementQuery) {
+    if (g_runtimeFeatureRegistry.mapFogQuery || g_runtimeFeatureRegistry.movementQuery ||
+        g_runtimeFeatureRegistry.nativeTiming) {
         RequireManagerRuntimeInstall(
             InstallMapQueryRuntime(g_imageBase, g_buildProfile == &kPublicBuildProfile,
-                g_runtimeFeatureRegistry.mapFogQuery, g_runtimeFeatureRegistry.movementQuery),
-            managerLaunch, "The stock GPL read-only query registration boundary did not match its profile.");
+                g_runtimeFeatureRegistry.mapFogQuery, g_runtimeFeatureRegistry.movementQuery,
+                g_runtimeFeatureRegistry.nativeTiming ? &g_runtimeFeatureRegistry : nullptr),
+            managerLaunch, "The stock GPL interface registration boundary did not match its profile.");
     }
 
     if (privateActivityText) {

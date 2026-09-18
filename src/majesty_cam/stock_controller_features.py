@@ -191,6 +191,25 @@ class StockMx05DataRecordListPanel(StockMx05LiveAgentListPanel):
 
 
 @dataclass(frozen=True)
+class StockAp52PrivateRecruitment:
+    """Three indexed stock guild recruit rows on a private AP52 owner."""
+
+    panel_key: str
+    parent_building: str
+    third_price_control_id: int
+    type: str = "stock.ap52-private-recruitment.v1"
+
+
+@dataclass(frozen=True)
+class StockAp52RecruitmentPanel(StockAp52PrivateRecruitment):
+    """Stock AP52 recruitment on a native secondary panel, not the parent."""
+
+    source_dialog_id: str = ""
+    open_command_id: int = 0
+    type: str = "stock.ap52-recruitment-panel.v1"
+
+
+@dataclass(frozen=True)
 class StockMx22BuildingOpenToggle:
     """MX22's persistent per-building open/closed state and paired controls."""
 
@@ -329,6 +348,7 @@ class StockAp69SovereignTargetAction:
 
 
 ControllerFeature = Union[
+    StockAp52PrivateRecruitment,
     StockMx22BuildingOpenToggle,
     StockMx04Mx05OccupantActionPanel,
     StockMx05LiveAgentListPanel,
@@ -345,6 +365,8 @@ ControllerFeature = Union[
 
 
 _FEATURE_TYPES = {
+    "stock.ap52-private-recruitment.v1": StockAp52PrivateRecruitment,
+    "stock.ap52-recruitment-panel.v1": StockAp52RecruitmentPanel,
     "stock.mx22-building-open-toggle.v1": StockMx22BuildingOpenToggle,
     "stock.mx04-mx05-occupant-action-panel.v1": StockMx04Mx05OccupantActionPanel,
     "stock.mx05-live-agent-list-panel.v1": StockMx05LiveAgentListPanel,
@@ -723,7 +745,17 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
             )
     else:
         _logical(feature.panel_key, "panel_key")
-    if isinstance(feature, StockAp10Ap69SecondaryPanel):
+    if isinstance(feature, StockAp52PrivateRecruitment):
+        _logical(feature.parent_building, "parent_building")
+        _control(feature.third_price_control_id, "third_price_control_id")
+        if feature.third_price_control_id <= 0x22CE:
+            raise ControllerFeatureError("private recruitment third price control must not reuse stock AP52 controls")
+        if isinstance(feature, StockAp52RecruitmentPanel):
+            _fourcc(feature.source_dialog_id, "source_dialog_id")
+            _control(feature.open_command_id, "open_command_id")
+            if feature.open_command_id <= 0x22CE or feature.open_command_id == feature.third_price_control_id:
+                raise ControllerFeatureError("recruitment panel opener must be private and distinct from the third price")
+    elif isinstance(feature, StockAp10Ap69SecondaryPanel):
         _logical(feature.parent_building, "parent_building")
         _fourcc(feature.source_dialog_id, "source_dialog_id")
         _family_id(feature.building_family_id, "building_family_id")
@@ -1068,7 +1100,10 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
 
 
 def _validate_composition(features: Sequence[ControllerFeature]) -> None:
-    panel_types = (StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
+    recruitments = [item for item in features if isinstance(item, StockAp52PrivateRecruitment)]
+    _unique_field(recruitments, "panel_key", "private recruitment panel_key")
+    _unique_field(recruitments, "parent_building", "private recruitment parent")
+    panel_types = (StockAp52RecruitmentPanel, StockAp10Ap69SecondaryPanel, StockMx09Ap41RewardPanel,
                    StockMx04Mx05OccupantActionPanel, StockMx05LiveAgentListPanel)
     panels = {
         item.panel_key: item
@@ -1114,7 +1149,7 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
             toggle_commands.add(command)
 
     for feature in features:
-        if isinstance(feature, StockMx22BuildingOpenToggle):
+        if isinstance(feature, (StockMx22BuildingOpenToggle, StockAp52PrivateRecruitment)):
             continue
         if not isinstance(feature, panel_types) and feature.panel_key not in panels:
             raise ControllerFeatureError(
@@ -1145,7 +1180,7 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
     controls: dict[str, dict[int, str]] = {key: {} for key in panels}
 
     for feature in features:
-        if isinstance(feature, StockMx22BuildingOpenToggle):
+        if isinstance(feature, (StockMx22BuildingOpenToggle, StockAp52PrivateRecruitment)):
             continue
         if isinstance(feature, (StockMx04Mx05OccupantActionPanel, StockMx05LiveAgentListPanel)):
             symbols = (
@@ -1534,6 +1569,8 @@ __all__ = [
     "StockAp69SovereignTargetAction",
     "StockAp99ResearchRow",
     "StockMx22BuildingOpenToggle",
+    "StockAp52PrivateRecruitment",
+    "StockAp52RecruitmentPanel",
     "StockMx04Mx05OccupantActionPanel",
     "StockMx09Ap41RewardPanel",
     "UpgradeRequirement",
