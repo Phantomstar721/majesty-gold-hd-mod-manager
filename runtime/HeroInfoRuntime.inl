@@ -3,8 +3,11 @@
 using HeroInfoRecord = MajestyRuntimeFeatures::HeroInfoRecord;
 const HeroInfoRecord* g_heroSpellRow = nullptr;
 const HeroInfoRecord* g_heroEffectRow = nullptr;
+MajestyStringView g_heroSpellLabel = {};
 MajestyStringView g_heroEffectLabel = {};
-using HeroAppend = int (__thiscall*)(void*, int, const char*);
+// Both stock append wrappers forward a 12-byte string object to message 0x60,
+// not a char buffer. Stock synchronously parses/copies it into the owned row.
+using HeroAppend = int (__thiscall*)(void*, int, const MajestyStringView*);
 using HeroImageOp = void (__thiscall*)(void*, std::uint32_t);
 using HeroImageLife = void (__thiscall*)(void*);
 using HeroSelected = void* (__thiscall*)(void*);
@@ -31,7 +34,16 @@ bool ValidateHeroInfoProfile() {
         hash(0xA4110, 0x910) == 0xE1D159B5u &&
         hash(0x272410, 0x80) == 0x5EA93191u &&
         hash(0x288030, 0x240) == 0xE4111E50u &&
-        hash(0x2CE250, 0x80) == 0x08372856u &&
+        // Message 0x60/channel 4: native-string row text, distinct from the
+        // raw-char channel 0. Also pin parsing, string copy and row cleanup.
+        hash(0x273A72, 0x49) == 0xC7F425DEu &&
+        hash(0x2D0660, 0x9F) == 0x822927BFu &&
+        hash(0x2CD7E0, 0x80) == 0x793158B2u &&
+        hash(0x285050, 0xC6) == 0x2AE088E8u &&
+        hash(0x284A40, 0xA0) == 0x5C06EA1Bu &&
+        hash(0x23AAF0, 0x80) == 0x18E7D978u &&
+        hash(0x2CE250, 0xE0) == 0xCF9EA6EFu &&
+        hash(0x2CE0C0, 0x90) == 0xBC344AF3u &&
         hash(0xB4C00, 0x100) == 0xD541CFCFu;
 }
 MajestyStringView HeroInfoString(const std::string& text) {
@@ -57,9 +69,15 @@ void __fastcall HeroSpellImage(void* image, void*, unsigned stockSet) {
 void __fastcall HeroEffectImage(void* image, void*, unsigned stockSet) {
     SetHeroImage(image, stockSet, g_heroEffectRow);
 }
-const char* __stdcall SelectHeroSpell(unsigned actionId, const char* stockText) {
+const MajestyStringView* __stdcall SelectHeroSpell(
+    unsigned actionId, const MajestyStringView* stockText) {
     g_heroSpellRow = g_runtimeFeatureRegistry.FindHeroInfo(1, actionId);
-    return g_heroSpellRow ? g_heroSpellRow->displayText.c_str() : stockText;
+    if (!g_heroSpellRow) return stockText;
+    // The naked adapter tail-calls stock after this helper returns, so the
+    // view must outlive this stack frame. Registry text is immutable in-game;
+    // the view is borrowed only until the synchronous stock append returns.
+    g_heroSpellLabel = HeroInfoString(g_heroSpellRow->displayText);
+    return &g_heroSpellLabel;
 }
 __declspec(naked) void HeroSpellAppendHook() {
     __asm {
@@ -111,7 +129,8 @@ void __stdcall AppendHeroPassives(void* controller, void* list) {
     const auto* end = g_runtimeFeatureRegistry.heroInfoRows.data()+g_runtimeFeatureRegistry.heroInfoRows.size();
     for (; row != end && row->kind == 3 && row->subjectId == subject; ++row) {
         if (level < static_cast<int>(row->unlockLevel)) continue;
-        const int index = g_heroAppend(list, -1, row->displayText.c_str());
+        const auto text = HeroInfoString(row->displayText);
+        const int index = g_heroAppend(list, -1, &text);
         if (index < 0) continue;
         alignas(4) unsigned char image[0x6C] = {};
         g_heroImageCtor(image);

@@ -14,11 +14,12 @@ be tied to one Workshop item, mod UUID, building, or author.
 ## Use supported data-only recipes first
 
 Schema-v3 packages place supported declarations in the top-level
-`mod-definition.json` `runtime_features` array. The current parser accepts
-exactly these feature types:
+`mod-definition.json` `runtime_features` array. Supported recipes include:
 
 - `stock.name-generator.v1`;
 - `stock.ap78-enchantment-row.v1`;
+- `stock.ap78-info-row.v1` ([hero-information rows](stock-ap78-info-rows.md));
+- `manager.overlay-movement-scale.v1` ([attached-overlay percentages](stock-overlay-movement-scale.md), beta2 only);
 - `stock.ap10-ap69-secondary-panel.v1`;
 - `stock.mx09-ap41-reward-panel.v1`;
 - `stock.mx04-mx05-occupant-action-panel.v1`;

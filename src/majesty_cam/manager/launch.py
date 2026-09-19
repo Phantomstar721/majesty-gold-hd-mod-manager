@@ -150,7 +150,7 @@ def launch_majesty(
         if not feature_path.is_file():
             raise OSError("runtime feature registry path is not a file")
         prepared_features = decode_runtime_feature_registry(feature_path.read_bytes())
-        if prepared_features.equipment or prepared_features.kingdom_research or prepared_features.hero_info_rows:
+        if prepared_features.equipment or prepared_features.kingdom_research or prepared_features.hero_info_rows or prepared_features.movement_scales:
             require_beta2(paths.game_executable)
     except (OSError, ValueError) as exc:
         raise ManagerLaunchError(

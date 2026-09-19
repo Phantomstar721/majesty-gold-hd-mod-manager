@@ -17,6 +17,8 @@ from .equipment import EquipmentRegistration, EQUIPMENT_FEATURE_TYPE, MAX_EQUIPM
 from .kingdom_research import (KingdomResearchRegistration, KINGDOM_RESEARCH_TYPE,
     MAX_KINGDOM_RESEARCH, validate_registration as validate_kingdom_registration)
 from .hero_info import HeroInfoRow, HERO_INFO_TYPE, HERO_INFO_KINDS, MAX_HERO_INFO_ROWS, hero_info_mapping
+from .movement_scale import (OverlayMovementScale, MOVEMENT_SCALE_TYPE,
+                             MAX_MOVEMENT_SCALES, movement_scale_mapping)
 
 
 RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH = (
@@ -86,7 +88,7 @@ class NativeTimingFeature:
 
 RuntimeFeature = Union[NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature,
                        MovementQueryFeature, NativeTimingFeature, EquipmentRegistration,
-                       KingdomResearchRegistration, HeroInfoRow]
+                       KingdomResearchRegistration, HeroInfoRow, OverlayMovementScale]
 
 
 @dataclass(frozen=True)
@@ -99,10 +101,11 @@ class RuntimeFeatureRegistry:
     equipment: tuple[EquipmentRegistration, ...] = ()
     kingdom_research: tuple[KingdomResearchRegistration, ...] = ()
     hero_info_rows: tuple[HeroInfoRow, ...] = ()
+    movement_scales: tuple[OverlayMovementScale, ...] = ()
 
     @property
     def features(self) -> tuple[RuntimeFeature, ...]:
-        return (*self.name_generators, *self.enchantment_rows, *self.equipment, *self.kingdom_research, *self.hero_info_rows,
+        return (*self.name_generators, *self.enchantment_rows, *self.equipment, *self.kingdom_research, *self.hero_info_rows, *self.movement_scales,
                 *((MapFogQueryFeature(),) if self.map_fog_query else ()),
                 *((MovementQueryFeature(),) if self.movement_query else ()),
                 *((self.native_timing,) if self.native_timing is not None else ()))
@@ -184,6 +187,7 @@ def normalize_runtime_features(
     equipment: dict[int, EquipmentRegistration] = {}
     research: dict[str, KingdomResearchRegistration] = {}
     info = {}
+    movement_scales = {}
     info_subjects = set()
     research_commands, research_attributes, research_families = set(), set(), set()
     for feature in expanded:
@@ -235,6 +239,12 @@ def normalize_runtime_features(
                     f"conflicting enchantment-row feature for {feature.overlay_id}"
                 )
             rows[overlay_key] = canonical
+        elif isinstance(feature, OverlayMovementScale):
+            movement_scale_mapping(feature)
+            key = _fourcc_u32(feature.overlay_id)
+            if key in movement_scales and movement_scales[key] != feature:
+                raise ValueError(f"conflicting movement scale for {feature.overlay_id}")
+            movement_scales[key] = feature
         elif isinstance(feature, HeroInfoRow):
             hero_info_mapping(feature)
             key = feature.sort_key
@@ -298,6 +308,8 @@ def normalize_runtime_features(
         raise ValueError("kingdom research registry exceeds 32 identities")
     if len(info) > MAX_HERO_INFO_ROWS:
         raise ValueError("hero information registry exceeds 1024 rows")
+    if len(movement_scales) > MAX_MOVEMENT_SCALES:
+        raise ValueError("movement scale registry exceeds 256 overlays")
     if any(row.kind == "enchantment" and _fourcc_u32(row.subject_id) in rows for row in info.values()):
         raise ValueError("hero information and legacy enchantment rows claim the same overlay")
     return RuntimeFeatureRegistry(
@@ -308,6 +320,7 @@ def normalize_runtime_features(
         equipment=tuple(equipment[key] for key in sorted(equipment)),
         kingdom_research=tuple(research[key] for key in sorted(research)),
         hero_info_rows=tuple(info[key] for key in sorted(info)),
+        movement_scales=tuple(movement_scales[key] for key in sorted(movement_scales)),
         native_timing=NativeTimingFeature(
             tuple(_u32_fourcc(key) for key in sorted(timing_spells)),
             tuple(_u32_fourcc(key) for key in sorted(timing_effectors)),
@@ -385,6 +398,9 @@ def derive_feature_runtime_capabilities(
     effective.discard(EQUIPMENT_FEATURE_TYPE)
     effective.discard(KINGDOM_RESEARCH_TYPE)
     effective.discard(HERO_INFO_TYPE)
+    effective.discard(MOVEMENT_SCALE_TYPE)
+    if registry.movement_scales:
+        effective.add(MOVEMENT_SCALE_TYPE)
     if registry.hero_info_rows:
         effective.add(HERO_INFO_TYPE)
     if registry.kingdom_research:
@@ -422,19 +438,20 @@ def encode_runtime_feature_registry(
     chunks = [
         _HEADER.pack(
             _MAGIC,
-            7 if registry.hero_info_rows else 6 if visual_research else 5 if registry.kingdom_research else 4 if registry.equipment else 3 if registry.native_timing is not None else
+            8 if registry.movement_scales else 7 if registry.hero_info_rows else 6 if visual_research else 5 if registry.kingdom_research else 4 if registry.equipment else 3 if registry.native_timing is not None else
             2 if registry.map_fog_query or registry.movement_query else _VERSION,
             len(registry.name_generators),
             len(registry.enchantment_rows),
         )
     ]
-    if registry.hero_info_rows or registry.kingdom_research or registry.equipment or registry.map_fog_query or registry.movement_query or registry.native_timing is not None:
+    if registry.movement_scales or registry.hero_info_rows or registry.kingdom_research or registry.equipment or registry.map_fog_query or registry.movement_query or registry.native_timing is not None:
         chunks.append(struct.pack("<I", int(registry.map_fog_query) |
                                   (int(registry.movement_query) << 1) |
                                   (int(registry.native_timing is not None) << 2) |
                                   (int(bool(registry.equipment)) << 3) |
                                   (int(bool(registry.kingdom_research)) << 4) |
-                                  (int(bool(registry.hero_info_rows)) << 5)))
+                                  (int(bool(registry.hero_info_rows)) << 5) |
+                                  (int(bool(registry.movement_scales)) << 6)))
     for feature in registry.name_generators:
         chunks.append(
             _NAME_GENERATOR.pack(
@@ -473,7 +490,7 @@ def encode_runtime_feature_registry(
                 item.gold_bonus_percent, item.experience_bonus_percent,
                 item.progress_control_id, item.active_display_control_id, len(text)))
             chunks.append(text)
-            if visual_research or registry.hero_info_rows:
+            if visual_research or registry.hero_info_rows or registry.movement_scales:
                 effector = item.active_effector.encode("ascii")
                 chunks.extend((struct.pack("<I", len(effector)), effector))
     if registry.hero_info_rows:
@@ -484,6 +501,10 @@ def encode_runtime_feature_registry(
                 _fourcc_u32(row.subject_id), row.unlock_level, _fourcc_u32(row.image_id),
                 row.image_set, len(key), len(label), len(tooltip)))
             chunks.extend((key, label, tooltip))
+    if registry.movement_scales:
+        chunks.append(struct.pack("<I", len(registry.movement_scales)))
+        chunks.extend(struct.pack("<II", _fourcc_u32(item.overlay_id), item.percent)
+                      for item in registry.movement_scales)
     payload = b"".join(chunks)
     if len(payload) > _MAX_REGISTRY_BYTES:
         raise ValueError(
@@ -504,7 +525,7 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
     magic, version, name_count, row_count = _HEADER.unpack_from(payload)
     if magic != _MAGIC:
         raise ValueError("runtime feature registry magic is invalid")
-    if version not in (1, 2, 3, 4, 5, 6, 7):
+    if version not in (1, 2, 3, 4, 5, 6, 7, 8):
         raise ValueError(f"unsupported runtime feature registry version: {version}")
     if name_count > _MAX_NAME_GENERATORS:
         raise ValueError(
@@ -521,9 +542,10 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
     if len(payload) < header_size:
         raise ValueError("runtime feature registry flags are truncated")
     flags = struct.unpack_from("<I", payload, _HEADER.size)[0] if version >= 2 else 0
-    if (flags & ~(63 if version == 7 else 31 if version >= 5 else 15 if version == 4 else 7 if version == 3 else 3)
+    if (flags & ~(127 if version == 8 else 63 if version == 7 else 31 if version >= 5 else 15 if version == 4 else 7 if version == 3 else 3)
             or (version == 3 and not flags & 4) or (version == 4 and not flags & 8)
-            or (version in (5, 6) and not flags & 16) or (version == 7 and not flags & 32)):
+            or (version in (5, 6) and not flags & 16) or (version == 7 and not flags & 32)
+            or (version == 8 and not flags & 64)):
         raise ValueError("runtime feature registry has unsupported flags")
     minimum_size = (
         header_size
@@ -684,9 +706,25 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
             if info and row.sort_key <= info[-1].sort_key:
                 raise ValueError("hero information rows must be sorted and unique")
             info.append(row)
+    scales = []
+    if flags & 64:
+        if offset + 4 > len(payload):
+            raise ValueError("movement scale count is truncated")
+        count = struct.unpack_from("<I", payload, offset)[0]
+        offset += 4
+        if not 1 <= count <= MAX_MOVEMENT_SCALES or offset + 8 * count > len(payload):
+            raise ValueError("movement scale records are invalid or truncated")
+        previous = 0
+        for _ in range(count):
+            overlay, percent = struct.unpack_from("<II", payload, offset)
+            offset += 8
+            if overlay <= previous:
+                raise ValueError("movement scales must be strictly sorted and unique")
+            scales.append(OverlayMovementScale(_u32_fourcc(overlay), percent))
+            previous = overlay
     if offset != len(payload):
         raise ValueError("runtime feature registry has trailing bytes")
-    return normalize_runtime_features((*names, *rows, *equipment, *research, *info,
+    return normalize_runtime_features((*names, *rows, *equipment, *research, *info, *scales,
         *((MapFogQueryFeature(),) if flags & 1 else ()),
         *((MovementQueryFeature(),) if flags & 2 else ()), *timing_features))
 

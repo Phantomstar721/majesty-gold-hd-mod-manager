@@ -243,6 +243,9 @@ declare
     agent Building;
     integer Index;
 begin
+    // Stock ListObjects deliberately excludes its origin. Reconcile the
+    // researching building explicitly, then use the native query for others.
+    if ($GetUnitPlayerNumber(Origin) == Player) ${key}_Visual(Origin);
     $ListObjects(Origin, "Building", -1, Buildings, #CheckTitles,
         "{parent_building}", #NoHiddenMap, #ATTRIB_FirstStageBuilt, 1);
     Index = 1;

@@ -269,6 +269,14 @@ polling loop, marker agent, saved native pointer or sidecar ledger is introduced
   associated cancellation uses `DeleteEffector`. The adapter copies that
   attached-effector ownership, not the tower's unrelated active-script thread.
   Super Charge's one-shot building query is the reference for completion fanout.
+- `ListObjects` predicate `0x439C80` explicitly excludes the originating native
+  unit (`0x439CC2..0x439CCA`). A research completion originates from a building,
+  unlike the stock spell caster, so the fanout must reconcile that building
+  explicitly before querying the others. The 2026-09-19 paused capture had a
+  completed level-3 building, payer 0 in the saved completion ledger, and no
+  attached overlays; it was the only qualifying building and the query skipped
+  itself. The generated callback now applies the same owner-checked, idempotent
+  visual operation to its origin, then retains the stock query for other units.
 - Native creation `0x005DE840` resolves the Description, creates the native
   child and attaches it through `0x005BE330` to the parent's `+0xA4` container
   (`0x005DE908..0x005DE912`). The stock Check/GetEffector paths

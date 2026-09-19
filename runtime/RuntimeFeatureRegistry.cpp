@@ -129,6 +129,7 @@ bool ParseRegistry(
     registry->equipment.clear();
     registry->kingdomResearch.clear();
     registry->heroInfoRows.clear();
+    registry->movementScales.clear();
     if (error != nullptr) {
         error->clear();
     }
@@ -151,15 +152,16 @@ bool ParseRegistry(
         SetError(error, "runtime feature registry header is truncated");
         return false;
     }
-    if (version < kRegistryVersion || version > 7) {
+    if (version < kRegistryVersion || version > 8) {
         SetError(error, "runtime feature registry schema version is unsupported");
         return false;
     }
     std::uint32_t flags = 0;
     if (version >= 2 && (!ReadU32(bytes, size, &cursor, &flags) ||
-        (flags & ~(version == 7 ? 63u : version >= 5 ? 31u : version == 4 ? 15u : version == 3 ? 7u : 3u)) != 0 ||
+        (flags & ~(version == 8 ? 127u : version == 7 ? 63u : version >= 5 ? 31u : version == 4 ? 15u : version == 3 ? 7u : 3u)) != 0 ||
         (version == 3 && !(flags & 4u)) || (version == 4 && !(flags & 8u)) ||
-        ((version == 5 || version == 6) && !(flags & 16u)) || (version == 7 && !(flags & 32u)))) {
+        ((version == 5 || version == 6) && !(flags & 16u)) || (version == 7 && !(flags & 32u)) ||
+        (version == 8 && !(flags & 64u)))) {
         SetError(error, "runtime feature registry flags are invalid or truncated");
         return false;
     }
@@ -448,6 +450,24 @@ bool ParseRegistry(
             info.push_back(std::move(r));
         }
     }
+    std::vector<MovementScaleRecord> scales;
+    if (flags & 64u) {
+        std::uint32_t count = 0, previous = 0;
+        if (!ReadU32(bytes, size, &cursor, &count) || !count || count > 256 || count > (size-cursor)/8) {
+            SetError(error, "movement scale count is invalid or truncated"); return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            MovementScaleRecord record{};
+            if (!ReadU32(bytes, size, &cursor, &record.overlayId) ||
+                !ReadU32(bytes, size, &cursor, &record.percent) ||
+                !IsPrintableFourCC(record.overlayId) || record.overlayId <= previous ||
+                record.percent < 1 || record.percent > 1000) {
+                SetError(error, "movement scales must contain sorted unique overlays and percentages 1..1000"); return false;
+            }
+            previous = record.overlayId;
+            scales.push_back(record);
+        }
+    }
     if (cursor != size) {
         SetError(error, "runtime feature registry contains trailing bytes");
         return false;
@@ -462,6 +482,7 @@ bool ParseRegistry(
     registry->equipment = std::move(equipment);
     registry->kingdomResearch = std::move(research);
     registry->heroInfoRows = std::move(info);
+    registry->movementScales = std::move(scales);
     return true;
 }
 

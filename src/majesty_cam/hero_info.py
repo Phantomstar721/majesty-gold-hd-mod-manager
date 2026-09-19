@@ -8,6 +8,22 @@ HERO_INFO_KINDS = ("spell", "enchantment", "passive")
 MAX_HERO_INFO_ROWS = 1024
 
 
+def enable_native_tooltips(payload):
+    """Retain AP78's list records, enabling stock hover registration at load."""
+    from .private_recruitment import records, control_record
+    items = list(records(payload))
+    for control in (0x221A, 0x221B):
+        row = control_record(items, control)
+        # Literal AP78 listbox property layout: type 6, flags property 3,
+        # then control-ID property 6. Do not search arbitrary values for flags.
+        if len(row) < 20 or row[0] != 6 or row[16] != 3 or row[18:20] != (6, control):
+            raise ValueError("AP78 information list has an unsupported flags/control layout")
+        changed = list(row)
+        changed[17] |= 0x400  # FLAG_HAS_TOOLTIP; stock owns hover registration.
+        items[items.index(row)] = tuple(changed)
+    return b"".join(struct.pack(f"<{len(row)}I", *row) for row in items)
+
+
 @dataclass(frozen=True)
 class HeroInfoRow:
     feature_key: str

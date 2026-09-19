@@ -6,8 +6,10 @@ support. Install this manager and launch Majesty through it to use them
 individually or together. It automatically finds and organizes your mods and
 quests, remembers your choices, and prepares anything that needs extra support.
 
-Update 0.3.7 adds shared panel, hero-integration, and timing capabilities, plus
-improvements to combining shared scripts, descriptions, and artwork.
+Update 0.3.8 adds GOG Gold HD support and easier switching between supported
+installations. It fixes crashes and missing hover descriptions in custom hero
+panels, corrects missing research effects, and supports percentage-based
+movement effects. Shared panel and mod-combining improvements are also included.
 Close Majesty and the Manager before updating. Afterwards, reopen the Manager,
 select Rescan Content, and Prepare Selected Mods (or Prepare Again) before
 launching Majesty.
@@ -25,7 +27,10 @@ First launch:
 7. Choose your mods, prepare them if requested, and select Launch Majesty.
 
 Keep the entire downloaded folder together. The manager supports both the
-default and beta2 versions of Majesty Gold HD.
+default and beta2 Steam versions, plus GOG Gold HD 1.5.2.28. Some advanced mod
+features require Steam beta2; the manager checks compatibility before launch.
+GOG users should use the complete GitHub download linked below. The manager can
+find already-downloaded Workshop content but does not download subscriptions.
 
 More details: https://github.com/Phantomstar721/majesty-gold-hd-mod-manager
 Direct download: https://github.com/Phantomstar721/majesty-gold-hd-mod-manager/releases/latest

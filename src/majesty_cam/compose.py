@@ -17,7 +17,10 @@ import xml.etree.ElementTree as ET
 
 from ._subprocess import no_console_window_options
 from .equipment import EquipmentRegistration, EQUIPMENT_FEATURE_TYPE, require_beta2
-from .hero_info import HeroInfoRow, HERO_INFO_TYPE, validate_hero_info_evidence
+from .movement_scale import (OverlayMovementScale, MOVEMENT_SCALE_TYPE,
+                             validate_movement_scale_evidence)
+from .hero_info import (HeroInfoRow, HERO_INFO_TYPE, validate_hero_info_evidence,
+                       enable_native_tooltips)
 from .equipment_compose import (resolve_equipment, transform_equipment_description,
                                 bind_equipment_art, validate_generated_equipment)
 from .kingdom_research import KingdomResearchRegistration, KINGDOM_RESEARCH_TYPE
@@ -1158,6 +1161,7 @@ def merge_text_resources(
     dialog_resolutions: Sequence[ResolvedBuildingDialog] | None = None,
     controller_panels: Sequence[ResolvedControllerPanel] = (),
     controller_registry: ResolvedControllerRegistry | None = None,
+    hero_info_tooltips: bool = False,
     named_resolutions: Mapping[
         tuple[bytes, bytes], ScopedNamedResourceResolution
     ] | None = None,
@@ -1269,6 +1273,17 @@ def merge_text_resources(
         resolutions=named_resolutions,
         stock_resources=stock_named_resources,
     )
+    if hero_info_tooltips:
+        panel = next((e for e in smnu_entries if e.name[:4] == b"AP78"), None)
+        if panel is None:
+            payload = (stock_named_resources or {}).get((b"SMNU", b"AP78"))
+            panel = (CamEntry(name=pad_name(b"AP78"), data=payload) if payload is not None
+                     else _require_cam_entry(game_path / "Data/textdata.cam", b"SMNU", b"AP78"))
+        try:
+            panel = replace(panel, data=enable_native_tooltips(panel.data))
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+        smnu_entries = tuple(e for e in smnu_entries if e.name[:4] != b"AP78") + (panel,)
     private_strt_entries, private_strt_selections = merge_named_resources(
         private_strt_resources,
         b"STRT",
@@ -3903,6 +3918,7 @@ def validate_controller_stock_evidence(
         bool(_controller_record_count(registry))
         or bool(runtime_feature_registry.enchantment_rows)
         or bool(runtime_feature_registry.hero_info_rows)
+        or bool(runtime_feature_registry.movement_scales)
         or runtime_feature_registry.native_timing is not None
         or any(
         inventory.selected.package.definition is not None
@@ -4058,6 +4074,11 @@ def validate_controller_stock_evidence(
     )
 
     _validate_native_timing_stock_subjects(stock_descriptions, runtime_feature_registry)
+    for scale in runtime_feature_registry.movement_scales:
+        matches = [kind for (_owner, key), kind in description_kinds.items()
+                   if key == ("Unit", scale.overlay_id)]
+        if matches != ["addition"]:
+            raise ComposeError(f"movement scale {scale.overlay_id!r} must identify exactly one package-added Overlay Description")
 
     if runtime_feature_registry.hero_info_rows:
         stock_images = stock_image_ids(game_path)
@@ -5770,7 +5791,7 @@ def resolve_runtime_feature_registry(
             *(
                 feature
                 for feature in definition.runtime_features
-                if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature, HeroInfoRow))
+                if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature, HeroInfoRow, OverlayMovementScale))
             ),
             *legacy_runtime_features(definition.runtime_capabilities),
         )
@@ -5849,6 +5870,8 @@ def resolve_runtime_feature_registry(
             key = ("name-generator", feature.generator_id)
         elif isinstance(feature, EnchantmentRowFeature):
             key = ("enchantment-row", feature.overlay_id)
+        elif isinstance(feature, OverlayMovementScale):
+            key = ("movement-scale", feature.overlay_id)
         else:  # Keep unrelated schema-v3 feature families out of MMFR.
             raise ComposeError(
                 "runtime feature registry received an unsupported feature family: "
@@ -5929,6 +5952,12 @@ def _runtime_feature_evidence_errors(
     inventory: PackageInventory,
     feature: RuntimeFeature,
 ) -> tuple[str, ...]:
+    if isinstance(feature, OverlayMovementScale):
+        try:
+            validate_movement_scale_evidence(inventory, feature)
+            return ()
+        except ValueError as exc:
+            return (str(exc),)
     if isinstance(feature, HeroInfoRow):
         try:
             validate_hero_info_evidence(inventory, feature)
@@ -7140,7 +7169,7 @@ def compose_package(
     runtime_feature_registry = resolve_runtime_feature_registry(
         inventories, runtime_capabilities
     )
-    if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows:
+    if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows or runtime_feature_registry.movement_scales:
         require_beta2(game_path / "MajestyHD.exe")
     runtime_feature_registry_payload = encode_runtime_feature_registry(
         runtime_feature_registry
@@ -7167,6 +7196,7 @@ def compose_package(
         dialog_resolutions=dialog_resolutions,
         controller_panels=controller_result.panels,
         controller_registry=controller_result.registry,
+        hero_info_tooltips=bool(runtime_feature_registry.hero_info_rows),
         named_resolutions=named_cam_resolutions,
         strt_resolutions=strt_resolutions,
         stock_named_resources=stock_named_resources,
@@ -7756,6 +7786,8 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
         raise ComposeError("generated kingdom research registry and MMCP hook selection disagree")
     if bool(runtime_features.hero_info_rows) != (HERO_INFO_TYPE in runtime_capabilities):
         raise ComposeError("generated hero information registry and MMCP hook selection disagree")
+    if bool(runtime_features.movement_scales) != (MOVEMENT_SCALE_TYPE in runtime_capabilities):
+        raise ComposeError("generated movement scale registry and MMCP hook selection disagree")
     controller_path = root / CONTROLLER_REGISTRY_RELATIVE_PATH
     if not controller_path.is_file():
         raise ComposeError(
@@ -7891,6 +7923,10 @@ def _validate_generated_runtime_evidence(
 
     for feature in runtime_features.features:
         _require_runtime_feature_evidence(inventory, feature)
+    if runtime_features.hero_info_rows:
+        panel = _owned_smnu_payload(inventory, b"AP78", "generated hero information")
+        if enable_native_tooltips(panel) != panel:
+            raise ComposeError("generated AP78 information lists must enable native tooltips")
     _require_name_generator_declarations(
         inventory,
         runtime_features.name_generators,
@@ -8364,6 +8400,10 @@ def _build_report(
                 ),
                 "map_fog_query": runtime_feature_registry.map_fog_query,
                 "movement_query": runtime_feature_registry.movement_query,
+                "movement_scales": [
+                    {"overlay_id": item.overlay_id, "percent": item.percent}
+                    for item in runtime_feature_registry.movement_scales
+                ],
                 "kingdom_research": [
                     {"identity": item.identity, "building_family": item.building_family,
                      "action_control_id": item.action_control_id,

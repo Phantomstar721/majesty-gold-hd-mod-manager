@@ -564,7 +564,7 @@ def create_build_plan(
                 inventories,
                 tuple(sorted(capabilities)),
             )
-            if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows:
+            if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows or runtime_feature_registry.movement_scales:
                 if game_path is None:
                     raise ValueError("Selected runtime features require an audited beta2 game installation")
                 require_beta2(game_path / "MajestyHD.exe")

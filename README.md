@@ -25,6 +25,7 @@ needed by custom buildings, panels, and other advanced features.
   and stops with conflict details when edits cannot be reconciled.
 - Supports reusable list, research, reward, and recruitment panels, including
   single-panel layouts at lower resolutions.
+- Supports custom ability names, icons, and hover descriptions in hero panels.
 - Leaves subscribed mods and downloaded quests unchanged.
 - Installs and manages the supported Majesty quality-of-life patches.
 - Supports both maintained Steam versions and GOG Gold HD 1.5.2.28. See
@@ -68,8 +69,8 @@ downloading any updated mods, reopen the Manager, select **Rescan Content**,
 then **Prepare Selected Mods** (or **Prepare Again**) to refresh your generated
 package before launching.
 
-The [0.3.7 update notes](release/v0.3.7.md) cover the latest shared panel,
-hero-integration, timing, and merge improvements.
+The [0.3.8 update notes](release/v0.3.8.md) cover GOG support, hero-panel fixes,
+research effects, and percentage-based movement effects.
 
 ## Content tabs
 
@@ -200,6 +201,10 @@ These features are package-declared, not tied to particular mod names or UUIDs:
 - **Read-only world queries:** bounded explored-map searches and stock unit
   movement values, without spawning units or changing movement attributes.
   See [movement queries](docs/stock-movement-query.md).
+- **Movement effects:** opt-in percentage distance scaling while a private
+  overlay is attached, preserving stock timing, pathfinding and effect expiry.
+  See [overlay movement scaling](docs/stock-overlay-movement-scale.md) for the
+  beta2-only contract and additive stacking rules.
 
 Each recipe has a bounded stock lifecycle and resource-ownership contract.
 Private controls and resources must match what the package ships; fields named
@@ -255,10 +260,15 @@ For the complete technical rules, see the
 
 ## Compatibility and safety
 
-The manager supports both maintained Steam versions:
+The manager supports these game versions:
 
 - Default Public Version `1.5.2.24`
 - `beta2` Steam Multiplayer Support `1.5.2.28`
+- GOG Gold HD `1.5.2.28`
+
+Some advanced mod features currently require Steam beta2. The Manager checks
+the selected installation and explains when a mod needs a different version.
+See [GOG support and limitations](docs/gog-support.md) before using GOG.
 
 The detected version and installation folder are shown at the top of the app.
 Use **Choose…** if you want the manager to use a different supported

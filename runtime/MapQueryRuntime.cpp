@@ -32,6 +32,7 @@ const Profile* g_profile = nullptr;
 bool g_mapQuery = false, g_movementQuery = false;
 int (*g_researchOrder)(void*, std::uint32_t) = nullptr;
 int (*g_researchEligible)(void*, std::uint32_t) = nullptr;
+int (*g_movementDistance)(void*, int) = nullptr;
 
 struct MovementProfile {
     std::uintptr_t changeType, resolveUnit, findDescription, descriptionsGlobal;
@@ -242,7 +243,14 @@ int UnitMovementRate(void* value, int mode) {
         using Interval = int (__thiscall*)(void*);
         interval = reinterpret_cast<Interval>(intervalMethod)(unit);
     }
-    return Rate(Read<int>(movement, 0x10), interval);
+    const int distance = Read<int>(movement, 0x10);
+    const int rate = Rate(distance, interval);
+    if (mode == 1 && rate >= 0 && g_movementDistance) {
+        // Scale Q16 distance before dividing, avoiding a second truncation of
+        // the already-rounded integer rate. Per-order caps are not nominal rate.
+        return g_movementDistance(unit, distance << 11)/interval;
+    }
+    return rate;
 }
 int UnitTypeMovementRate(const char* name) {
     using namespace MajestyMovement;
@@ -609,10 +617,12 @@ bool InstallMapQueryRuntime(std::uintptr_t imageBase, MajestyBuildId buildId,
                            bool mapQuery, bool movementQuery,
                            const MajestyRuntimeFeatures::Registry* timing,
                            int (*researchOrder)(void*, std::uint32_t),
-                           int (*researchEligible)(void*, std::uint32_t)) {
+                           int (*researchEligible)(void*, std::uint32_t),
+                           int (*movementDistance)(void*, int)) {
     if ((researchOrder == nullptr) != (researchEligible == nullptr)) return false;
     if (!mapQuery && !movementQuery && timing == nullptr && !researchOrder) return true;
     if (researchOrder && buildId != MajestyBuildId::SteamBeta2) return false;
+    if (movementDistance && buildId != MajestyBuildId::SteamBeta2) return false;
     if (timing != nullptr && !timing->nativeTiming) return false;
     g_base = imageBase;
     switch (buildId) {
@@ -627,6 +637,7 @@ bool InstallMapQueryRuntime(std::uintptr_t imageBase, MajestyBuildId buildId,
     g_timing = timing;
     g_researchOrder = researchOrder;
     g_researchEligible = researchEligible;
+    g_movementDistance = movementDistance;
     g_mapQuery = mapQuery;
     g_movementQuery = movementQuery;
     // Pin the stock registration boundary and field accesses on both audited

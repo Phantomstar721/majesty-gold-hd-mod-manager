@@ -350,7 +350,7 @@ def prepared_catalog_merge_preflight(
             (inventory,),
             prepared.runtime_capabilities,
         )
-        if runtime_features.equipment or runtime_features.kingdom_research or runtime_features.hero_info_rows:
+        if runtime_features.equipment or runtime_features.kingdom_research or runtime_features.hero_info_rows or runtime_features.movement_scales:
             require_beta2(game_path / "MajestyHD.exe")
         dialogs = resolve_building_dialogs((inventory,))
         controller = resolve_controller_registry(

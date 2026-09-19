@@ -67,6 +67,7 @@ DLL therefore cannot silently run a package that needs a newer hook.
 | `stock.controller-recipes.v1` | Requires at least one resolved MMCR recipe and installs only the stock-controller hook groups selected by those records. |
 | `stock.map-fog-query.v1` | Requires the MMFR map-query flag and registers read-only, bounded native GPL map queries. |
 | `stock.movement-query.v1` | Requires the MMFR movement-query flag and registers read-only native unit/description locomotion queries. |
+| `manager.overlay-movement-scale.v1` | Beta2-only: requires MMFR v8 overlay percentages; scales one native linear-order step while the overlay is attached, preserving stock timing and lifecycle. |
 | `stock.native-timing.v1` | Requires MMFR v3 timing selection and registers the stock clock, read-only movement/action base periods, declared effector-time queries and learned-spell cooldown commits. |
 | `stock.equipment.v1` | Local beta2-only trial: requires MMFR v4 equipment records and extends stock enum/name/icon tables. No purchase, combat, save, or timer hooks. |
 | `manager.kingdom-research.v1` | Local beta2-only trial: requires MMFR v5/v6 research records, saved GPL owner state, and a private AP52 parent. Uses the stock queued purchase/order/completion lifecycle and declared earned-reward boundaries; optionally reconciles private active effects at native lifecycle events. |
@@ -85,7 +86,7 @@ same generic records described below and emits only the canonical generic MMCP
 capabilities. New packages describe typed runtime features instead of using
 these aliases.
 
-## MMFR v1-v6
+## MMFR v1-v8
 
 MMFR is an immutable, data-only registry. It cannot carry a DLL, path, RVA,
 patch byte, callback, or instruction.
@@ -204,6 +205,14 @@ label/tooltip Windows-1252 bytes follow. Ordering is by kind, numeric FourCC and
 key; spell/effect subjects are unique. The complete MMFR remains capped at 1 MiB.
 Research records in v7 include the v6 optional effector length even when empty.
 See the [AP78 stock lifecycle and author contract](stock-ap78-info-rows.md).
+
+MMFR v8 adds flag 64 and a final movement-scale section after the other selected
+sections: `u32 count` (1–256), then `{u32 overlay_id, u32 percent}` pairs sorted
+strictly by numeric FourCC. Percent must be 1–1000. Research retains its v6/v7
+effect-length field. V8 requires bit 6 and permits only bits 0–6; empty sections,
+duplicates, malformed IDs and trailing data are rejected. Without movement
+scaling the writer retains the older appropriate version. See the
+[overlay movement contract and native lifecycle](stock-overlay-movement-scale.md).
 
 ## MMCR controller recipes
 

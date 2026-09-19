@@ -336,6 +336,7 @@ class ManagerCatalogTests(unittest.TestCase):
         self.assertIn("AITX[7]", issues[0].message)
 
     def test_catalog_preflight_passes_toggle_ownership_to_stock_evidence(self):
+        from majesty_cam.runtime_features import RuntimeFeatureRegistry
         package = Path("C:/fixture/toggle-mod")
         prepared = PreparedMergeMod(
             content_id=normalize_content_id(MERGE_ID),
@@ -371,7 +372,7 @@ class ManagerCatalogTests(unittest.TestCase):
             "majesty_cam.manager.preflight.validate_gpl_feature_evidence"
         ), patch(
             "majesty_cam.manager.preflight.resolve_runtime_feature_registry",
-            return_value=SimpleNamespace(equipment=(), kingdom_research=(), hero_info_rows=()),
+            return_value=RuntimeFeatureRegistry(),
         ), patch(
             "majesty_cam.manager.preflight.resolve_building_dialogs",
             return_value=(),

@@ -21,6 +21,11 @@ reduce observed travel without changing the returned rate. Mode 1 queries the
 current modifier, not a historical snapshot of an already queued move order.
 An explicit movement-attachment or unit-type change affects subsequent queries.
 
+When the optional [overlay distance adapter](stock-overlay-movement-scale.md)
+is also selected, mode 1 includes its current attached-overlay percentage.
+Mode 0 and the description query remain unscaled references. The distance
+adapter does not change the simulation quantum or ordinary interval modifiers.
+
 Returns: nonnegative rate on success (zero means no positive representable rate);
 `-1` invalid/missing unit, unknown/empty description name, or invalid mode;
 `-2` absent/unsupported movement description or non-stock interval override;

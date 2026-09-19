@@ -6,6 +6,9 @@ void* live = nullptr;
 void* named = nullptr;
 void* catalog = nullptr;
 int modifier = 0, intervalCalls = 0, lookupCalls = 0;
+int ScaleDistance(void* unit, int distance) {
+    assert(unit == live); return distance * 115 / 100;
+}
 void* __fastcall Reference(void* object, void*) { return object; }
 void* __fastcall Resolve(void* reference, void*) {
     assert(Read<unsigned>(reference, 8) == 42);
@@ -79,6 +82,12 @@ void Run() {
     modifier = 40;
     assert(UnitMovementRate(&value,0) == 512 && intervalCalls == 0);
     assert(UnitMovementRate(&value,1) == 256 && intervalCalls == 1);
+    g_movementDistance = &ScaleDistance;
+    assert(UnitMovementRate(&value,1) == 294);
+    assert(UnitMovementRate(&value,0) == 512);
+    assert(UnitTypeMovementRate("Example") == 512);
+    g_movementDistance = nullptr;
+    intervalCalls = 1;
     assert(std::memcmp(&value,&original,sizeof(value)) == 0);
     assert(std::memcmp(unit,originalUnit,sizeof(unit)) == 0);
     assert(UnitMovementRate(&value,2) == kInvalid && UnitMovementRate(nullptr,0) == kInvalid);

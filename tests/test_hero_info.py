@@ -9,7 +9,7 @@ import unittest
 from xml.etree import ElementTree as ET
 
 from majesty_cam.hero_info import (HeroInfoRow, hero_info_mapping, parse_hero_info,
-                                  validate_hero_info_evidence, HERO_INFO_TYPE)
+                                  validate_hero_info_evidence, HERO_INFO_TYPE, enable_native_tooltips)
 from majesty_cam.runtime_features import (encode_runtime_feature_registry, decode_runtime_feature_registry,
     normalize_runtime_features, derive_feature_runtime_capabilities, EnchantmentRowFeature)
 from majesty_cam.package import parse_mod_definition, mod_definition_mapping
@@ -46,6 +46,36 @@ def inventory(root, row=ROW, *, stock=None):
 
 
 class HeroInfoTests(unittest.TestCase):
+    def test_tooltip_flags_use_stock_list_properties_only(self):
+        from majesty_cam.compose import merge_text_resources
+        # Literal stock AP78 list property headers, with unrelated records kept.
+        left = [6, 2, 13, 56, 158, 82, 33, 0, 10, 16, 10, 1048576,
+                12, 1230261833, 13, 1005, 3, 128, 6, 0x221A, 0xFFFFFFFF]
+        right = left.copy()
+        right[3], right[5], right[19] = 161, 52, 0x221B
+        other = [99, 0x400, 0xFFFFFFFF]
+        pack = lambda parts: b''.join(struct.pack(f'<{len(p)}I', *p) for p in parts)
+        payload = pack([other, left, right, [0xFFFFFFFF]])
+        expected_left, expected_right = left.copy(), right.copy()
+        expected_left[17] |= 0x400
+        expected_right[17] |= 0x400
+        expected = pack([other, expected_left, expected_right, [0xFFFFFFFF]])
+        self.assertEqual(enable_native_tooltips(payload), expected)
+        self.assertEqual(enable_native_tooltips(expected), expected)
+        stock = {(b'SMNU', b'AP78'): payload}
+        result = merge_text_resources(Path('unused'), (), stock_named_resources=stock,
+                                      hero_info_tooltips=True)
+        self.assertEqual(result.text_archive.sections[0].entries[0].data, expected)
+        plain = merge_text_resources(Path('unused'), (), stock_named_resources=stock)
+        self.assertEqual(plain.text_archive.sections[0].entries, ())
+        with self.assertRaises(ValueError):
+            enable_native_tooltips(pack([left, [0xFFFFFFFF]]))
+        with self.assertRaises(ValueError):
+            enable_native_tooltips(pack([left, left, right, [0xFFFFFFFF]]))
+        left[16] = 7
+        with self.assertRaises(ValueError):
+            enable_native_tooltips(pack([left, right, [0xFFFFFFFF]]))
+
     def test_schema_and_wire(self):
         definition = dict(schema_version=3, mod_id="39ee2697-33c8-42e2-a575-c26c00640f24",
                           internal_name="Example", display_name="Example", custom_buildings=[],
@@ -144,7 +174,7 @@ class HeroInfoTests(unittest.TestCase):
         image = PeImage(path)
         source = (Path(__file__).resolve().parents[1]/"runtime/HeroInfoRuntime.inl").read_text()
         hashes = re.findall(r'hash\((0x[0-9A-F]+), (0x[0-9A-F]+)\) == (0x[0-9A-F]+)u', source)
-        self.assertEqual(len(hashes), 6)
+        self.assertEqual(len(hashes), 13)
         for rva, size, expected in hashes:
             actual = 2166136261
             for byte in image.read(int(rva, 16), int(size, 16)):
@@ -154,3 +184,15 @@ class HeroInfoTests(unittest.TestCase):
                             (0xa48ff, 0x287f30), (0xa4942, 0x287770)):
             self.assertEqual(image.target(rva), target)
         self.assertEqual(image.read(0xa407c, 7), bytes.fromhex("8b 74 24 18 8b 4e 24"))
+        harness = (Path(__file__).resolve().parent/"HeroInfoRuntimeTests.h").read_text()
+        literal = re.search(r"stockAppend\[\] = \{(.*?)\};", harness, re.S).group(1)
+        append = bytes(int(value, 16) for value in re.findall(r"0x[0-9A-F]{2}", literal))
+        self.assertEqual(len(append), 54)
+        for rva in (0x272410, 0x272450):
+            self.assertEqual(image.read(rva, len(append)), append)
+        text = read_cam(Path(path).parent/'Data/textdata.cam')
+        panel = next(e for s in text.sections if s.extension == b'SMNU'
+                     for e in s.entries if e.name[:4] == b'AP78')
+        changed = enable_native_tooltips(panel.data)
+        differences = [(before, after) for before, after in zip(panel.data, changed) if before != after]
+        self.assertEqual(differences, [(0, 4), (0, 4)])

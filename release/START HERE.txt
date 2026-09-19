@@ -1,4 +1,4 @@
-MAJESTY MOD MANAGER 0.3.7
+MAJESTY MOD MANAGER 0.3.8
 
 Keep this entire folder together. "Majesty Mod Manager.exe" requires the
 nearby "_internal" folder and will not work if the EXE is moved by itself.
@@ -7,15 +7,18 @@ nearby "_internal" folder and will not work if the EXE is moved by itself.
 2. Double-click "Majesty Mod Manager.exe". The Manager itself runs as your
    current Windows user. Windows asks for administrator approval only when a
    game-file helper must be changed inside a protected Majesty installation.
-3. Confirm the app detects Default Public 1.5.2.24 or beta2 1.5.2.28.
+3. Select your installation: Steam Public 1.5.2.24, Steam beta2 1.5.2.28,
+   or GOG Gold HD 1.5.2.28. Some advanced mods require Steam beta2.
 4. Optionally choose "Desktop Shortcut" so this folder is easy to launch again.
 5. Install the two required helpers on the Quality of Life tab when prompted.
 6. Review the automatically selected mods.
 7. If Merge mods are selected, choose "Prepare Selected Mods".
 8. Choose "Launch Majesty".
 
-Always launch through the manager while using prepared Merge content. Your
-subscribed source mods and downloaded quests are left untouched.
+Always launch through the manager while using prepared Merge content or GOG
+Standard mods from Workshop. Your subscribed source mods and downloaded quests
+are left untouched. The Manager can find already-downloaded Workshop content
+for GOG, but does not download subscriptions. GOG 1.5.1.2 is not supported.
 
 UPDATING
 Update the Manager and your selected mods with the game and Manager closed.

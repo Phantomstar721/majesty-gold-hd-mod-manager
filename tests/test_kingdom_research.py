@@ -190,6 +190,9 @@ class KingdomResearchTests(unittest.TestCase):
         self.assertIn('_Visuals(Building, CompletedPlayer)', text)
         self.assertLess(text.index('_done" = Completed;'), text.index('_Visuals(Building, CompletedPlayer)'))
         self.assertIn('$GetUnitPlayerNumber(Building) == Player', text)
+        origin = 'if ($GetUnitPlayerNumber(Origin) == Player) $' + record.callback_symbol + '_Visual(Origin);'
+        self.assertIn(origin, text)
+        self.assertLess(text.index(origin), text.index('$ListObjects(Origin,'))
         self.assertIn('if ((Operation == 2) && Matched)', text)
 
     def test_v6_rejects_missing_visual_and_bad_names(self):

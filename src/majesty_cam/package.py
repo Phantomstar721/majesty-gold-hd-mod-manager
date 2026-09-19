@@ -10,6 +10,8 @@ import xml.etree.ElementTree as ET
 from .runtime_capabilities import is_runtime_capability_name
 from .equipment import StockEquipment, EQUIPMENT_FEATURE_TYPE, parse_equipment, equipment_mapping
 from .hero_info import HeroInfoRow, HERO_INFO_TYPE, parse_hero_info, hero_info_mapping
+from .movement_scale import (OverlayMovementScale, MOVEMENT_SCALE_TYPE,
+                             parse_movement_scale, movement_scale_mapping)
 from .kingdom_research import (KingdomResearch, KINGDOM_RESEARCH_TYPE,
                                parse_kingdom_research, kingdom_research_mapping)
 from .shared_features import (
@@ -519,6 +521,12 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             _require_exact_fields(raw_feature, {"type"}, context)
             feature = MapFogQueryFeature()
             feature_key = (feature_type, "shared")
+        elif feature_type == MOVEMENT_SCALE_TYPE:
+            try:
+                feature = parse_movement_scale(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context}: {exc}") from exc
+            feature_key = (feature_type, feature.overlay_id)
         elif feature_type == "stock.movement-query.v1":
             _require_exact_fields(raw_feature, {"type"}, context)
             feature = MovementQueryFeature()
@@ -648,7 +656,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 f"duplicate runtime feature identity: {feature_key[1]!r}"
             )
         seen_feature_keys.add(feature_key)
-        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature, HeroInfoRow)):
+        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature, HeroInfoRow, OverlayMovementScale)):
             try:
                 normalize_runtime_features((feature,))
             except ValueError as exc:
@@ -1125,6 +1133,8 @@ def mod_definition_mapping(definition: ModDefinition) -> dict:
 
 
 def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
+    if isinstance(feature, OverlayMovementScale):
+        return movement_scale_mapping(feature)
     if isinstance(feature, HeroInfoRow):
         return hero_info_mapping(feature)
     if isinstance(feature, KingdomResearch):

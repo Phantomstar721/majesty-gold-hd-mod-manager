@@ -29,6 +29,7 @@ constexpr char kNativeTiming[] = "stock.native-timing.v1";
 constexpr char kEquipment[] = "stock.equipment.v1";
 constexpr char kKingdomResearch[] = "manager.kingdom-research.v1";
 constexpr char kHeroInfo[] = "stock.ap78-info-row.v1";
+constexpr char kMovementScale[] = "manager.overlay-movement-scale.v1";
 
 struct Manifest {
     std::vector<std::string> capabilities;

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cwchar>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -404,6 +405,7 @@ bool ValidateSelectedParentControllerProfiles();
 bool ValidateQuestBoardProfile();
 bool ValidateKingdomResearchProfile();
 bool ValidateHeroInfoProfile();
+bool ValidateMovementScaleProfile();
 bool HeroEffectRowsSelected();
 const MajestyRuntimeFeatures::KingdomResearchRecord* FindKingdomResearch(std::uint32_t command);
 bool CompleteKingdomResearch(std::uint32_t, void*, std::uint32_t, std::uint32_t, std::uint32_t);
@@ -1686,6 +1688,7 @@ bool ValidateMajestyBuildProfile() {
         }
     }
     if (!g_runtimeFeatureRegistry.heroInfoRows.empty() && !ValidateHeroInfoProfile()) return false;
+    if (!g_runtimeFeatureRegistry.movementScales.empty() && !ValidateMovementScaleProfile()) return false;
     if (!g_runtimeFeatureRegistry.kingdomResearch.empty() && !ValidateKingdomResearchProfile()) return false;
     if (!g_stockControllerRegistry.occupantActionPanels.empty() ||
         !g_stockControllerRegistry.liveAgentLists.empty()) {
@@ -7031,6 +7034,7 @@ __declspec(naked) void SecondaryControllerResultHook() {
 }
 
 #include "HeroInfoRuntime.inl"
+#include "MovementScaleRuntime.inl"
 
 // AP78 has no generic data-driven Enchantments presenter. Its stock refresh
 // reads each active effector's overlay FourCC and switches over a fixed list.
@@ -7559,6 +7563,7 @@ DWORD WINAPI InitializeRuntime(void*) {
         HasRuntimeCapability(MajestyRuntimeCapabilities::kEquipment) != !g_runtimeFeatureRegistry.equipment.empty() ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kKingdomResearch) != kingdomResearch ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kHeroInfo) != !g_runtimeFeatureRegistry.heroInfoRows.empty() ||
+        HasRuntimeCapability(MajestyRuntimeCapabilities::kMovementScale) != !g_runtimeFeatureRegistry.movementScales.empty() ||
         requestedEnchantmentRowHook != privateEnchantmentRows ||
         requestedStockControllerRecipes != stockControllerRecipes) {
         StopUnsafeManagerRuntimeLaunch(
@@ -7586,6 +7591,10 @@ DWORD WINAPI InitializeRuntime(void*) {
                 g_runtimeFeatureRegistry, &StopUnsafeManagerRuntimeLaunch),
             managerLaunch, "Private equipment requires the audited beta2 registration boundaries.");
     }
+    if (!g_runtimeFeatureRegistry.movementScales.empty()) {
+        RequireManagerRuntimeInstall(InstallMovementScale(), managerLaunch,
+            "Overlay movement scaling requires the audited beta2 linear movement boundary.");
+    }
     if (g_runtimeFeatureRegistry.mapFogQuery || g_runtimeFeatureRegistry.movementQuery ||
         g_runtimeFeatureRegistry.nativeTiming || kingdomResearch) {
         RequireManagerRuntimeInstall(
@@ -7593,7 +7602,8 @@ DWORD WINAPI InitializeRuntime(void*) {
                 g_runtimeFeatureRegistry.mapFogQuery, g_runtimeFeatureRegistry.movementQuery,
                 g_runtimeFeatureRegistry.nativeTiming ? &g_runtimeFeatureRegistry : nullptr,
                 kingdomResearch ? &KingdomResearchOrder : nullptr,
-                kingdomResearch ? &KingdomResearchEligible : nullptr),
+                kingdomResearch ? &KingdomResearchEligible : nullptr,
+                g_runtimeFeatureRegistry.movementScales.empty() ? nullptr : &MovementQueryDistance),
             managerLaunch, "The stock GPL interface registration boundary did not match its profile.");
     }
 
