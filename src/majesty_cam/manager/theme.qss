@@ -18,6 +18,23 @@ QWidget {
 QMainWindow#managerWindow,
 QWidget#appRoot { background-color: #12100c; }
 
+/* Dialogs inherit our pale text, so their surfaces must not use the OS palette. */
+QMessageBox {
+    color: #eee8d9;
+    background-color: #181410;
+}
+
+QMessageBox QLabel {
+    color: #eee8d9;
+    background-color: transparent;
+}
+
+QMessageBox QTextEdit {
+    color: #eee8d9;
+    background-color: #0d0b08;
+    border: 1px solid #4a4038;
+}
+
 QFrame#appHeader {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 #18130f, stop:0.48 #2a1d14, stop:1 #17100e);
