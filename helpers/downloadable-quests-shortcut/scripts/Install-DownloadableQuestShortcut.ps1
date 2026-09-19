@@ -282,17 +282,20 @@ function Test-Magic {
 function Get-CamEntries {
     param([byte[]]$Bytes)
 
+    # UI scans read tens of thousands of words. Call BitConverter directly in
+    # these loops: a PowerShell function/pipeline per word dominates dry-runs.
+
     if (-not (Test-Magic $Bytes)) {
         throw "Not a Majesty CAM/UIData archive."
     }
 
-    $sectionCount = [int](Read-U32 $Bytes 12)
+    $sectionCount = [int][BitConverter]::ToUInt32($Bytes, 12)
     $entries = @()
     for ($sectionIndex = 0; $sectionIndex -lt $sectionCount; $sectionIndex++) {
         $dir = 20 + ($sectionIndex * 8)
         $extension = [Text.Encoding]::ASCII.GetString($Bytes, $dir, 4).TrimEnd()
-        $sectionHeaderOffset = [int](Read-U32 $Bytes ($dir + 4))
-        $entryCount = [int](Read-U32 $Bytes $sectionHeaderOffset)
+        $sectionHeaderOffset = [int][BitConverter]::ToUInt32($Bytes, ($dir + 4))
+        $entryCount = [int][BitConverter]::ToUInt32($Bytes, $sectionHeaderOffset)
 
         for ($entryIndex = 0; $entryIndex -lt $entryCount; $entryIndex++) {
             $entryHeader = $sectionHeaderOffset + 8 + ($entryIndex * 28)
@@ -300,8 +303,8 @@ function Get-CamEntries {
             $entries += [pscustomobject]@{
                 Extension = $extension
                 Name = $name
-                DataOffset = [int](Read-U32 $Bytes ($entryHeader + 20))
-                DataSize = [int](Read-U32 $Bytes ($entryHeader + 24))
+                DataOffset = [int][BitConverter]::ToUInt32($Bytes, ($entryHeader + 20))
+                DataSize = [int][BitConverter]::ToUInt32($Bytes, ($entryHeader + 24))
                 DataOffsetField = $entryHeader + 20
                 DataSizeField = $entryHeader + 24
             }
@@ -316,9 +319,9 @@ function Get-NextElementOffset {
     for ($relative = $RelativeStart + 4; $relative -le ($EntryEnd - $EntryOffset - 12); $relative += 4) {
         $absolute = $EntryOffset + $relative
         if (
-            (Read-U32 $Bytes $absolute) -eq $ElementSentinel -and
-            (Read-U32 $Bytes ($absolute + 4)) -eq 0 -and
-            (Read-U32 $Bytes ($absolute + 8)) -eq 2
+            [BitConverter]::ToUInt32($Bytes, $absolute) -eq $ElementSentinel -and
+            [BitConverter]::ToUInt32($Bytes, ($absolute + 4)) -eq 0 -and
+            [BitConverter]::ToUInt32($Bytes, ($absolute + 8)) -eq 2
         ) {
             return $absolute
         }
@@ -336,7 +339,7 @@ function Test-ElementHasTokenPair {
     )
 
     for ($offset = $Start; $offset -le ($End - 8); $offset += 4) {
-        if ((Read-U32 $Bytes $offset) -eq $Token -and (Read-U32 $Bytes ($offset + 4)) -eq $Value) {
+        if ([BitConverter]::ToUInt32($Bytes, $offset) -eq $Token -and [BitConverter]::ToUInt32($Bytes, ($offset + 4)) -eq $Value) {
             return $true
         }
     }
@@ -357,9 +360,9 @@ function Find-Element {
     for ($relative = 0; $relative -le ($Entry.DataSize - 28); $relative += 4) {
         $absolute = $entryOffset + $relative
         if (
-            (Read-U32 $Bytes $absolute) -ne $ElementSentinel -or
-            (Read-U32 $Bytes ($absolute + 4)) -ne 0 -or
-            (Read-U32 $Bytes ($absolute + 8)) -ne 2
+            [BitConverter]::ToUInt32($Bytes, $absolute) -ne $ElementSentinel -or
+            [BitConverter]::ToUInt32($Bytes, ($absolute + 4)) -ne 0 -or
+            [BitConverter]::ToUInt32($Bytes, ($absolute + 8)) -ne 2
         ) {
             continue
         }
@@ -369,16 +372,17 @@ function Find-Element {
         if (-not $hasText) {
             $hasText = Test-ElementHasTokenPair $Bytes ($absolute + 28) $next 7 $TextId
         }
+        if (-not $hasText) { continue }
         $hasImage = Test-ElementHasTokenPair $Bytes ($absolute + 28) $next 6 $ImageId
-        $hasFixed = Test-ElementHasTokenPair $Bytes ($absolute + 28) $next 43 1
-        if ($hasText -and $hasImage -and ((-not $RequireFixed) -or $hasFixed)) {
+        if (-not $hasImage) { continue }
+        if ((-not $RequireFixed) -or (Test-ElementHasTokenPair $Bytes ($absolute + 28) $next 43 1)) {
             return [pscustomobject]@{
                 Offset = $absolute
                 EndOffset = $next
-                X = [int](Read-U32 $Bytes ($absolute + 12))
-                Y = [int](Read-U32 $Bytes ($absolute + 16))
-                Width = [int](Read-U32 $Bytes ($absolute + 20))
-                Height = [int](Read-U32 $Bytes ($absolute + 24))
+                X = [int][BitConverter]::ToUInt32($Bytes, ($absolute + 12))
+                Y = [int][BitConverter]::ToUInt32($Bytes, ($absolute + 16))
+                Width = [int][BitConverter]::ToUInt32($Bytes, ($absolute + 20))
+                Height = [int][BitConverter]::ToUInt32($Bytes, ($absolute + 24))
             }
         }
     }

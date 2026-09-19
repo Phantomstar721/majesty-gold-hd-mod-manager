@@ -43,6 +43,7 @@ from .qol_service import (
 
 STARTUP_CACHE_SCHEMA_VERSION = 4
 STARTUP_CACHE_FILENAME = "startup-cache.json"
+QOL_CACHE_SCHEMA_VERSION = 1
 _MAX_QOL_INSTALLATIONS = 8
 _STOCK_PREFLIGHT_INPUTS = (
     Path("MajestyHD.exe"),
@@ -73,6 +74,18 @@ class StartupCache:
         qol = value.get("qol")
         if not isinstance(qol, dict):
             qol = None
+        # Older Managers replace the shared startup cache with their own
+        # schema. Keep helper evidence in a separate, independently versioned
+        # file so opening one cannot evict this Manager's installation checks.
+        # The embedded v4 entry remains a migration fallback.
+        try:
+            qol_value = json.loads(path.with_suffix(".qol.json").read_text(encoding="utf-8"))
+            if (isinstance(qol_value, dict)
+                    and qol_value.get("schema_version") == QOL_CACHE_SCHEMA_VERSION
+                    and isinstance(qol_value.get("qol"), dict)):
+                qol = qol_value["qol"]
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            pass
         managed_build = value.get("managed_build")
         if not isinstance(managed_build, dict):
             managed_build = None
@@ -285,12 +298,17 @@ class StartupCache:
         payload = {
             "schema_version": STARTUP_CACHE_SCHEMA_VERSION,
             "merge_preflight": self.preflight,
-            "qol": self.qol,
             "managed_build": self.managed_build,
             "catalog": self.catalog,
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            if self.qol is not None:
+                _atomic_write(
+                    self.path.with_suffix(".qol.json"),
+                    (json.dumps({"schema_version": QOL_CACHE_SCHEMA_VERSION,
+                                 "qol": self.qol}, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+                )
             _atomic_write(
                 self.path,
                 (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"),

@@ -170,10 +170,16 @@ Remove Optional bulk action continues to remove only optional helpers.
 Helper inspection caches retain separate results for up to eight installation
 paths. Returning to an unchanged installation, including after restarting the
 Manager, refreshes preferences directly and starts no PowerShell dry-runs.
+Helper results live in a separately versioned `startup-cache.qol.json` beside
+the startup cache, so opening an older Manager cannot discard them by rewriting
+the shared startup-cache schema. Existing embedded results migrate automatically.
 Executable and relevant UI-data metadata, canonical script/dependency contents,
 and status-interpretation settings still invalidate that installation's result.
 The initial inspection and checks after changed evidence still run the canonical
 read-only scripts; a failed inspection is retried on the next scan.
+The UI-data parsers use direct binary reads in their hot loops, avoiding a
+PowerShell function invocation for every four-byte word. They retain the same
+record boundaries, token matching, executable guards, and install/restore logic.
 PE discovery reads only the header and file length rather than the whole EXE.
 Plan fingerprints include the selected installation path and executable profile;
 metadata invalidation includes the EXE. Byte-identical CAM inputs alone cannot

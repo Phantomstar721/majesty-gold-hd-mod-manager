@@ -382,21 +382,23 @@ function Assert-FileWritable {
 
 function Get-CamEntries {
     param([byte[]]$Bytes)
+    # Avoid a PowerShell function/pipeline per four-byte word in UI scan loops.
+    # Direct BitConverter reads preserve the parser's bounds and match rules.
     if (-not (Test-BytesEqual $Bytes 0 $script:CamMagic)) { throw "Not a Majesty CAM/UIData archive." }
     $entries = @()
-    $sectionCount = [int](Read-U32 $Bytes 12)
+    $sectionCount = [int][BitConverter]::ToUInt32($Bytes, 12)
     for ($sectionIndex = 0; $sectionIndex -lt $sectionCount; $sectionIndex++) {
         $directory = 20 + ($sectionIndex * 8)
         $extension = [Text.Encoding]::ASCII.GetString($Bytes, $directory, 4).TrimEnd()
-        $sectionOffset = [int](Read-U32 $Bytes ($directory + 4))
-        $entryCount = [int](Read-U32 $Bytes $sectionOffset)
+        $sectionOffset = [int][BitConverter]::ToUInt32($Bytes, ($directory + 4))
+        $entryCount = [int][BitConverter]::ToUInt32($Bytes, $sectionOffset)
         for ($entryIndex = 0; $entryIndex -lt $entryCount; $entryIndex++) {
             $header = $sectionOffset + 8 + ($entryIndex * 28)
             $entries += [pscustomobject]@{
                 Extension = $extension
                 Name = [Text.Encoding]::ASCII.GetString($Bytes, $header, 20).TrimEnd([char]0)
-                DataOffset = [int](Read-U32 $Bytes ($header + 20))
-                DataSize = [int](Read-U32 $Bytes ($header + 24))
+                DataOffset = [int][BitConverter]::ToUInt32($Bytes, ($header + 20))
+                DataSize = [int][BitConverter]::ToUInt32($Bytes, ($header + 24))
                 DataOffsetField = $header + 20
                 DataSizeField = $header + 24
             }
@@ -409,7 +411,7 @@ function Get-NextElementOffset {
     param([byte[]]$Bytes, [object]$Entry, [int]$Start)
     $end = $Entry.DataOffset + $Entry.DataSize
     for ($offset = $Start + 4; $offset -le ($end - 12); $offset += 4) {
-        if ((Read-U32 $Bytes $offset) -eq [uint32]::MaxValue -and (Read-U32 $Bytes ($offset + 4)) -ne [uint32]::MaxValue -and (Read-U32 $Bytes ($offset + 8)) -eq 2) {
+        if ([BitConverter]::ToUInt32($Bytes, $offset) -eq [uint32]::MaxValue -and [BitConverter]::ToUInt32($Bytes, ($offset + 4)) -ne [uint32]::MaxValue -and [BitConverter]::ToUInt32($Bytes, ($offset + 8)) -eq 2) {
             return $offset
         }
     }
@@ -421,17 +423,17 @@ function Find-ElementByControlId {
     $matches = @()
     $entryEnd = $Entry.DataOffset + $Entry.DataSize
     for ($offset = $Entry.DataOffset; $offset -le ($entryEnd - 28); $offset += 4) {
-        if ((Read-U32 $Bytes $offset) -ne [uint32]::MaxValue -or (Read-U32 $Bytes ($offset + 4)) -eq [uint32]::MaxValue -or (Read-U32 $Bytes ($offset + 8)) -ne 2) { continue }
+        if ([BitConverter]::ToUInt32($Bytes, $offset) -ne [uint32]::MaxValue -or [BitConverter]::ToUInt32($Bytes, ($offset + 4)) -eq [uint32]::MaxValue -or [BitConverter]::ToUInt32($Bytes, ($offset + 8)) -ne 2) { continue }
         $next = Get-NextElementOffset $Bytes $Entry $offset
         for ($pair = $offset + 28; $pair -le ($next - 8); $pair += 8) {
-            if ((Read-U32 $Bytes $pair) -eq 6 -and (Read-U32 $Bytes ($pair + 4)) -eq $ControlId) {
+            if ([BitConverter]::ToUInt32($Bytes, $pair) -eq 6 -and [BitConverter]::ToUInt32($Bytes, ($pair + 4)) -eq $ControlId) {
                 $matches += [pscustomobject]@{
                     Offset = $offset
                     EndOffset = $next
-                    X = [int](Read-U32 $Bytes ($offset + 12))
-                    Y = [int](Read-U32 $Bytes ($offset + 16))
-                    Width = [int](Read-U32 $Bytes ($offset + 20))
-                    Height = [int](Read-U32 $Bytes ($offset + 24))
+                    X = [int][BitConverter]::ToUInt32($Bytes, ($offset + 12))
+                    Y = [int][BitConverter]::ToUInt32($Bytes, ($offset + 16))
+                    Width = [int][BitConverter]::ToUInt32($Bytes, ($offset + 20))
+                    Height = [int][BitConverter]::ToUInt32($Bytes, ($offset + 24))
                 }
                 break
             }

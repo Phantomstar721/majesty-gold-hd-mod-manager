@@ -1,5 +1,6 @@
 from dataclasses import replace
 from pathlib import Path
+import json
 import os
 import subprocess
 import sys
@@ -144,8 +145,15 @@ class StartupCacheTests(unittest.TestCase):
                     self.assertTrue(snapshot.qol_utilities[0].installed)
                 self.assertEqual(runner.call_count, 2)
 
-                # Persisted entries also survive a Manager restart.
+                # An older Manager can still write its own startup-cache
+                # schema. That must not evict either installation's helpers.
+                paths.startup_cache_path.write_text(
+                    json.dumps({"schema_version": 3, "qol": {"signature": "legacy"}})
+                )
                 controller = ManagerController(paths=paths, registry=CompatibilityRegistry(specs={}))
+                controller.scan(force_refresh=True)
+                self.assertEqual(runner.call_count, 2)
+                controller.select_game_executable(gog)
                 controller.scan(force_refresh=True)
                 self.assertEqual(runner.call_count, 2)
 
@@ -162,6 +170,26 @@ class StartupCacheTests(unittest.TestCase):
                     controller.select_game_executable(executable)
                     controller.scan(force_refresh=True)
                 self.assertEqual(runner.call_count, 5)
+
+    def test_qol_cache_migrates_embedded_entries_and_recovers_from_bad_sidecar(self):
+        from majesty_cam.manager.startup_cache import STARTUP_CACHE_SCHEMA_VERSION
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = root / "startup-cache.json"
+            service = QolService(repo_root=root, game_executable=root / "MajestyHD.exe", specs=())
+            cache = StartupCache.load(path)
+            cache.set_qol("signature", QolCatalogSnapshot(service.game_executable, PUBLIC_BRANCH, ()))
+            path.write_text(json.dumps({"schema_version": STARTUP_CACHE_SCHEMA_VERSION, "qol": cache.qol}))
+            migrated = StartupCache.load(path)
+            self.assertIsNotNone(migrated.get_qol("signature", service))
+            migrated.save()
+            self.assertNotIn("qol", json.loads(path.read_text()))
+            path.unlink()
+            self.assertIsNotNone(StartupCache.load(path).get_qol("signature", service))
+            for invalid in ("broken json", "[]", '{"schema_version": -1, "qol": {}}'):
+                path.with_suffix(".qol.json").write_text(invalid)
+                self.assertIsNone(StartupCache.load(path).get_qol("signature", service))
 
     def test_qol_cache_is_bounded_and_does_not_mix_installations(self):
         with TemporaryDirectory() as temp:

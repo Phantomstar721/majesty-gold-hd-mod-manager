@@ -181,6 +181,9 @@ function Get-CamEntries {
 function Find-ByteSequence {
     param([byte[]]$Bytes, [int]$Start, [int]$End, [byte[]]$Needle)
     for ($offset = $Start; $offset -le ($End - $Needle.Length); $offset++) {
+        # Most offsets cannot match. Avoid a function/pipeline invocation for
+        # every byte in every UI string table during an installed-state check.
+        if ($Needle.Length -gt 0 -and $Bytes[$offset] -ne $Needle[0]) { continue }
         if (Test-BytesEqual $Bytes $offset $Needle) { return $offset }
     }
     return -1
