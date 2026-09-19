@@ -140,6 +140,90 @@ end
                 add_gameplay_event_observers(SemanticMergeResult((*callbacks.items, changed), ()), subscribers, stock)
 
 
+class EarnedExperienceEventTests(unittest.TestCase):
+    subscribers = {
+        "combat-experience-awarded": ("Example_Combat",),
+        "exploration-experience-awarded": ("Example_Explore",),
+    }
+    callbacks = '''function Example_Combat(agent Hero, integer Base)
+declare
+begin
+end
+function Example_Explore(agent Hero, integer Base)
+declare
+begin
+end
+'''
+
+    def test_contract_is_two_typed_arguments_without_a_return(self):
+        for event in self.subscribers:
+            feature = StockGameplayEventObserver("xp", event, "Example_Award")
+            self.assertEqual(parse_shared_feature(shared_feature_mapping(feature)), feature)
+            for args, returns in (("agent Hero", ""), ("agent Hero, string Base", ""),
+                                  ("agent Hero, integer Base", " is boolean")):
+                source = parse_gpl(f"function Example_Award({args}){returns}\nbegin\nend\n")
+                with self.assertRaisesRegex(ValueError, "requires"):
+                    validate_shared_bindings([(MOD, (feature,), (source,))])
+
+    @unittest.skipUnless((GAME / "SDK/Gplbcc.exe").is_file(), "requires installed stock SDK")
+    def test_stock_owners_preserved_and_other_rewards_not_intercepted(self):
+        stock = _load_stock_gameplay_event_items(GAME, self.subscribers)
+        final = add_gameplay_event_observers(
+            SemanticMergeResult(parse_gpl(self.callbacks).items, ()), self.subscribers, stock)
+        functions = {item.normalized_name: item.text for item in final.items}
+        for name, wrapper in (("attack_end", "MM_Event_CombatXP"),
+                              ("travel_to_exp", "MM_Event_ExploreXP")):
+            text = functions[name]
+            self.assertEqual(text.count("$" + wrapper), 1)
+            self.assertEqual(stock_tokens(text.replace("$" + wrapper, "$give_exp")),
+                             stock_tokens(stock[name].text))
+        self.assertIn("$give_exp(leader,#familiar_fight_exp);", functions["attack_end"])
+        self.assertNotIn("give_exp", functions)
+        self.assertEqual(set(functions), {"example_combat", "example_explore", "attack_end",
+                                        "travel_to_exp", "mm_event_combatxp", "mm_event_explorexp"})
+        with TemporaryDirectory(prefix="manager-xp-events-compiler-") as tmp:
+            compile_gpl(final.emit_project_source_set("Fixture.gpl", "Fixture.dat"),
+                        GAME / "SDK/Gplbcc.exe", Path(tmp) / "compiler", stem="Fixture")
+
+    @unittest.skipUnless((GAME / "SDK/Gplbcc.exe").is_file(), "requires installed stock SDK")
+    def test_generated_wrappers_pay_first_and_recursive_give_exp_is_not_an_event(self):
+        stock = _load_stock_gameplay_event_items(GAME, self.subscribers)
+        final = add_gameplay_event_observers(
+            SemanticMergeResult(parse_gpl(self.callbacks).items, ()), self.subscribers, stock)
+        wrappers = "\n".join(item.text for item in final.items
+                              if item.normalized_name.startswith("mm_event_"))
+        vm = SamplerHarness(wrappers)
+        for wrapper, observer in (("MM_Event_CombatXP", "example_combat"),
+                                   ("MM_Event_ExploreXP", "example_explore")):
+            for base in (-1, 0, 120):
+                with self.subTest(wrapper=wrapper, base=base):
+                    leader, follower = Agent(), Agent()
+                    trace = []
+                    vm.calls["give_exp"] = lambda hero, amount: trace.append(("award", hero, amount))
+                    def observe(hero, amount):
+                        trace.append(("notify", hero, amount))
+                        vm.calls["give_exp"](follower, amount // 2)
+                    vm.calls[observer] = observe
+                    vm.call(wrapper, leader, base)
+                    expected = [("award", leader, base)]
+                    if base > 0:
+                        expected += [("notify", leader, base), ("award", follower, base // 2)]
+                    self.assertEqual(trace, expected)
+
+    @unittest.skipUnless((GAME / "SDK/Gplbcc.exe").is_file(), "requires installed stock SDK")
+    def test_incompatible_source_and_double_insertion_fail_closed(self):
+        stock = _load_stock_gameplay_event_items(GAME, self.subscribers)
+        callbacks = parse_gpl(self.callbacks).items
+        for name in stock:
+            changed = replace(stock[name], text=stock[name].text.replace("$give_exp", "$CustomXP"))
+            with self.assertRaisesRegex(ValueError, "stock gameplay-event owner"):
+                add_gameplay_event_observers(
+                    SemanticMergeResult((*callbacks, changed), ()), self.subscribers, stock)
+        final = add_gameplay_event_observers(SemanticMergeResult(callbacks, ()), self.subscribers, stock)
+        with self.assertRaisesRegex(ValueError, "stock gameplay-event owner"):
+            add_gameplay_event_observers(final, self.subscribers, stock)
+
+
 class SharedServiceTests(unittest.TestCase):
     def harness(self):
         harness = SamplerHarness(activity_source((SharedBinding(MOD, ACTIVITY),)))

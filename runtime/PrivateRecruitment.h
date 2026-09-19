@@ -14,6 +14,17 @@ static const std::uint32_t* helpers = nullptr;
 using Presenter = void (__thiscall*)(void*);
 using Tooltip = bool (__thiscall*)(void*, std::uint32_t, std::uint32_t, void*);
 
+inline void RefreshCapacityChange(void* controller, std::uint32_t notification) {
+    if (notification != 0x00425041u) return; // native MaxGuildMembers
+    // Literal AP52 building-change refresh order. Its stock event switch does
+    // not cover a GPL capacity correction made after description initialization.
+    // Re-enter the installed slots, not the clones directly: an opener keeps
+    // its rows hidden, a child suppresses counts, and research retains its gate.
+    auto** table = *static_cast<void***>(controller);
+    reinterpret_cast<Presenter>(table[13])(controller);
+    reinterpret_cast<Presenter>(table[16])(controller);
+}
+
 inline std::uint32_t Fingerprint(const unsigned char* bytes, const Code& code) {
     std::uint32_t hash = 2166136261u;
     std::size_t relocation = 0;

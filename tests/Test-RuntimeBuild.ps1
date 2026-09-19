@@ -335,10 +335,17 @@ try {
             throw "Required static install no longer completes before manager readiness: $requiredPreWindowInstall"
         }
     }
-    $ap10ControllerBlocks = (Get-CppGuardBlocks -Source $initialize -Condition "ap10Ap69ControllerRecipes") -join "`n"
+    $researchBlocks = (Get-CppGuardBlocks -Source $initialize -Condition "ap10Ap69ControllerRecipes || kingdomResearch") -join "`n"
     foreach ($install in @(
         "ValidateStockResearchRoute()", "InstallPrivateResearchDescriptorRegistry()",
-        "InstallResearchCompletionBridge()", "InstallResearchCompletionNameClone()",
+        "InstallResearchCompletionBridge()", "InstallResearchCompletionNameClone()"
+    )) {
+        if (-not $researchBlocks.Contains($install)) {
+            throw "Shared research install is not gated by research records: $install"
+        }
+    }
+    $ap10ControllerBlocks = (Get-CppGuardBlocks -Source $initialize -Condition "ap10Ap69ControllerRecipes") -join "`n"
+    foreach ($install in @(
         "InstallPrivateSpellDescriptorResolver()", "InstallPrivateSovereignSpellRoute()",
         "InstallPrivateRageRoute()", "InstallGameUpdateRefreshBridge()"
     )) {
@@ -370,9 +377,11 @@ try {
             "InstallPrivateNameGenerators()") },
         @{ Condition = "privateEnchantmentRows"; Calls = @(
             "InstallPrivateEnchantmentRows()") },
-        @{ Condition = "ap10Ap69ControllerRecipes"; Calls = @(
+        @{ Condition = "ap10Ap69ControllerRecipes || kingdomResearch"; Calls = @(
             "ValidateStockResearchRoute()", "InstallPrivateResearchDescriptorRegistry()",
-            "InstallResearchCompletionBridge()", "InstallResearchCompletionNameClone()",
+            "InstallResearchCompletionBridge()", "InstallResearchCompletionNameClone()") },
+        @{ Condition = "kingdomResearch"; Calls = @("InstallKingdomResearchGate()") },
+        @{ Condition = "ap10Ap69ControllerRecipes"; Calls = @(
             "InstallPrivateSpellDescriptorResolver()", "InstallPrivateSovereignSpellRoute()",
             "InstallPrivateRageRoute()", "InstallGameUpdateRefreshBridge()") },
         @{ Condition = "stockControllerRecipes"; Calls = @(

@@ -55,7 +55,8 @@ bool StockModNarrowPath(const std::wstring& path, std::string& output) {
 }
 
 bool ParseGogStandardMods(const std::wstring& value, std::vector<GogStandardMod>& output,
-    const wchar_t* extension = L".mmxml", std::size_t maximum = kMaximumStandardMods) {
+    const wchar_t* extension = L".mmxml", std::size_t maximum = kMaximumStandardMods,
+    bool allowUnavailableQuests = false) {
     output.clear();
     if (value.empty() || value.size() > kMaximumStandardManifestCharacters) return false;
     std::vector<GogStandardMod> parsed;
@@ -81,8 +82,12 @@ bool ParseGogStandardMods(const std::wstring& value, std::vector<GogStandardMod>
         const DWORD attributes = GetFileAttributesW(path.c_str());
         if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) ||
             !StockModNarrowPath(path, mod.manifest)) {
-            WriteLog(("GOG Standard manifest is missing or its path cannot be represented by the stock filesystem: " + mod.id).c_str());
-            return false;
+            WriteLog(("GOG manifest is missing or its path cannot be represented by the stock filesystem: " + mod.id).c_str());
+            if (!allowUnavailableQuests) return false;
+            // Preserve IDs for duplicate/count validation, but never send an
+            // unavailable optional quest path to the engine. Standard mods
+            // remain required and fail closed.
+            mod.manifest.clear();
         }
         for (const auto& previous : parsed) if (previous.id == mod.id) return false;
         parsed.push_back(std::move(mod));

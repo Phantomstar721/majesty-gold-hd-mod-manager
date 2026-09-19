@@ -146,7 +146,9 @@ ownership, API return values and completion/cancellation responsibilities.
 Source-composed shared services are also available:
 `stock.gameplay-event-observer.v1` reports actual stock potion consumption,
 attack-flag completion, reward-flag credit, caravan delivery and completed
-tournament participation. Attack completion is independent of recipient payout.
+tournament participation, plus combat and exploration XP award boundaries.
+Attack completion is independent of recipient payout. XP observers receive the
+original award before the recipient-level divisor, not bonus-adjusted XP.
 `stock.activity-duration.v1` measures a mod-defined activity using one shared
 stock-scheduled sampler, with independent progress, pause/resume, cancellation
 and terminal callbacks. Neither adds a native timer or a per-unit polling thread.
@@ -192,6 +194,11 @@ that exact atlas and its TILE dependencies automatically, so an overlay's
 `ImageIDBase` and `Static` flag do not select the panel-row icon. Multiple
 packages may declare either feature; exact duplicates from the same owner
 coalesce, while cross-package ownership or conflicting declarations fail.
+
+For owned custom icons, per-row mouseover help, or level-gated read-only passive
+rows, use [`stock.ap78-info-row.v1`](stock-ap78-info-rows.md). It reuses AP78's
+stock list and tooltip lifecycle; it does not grant abilities or make passive
+entries castable. This extension is currently audited for Steam beta2 only.
 
 #### Stock controller recipes
 

@@ -277,7 +277,124 @@ stock group, not a new controller or order.
   private event copy retains its extra building-change refresh. No upgrade
   timer, peasant script, refund rule or construction state is replaced.
 
+### Capacity increases at completion: author lifecycle contract
+
+**Description capacity alone takes effect at upgrade start, not completion.**
+This is stock building behavior, not a replacement made by the private AP52
+presenters. A package that wants its extra spaces only after construction must
+set the native capacity at both existing stock GPL lifecycle boundaries. A
+private `basic_upgrade` wrapper alone is insufficient.
+
+Read-only beta2 1.5.2.28 trace, 2026-09-18 (addresses are preferred VAs):
+
+| Boundary | Native evidence | Consequence |
+| --- | --- | --- |
+| Upgrade start | `0x43AF82` calls `0x4494C0(newDescription, true)`; `0x44951A..0x449523` invokes building vtable +8 (`0x4482C0`), which invokes +0xC (`0x43D160`) | Native building initialization runs with the **new** Description before construction completes. |
+| Capacity initialization | `0x43D197..0x43D1A2` writes `description.Game +0x24` to attribute `0x00425041` | This is the native `MaxGuildMembers` value, in the unit's normal saved attribute map. |
+| Description change | `0x5CF7B0` changes only unit +0x7C (Description ID) and +0x90 (Description pointer) | Native stage identity is not proof that the saved GPL stage properties have advanced. |
+| Synchronous start callback | `0x43D125..0x43D133` evaluates `building_upgraded` before returning from the upgrade command | Apply the temporary capacity here, **before** its unchanged `$RunThread(upgradescript, 1, agent)`. Doing it inside `basic_upgrade` leaves a scheduled-delay gap. |
+| GPL template completion | `$UpgradeAgentAttributes` is registered at `0x43592E..0x43595D` to `0x4303E0` | `0x43044F..0x4305D9` resolves the current Description's GPL template and assigns its GPL properties through the GPL agent/value interfaces. It does **not** call native building initialization or restore `MaxGuildMembers`. |
+| Authoritative full check | `0x43E3A0` reads native attribute `0x00425041` through `0x5CEF70`, then compares it to `0x43E2F0(0)` | Both the stock presenter (`0x496DBA`) and actual delayed-recruit command (`0x44E070`) use this check. The command rejects full capacity before the payment at `0x44E104..0x44E11B`. |
+| Capacity setter | `$SetAttribute` (`0x42F860`) calls unit vtable +0x124; building `0x449950` delegates storage to `0x5DE410 -> 0x678E30`, then sends normal notifications | Use the real native attribute, not a similarly named GPL property or a UI-only disabled state. |
+| Construction completion | Stock `BuildingReachedMaxHP` calls `UpgradeAgentAttributes` only in its already-built-first-stage / unfinished-current-stage branch | Restore the new native capacity immediately after this call and before the unchanged Legendary Heroes override and readiness notifications. |
+
+For a normal stock-upgrade package, keep a package-private GPL capacity value
+in each building template, generated from the same author data as that stage's
+XML `Game/MaxGuildMembers`. **Declare that value as an integer in the GPL
+prototype used by every stage. A DAT assignment alone does not create an
+instance property.** Clone the complete stock `Guild` prototype under a private
+name, preserving every stock declaration, type, order and body, and add only
+the private integer declaration. Point each stage's DAT block at that private
+prototype instead of `{Guild`. Do not modify the shared stock prototype or
+substitute dynamic attribute creation in a delayed upgrade script.
+
+The native description changes first; the existing
+GPL instance retains its completed-stage template values until the stock
+`UpgradeAgentAttributes` call. This makes the capacity source explicit instead
+of guessing whether a numeric native stage suffix means construction finished.
+
+A read-only live before/after check on 2026-09-18 established this distinction:
+the loaded three-stage DAT templates contained the intended 4/6/8 values, but
+their shared `Guild` prototype had only its 26 stock declarations. The live
+level-1 guild consequently lacked the private property. Starting its upgrade
+changed native capacity from 4 to 6 and cleared `CurrentStageBuilt`, while GPL
+`Level` correctly remained 1. The missing-property guard then skipped the
+capacity correction. The loaded template values and current compiled package
+were not stale. Checking only DAT text or the presence of a property name in
+compiled bytecode cannot validate this contract: verify the typed prototype
+declaration, every template's prototype binding, and the resulting live field.
+
+The two narrowly scoped source additions are:
+
+1. In `building_upgraded`, for this package's declared building family only,
+   write its still-current GPL capacity to native `#ATTRIB_MaxGuildMembers`,
+   using **1** instead if the stock Legendary Heroes quest condition is true.
+   Then execute the original `$RunThread` line unchanged. Do not replace it
+   with a new timer, change `basic_upgrade`, or delay the capacity write.
+2. In the actual upgrade-completion branch of `BuildingReachedMaxHP`, directly
+   after the original `$UpgradeAgentAttributes(theBuilding)`, write that same
+   package-private property (now refreshed from the new template) to native
+   `#ATTRIB_MaxGuildMembers`. Leave the immediately following stock Legendary
+   Heroes override in place. Do not insert this in the repair or first-birth
+   branches and do not duplicate construction completion.
+
+Scope both additions to the package's own family/property; preserve all stock
+statements, order, arguments and other buildings. These are ordinary GPL source
+changes for the source package, not a new Manager runtime feature or panel
+declaration. Supply them through the existing stock-relative GPL merge path.
+Do not write a second capacity store, scan the world, hook attribute reads, or
+intercept recruitment payments. The existing capacity attribute is serialized
+with the unit; its lowered value survives an interrupted upgrade/save/load.
+Existing relation-100 members and the saved stock recruit order are untouched;
+unused spaces in the completed tier remain available. A destroyed building
+uses normal unit and membership cleanup with no extension-owned state.
+
+The capacity-template property is part of the package's saved GPL data.
+Adding it does not migrate an already-running/older saved instance that lacks
+the property; validate this change in a fresh game first. Do not silently
+guess a replacement value in an old save. Repeating the same completion path
+must not add capacity cumulatively: assign the stage value, never increment it.
+
+For example, a 4/6/8 author table must produce 4 during the first upgrade,
+6 after its completion and throughout the second upgrade, then 8 when that
+finishes. Verify full and partially occupied guilds, immediate queued recruit
+clicks after Upgrade, construction interruption, mid-upgrade save/load, member
+death/dismissal, and the Legendary Heroes one-member rule. No Manager native
+capacity interception is required for this stock lifecycle implementation.
+
 ### Exact adaptation and overhead
+
+#### Capacity-change presentation
+
+The private controller also handles native `MaxGuildMembers` notification
+`0x00425041`. This fixes an inherited stock presentation gap: AP52 refreshes
+recruitment for the description-change event at upgrade start, but ignores a
+subsequent GPL capacity correction. Dispatch reads the corrected capacity
+while the buttons can retain the earlier enabled state.
+
+Beta2 trace: `$SetAttribute` at `0x42F955..0x42F966` calls unit virtual +0x124.
+Building setter `0x449994..0x4499B0` stores the attribute first, then publishes
+`(unitId, 1, attributeId, value)` through `0x4264F0`. The existing controller
+registration filter `0x4687E0` matches the unit/category before invoking event
+slot +0x20. Neither AP52 `0x4B2BB0`, shared guild `0x496980`, nor inherited
+building `0x496200` handles the capacity ID. AP52's description-change case
+already supplies the needed stock analogue: invoke recruit slot +0x34, then
+count slot +0x40.
+
+After ordinary native event dispatch, only private three-choice controllers
+repeat those two virtual calls for the capacity notification. They do not
+interpret its value or determine whether the building is upgrading. The
+unchanged stock presenter reads the same current capacity/membership as actual
+recruitment, retaining its busy, scenario and funds checks in stock order.
+Installed virtual slots preserve hidden parent rows, research gating and the
+child's no-count behavior. Both completion increases and start-time decreases
+use the same event. Already-empty completed-tier spaces remain recruitable.
+
+No registration, ownership, scheduler, gameplay state, setter or native AP52
+code changes. Existing stock controller teardown removes its registrations;
+closed panels require no work. Other notifications, including simulation
+ticks, do not receive an extra recruitment refresh. Reopening uses normal
+setup and immediately reads current saved capacity.
 
 The Manager creates private, read/execute-only copies of five audited functions:
 shared recruit presenter, shared tooltip, AP52 count presenter, setup and event.

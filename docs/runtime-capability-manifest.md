@@ -68,6 +68,8 @@ DLL therefore cannot silently run a package that needs a newer hook.
 | `stock.map-fog-query.v1` | Requires the MMFR map-query flag and registers read-only, bounded native GPL map queries. |
 | `stock.movement-query.v1` | Requires the MMFR movement-query flag and registers read-only native unit/description locomotion queries. |
 | `stock.native-timing.v1` | Requires MMFR v3 timing selection and registers the stock clock, read-only movement/action base periods, declared effector-time queries and learned-spell cooldown commits. |
+| `stock.equipment.v1` | Local beta2-only trial: requires MMFR v4 equipment records and extends stock enum/name/icon tables. No purchase, combat, save, or timer hooks. |
+| `manager.kingdom-research.v1` | Local beta2-only trial: requires MMFR v5/v6 research records, saved GPL owner state, and a private AP52 parent. Uses the stock queued purchase/order/completion lifecycle and declared earned-reward boundaries; optionally reconciles private active effects at native lifecycle events. |
 
 The manager derives these data-driven capability names from the generated
 registries. A package cannot enable one merely by copying the capability string
@@ -83,7 +85,7 @@ same generic records described below and emits only the canonical generic MMCP
 capabilities. New packages describe typed runtime features instead of using
 these aliases.
 
-## MMFR v1-v3
+## MMFR v1-v6
 
 MMFR is an immutable, data-only registry. It cannot carry a DLL, path, RVA,
 patch byte, callback, or instruction.
@@ -141,6 +143,67 @@ read-only base-period support. Bits above 2, missing bit 2 in v3, truncation and
 closed. V1/v2 output is unchanged when timing is unselected. The native timing
 interface shares the same single GPL registration adapter; it adds no scheduler
 or background work. See [native timing](stock-native-timing.md).
+
+MMFR v4 is emitted only when private equipment is selected. It adds required
+flag bit 3 and permits bits 0–3. Timing families remain present only when bit 2
+is set. After all prior records/families, it appends `u32 equipment_count`
+(1–256), followed by three `u32` fields per record: stable equipment identity
+(0x800000–0xFFFFFF), slot (0 weapon, 1 armor), and printable name-table FourCC.
+Records are strictly increasing by identity. The icon set uses that same
+identity within stock INBw/INBa; the enum name is `MME_` plus six uppercase hex
+digits. No file paths or callbacks are supplied. Readers reject invalid slots,
+duplicate identities, missing bit 3, truncation, and trailing data. V1–v3
+output is unchanged without equipment. See the [trial contract](stock-equipment-contract.md)
+and [native audit](stock-custom-equipment-audit.md) for stock ownership and
+remaining in-game validation.
+
+MMFR v5 is emitted only when saved kingdom research is selected. It requires
+flag bit 4 and permits bits 0–4. Timing and equipment sections remain present
+only when their respective flags are set. After the prior selected sections,
+v5 appends `u32 research_count` (1–32), followed by these records:
+
+```text
+16 bytes stable identity derived from package UUID and feature key
+u32      printable three-byte native building family (high byte zero)
+u32      private action control ID
+u32      audited stock descriptor template control ID
+u32      private completion display attribute
+u32      required completed level (1–3)
+u32      price (1–1,000,000)
+u32      earned-gold bonus percent (0–100)
+u32      earned-XP bonus percent (0–100)
+u32      progress control ID
+u32      active-display control ID
+u32      completion-text byte length (1–96)
+bytes    non-NUL Windows-1252 completion text
+```
+
+The fixed record prefix is 60 bytes. Identities are strictly increasing;
+identities, action IDs, completion attributes and building families must each
+be unique. At least one percentage must be nonzero. The native parser rejects
+invalid fields, missing bit 4, empty final sections, truncation and trailing
+bytes. The Manager additionally proves the owned Description/DAT/prototype
+chain and literal panel group. V1–v4 output is unchanged without this feature.
+
+MMFR v6 is selected only when at least one research declares `active_effector`.
+It retains v5 flags and appends `u32 name_length`, then that many ASCII bytes,
+after **each** record's completion text. Zero means no effect for that record;
+otherwise the name must match `[A-Za-z_][A-Za-z0-9_]{0,63}`. There must be at
+least one nonempty name. Names refer to validated private Overlay descriptions,
+not arbitrary script entry points. V5 remains the unchanged effect-free format.
+The MMCP capability is derived from these validated records, never accepted as
+an author-supplied hook request. See the [test-build contract](kingdom-research-contract.md)
+and [stock audit](stock-kingdom-research-audit.md); live acceptance is pending.
+
+MMFR v7 adds flag 32 and a final hero-information section. It is emitted only
+when `stock.ap78-info-row.v1` rows are selected; older feature sets keep their
+unchanged wire versions. Each of 1–1024 sorted rows contains eight `u32` values:
+kind (1 spell, 2 enchantment, 3 passive), subject FourCC, unlock level, private
+image FourCC, set ID, key length, label length and tooltip length. Key ASCII and
+label/tooltip Windows-1252 bytes follow. Ordering is by kind, numeric FourCC and
+key; spell/effect subjects are unique. The complete MMFR remains capped at 1 MiB.
+Research records in v7 include the v6 optional effector length even when empty.
+See the [AP78 stock lifecycle and author contract](stock-ap78-info-rows.md).
 
 ## MMCR controller recipes
 

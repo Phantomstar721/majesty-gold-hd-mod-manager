@@ -9,7 +9,7 @@ $sdkLibs = Get-ChildItem (Join-Path $sdkRoot "Lib") -Directory | Sort-Object Nam
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $includes = @("/I$toolRoot\include", "/I$($sdkIncludes.FullName)\ucrt", "/I$($sdkIncludes.FullName)\shared", "/I$($sdkIncludes.FullName)\um")
 $libraries = @("/LIBPATH:$toolRoot\lib\x86", "/LIBPATH:$($sdkLibs.FullName)\ucrt\x86", "/LIBPATH:$($sdkLibs.FullName)\um\x86")
-$sources = @("BoundedMapQuery", "MapQueryRuntime", "ControllerLifecycleRegistry", "FreestyleCamRuntime", "IntentTextRegistry", "RuntimeCapabilityManifest", "RuntimeFeatureRegistry", "StockControllerRegistry") | ForEach-Object { Join-Path $repoRoot "runtime\$_.cpp" }
+$sources = @("BoundedMapQuery", "MapQueryRuntime", "EquipmentRuntime", "ControllerLifecycleRegistry", "FreestyleCamRuntime", "IntentTextRegistry", "RuntimeCapabilityManifest", "RuntimeFeatureRegistry", "StockControllerRegistry") | ForEach-Object { Join-Path $repoRoot "runtime\$_.cpp" }
 & $compiler /nologo /W4 /O2 /EHsc @includes @sources (Join-Path $PSScriptRoot "OccupantActionRuntimeTests.cpp") "/Fo$output\" "/Fe:$output\OccupantActionRuntimeTests.exe" /link @libraries user32.lib
 if ($LASTEXITCODE -ne 0) { throw "Occupant runtime tests did not compile: $LASTEXITCODE" }
 & (Join-Path $output "OccupantActionRuntimeTests.exe")

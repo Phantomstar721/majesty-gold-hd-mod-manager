@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 
 from ..cam import read_cam
+from ..equipment import require_beta2
 from ..gpl import find_foreach_return_violations
 from ..compose import (
     ComposeError,
@@ -349,6 +350,8 @@ def prepared_catalog_merge_preflight(
             (inventory,),
             prepared.runtime_capabilities,
         )
+        if runtime_features.equipment or runtime_features.kingdom_research or runtime_features.hero_info_rows:
+            require_beta2(game_path / "MajestyHD.exe")
         dialogs = resolve_building_dialogs((inventory,))
         controller = resolve_controller_registry(
             (inventory,),

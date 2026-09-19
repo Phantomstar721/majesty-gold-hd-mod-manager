@@ -543,6 +543,7 @@ class ManagerController:
             )
             self.profile = self._profile_with_current_selections()
             save_profile(self.paths.profile_path, self.profile)
+            self.notices.extend(message for message in result.warnings if message not in self.notices)
             return result, self.snapshot()
         finally:
             # launch_majesty closes the parent's handle after successful

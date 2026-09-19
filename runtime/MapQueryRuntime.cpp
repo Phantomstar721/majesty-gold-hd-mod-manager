@@ -6,6 +6,7 @@
 #include "BoundedMapQuery.h"
 #include "MovementRate.h"
 #include "NativeTiming.h"
+#include "EarnedRewards.h"
 #include "RuntimeFeatureRegistry.h"
 #include <algorithm>
 #include <cstring>
@@ -29,6 +30,8 @@ constexpr Profile kGog = {
 std::uintptr_t g_base = 0;
 const Profile* g_profile = nullptr;
 bool g_mapQuery = false, g_movementQuery = false;
+int (*g_researchOrder)(void*, std::uint32_t) = nullptr;
+int (*g_researchEligible)(void*, std::uint32_t) = nullptr;
 
 struct MovementProfile {
     std::uintptr_t changeType, resolveUnit, findDescription, descriptionsGlobal;
@@ -532,6 +535,49 @@ void Register(const char* name, void (__cdecl* callback)(void*)) {
         Read<void*>(engine, 8), text, reinterpret_cast<void*>(callback), 1, 0, 0);
     reinterpret_cast<Destroy>(g_base+g_profile->stringDestructor)(text);
 }
+void __cdecl ResearchOrder(void* arguments) {
+    int* result = Integer(arguments, 0);
+    if (!result) return;
+    *result = 0;
+    const int* command = Integer(arguments, 2);
+    if (command && *command > 0 && g_researchOrder)
+        *result = g_researchOrder(ResolveLiveUnit(Argument(arguments, 1), g_movementProfile->resolveUnit),
+            static_cast<std::uint32_t>(*command));
+}
+void __cdecl ResearchEligible(void* arguments) {
+    int* result = Integer(arguments, 0);
+    if (!result) return;
+    *result = 0;
+    const int* command = Integer(arguments, 2);
+    if (command && *command > 0 && g_researchEligible)
+        *result = g_researchEligible(ResolveLiveUnit(Argument(arguments, 1), g_movementProfile->resolveUnit),
+            static_cast<std::uint32_t>(*command));
+}
+void __cdecl ResearchCapAdd(void* arguments) {
+    int* result = Integer(arguments, 0);
+    const int* base = Integer(arguments, 1);
+    const int* bonus = Integer(arguments, 2);
+    // Read all inputs before touching an aliased GPL return slot.
+    const int value = base ? *base : 0;
+    const int extra = bonus ? *bonus : 0;
+    if (result) *result = MajestyEarnedRewards::CapAdd(value, extra);
+}
+void __cdecl ResearchAwardBonus(void* arguments) {
+    int* result = Integer(arguments, 0);
+    const int* base = Integer(arguments, 1);
+    const int* percent = Integer(arguments, 2);
+    int* carry = Integer(arguments, 3);
+    if (!result) return;
+    if (!base || !percent || !carry || result == carry) {
+        *result = 0;
+        return;
+    }
+    const int value = *base, rate = *percent;
+    int remainder = *carry;
+    const int bonus = MajestyEarnedRewards::Bonus(value, rate, remainder);
+    *carry = remainder;
+    *result = bonus;
+}
 void __cdecl RegisterAfterStock() {
     reinterpret_cast<void (__cdecl*)()>(g_base+g_profile->registration)();
     if (g_mapQuery) {
@@ -550,13 +596,23 @@ void __cdecl RegisterAfterStock() {
         if (!g_timing->timingEffectorIds.empty()) Register("MM_EffectorRemaining", &RemainingEffector);
         if (!g_timing->timingSpellIds.empty()) Register("MM_CommitSpellCooldown", &CommitCooldown);
     }
+    if (g_researchOrder) {
+        Register("MM_KR_Order", &ResearchOrder);
+        Register("MM_KR_CapAdd", &ResearchCapAdd);
+        Register("MM_KR_AwardBonus", &ResearchAwardBonus);
+    }
+    if (g_researchEligible) Register("MM_KR_Eligible", &ResearchEligible);
 }
 }
 
 bool InstallMapQueryRuntime(std::uintptr_t imageBase, MajestyBuildId buildId,
                            bool mapQuery, bool movementQuery,
-                           const MajestyRuntimeFeatures::Registry* timing) {
-    if (!mapQuery && !movementQuery && timing == nullptr) return true;
+                           const MajestyRuntimeFeatures::Registry* timing,
+                           int (*researchOrder)(void*, std::uint32_t),
+                           int (*researchEligible)(void*, std::uint32_t)) {
+    if ((researchOrder == nullptr) != (researchEligible == nullptr)) return false;
+    if (!mapQuery && !movementQuery && timing == nullptr && !researchOrder) return true;
+    if (researchOrder && buildId != MajestyBuildId::SteamBeta2) return false;
     if (timing != nullptr && !timing->nativeTiming) return false;
     g_base = imageBase;
     switch (buildId) {
@@ -569,6 +625,8 @@ bool InstallMapQueryRuntime(std::uintptr_t imageBase, MajestyBuildId buildId,
     default: return false;
     }
     g_timing = timing;
+    g_researchOrder = researchOrder;
+    g_researchEligible = researchEligible;
     g_mapQuery = mapQuery;
     g_movementQuery = movementQuery;
     // Pin the stock registration boundary and field accesses on both audited
@@ -580,7 +638,7 @@ bool InstallMapQueryRuntime(std::uintptr_t imageBase, MajestyBuildId buildId,
     constexpr unsigned char optionalUnitRead[] = {0x8B,0x00,0x8B,0x4C,0x24,0x1C};
     constexpr unsigned char averageUnitDefault[] = {0xC7,0x44,0x24,0x24,0,0,0,0};
     constexpr unsigned char averageUnitBranch[] = {0x8B,0x4C,0x24,0x24,0x85,0xC9,0x74,0x5F};
-    if ((movementQuery || timing != nullptr) && !ValidateMovementQuery()) return false;
+    if ((movementQuery || timing != nullptr || researchOrder) && !ValidateMovementQuery()) return false;
     if (timing != nullptr && !ValidateNativeTiming()) return false;
     if (!Call(g_profile->registrationCall, g_profile->registration) ||
         !Call(g_profile->registration+0x7F1, g_profile->stringConstructor) ||

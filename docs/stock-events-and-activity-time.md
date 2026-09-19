@@ -98,6 +98,54 @@ composed into each attack owner: completion runs first, while per-recipient
 credit remains after the native `give_gold` call. No observer replaces another.
 With no subscribers, no completion call or extra stock source input is added.
 
+### Combat and exploration XP awards
+
+`combat-experience-awarded` observes only the hero branch of
+`GPLMx/TaskModules/Subtasks/mx_make_attack.gpl:attack_end`. Stock attack and spell
+resolution compute `exp_given`, then the hero branch applies
+`max(1, ExperienceLevel / combat_exp_div)` before calling `give_exp`.
+The familiar-to-leader award in the same function remains untouched.
+
+`exploration-experience-awarded` observes only
+`GPLMx/TaskModules/Characters/mx_Travel_to.gpl:travel_to_exp`, inside its existing
+successful `has_arrived(ThisAgent, false)` branch. Failed arrival, danger checks,
+healing and travel continuations do not emit an event. This is stock arrival
+credit for exploration/patrol, not credit for every newly revealed tile.
+
+Both callbacks have the signature `(agent Recipient, integer Base)` with no
+return value. A synchronous generated wrapper captures the original `give_exp`
+argument once, calls the original `give_exp` first, then notifies subscribers
+when Base is positive. Base is **before give_exp's recipient-level divisor and
+any earned-reward bonus**, but after the combat caller's own divisor. It is not
+the final XP credited. A zero amount after the recipient-level divisor may
+therefore still produce an event with a positive Base. Level-up side effects
+finish before notification, without recomputing Base at the new level.
+
+Example declaration:
+
+```json
+{
+  "type": "stock.gameplay-event-observer.v1",
+  "feature_key": "support-combat-xp",
+  "event": "combat-experience-awarded",
+  "callback_symbol": "Example_CombatAward"
+}
+```
+
+A consumer can award a fraction of Base to its eligible follower through normal
+`give_exp`; that recipient's own divisor and selected research bonus run once.
+The Manager does not find followers, choose a percentage, deduct leader XP or
+award anything itself. Calling `give_exp` from the observer does not emit these
+events: there is no broad interceptor. Songs, quests, training, tournaments,
+item collection, familiar awards and direct XP writes remain outside them.
+Observers must not call `attack_end` or `travel_to_exp` recursively.
+
+The implementation changes only the two proved call identities. Their complete
+stock bodies, predicates, payment/division order and callbacks remain intact;
+an incompatible rewrite fails with the owning function named. There is no new
+timer, saved state, native hook, per-frame query or cleanup lifecycle. With no
+subscribers there are no generated wrappers or additional stock source inputs.
+
 ### Caravan delivery
 
 `GPLMx/TaskModules/Characters/Henchmen/mx_caravan.gpl:Caravan_Go_Trade` owns
@@ -134,6 +182,8 @@ Declarations reside in schema-v3 `runtime_features`.
 | Event | Void callback arguments |
 | --- | --- |
 | `potion-consumed` | `agent Consumer, string PotionIdentity` |
+| `combat-experience-awarded` | `agent Recipient, integer Base` |
+| `exploration-experience-awarded` | `agent Recipient, integer Base` |
 | `reward-flag-paid` | `agent Flag, agent Recipient, integer Share` |
 | `attack-flag-completed` | `agent Flag, agent Target` |
 | `caravan-delivered` | `agent Caravan, agent Destination, integer Cargo` |

@@ -106,9 +106,22 @@ class ManagerProcessWiringTests(unittest.TestCase):
             foreign = root / "foreign" / "adventure.mqxml"
             foreign.parent.mkdir()
             foreign.write_text("<Majesty/>")
-            for bad in (missing, replace(quest, manifest_path=foreign, package_root=foreign.parent)):
-                with self.assertRaises(ManagerLaunchError):
-                    _gog_quest_manifests(paths, (bad,))
+            warnings = []
+            self.assertEqual(_gog_quest_manifests(paths, (missing, quest), warnings=warnings),
+                             f"{MOD_ID}\t{manifest.resolve()}")
+            self.assertEqual(len(warnings), 1)
+            self.assertIn(missing.display_name, warnings[0])
+            with patch("majesty_cam.manager.launch.detect_majesty_branch", return_value=GOG_BRANCH), patch(
+                "majesty_cam.manager.launch.subprocess.Popen", return_value=SimpleNamespace(pid=123)
+            ) as popen:
+                result = launch_majesty(paths, [], quests=(missing,), ensure_qol=False,
+                    capability_manifest=_capability_manifest(root), runtime_feature_registry=_feature_registry(root),
+                    controller_registry=_controller_registry(root))
+            self.assertNotIn(QUEST_MANIFESTS_ENV_VAR, popen.call_args.kwargs["env"])
+            self.assertEqual(len(result.warnings), 1)
+            self.assertIn(missing.display_name, result.warnings[0])
+            with self.assertRaises(ManagerLaunchError):
+                _gog_quest_manifests(paths, (replace(quest, manifest_path=foreign, package_root=foreign.parent),))
 
     def test_gog_launch_registers_selected_workshop_variants_and_preserves_active_order(self):
         second_id = "11223344-5566-7788-99AA-BBCCDDEEFF00"

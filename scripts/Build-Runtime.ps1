@@ -114,6 +114,7 @@ if ($SiegeCrashDiagnostic) {
 }
 
 $runtimeSources = @(
+    (Join-Path $sourceRoot "EquipmentRuntime.cpp"),
     (Join-Path $sourceRoot "BoundedMapQuery.cpp"),
     (Join-Path $sourceRoot "MapQueryRuntime.cpp"),
     (Join-Path $sourceRoot "MajestyModManagerRuntime.cpp"),

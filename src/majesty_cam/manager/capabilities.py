@@ -8,6 +8,9 @@ discovery and the deeper build preflight.
 from __future__ import annotations
 
 from ..runtime_capabilities import PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY
+from ..equipment import EQUIPMENT_FEATURE_TYPE
+from ..hero_info import HERO_INFO_TYPE
+from ..kingdom_research import KINGDOM_RESEARCH_TYPE
 from ..runtime_features import (
     ENCHANTMENT_ROW_RUNTIME_CAPABILITY,
     NAME_GENERATOR_RUNTIME_CAPABILITY,
@@ -31,6 +34,9 @@ DERIVED_RUNTIME_CAPABILITIES = frozenset(
         MAP_QUERY_RUNTIME_CAPABILITY,
         MOVEMENT_QUERY_RUNTIME_CAPABILITY,
         NATIVE_TIMING_RUNTIME_CAPABILITY,
+        EQUIPMENT_FEATURE_TYPE,
+        HERO_INFO_TYPE,
+        KINGDOM_RESEARCH_TYPE,
         STOCK_CONTROLLER_RUNTIME_CAPABILITY,
     )
 )

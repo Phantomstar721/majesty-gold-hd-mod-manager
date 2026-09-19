@@ -252,6 +252,87 @@ int main() {
         AppendU32(&timing,0); AppendU32(&timing,0);
         if (!ExpectInvalid(timing,"flags")) return 28;
     }
+    for (unsigned flags = 8; flags < 16; ++flags) {
+        auto equipment = Header(4, 0, 0);
+        AppendU32(&equipment, flags);
+        if (flags & 4) { AppendU32(&equipment, 0); AppendU32(&equipment, 0); }
+        AppendU32(&equipment, 2);
+        AppendU32(&equipment, 0x800001); AppendU32(&equipment, 0); AppendU32(&equipment, FourCC("ZN01"));
+        AppendU32(&equipment, 0x900001); AppendU32(&equipment, 1); AppendU32(&equipment, FourCC("ZN02"));
+        if (!MajestyRuntimeFeatures::ParseRegistry(equipment.data(), equipment.size(), &registry, &error) ||
+            registry.equipment.size() != 2 || registry.equipment[1].slot != 1 ||
+            registry.equipment[0].equipmentId != 0x800001) return 29;
+        for (std::size_t size = 0; size < equipment.size(); ++size) {
+            if (MajestyRuntimeFeatures::ParseRegistry(equipment.data(), size, &registry, &error) ||
+                !registry.equipment.empty()) return 30;
+        }
+        equipment[equipment.size()-8] = 2; // illegal armor slot
+        if (!ExpectInvalid(equipment, "equipment records")) return 31;
+    }
+    auto noEquipment = Header(4, 0, 0); AppendU32(&noEquipment, 8); AppendU32(&noEquipment, 0);
+    if (!ExpectInvalid(noEquipment, "equipment record count")) return 32;
+    auto research = Header(5, 0, 0);
+    AppendU32(&research, 16); AppendU32(&research, 1);
+    research.insert(research.end(), 16, 1);
+    for (auto value : {0x00475845u, 0x7300u, 0x139Cu, 0xD1234567u, 3u,
+            3000u, 15u, 15u, 0x7301u, 0x7302u, 4u}) AppendU32(&research, value);
+    research.insert(research.end(), {'T','e','s','t'});
+    if (!MajestyRuntimeFeatures::ParseRegistry(research.data(), research.size(), &registry, &error) ||
+        registry.kingdomResearch.size() != 1 || registry.kingdomResearch[0].price != 3000 ||
+        registry.kingdomResearch[0].CallbackSymbol() != "MM_KR_01010101010101010101010101010101") return 33;
+    for (std::size_t size = 0; size < research.size(); ++size) {
+        if (MajestyRuntimeFeatures::ParseRegistry(research.data(), size, &registry, &error) ||
+            !registry.kingdomResearch.empty()) return 34;
+    }
+    for (auto offset : {42u, 43u, 47u, 48u, 55u, 56u, 62u, 64u, 68u, 75u, 79u, 80u, 84u}) {
+        auto bad = research;
+        bad[offset] = offset == 84u ? 0 : 0xFF;
+        // Invalid family/template/attribute/level/price/percent/controls/text.
+        if (MajestyRuntimeFeatures::ParseRegistry(bad.data(), bad.size(), &registry, &error)) {
+            std::fprintf(stderr, "Accepted invalid kingdom record field at %u\n", offset); return 35;
+        }
+    }
+    auto visual = research;
+    visual[4] = 6;
+    AppendU32(&visual, 14);
+    const char visualName[] = "Example_Active";
+    visual.insert(visual.end(), visualName, visualName+14);
+    if (!MajestyRuntimeFeatures::ParseRegistry(visual.data(), visual.size(), &registry, &error) ||
+        registry.kingdomResearch[0].activeEffector != visualName) return 36;
+    for (std::size_t size = 0; size < visual.size(); ++size)
+        if (MajestyRuntimeFeatures::ParseRegistry(visual.data(), size, &registry, &error)) return 37;
+    for (unsigned invalid : {0u, 0xFFu, static_cast<unsigned>('1'), static_cast<unsigned>('"')}) {
+        auto bad = visual;
+        bad[bad.size()-14] = static_cast<unsigned char>(invalid);
+        if (!ExpectInvalid(bad, "effector name")) return 38;
+    }
+    auto noVisual = research;
+    noVisual[4] = 6;
+    AppendU32(&noVisual, 0);
+    if (!ExpectInvalid(noVisual, "requires an active effector")) return 39;
+    auto info = Header(7, 0, 0);
+    AppendU32(&info, 32); AppendU32(&info, 1);
+    for (auto value : {3u, FourCC("ZH01"), 2u, FourCC("ZI01"), 1019u, 3u, 5u, 4u}) AppendU32(&info, value);
+    const char infoText[] = "keyLabelHelp";
+    info.insert(info.end(), infoText, infoText+12);
+    if (!MajestyRuntimeFeatures::ParseRegistry(info.data(), info.size(), &registry, &error) ||
+        registry.heroInfoRows.size() != 1 || !registry.FindHeroInfo(3, FourCC("ZH01")) ||
+        registry.FindHeroInfo(2, FourCC("ZH01")) || registry.heroInfoRows[0].tooltipText != "Help") return 40;
+    for (std::size_t size = 0; size < info.size(); ++size)
+        if (MajestyRuntimeFeatures::ParseRegistry(info.data(), size, &registry, &error) || !registry.heroInfoRows.empty()) return 41;
+    for (unsigned offset : {24u, 28u, 32u, 36u, 43u, 44u, 48u, 52u, 56u, 59u, 64u}) {
+        auto bad = info; bad[offset] = 0;
+        if (offset == 43u) bad[offset] = 1; // layered image set
+        if (MajestyRuntimeFeatures::ParseRegistry(bad.data(), bad.size(), &registry, &error)) {
+            std::fprintf(stderr, "Accepted bad hero row at %u\n", offset); return 42;
+        }
+    }
+    // v7 also supports research without an effect; v6 deliberately doesn't.
+    auto mixed = noVisual;
+    mixed[4] = 7; mixed[16] = 48;
+    mixed.insert(mixed.end(), info.begin()+20, info.end());
+    if (!MajestyRuntimeFeatures::ParseRegistry(mixed.data(), mixed.size(), &registry, &error) ||
+        registry.kingdomResearch.size() != 1 || registry.heroInfoRows.size() != 1) return 43;
     std::puts("Runtime feature registry parser tests passed.");
     return 0;
 }

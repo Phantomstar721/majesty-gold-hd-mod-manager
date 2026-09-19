@@ -8,6 +8,7 @@ std::vector<std::string> events;
 void* expectedOwner = &records;
 const void* expectedOptions = nullptr;
 bool failLoad = false;
+bool failPack = false;
 bool omitVariant = false;
 
 void __fastcall Scan(void* owner, void*, const MajestyStringView* path, unsigned recursive, const void* options) {
@@ -24,7 +25,7 @@ bool __fastcall Load(void* owner, void*, const MajestyStringView* path, const vo
     assert(owner == expectedOwner && options == expectedOptions);
     const std::string file(path->data, path->length);
     events.push_back(file);
-    if (failLoad) return false;
+    if (failLoad || (failPack && file == "pack.mqxml")) return false;
     if (file == "pack.mqxml") {
         records[1].id.Data1 = 1;
         if (!omitVariant) records[2].id.Data1 = 2;
@@ -55,18 +56,32 @@ void Run() {
     assert(RegisterGogWorkshopQuests(expectedOwner, options));
     assert(events.size() == 2);
     records[1].id.Data2 = 99; // a colliding key is not the expected GUID
+    records.erase(3);
     assert(!RegisterGogWorkshopQuests(expectedOwner, options));
+    assert(records[1].id.Data2 == 99 && records.count(3) == 1);
     records.clear();
     events.clear();
     omitVariant = true;
     assert(!RegisterGogWorkshopQuests(expectedOwner, options));
     assert(std::count(events.begin(), events.end(), "pack.mqxml") == 1);
+    assert(records.count(1) == 1 && records.count(3) == 1); // partial stock records retained
     omitVariant = false;
+    records.clear();
+    events.clear();
+    failPack = true;
+    // The actual startup wrapper must return, retaining the good quest.
+    GogQuestDirectoryScan(expectedOwner, nullptr, &directory, 1, options);
+    assert((events == std::vector<std::string>{"scan", "pack.mqxml", "other.mqxml"}));
+    assert(records.size() == 1 && records.count(3) == 1);
+    failPack = false;
+    events.clear();
+    GogQuestDirectoryScan(expectedOwner, nullptr, &directory, 1, options);
+    assert(records.size() == 3); // repaired file retried at the next stock boundary
     records.clear();
     failLoad = true;
     StandardModTests::events.clear();
     assert(!RegisterGogWorkshopQuests(expectedOwner, options));
-    assert((StandardModTests::events == std::vector<std::string>{"construct", "destroy"}));
+    assert((StandardModTests::events == std::vector<std::string>{"construct", "destroy", "construct", "destroy"}));
     failLoad = false;
     g_gogWorkshopQuests.clear();
 
@@ -89,5 +104,9 @@ void Run() {
     assert(SetEnvironmentVariableW(kGogQuestManifestsEnvironment, nullptr));
     assert(DeleteFileW(manifest.c_str()));
     assert(!ParseGogStandardMods(row, parsed, L".mqxml", 789));
+    assert(ParseGogStandardMods(row, parsed, L".mqxml", 789, true));
+    assert(parsed.size() == 1 && parsed[0].manifest.empty());
+    assert(!ParseGogStandardMods(row + L"\n" + row, parsed, L".mqxml", 789, true));
+    assert(!ParseGogStandardMods(L"invalid", parsed, L".mqxml", 789, true));
 }
 } // namespace QuestTests

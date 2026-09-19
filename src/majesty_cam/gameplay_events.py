@@ -25,6 +25,8 @@ STOCK_EVENT_FILES = {
     "caravan_go_trade": "TaskModules/Characters/Henchmen/mx_caravan.gpl",
     "enter_tourney": "TaskModules/Buildings/mx_Fairgrounds.gpl",
     "exit_fair": "TaskModules/Buildings/mx_Fairgrounds.gpl",
+    "attack_end": "TaskModules/Subtasks/mx_make_attack.gpl",
+    "travel_to_exp": "TaskModules/Characters/mx_Travel_to.gpl",
 }
 EVENT_FUNCTIONS = {
     "potion-consumed": ("heal_self", "heal_self_fleeing", "speed_tonic_effect",
@@ -36,6 +38,8 @@ EVENT_FUNCTIONS = {
     "attack-flag-completed": ("attack_flag_poll", "attack_flag_death_callback"),
     "caravan-delivered": ("caravan_go_trade",),
     "tournament-completed": ("enter_tourney", "exit_fair"),
+    "combat-experience-awarded": ("attack_end",),
+    "exploration-experience-awarded": ("travel_to_exp",),
 }
 
 
@@ -216,6 +220,33 @@ def add_gameplay_event_observers(
 
     def calls(event: str, arguments: str) -> str:
         return "\n".join(f"\t${symbol}({arguments});" for symbol in requested[event])
+
+    for event, name, wrapper, argument in (
+        ("combat-experience-awarded", "attack_end", "MM_Event_CombatXP",
+         r"exp_given\s*/\s*new_exp_div"),
+        ("exploration-experience-awarded", "travel_to_exp", "MM_Event_ExploreXP",
+         r"#explore_exp"),
+    ):
+        if event not in requested:
+            continue
+        item = target(name)
+        # Replace only the audited recipient call, inside its original branch.
+        # The argument is evaluated once, before give_exp can change a level.
+        # Familiar awards and all unrelated give_exp callers stay unobserved.
+        save(item, _once(item.text,
+            r"\$give_exp\s*\(\s*thisagent\s*,\s*" + argument + r"\s*\)\s*;",
+            lambda m: re.sub(r"\$give_exp\b", "$" + wrapper, m.group(),
+                             count=1, flags=re.IGNORECASE)))
+        generated(f'''function {wrapper}(agent Recipient, integer Base)
+declare
+begin
+    $give_exp(Recipient, Base);
+    if (Base > 0)
+        begin
+''' + calls(event, "Recipient, Base") + '''
+        end
+end
+''')
 
     if "potion-consumed" in requested:
         for name in EVENT_FUNCTIONS["potion-consumed"]:

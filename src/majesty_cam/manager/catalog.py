@@ -453,6 +453,16 @@ def _parse_candidate(
     content_nodes = [
         node for node in xml_root.iter() if _local_name(node.tag) == expected_tag
     ]
+    if expected_tag == "Quest" and (
+        len(content_nodes) != 1 or content_nodes[0] not in list(xml_root)
+    ):
+        issues.append(CatalogIssue(
+            code="invalid_manifest_shape",
+            message="Quest manifest must contain one direct Quest child of its document root.",
+            severity=IssueSeverity.ERROR,
+            path=manifest,
+        ))
+        return (_invalid_entry(candidate, inferred_kind, issues),)
     # Majesty's stock Mod catalog permits one .mmxml document to publish
     # several independent Mod elements.  Each element has its own UUID and is
     # independently selectable in the game's Mod dialog.  Quest manifests and

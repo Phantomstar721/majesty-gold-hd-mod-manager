@@ -8,6 +8,10 @@ from typing import Mapping, Optional, Sequence, Tuple, Union
 import xml.etree.ElementTree as ET
 
 from .runtime_capabilities import is_runtime_capability_name
+from .equipment import StockEquipment, EQUIPMENT_FEATURE_TYPE, parse_equipment, equipment_mapping
+from .hero_info import HeroInfoRow, HERO_INFO_TYPE, parse_hero_info, hero_info_mapping
+from .kingdom_research import (KingdomResearch, KINGDOM_RESEARCH_TYPE,
+                               parse_kingdom_research, kingdom_research_mapping)
 from .shared_features import (
     SHARED_FEATURE_TYPES, SharedFeature, StockGameplayEventObserver,
     StockActivityDuration, parse_shared_feature, shared_feature_mapping,
@@ -194,7 +198,7 @@ class CustomBuildingDefinition:
 # Backward-compatible descriptive alias for the schema's AP78-specific record
 # name; the runtime module intentionally uses the reusable shorter class name.
 Ap78EnchantmentRowFeature = EnchantmentRowFeature
-PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature, GplFeature, SharedFeature]
+PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature, GplFeature, SharedFeature, StockEquipment, KingdomResearch]
 
 
 @dataclass(frozen=True)
@@ -545,6 +549,24 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 display_text=display_text,
             )
             feature_key = (feature_type, overlay_id.casefold())
+        elif feature_type == HERO_INFO_TYPE:
+            try:
+                feature = parse_hero_info(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context}: {exc}") from exc
+            feature_key = (feature_type, feature.feature_key)
+        elif feature_type == KINGDOM_RESEARCH_TYPE:
+            try:
+                feature = parse_kingdom_research(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context}: {exc}") from exc
+            feature_key = (feature_type, feature.feature_key)
+        elif feature_type == EQUIPMENT_FEATURE_TYPE:
+            try:
+                feature = parse_equipment(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context}: {exc}") from exc
+            feature_key = (feature_type, feature.feature_key)
         elif feature_type in SHARED_FEATURE_TYPES:
             try:
                 feature = parse_shared_feature(raw_feature)
@@ -626,7 +648,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 f"duplicate runtime feature identity: {feature_key[1]!r}"
             )
         seen_feature_keys.add(feature_key)
-        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature)):
+        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature, HeroInfoRow)):
             try:
                 normalize_runtime_features((feature,))
             except ValueError as exc:
@@ -1103,6 +1125,12 @@ def mod_definition_mapping(definition: ModDefinition) -> dict:
 
 
 def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
+    if isinstance(feature, HeroInfoRow):
+        return hero_info_mapping(feature)
+    if isinstance(feature, KingdomResearch):
+        return kingdom_research_mapping(feature)
+    if isinstance(feature, StockEquipment):
+        return equipment_mapping(feature)
     if isinstance(feature, MapFogQueryFeature):
         return {"type": "stock.map-fog-query.v1"}
     if isinstance(feature, MovementQueryFeature):

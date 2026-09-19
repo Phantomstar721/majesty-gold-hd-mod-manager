@@ -34,6 +34,21 @@ QUEST_ID = "{BE9E6DFC-10F1-4984-9C79-A2F8F8F8C4A5}"
 
 
 class ManagerCatalogTests(unittest.TestCase):
+    def test_quest_catalog_uses_stock_direct_child_lookup(self):
+        with TemporaryDirectory() as tmp:
+            workshop = Path(tmp)
+            package = workshop / "1234"
+            package.mkdir()
+            manifest = package / "Quest.mqxml"
+            quest = f'<Quest id="{QUEST_ID}"><Name>Fixture</Name></Quest>'
+            for xml in (quest, f"<Majesty><Nested>{quest}</Nested></Majesty>",
+                        f"<Majesty>{quest}{quest}</Majesty>"):
+                manifest.write_text(xml, encoding="utf-8")
+                entry = scan_catalog(workshop_roots=(workshop,)).quests[0]
+                self.assertIn("invalid_manifest_shape", _issue_codes(entry))
+            manifest.write_text(f"<Majesty>{quest}</Majesty>", encoding="utf-8")
+            self.assertFalse(scan_catalog(workshop_roots=(workshop,)).quests[0].issues)
+
     def test_classifies_standard_quest_and_definition_backed_merge_mod(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -356,7 +371,7 @@ class ManagerCatalogTests(unittest.TestCase):
             "majesty_cam.manager.preflight.validate_gpl_feature_evidence"
         ), patch(
             "majesty_cam.manager.preflight.resolve_runtime_feature_registry",
-            return_value=SimpleNamespace(),
+            return_value=SimpleNamespace(equipment=(), kingdom_research=(), hero_info_rows=()),
         ), patch(
             "majesty_cam.manager.preflight.resolve_building_dialogs",
             return_value=(),

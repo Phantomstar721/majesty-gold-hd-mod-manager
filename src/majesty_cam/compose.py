@@ -16,6 +16,14 @@ import uuid
 import xml.etree.ElementTree as ET
 
 from ._subprocess import no_console_window_options
+from .equipment import EquipmentRegistration, EQUIPMENT_FEATURE_TYPE, require_beta2
+from .hero_info import HeroInfoRow, HERO_INFO_TYPE, validate_hero_info_evidence
+from .equipment_compose import (resolve_equipment, transform_equipment_description,
+                                bind_equipment_art, validate_generated_equipment)
+from .kingdom_research import KingdomResearchRegistration, KINGDOM_RESEARCH_TYPE
+from .kingdom_research_compose import (bindings as kingdom_research_bindings,
+    declarations as kingdom_research_declarations, validate_panels as validate_kingdom_research_panels,
+    validate_generated as validate_generated_kingdom_research)
 from .private_recruitment import (
     PrivateRecruitmentError,
     validate_descriptions as validate_private_recruitment_descriptions,
@@ -139,6 +147,7 @@ from .stock_cam import (
     STOCK_NAMED_CAM_SECTIONS,
     StockCamError,
     load_effective_stock_named_resources,
+    stock_image_ids,
 )
 from .stock_building_controllers import (
     is_stock_building_controller,
@@ -3316,6 +3325,7 @@ def merge_description_resources(
         definition = definitions[owner]
         if definition is None:
             return element
+        transform_equipment_description(definition, element)
         if element.get("subType") != "Building":
             return element
         local_name = element.get("Name", "")
@@ -3892,6 +3902,8 @@ def validate_controller_stock_evidence(
     needs_stock_proof = (
         bool(_controller_record_count(registry))
         or bool(runtime_feature_registry.enchantment_rows)
+        or bool(runtime_feature_registry.hero_info_rows)
+        or runtime_feature_registry.native_timing is not None
         or any(
         inventory.selected.package.definition is not None
         and inventory.selected.package.definition.schema_version == 3
@@ -4044,6 +4056,19 @@ def validate_controller_stock_evidence(
     _validate_authored_private_recruitment(
         game_path, inventories, registry, stock_descriptions=stock_descriptions
     )
+
+    _validate_native_timing_stock_subjects(stock_descriptions, runtime_feature_registry)
+
+    if runtime_feature_registry.hero_info_rows:
+        stock_images = stock_image_ids(game_path)
+        for row in runtime_feature_registry.hero_info_rows:
+            subject_type = "Action" if row.kind == "spell" else "Unit"
+            matches = [kind for (_owner, key), kind in description_kinds.items()
+                       if key == (subject_type, row.subject_id)]
+            if matches != ["addition"]:
+                raise ComposeError(f"hero information {row.subject_id!r} must identify exactly one package-added Description")
+            if row.image_id.encode("ascii") in stock_images:
+                raise ComposeError(f"hero information image {row.image_id!r} cannot override a stock IMAG")
 
     for row in runtime_feature_registry.enchantment_rows:
         matches = [
@@ -5036,6 +5061,17 @@ def merge_gpl_resources(
             final = add_activity_service(final, shared)
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
+    try:
+        research = kingdom_research_bindings(inventories)
+        if research:
+            from .kingdom_research_gpl import compose_service
+            if stock_function_loader is None:
+                raise ValueError("kingdom research requires the installed stock award sources")
+            ancestors = stock_function_loader(("give_gold", "give_exp"))
+            final = compose_service(final, research,
+                {key[1]: item for key, item in ancestors.items()})
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
     if private_activity_texts:
         try:
             audit_private_activity_text_resolver_aliases(
@@ -5734,7 +5770,7 @@ def resolve_runtime_feature_registry(
             *(
                 feature
                 for feature in definition.runtime_features
-                if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature))
+                if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature, HeroInfoRow))
             ),
             *legacy_runtime_features(definition.runtime_capabilities),
         )
@@ -5792,6 +5828,13 @@ def resolve_runtime_feature_registry(
         if isinstance(feature, (MapFogQueryFeature, MovementQueryFeature)):
             # This is one shared read-only interface, not a resource claim.
             continue
+        if isinstance(feature, HeroInfoRow):
+            for key in (("hero-info-subject", feature.subject_id), ("hero-info-image", feature.image_id)):
+                prior = owners.get(key)
+                if prior is not None and prior[0] != owner:
+                    raise ComposeError(f"hero information resource {key[1]!r} is claimed by both {prior[0]} and {owner}")
+                owners[key] = (owner, feature)
+            continue
         if isinstance(feature, NativeTimingFeature):
             for kind, values in (("timing-spell", feature.spell_ids),
                                  ("timing-effector", feature.effector_ids)):
@@ -5819,7 +5862,9 @@ def resolve_runtime_feature_registry(
             )
         owners[key] = (owner, feature)
     try:
-        return normalize_runtime_features(feature for _owner, feature in claims)
+        return normalize_runtime_features((*[feature for _owner, feature in claims],
+                                           *resolve_equipment(inventories),
+                                           *(record for record, _title in kingdom_research_bindings(inventories))))
     except ValueError as exc:
         raise ComposeError(f"invalid combined runtime features: {exc}") from exc
 
@@ -5861,6 +5906,14 @@ def _require_name_generator_declarations(
         )
 
 
+def _validate_native_timing_stock_subjects(stock_descriptions, registry):
+    if registry.native_timing:
+        for identifier in registry.native_timing.effector_ids:
+            stock = stock_descriptions.get(("Unit", identifier))
+            if stock and stock[0].to_element().get("subType") != "Overlay":
+                raise ComposeError(f"native timing effector {identifier!r} collides with a stock non-Overlay Unit")
+
+
 def _require_runtime_feature_evidence(
     inventory: PackageInventory,
     feature: RuntimeFeature,
@@ -5876,6 +5929,24 @@ def _runtime_feature_evidence_errors(
     inventory: PackageInventory,
     feature: RuntimeFeature,
 ) -> tuple[str, ...]:
+    if isinstance(feature, HeroInfoRow):
+        try:
+            validate_hero_info_evidence(inventory, feature)
+            return ()
+        except ValueError as exc:
+            return (str(exc),)
+    if isinstance(feature, KingdomResearchRegistration):
+        try:
+            validate_generated_kingdom_research(inventory, feature)
+            return ()
+        except ValueError as exc:
+            return (str(exc),)
+    if isinstance(feature, EquipmentRegistration):
+        try:
+            validate_generated_equipment(inventory, feature)
+            return ()
+        except ValueError as exc:
+            return (str(exc),)
     if isinstance(feature, (MapFogQueryFeature, MovementQueryFeature)):
         return ()
     if isinstance(feature, NativeTimingFeature) and not (feature.spell_ids or feature.effector_ids):
@@ -6478,12 +6549,18 @@ def _validate_authored_private_recruitment(game_path, inventories, registry, *, 
     stock_path = game_path / "Data" / "textdata.cam"
     archive = read_cam(stock_path)
     templates = {}
-    for key in (b"AP52", b"AP53", b"AP10", b"AP69"):
+    research = any(kingdom_research_declarations(item) for item in inventories)
+    for key in (b"AP52", b"AP53", b"AP10", b"AP69") + ((b"AP99", b"AP24") if research else ()):
         matches = [entry.data for section in archive.sections if section.extension == b"SMNU"
                    for entry in section.entries if entry.name[:4] == key]
         if len(matches) != 1:
             raise ComposeError(f"private recruitment requires one stock SMNU/{key.decode()}")
         templates[key] = matches[0]
+    if research:
+        try:
+            validate_kingdom_research_panels(inventories, templates)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
     if stock_descriptions is None:
         stock_descriptions = _load_effective_stock_descriptions(game_path)
     stock_characters = {element.get("Name") for record, _ in stock_descriptions.values()
@@ -7063,6 +7140,8 @@ def compose_package(
     runtime_feature_registry = resolve_runtime_feature_registry(
         inventories, runtime_capabilities
     )
+    if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows:
+        require_beta2(game_path / "MajestyHD.exe")
     runtime_feature_registry_payload = encode_runtime_feature_registry(
         runtime_feature_registry
     )
@@ -7100,11 +7179,11 @@ def compose_package(
     art_results = merge_art_resource_domains(
         game_path,
         inventories,
-        required_stock_imag_ids=(
-            (b"IX93",)
-            if runtime_feature_registry.enchantment_rows
-            else ()
-        ),
+        required_stock_imag_ids=tuple(sorted(
+            {item.image_id.encode("ascii") for item in runtime_feature_registry.equipment}
+            | ({b"IX93"} if runtime_feature_registry.enchantment_rows else set())
+            | ({b"INTn", b"IX93"} if runtime_feature_registry.hero_info_rows else set())
+        )),
         art_resolutions=art_resolutions,
     )
     audio_archive, sound_archive, sound_selections = merge_sound_resources(
@@ -7112,6 +7191,7 @@ def compose_package(
         named_resolutions=named_cam_resolutions,
         stock_named_resources=stock_named_resources,
     )
+    art_results = bind_equipment_art(art_results, inventories)
     controlled_follower_markers = tuple(
         sorted(
             (
@@ -7657,7 +7737,7 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
             "generated name-generator feature registry and generic MMCP hook "
             "selection disagree"
         )
-    if bool(runtime_features.enchantment_rows) != (
+    if bool(runtime_features.enchantment_rows or any(r.kind == "enchantment" for r in runtime_features.hero_info_rows)) != (
         ENCHANTMENT_ROW_RUNTIME_CAPABILITY in runtime_capabilities
     ):
         raise ComposeError(
@@ -7670,6 +7750,12 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
         raise ComposeError("generated movement-query registry and MMCP hook selection disagree")
     if (runtime_features.native_timing is not None) != (NATIVE_TIMING_RUNTIME_CAPABILITY in runtime_capabilities):
         raise ComposeError("generated native-timing registry and MMCP hook selection disagree")
+    if bool(runtime_features.equipment) != (EQUIPMENT_FEATURE_TYPE in runtime_capabilities):
+        raise ComposeError("generated equipment registry and MMCP hook selection disagree")
+    if bool(runtime_features.kingdom_research) != (KINGDOM_RESEARCH_TYPE in runtime_capabilities):
+        raise ComposeError("generated kingdom research registry and MMCP hook selection disagree")
+    if bool(runtime_features.hero_info_rows) != (HERO_INFO_TYPE in runtime_capabilities):
+        raise ComposeError("generated hero information registry and MMCP hook selection disagree")
     controller_path = root / CONTROLLER_REGISTRY_RELATIVE_PATH
     if not controller_path.is_file():
         raise ComposeError(
@@ -8278,6 +8364,21 @@ def _build_report(
                 ),
                 "map_fog_query": runtime_feature_registry.map_fog_query,
                 "movement_query": runtime_feature_registry.movement_query,
+                "kingdom_research": [
+                    {"identity": item.identity, "building_family": item.building_family,
+                     "action_control_id": item.action_control_id,
+                     "required_level": item.required_level, "price": item.price,
+                     "gold_bonus_percent": item.gold_bonus_percent,
+                     "experience_bonus_percent": item.experience_bonus_percent,
+                     "active_effector": item.active_effector}
+                    for item in runtime_feature_registry.kingdom_research
+                ],
+                "equipment": [
+                    {"equipment_id": item.equipment_id, "slot": "weapon" if item.slot == 0 else "armor",
+                     "enum_name": item.enum_name, "name_table": item.name_table,
+                     "image_id": item.image_id, "image_set": item.equipment_id}
+                    for item in runtime_feature_registry.equipment
+                ],
                 "native_timing": None if runtime_feature_registry.native_timing is None else {
                     "spell_ids": list(runtime_feature_registry.native_timing.spell_ids),
                     "effector_ids": list(runtime_feature_registry.native_timing.effector_ids),

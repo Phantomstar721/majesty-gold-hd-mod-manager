@@ -72,6 +72,89 @@ bool __fastcall TestAffordable(void* controller, void*, unsigned index) {
 void __fastcall TestTooltip(void* controller, void*, void* text, unsigned index) {
     recruitControllerSeen = controller; recruitIndexSeen = index; recruitTextSeen = text;
 }
+struct CapacityPanel {
+    void** table;
+    unsigned members, capacity, refreshes, counts;
+    bool available, hideRows;
+};
+void __fastcall TestCapacityRows(void* controller, void*) {
+    auto* panel = static_cast<CapacityPanel*>(controller);
+    assert(panel->refreshes == panel->counts);
+    ++panel->refreshes;
+    panel->available = !panel->hideRows && panel->members < panel->capacity;
+}
+void __fastcall TestCapacityCounts(void* controller, void*) {
+    auto* panel = static_cast<CapacityPanel*>(controller);
+    assert(panel->refreshes == panel->counts + 1);
+    ++panel->counts;
+}
+bool capacityStockEventSeen = false;
+void __fastcall TestCapacityStockEvent(void*, void*, std::uint32_t unit,
+    std::uint32_t category, std::uint32_t notification, std::uint32_t value) {
+    assert(unit == 99 && category == 1 && notification == 0x00425041u && value == 4);
+    capacityStockEventSeen = true;
+}
+void __fastcall TestCapacityRowsAfterStock(void* controller, void* unused) {
+    assert(capacityStockEventSeen);
+    TestCapacityRows(controller, unused);
+}
+void VerifyCapacityNotificationRefresh() {
+    void* table[17] = {};
+    table[13] = reinterpret_cast<void*>(&TestCapacityRows);
+    table[16] = reinterpret_cast<void*>(&TestCapacityCounts);
+    CapacityPanel panel = {table, 4, 6, 0, 0, true, false};
+    // Native description changed first; GPL then restores completed-tier
+    // capacity. The same event is used when completion increases it again.
+    panel.capacity = 4;
+    MajestyPrivateRecruitment::RefreshCapacityChange(&panel, 0x00425041u);
+    assert(!panel.available && panel.refreshes == 1 && panel.counts == 1);
+    panel.capacity = 6;
+    MajestyPrivateRecruitment::RefreshCapacityChange(&panel, 0x00425041u);
+    assert(panel.available && panel.refreshes == 2 && panel.counts == 2);
+    panel.members = 3; panel.capacity = 4;
+    MajestyPrivateRecruitment::RefreshCapacityChange(&panel, 0x00425041u);
+    assert(panel.available); // do not lock unused completed-tier spaces
+    for (auto other : {0x09435358u, 0x00505041u, 0x02435358u, 0x0D425041u})
+        MajestyPrivateRecruitment::RefreshCapacityChange(&panel, other);
+    assert(panel.refreshes == 3 && panel.counts == 3); // no duplicate stock/tick refresh
+    panel.hideRows = true;
+    MajestyPrivateRecruitment::RefreshCapacityChange(&panel, 0x00425041u);
+    assert(!panel.available); // installed parent/research gate is retained
+    panel.hideRows = false;
+    table[16] = reinterpret_cast<void*>(&PrivateRecruitmentNoCounts);
+    MajestyPrivateRecruitment::RefreshCapacityChange(&panel, 0x00425041u);
+    assert(panel.available && panel.refreshes == 5 && panel.counts == 4);
+
+    // Exercise the actual event adapter and original arguments, not just its
+    // helper. The private parent and secondary controller share this adapter.
+    assert(g_occupantParentClasses.empty());
+    assert(g_runtimeFeatureRegistry.kingdomResearch.empty());
+    assert(g_parentOpenToggleRecord == nullptr);
+    OccupantParentClass entry{};
+    entry.thirdPrice = 0x7301u;
+    entry.recruitment.event = reinterpret_cast<void*>(&TestCapacityStockEvent);
+    entry.table[13] = reinterpret_cast<void*>(&TestCapacityRowsAfterStock);
+    entry.table[16] = reinterpret_cast<void*>(&TestCapacityCounts);
+    g_occupantParentClasses.push_back(&entry);
+    for (unsigned mode : {0u, 1u, 2u}) {
+        entry.recruitmentMode = mode;
+        CapacityPanel routed = {entry.table, 4, 4, 0, 0, true, mode == 1};
+        capacityStockEventSeen = false;
+        OccupantParentEvent(&routed, nullptr, 99, 1, 0x00425041u, 4);
+        assert(!routed.available && routed.refreshes == 1 && routed.counts == 1);
+    }
+    // A managed stock parent without the private recruitment recipe must not
+    // acquire the extra event behavior.
+    void* stock[17] = {};
+    stock[8] = entry.recruitment.event;
+    entry.stock = stock;
+    entry.thirdPrice = 0;
+    CapacityPanel ordinary = {entry.table, 4, 4, 0, 0, true, false};
+    OccupantParentEvent(&ordinary, nullptr, 99, 1, 0x00425041u, 4);
+    assert(ordinary.refreshes == 0 && ordinary.counts == 0);
+    g_occupantParentClasses.clear();
+    entry.recruitment.event = nullptr; // stub is not a VirtualAlloc-owned clone
+}
 void RunPrivateRecruitmentTests() {
     using namespace MajestyPrivateRecruitment;
     const auto savedBase = imageBase;
@@ -96,6 +179,7 @@ void RunPrivateRecruitmentTests() {
     std::uint32_t first = 0xDEADBEEF, second = 0xDEADBEEF;
     ThreeCounts(unit, nullptr, &first, &second);
     assert(first == 1 && second == 1);
+    VerifyCapacityNotificationRefresh();
 
     // Exercise executable cloning/control remapping and W^X without executing
     // any game code: mov eax, stock-command; ret becomes a private command.

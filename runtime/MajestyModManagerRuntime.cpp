@@ -23,6 +23,7 @@
 #include "FreestyleCamRuntime.h"
 #include "IntentTextRegistry.h"
 #include "MapQueryRuntime.h"
+#include "EquipmentRuntime.h"
 #include "RuntimeCapabilityManifest.h"
 #include "RuntimeFeatureRegistry.h"
 #include "StockBuildingControllerCatalog.h"
@@ -401,6 +402,11 @@ constexpr std::uint32_t kMx05DialogId = 0x3530584D;
 bool ValidateOccupantPanelProfile();
 bool ValidateSelectedParentControllerProfiles();
 bool ValidateQuestBoardProfile();
+bool ValidateKingdomResearchProfile();
+bool ValidateHeroInfoProfile();
+bool HeroEffectRowsSelected();
+const MajestyRuntimeFeatures::KingdomResearchRecord* FindKingdomResearch(std::uint32_t command);
+bool CompleteKingdomResearch(std::uint32_t, void*, std::uint32_t, std::uint32_t, std::uint32_t);
 bool OccupantCallMatches(std::uintptr_t callRva, std::uintptr_t targetRva);
 bool QuestSummaryCallMatches(
     std::uintptr_t callRva,
@@ -578,6 +584,7 @@ struct PrivateResearchDescriptor {
     std::uint32_t* descriptor;
 };
 std::vector<PrivateResearchDescriptor> g_privateResearchDescriptors;
+std::vector<MajestyStockControllers::ResearchRowRecord> g_kingdomResearchRows;
 const char* g_privateResearchCompletionText = nullptr;
 
 enum class PrivateSpellDescriptorKind {
@@ -1083,12 +1090,25 @@ StockControllerRegistryState LoadStockControllerRegistry() {
 }
 
 bool PrepareStockControllerRuntimeRecords() {
+    g_kingdomResearchRows.clear();
+    g_kingdomResearchRows.reserve(g_runtimeFeatureRegistry.kingdomResearch.size());
+    for (const auto& feature : g_runtimeFeatureRegistry.kingdomResearch) {
+        for (const auto& existing : g_stockControllerRegistry.researchRows)
+            if (existing.actionControlId == feature.actionControlId) return false;
+        g_kingdomResearchRows.push_back({feature.identity, feature.identity,
+            feature.actionControlId, feature.descriptorTemplateControlId,
+            feature.descriptorTemplateControlId, feature.requiredLevel, feature.price,
+            feature.actionControlId+1000, feature.progressControlId,
+            feature.activeDisplayControlId, feature.actionControlId+500, feature.completionText});
+    }
     g_privateResearchDescriptors.clear();
     g_privateResearchDescriptors.reserve(
-        g_stockControllerRegistry.researchRows.size());
+        g_stockControllerRegistry.researchRows.size() + g_kingdomResearchRows.size());
     for (const auto& row : g_stockControllerRegistry.researchRows) {
         g_privateResearchDescriptors.push_back({&row, nullptr});
     }
+    for (const auto& row : g_kingdomResearchRows)
+        g_privateResearchDescriptors.push_back({&row, nullptr});
     g_privateSpellDescriptors.clear();
     g_privateSpellDescriptors.reserve(
         g_stockControllerRegistry.timedRageActions.size() +
@@ -1109,7 +1129,7 @@ bool PrepareStockControllerRuntimeRecords() {
             {PrivateSpellDescriptorKind::SovereignTarget, &action, {}});
     }
     return g_privateResearchDescriptors.size() ==
-            g_stockControllerRegistry.researchRows.size() &&
+            g_stockControllerRegistry.researchRows.size() + g_kingdomResearchRows.size() &&
         g_privateSpellDescriptors.size() ==
             g_stockControllerRegistry.timedRageActions.size() +
             g_stockControllerRegistry.rageCommandActions.size() +
@@ -1665,6 +1685,8 @@ bool ValidateMajestyBuildProfile() {
             }
         }
     }
+    if (!g_runtimeFeatureRegistry.heroInfoRows.empty() && !ValidateHeroInfoProfile()) return false;
+    if (!g_runtimeFeatureRegistry.kingdomResearch.empty() && !ValidateKingdomResearchProfile()) return false;
     if (!g_stockControllerRegistry.occupantActionPanels.empty() ||
         !g_stockControllerRegistry.liveAgentLists.empty()) {
         if (!ValidateOccupantPanelProfile()) return false;
@@ -1688,7 +1710,7 @@ bool ValidateMajestyBuildProfile() {
         !ValidatePrivateRewardFlagProfile()) {
         return false;
     }
-    if (!g_runtimeFeatureRegistry.enchantmentRows.empty() &&
+    if ((!g_runtimeFeatureRegistry.enchantmentRows.empty() || HeroEffectRowsSelected()) &&
         !ValidatePrivateEnchantmentRowsProfile()) {
         return false;
     }
@@ -2496,6 +2518,7 @@ void __cdecl ResearchCompletionBridge(
     std::uint32_t eventRecord,
     std::uint32_t eventArgument,
     std::uint32_t eventType) {
+    if (CompleteKingdomResearch(commandOwner, context, eventRecord, eventArgument, eventType)) return;
     const bool privateResearchCompletion =
         eventType == 2 &&
         g_researchOwner.active &&
@@ -2888,6 +2911,8 @@ const std::uint32_t* ResolvePrivateResearchDescriptor(
     state->descriptor[1] = state->record->requiredLevel;
     state->descriptor[2] = state->record->price;
     state->descriptor[4] = completionDescriptor[4];
+    if (const auto* research = FindKingdomResearch(state->record->actionControlId))
+        state->descriptor[4] = research->completionAttribute;
     return state->descriptor;
 }
 
@@ -5216,7 +5241,8 @@ int __fastcall LiveAgentListControlHandoff(
 }
 bool WriteOccupantBranch(std::uintptr_t address, void* target, unsigned char opcode,
                          std::size_t size = 5) {
-    unsigned char patch[6] = {opcode, 0, 0, 0, 0, 0x90};
+    unsigned char patch[7] = {opcode, 0, 0, 0, 0, 0x90, 0x90};
+    if (size < 5 || size > sizeof(patch)) return false;
     const auto relative = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(target) - address - 5);
     std::memcpy(patch + 1, &relative, 4);
     DWORD previous = 0, ignored = 0;
@@ -6196,6 +6222,8 @@ bool InstallQuestBoardChildVtable(std::uint32_t controller) {
     return true;
 }
 
+#include "KingdomResearchRuntime.inl"
+
 struct OccupantParentClass {
     void* table[kAp10VtableEntries];
     void** stock;
@@ -6225,10 +6253,12 @@ void __fastcall OccupantParentSetup(void* controller, void*) {
     reinterpret_cast<ControllerSetup>(entry->thirdPrice ? entry->recruitment.setup : entry->stock[1])(controller);
     if (entry->recruitmentMode != 2)
         RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
+    RefreshKingdomResearch(reinterpret_cast<std::uint32_t>(controller), entry->recruitmentMode == 2);
 }
 int __fastcall OccupantParentControl(void* controller, void*, std::uint32_t command) {
     auto* entry = FindOccupantParentClass(controller);
     const bool recruitCommand = command == 0x1F48u || command == 0x1389u || command == 0x1388u;
+    if (recruitCommand && KingdomResearchActivity(NativePanelContext(reinterpret_cast<std::uint32_t>(controller)))) return 0;
     if (entry != nullptr && entry->recruitmentMode == 2) {
         if (command == 0x1F4Du && g_activeRecruitment != nullptr &&
             reinterpret_cast<std::uint32_t>(controller) == static_cast<std::uint32_t>(g_childController))
@@ -6249,6 +6279,7 @@ int __fastcall OccupantParentControl(void* controller, void*, std::uint32_t comm
         }
     }
     int openResult = 0;
+    if (HandleKingdomResearch(controller, command)) return 0;
     if (HandleBuildingOpenToggle(controller, command, &openResult)) return openResult;
     if (OpenOccupantPanel(controller, command, &openResult)) return openResult;
     if (OpenQuestBoardPanel(controller, command, &openResult)) return openResult;
@@ -6271,8 +6302,11 @@ void __fastcall OccupantParentEvent(
     }
     reinterpret_cast<ControllerEvent>(entry->thirdPrice ? entry->recruitment.event : entry->stock[8])(
         controller, a1, a2, a3, a4);
+    if (entry->thirdPrice)
+        MajestyPrivateRecruitment::RefreshCapacityChange(controller, a3);
     if (entry->recruitmentMode != 2)
         RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
+    RefreshKingdomResearch(reinterpret_cast<std::uint32_t>(controller), entry->recruitmentMode == 2);
 }
 void __fastcall PrivateRecruitmentRefresh(void* controller, void*) {
     const auto* entry = FindOccupantParentClass(controller);
@@ -6283,6 +6317,15 @@ void __fastcall PrivateRecruitmentRefresh(void* controller, void*) {
         SetControllerControlVisible(reinterpret_cast<std::uint32_t>(controller), entry->thirdPrice, false);
         return;
     }
+    if (KingdomResearchActivity(NativePanelContext(reinterpret_cast<std::uint32_t>(controller)))) {
+        // Never hand a research timer to AP52's produced-unit presenter.
+        const auto id = reinterpret_cast<std::uint32_t>(controller);
+        for (auto command : {0x1F48u, 0x1389u, 0x1388u})
+            SendControllerMessage(id, command, 0x0A, 1, 0);
+        for (auto control : {0x1752u, 0x1F51u, entry->thirdPrice, 0x1F56u, 0x1F57u})
+            SetControllerControlVisible(id, control, false);
+        return;
+    }
     entry->recruitment.Refresh(controller);
 }
 void __fastcall PrivateRecruitmentNoCounts(void*, void*) {}
@@ -6291,7 +6334,9 @@ bool __fastcall PrivateRecruitmentTooltip(
     const auto* entry = FindOccupantParentClass(controller);
     if (entry == nullptr || !entry->thirdPrice) return false;
     if (command == 0x1F48u || command == 0x1389u || command == 0x1388u)
-        return entry->recruitmentMode != 1 && entry->recruitment.Describe(controller, command, a2, text);
+        return entry->recruitmentMode != 1 &&
+            !KingdomResearchActivity(NativePanelContext(reinterpret_cast<std::uint32_t>(controller))) &&
+            entry->recruitment.Describe(controller, command, a2, text);
     return reinterpret_cast<MajestyPrivateRecruitment::Tooltip>(entry->stock[2])(controller, command, a2, text);
 }
 bool InstallOccupantParentVtable(std::uint32_t controller, bool recruitmentChild) {
@@ -6985,6 +7030,8 @@ __declspec(naked) void SecondaryControllerResultHook() {
     }
 }
 
+#include "HeroInfoRuntime.inl"
+
 // AP78 has no generic data-driven Enchantments presenter. Its stock refresh
 // reads each active effector's overlay FourCC and switches over a fixed list.
 // Preserve that entire switch and row builder: manager-validated private
@@ -6993,6 +7040,12 @@ __declspec(naked) void SecondaryControllerResultHook() {
 extern "C" void __stdcall SelectPrivateEnchantmentRow(
     std::uint32_t overlayId) {
     g_privateEnchantmentRowString = nullptr;
+    g_heroEffectRow = g_runtimeFeatureRegistry.FindHeroInfo(2, overlayId);
+    if (g_heroEffectRow) {
+        g_heroEffectLabel = HeroInfoString(g_heroEffectRow->displayText);
+        g_privateEnchantmentRowString = &g_heroEffectLabel;
+        return;
+    }
     const auto* row =
         g_runtimeFeatureRegistry.FindEnchantmentRow(overlayId);
     if (row == nullptr || g_runtimeFeatureRegistry.enchantmentRows.empty()) {
@@ -7482,6 +7535,7 @@ DWORD WINAPI InitializeRuntime(void*) {
         !g_stockControllerRegistry.privateRecruitments.empty();
     const bool ap10Ap69ControllerRecipes =
         !g_stockControllerRegistry.panels.empty();
+    const bool kingdomResearch = !g_runtimeFeatureRegistry.kingdomResearch.empty();
     const bool privateRewardFlagRecipes =
         !g_stockControllerRegistry.rewardPanels.empty();
     if (!PrepareStockControllerRuntimeRecords()) {
@@ -7491,7 +7545,7 @@ DWORD WINAPI InitializeRuntime(void*) {
     const bool requestedStockControllerRecipes = HasRuntimeCapability(
         MajestyRuntimeCapabilities::kGenericControllerRecipes);
     const bool privateEnchantmentRows =
-        !g_runtimeFeatureRegistry.enchantmentRows.empty();
+        !g_runtimeFeatureRegistry.enchantmentRows.empty() || HeroEffectRowsSelected();
     const bool requestedNameGeneratorHook =
         HasRuntimeCapability(
             MajestyRuntimeCapabilities::kGenericNameGenerator);
@@ -7502,6 +7556,9 @@ DWORD WINAPI InitializeRuntime(void*) {
         HasRuntimeCapability(MajestyRuntimeCapabilities::kMapFogQuery) != g_runtimeFeatureRegistry.mapFogQuery ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kMovementQuery) != g_runtimeFeatureRegistry.movementQuery ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kNativeTiming) != g_runtimeFeatureRegistry.nativeTiming ||
+        HasRuntimeCapability(MajestyRuntimeCapabilities::kEquipment) != !g_runtimeFeatureRegistry.equipment.empty() ||
+        HasRuntimeCapability(MajestyRuntimeCapabilities::kKingdomResearch) != kingdomResearch ||
+        HasRuntimeCapability(MajestyRuntimeCapabilities::kHeroInfo) != !g_runtimeFeatureRegistry.heroInfoRows.empty() ||
         requestedEnchantmentRowHook != privateEnchantmentRows ||
         requestedStockControllerRecipes != stockControllerRecipes) {
         StopUnsafeManagerRuntimeLaunch(
@@ -7517,18 +7574,26 @@ DWORD WINAPI InitializeRuntime(void*) {
             "GOG Standard manifest registration could not be installed: invalid paths or unaudited stock loader bytes.");
     }
     if (!InstallGogWorkshopQuests()) {
-        StopGogQuestLaunch("GOG quest registration could not be installed: invalid paths or unaudited stock loader bytes.");
+        StopUnsafeManagerRuntimeLaunch("GOG quest registration could not be installed: invalid metadata or unaudited stock loader bytes.");
     }
     if (privateRewardFlagRecipes && !PrepareRewardFlagRuntimeRecords()) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: private reward flag callbacks could not be prepared from stock Fl00.");
     }
+    if (!g_runtimeFeatureRegistry.equipment.empty()) {
+        RequireManagerRuntimeInstall(
+            InstallEquipmentRuntime(g_imageBase, g_buildProfile == &kBeta2BuildProfile,
+                g_runtimeFeatureRegistry, &StopUnsafeManagerRuntimeLaunch),
+            managerLaunch, "Private equipment requires the audited beta2 registration boundaries.");
+    }
     if (g_runtimeFeatureRegistry.mapFogQuery || g_runtimeFeatureRegistry.movementQuery ||
-        g_runtimeFeatureRegistry.nativeTiming) {
+        g_runtimeFeatureRegistry.nativeTiming || kingdomResearch) {
         RequireManagerRuntimeInstall(
             InstallMapQueryRuntime(g_imageBase, g_buildProfile->buildId,
                 g_runtimeFeatureRegistry.mapFogQuery, g_runtimeFeatureRegistry.movementQuery,
-                g_runtimeFeatureRegistry.nativeTiming ? &g_runtimeFeatureRegistry : nullptr),
+                g_runtimeFeatureRegistry.nativeTiming ? &g_runtimeFeatureRegistry : nullptr,
+                kingdomResearch ? &KingdomResearchOrder : nullptr,
+                kingdomResearch ? &KingdomResearchEligible : nullptr),
             managerLaunch, "The stock GPL interface registration boundary did not match its profile.");
     }
 
@@ -7580,7 +7645,7 @@ DWORD WINAPI InitializeRuntime(void*) {
             "Terminating manager launch before Majesty resumes: the private name registry could not be installed.");
     }
 
-    if (ap10Ap69ControllerRecipes) {
+    if (ap10Ap69ControllerRecipes || kingdomResearch) {
         g_stockResearchRouteReady = RequireManagerRuntimeInstall(
             ValidateStockResearchRoute(),
             managerLaunch,
@@ -7597,6 +7662,12 @@ DWORD WINAPI InitializeRuntime(void*) {
             InstallResearchCompletionNameClone(),
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the private research-completion name clone could not be installed.");
+    }
+    if (kingdomResearch) {
+        RequireManagerRuntimeInstall(InstallKingdomResearchGate(), managerLaunch,
+            "The kingdom research command boundary did not match the audited stock profile.");
+    }
+    if (ap10Ap69ControllerRecipes) {
         RequireManagerRuntimeInstall(
             InstallPrivateSpellDescriptorResolver(),
             managerLaunch,
@@ -7643,6 +7714,10 @@ DWORD WINAPI InitializeRuntime(void*) {
             InstallPrivateRewardFlagModeRegistry(),
             managerLaunch,
             "Terminating manager launch before Majesty resumes: private Fl00 modes could not be registered.");
+    }
+    if (!g_runtimeFeatureRegistry.heroInfoRows.empty()) {
+        RequireManagerRuntimeInstall(InstallHeroInfo(), managerLaunch,
+            "Hero information rows require the audited stock AP78 presentation boundaries.");
     }
     if (privateEnchantmentRows) {
         RequireManagerRuntimeInstall(

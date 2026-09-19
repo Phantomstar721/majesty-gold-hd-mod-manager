@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from functools import lru_cache
 from pathlib import Path
 import re
 import struct
@@ -14,6 +15,51 @@ STOCK_NAMED_CAM_SECTIONS = frozenset((b"SMNU", b"STRT", b"DSND", b"WAVE"))
 
 class StockCamError(ValueError):
     """Raised when installed stock named-CAM ancestry cannot be proven."""
+
+
+def stock_image_ids(game_path: Path) -> frozenset[bytes]:
+    """Collision evidence from directories only; never read art pixel payloads."""
+    from .stock_art import _stock_cam_paths
+    result = set()
+    for path in _stock_cam_paths(game_path.resolve(strict=True)):
+        stat = path.stat()
+        result.update(_stock_image_ids_cached(path, stat.st_size, stat.st_mtime_ns))
+    return frozenset(result)
+
+
+@lru_cache(maxsize=32)
+def _stock_image_ids_cached(path: Path, size: int, modified: int) -> frozenset[bytes]:
+    del modified  # part of the invalidation key
+    with path.open("rb") as stream:
+        header = stream.read(20)
+        if len(header) != 20 or header[:12] != CAM_MAGIC:
+            raise StockCamError(f"stock CAM has an invalid header: {path}")
+        count, length = struct.unpack_from("<II", header, 12)
+        if count > 4096 or 20+8*count+length > size:
+            raise StockCamError(f"stock CAM directory exceeds its file: {path}")
+        directory = stream.read(count*8)
+        if len(directory) != count*8:
+            raise StockCamError(f"stock CAM directory is truncated: {path}")
+        result = set()
+        end = 20+8*count+length
+        for i in range(count):
+            extension, offset = struct.unpack_from("<4sI", directory, i*8)
+            if extension != b"IMAG":
+                continue
+            if offset < 20+8*count or offset+8 > end:
+                raise StockCamError(f"stock IMAG directory offset is invalid: {path}")
+            stream.seek(offset)
+            prefix = stream.read(8)
+            if len(prefix) != 8:
+                raise StockCamError(f"stock IMAG directory is truncated: {path}")
+            entries = struct.unpack_from("<I", prefix)[0]
+            if entries > (end-offset-8)//28:
+                raise StockCamError(f"stock IMAG entries exceed their directory: {path}")
+            records = stream.read(entries*28)
+            if len(records) != entries*28:
+                raise StockCamError(f"stock IMAG entries are truncated: {path}")
+            result.update(records[j:j+4] for j in range(0, len(records), 28))
+    return frozenset(result)
 
 
 def load_effective_stock_named_resources(

@@ -205,7 +205,9 @@ void Run() {
 }
 #include "MovementQueryTests.h"
 #include "NativeTimingTests.h"
+#include "EarnedRewardsTests.h"
 int main() {
+    RewardsTest::Run();
     MovementTest::Run();
     TimingTest::Run();
     VerifyOutwardTraversal();

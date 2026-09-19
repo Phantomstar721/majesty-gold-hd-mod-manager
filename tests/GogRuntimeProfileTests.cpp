@@ -82,6 +82,11 @@ int main(int argc, char** argv) {
             Check(MajestyGogAudit::Validate(g_imageBase, MajestyGogAudit::kRecipes,
                 sizeof(MajestyGogAudit::kRecipes) / sizeof(MajestyGogAudit::kRecipes[0])), "complete recipe bodies");
         valid = Check(ValidateMajestyBuildProfile(), "selected controller capability") && valid;
+        for (const char* unsupported : {"stock.equipment.v1", "manager.kingdom-research.v1", "stock.ap78-info-row.v1"}) {
+            g_runtimeCapabilities.capabilities.push_back(unsupported);
+            valid = Check(!ValidateMajestyBuildProfile(), "newer Steam-only feature stays unavailable on GOG") && valid;
+            g_runtimeCapabilities.capabilities.pop_back();
+        }
         valid = Check(ValidateGogStandardModProfile(), "Standard manifest stock lifecycle") && valid;
         valid = Check(ValidateGogQuestProfile(), "Quest manifest stock lifecycle") && valid;
         for (const auto& range : MajestyGogAudit::kWorkshopQuests) {

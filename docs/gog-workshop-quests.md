@@ -57,10 +57,27 @@ conversion needed by Majesty. Several quest IDs may share a manifest; each
 manifest is loaded once per registration pass. All expected GUIDs must then
 exist; full GUID comparison rejects a collision in the stock numeric key.
 
-Startup refuses missing manifests or changed audited loader bytes before
-continuing to the menu. `scripts/audit_gog_quests.py` reproduces the exact
+Quest content failure is not a fatal runtime failure. The stock directory
+scanner calls the manifest loader at `0x119721`, ignores its boolean result,
+and advances to the next file at `0x119726`. The bridge follows that ordering:
+it attempts each manifest once per stock scan, retains any partially registered
+stock-owned records, logs unavailable GUIDs/paths, and continues with other
+quests. A duplicate native key is reported without replacing the existing
+record. Stock teardown still owns all cleanup; repaired downloads are retried
+at the next stock startup boundary, without a timer or persistent failure cache.
+
+Catalog validation requires the stock direct-child `Quest` shape. A manifest
+that disappears between scan and launch is skipped with a Manager notice;
+one that disappears or cannot be encoded after handoff is skipped by the
+runtime. Native-only registration failures are recorded in
+`MajestyBuildingRuntime.log`. They do not terminate unrelated game modes.
+Malformed launch metadata, foreign package paths, and changed audited loader
+bytes still fail closed. Selected Standard mods remain required.
+
+`scripts/audit_gog_quests.py` reproduces the exact
 stock body guards in `runtime/GogQuestAudit.h`. Native fixtures verify guard
 mutation rejection, owner/options forwarding, ordering, variants, repeated
 startup, teardown/reload, missing registrations and cleanup after failed load.
-Python fixtures verify GOG-only launch metadata and separation from Active Mods.
+Python fixtures verify GOG-only launch metadata and separation from Active Mods,
+direct-child validation, and recovery from unavailable downloads.
 Gameplay acceptance with downloaded quest packages remains a user-run check.

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ..equipment import require_beta2
 
 from dataclasses import dataclass
 import os
@@ -54,6 +55,7 @@ class LaunchResult:
     active_mod_ids: tuple[str, ...]
     executable: Path
     runtime_dll: Path
+    warnings: tuple[str, ...] = ()
 
 
 def launch_majesty(
@@ -118,11 +120,12 @@ def launch_majesty(
     environment.pop(STANDARD_MANIFESTS_ENV_VAR, None)
     environment.pop(QUEST_MANIFESTS_ENV_VAR, None)
     branch = detect_majesty_branch(paths.game_executable)
+    warnings: list[str] = []
     if branch == GOG_BRANCH:
         manifests = _gog_standard_manifests(paths, ordered, standard_mods)
         if manifests:
             environment[STANDARD_MANIFESTS_ENV_VAR] = manifests
-        quest_manifests = _gog_quest_manifests(paths, quests)
+        quest_manifests = _gog_quest_manifests(paths, quests, warnings=warnings)
         if quest_manifests:
             environment[QUEST_MANIFESTS_ENV_VAR] = quest_manifests
     try:
@@ -147,6 +150,8 @@ def launch_majesty(
         if not feature_path.is_file():
             raise OSError("runtime feature registry path is not a file")
         prepared_features = decode_runtime_feature_registry(feature_path.read_bytes())
+        if prepared_features.equipment or prepared_features.kingdom_research or prepared_features.hero_info_rows:
+            require_beta2(paths.game_executable)
     except (OSError, ValueError) as exc:
         raise ManagerLaunchError(
             f"The prepared runtime feature registry is missing or invalid: {exc}"
@@ -282,10 +287,13 @@ def launch_majesty(
         active_mod_ids=tuple(ordered),
         executable=paths.game_executable,
         runtime_dll=paths.runtime_dll,
+        warnings=tuple(warnings),
     )
 
 
-def _gog_quest_manifests(paths: ManagerPaths, entries: Sequence[CatalogEntry]) -> str:
+def _gog_quest_manifests(
+    paths: ManagerPaths, entries: Sequence[CatalogEntry], *, warnings: list[str] | None = None,
+) -> str:
     """Make valid downloaded quests available to Majesty's own quest selector."""
     manifests: dict[str, Path] = {}
     roots = tuple(root.resolve() for root in paths.workshop_roots)
@@ -299,9 +307,10 @@ def _gog_quest_manifests(paths: ManagerPaths, entries: Sequence[CatalogEntry]) -
         try:
             manifest = entry.manifest_path.resolve(strict=True)
             package = entry.package_root.resolve(strict=True)
+            if not manifest.is_file():
+                raise OSError("quest manifest is no longer a file")
             if (
-                not manifest.is_file()
-                or manifest.suffix.casefold() != ".mqxml"
+                manifest.suffix.casefold() != ".mqxml"
                 or manifest.parent != package
                 or not any(package == root or (package.parent == root and package.name.isdecimal()) for root in roots)
                 or any(ord(char) < 32 for char in str(manifest))
@@ -310,7 +319,13 @@ def _gog_quest_manifests(paths: ManagerPaths, entries: Sequence[CatalogEntry]) -
             previous = manifests.setdefault(entry.content_id, manifest)
             if previous != manifest:
                 raise ValueError("quest ID has multiple source manifests")
-        except (OSError, ValueError) as exc:
+        except OSError as exc:
+            # Quests are optional catalog entries, not selected Active Mods.
+            # A Steam download disappearing after Scan must not block the game.
+            if warnings is not None:
+                warnings.append(f"Skipped unavailable quest {entry.display_name}: {exc}. Rescan Content to refresh its status.")
+            continue
+        except ValueError as exc:
             raise ManagerLaunchError(
                 f"Cannot register quest {entry.display_name} for GOG: {exc}. Rescan the installed quests."
             ) from exc

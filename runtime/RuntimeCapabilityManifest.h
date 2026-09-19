@@ -26,6 +26,9 @@ constexpr char kGenericControllerRecipes[] =
 constexpr char kMapFogQuery[] = "stock.map-fog-query.v1";
 constexpr char kMovementQuery[] = "stock.movement-query.v1";
 constexpr char kNativeTiming[] = "stock.native-timing.v1";
+constexpr char kEquipment[] = "stock.equipment.v1";
+constexpr char kKingdomResearch[] = "manager.kingdom-research.v1";
+constexpr char kHeroInfo[] = "stock.ap78-info-row.v1";
 
 struct Manifest {
     std::vector<std::string> capabilities;

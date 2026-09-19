@@ -7,4 +7,6 @@ namespace MajestyRuntimeFeatures { struct Registry; }
 // Movement/timing-only use does not patch PathCost or access map tiles.
 bool InstallMapQueryRuntime(std::uintptr_t imageBase, MajestyBuildId buildId,
                            bool mapQuery = true, bool movementQuery = false,
-                           const MajestyRuntimeFeatures::Registry* timing = nullptr);
+                           const MajestyRuntimeFeatures::Registry* timing = nullptr,
+                           int (*researchOrder)(void*, std::uint32_t) = nullptr,
+                           int (*researchEligible)(void*, std::uint32_t) = nullptr);
