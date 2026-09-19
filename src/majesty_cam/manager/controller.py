@@ -533,6 +533,7 @@ class ManagerController:
                     entry for entry in self.catalog.entries
                     if entry.content_id in self.plan.selected_standard_ids
                 ),
+                quests=self.catalog.quests,
                 intent_registry=intent_registry,
                 capability_manifest=capability_manifest,
                 runtime_feature_registry=runtime_feature_registry,

@@ -117,7 +117,14 @@ try {
     # scripts. Keep the full-suite and launch payload on the same revision.
     foreach ($helper in @(
         @{ Source = $visitorRepo; Name = "Generic Visitor Lists" },
-        @{ Source = $rememberRepo; Name = "Remember Active Mods" }
+        @{ Source = $rememberRepo; Name = "Remember Active Mods" },
+        @{ Source = (Join-Path $repoRoot "helpers\downloadable-quests-shortcut"); Name = "Downloadable Quests Shortcut" },
+        @{ Source = (Join-Path $repoRoot "helpers\quest-map-drag"); Name = "Quest Map Drag" },
+        @{ Source = (Join-Path $repoRoot "helpers\unlock-all-quests"); Name = "Unlock All Quests" },
+        @{ Source = (Join-Path $repoRoot "helpers\suppress-all-message-flags"); Name = "Suppress All Message Flags" },
+        @{ Source = (Join-Path $repoRoot "helpers\remember-game-speed"); Name = "Remember Game Speed" },
+        @{ Source = (Join-Path $repoRoot "helpers\remember-camera-zoom"); Name = "Remember Camera Zoom" },
+        @{ Source = (Join-Path $repoRoot "helpers\lower-tracking-window"); Name = "Lower Tracking Window" }
     )) {
         $helperTarget = Join-Path $qolTarget ($helper.Name + "\scripts")
         Copy-Item -Path (Join-Path $helper.Source "scripts\*.ps1") -Destination $helperTarget -Force

@@ -54,7 +54,8 @@ bool StockModNarrowPath(const std::wstring& path, std::string& output) {
     return copied != 0 && copied < length && convert(shortPath.data());
 }
 
-bool ParseGogStandardMods(const std::wstring& value, std::vector<GogStandardMod>& output) {
+bool ParseGogStandardMods(const std::wstring& value, std::vector<GogStandardMod>& output,
+    const wchar_t* extension = L".mmxml", std::size_t maximum = kMaximumStandardMods) {
     output.clear();
     if (value.empty() || value.size() > kMaximumStandardManifestCharacters) return false;
     std::vector<GogStandardMod> parsed;
@@ -62,7 +63,7 @@ bool ParseGogStandardMods(const std::wstring& value, std::vector<GogStandardMod>
     while (start < value.size()) {
         const auto end = value.find(L'\n', start);
         const auto row = value.substr(start, end == std::wstring::npos ? end : end - start);
-        if (parsed.size() >= kMaximumStandardMods || row.size() < 38 || row[36] != L'\t') return false;
+        if (parsed.size() >= maximum || row.size() < 38 || row[36] != L'\t') return false;
         GogStandardMod mod;
         for (std::size_t i = 0; i < 36; ++i) {
             const auto c = row[i];
@@ -76,7 +77,7 @@ bool ParseGogStandardMods(const std::wstring& value, std::vector<GogStandardMod>
             ((path[0] >= L'A' && path[0] <= L'Z') || (path[0] >= L'a' && path[0] <= L'z')) &&
             path[1] == L':' && (path[2] == L'\\' || path[2] == L'/');
         const bool unc = path.size() > 4 && path[0] == L'\\' && path[1] == L'\\' && path[2] != L'.';
-        if ((!drive && !unc) || path.size() < 6 || _wcsicmp(path.c_str() + path.size() - 6, L".mmxml") != 0) return false;
+        if ((!drive && !unc) || path.size() < 6 || _wcsicmp(path.c_str() + path.size() - 6, extension) != 0) return false;
         const DWORD attributes = GetFileAttributesW(path.c_str());
         if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) ||
             !StockModNarrowPath(path, mod.manifest)) {

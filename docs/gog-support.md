@@ -14,29 +14,29 @@ validate the four stock PE sections; helper sections may be appended.
 
 GOG support includes:
 
-- Remember Active Mods and Generic Visitor Lists, including guarded restore.
+- All bundled quality-of-life utilities, including guarded restore. See
+  [the optional utility lifecycle audit](gog-qol.md).
 - Core launch and the existing custom-building factory fallback.
 - Selected Standard mods from already-downloaded Workshop packages, registered
   through GOG's stock manifest loader during Manager launch. See
   [the discovery and ownership audit](gog-standard-mods.md).
+- Downloaded Workshop quests, registered through the stock quest lifecycle.
+  See [the quest loader audit](gog-workshop-quests.md).
 - The existing Freestyle IMAG acquisition, assignment, and release repair.
 - Private name generators, activity text, and AP78 enchantment rows.
 - The existing GPL map, movement-rate, and native timing interfaces.
 - Stock controller recipes, including private recruitment, occupant and live-agent
   lists, reward panels, secondary panels, and their existing research actions.
 
-Experimental equipment and saved kingdom-research integration are not part of
-this change or the current release. Their GOG lifecycles remain unaudited.
+Equipment and saved kingdom-research integration are outside this PR's scope.
 Manager preflight identifies unsupported capabilities, and native preflight
 rejects them before installing any hook.
-The Steam public and beta2 profiles retain their prior capabilities. Optional
-Steam executable utilities are marked unavailable on GOG without spawning their
-installers. The shared intro-video preference remains available.
+The Steam public and beta2 profiles retain their prior capabilities.
 
-GOG has no Steam Workshop subscription/download or quest-discovery path. This
-integration registers selected, already-downloaded Standard mod manifests at
-stock startup. Quest packages must be in the local Quests folder. Local and
-Steam/GOG installations share the normal Documents/My Games/MajestyHD folders.
+GOG has no Steam Workshop subscription/download path. This integration registers
+selected Standard mod manifests and valid downloaded quest manifests at stock
+startup. Steam/GOG installations share the normal Documents/My Games/MajestyHD
+folders for local content and saves.
 
 ## Audited stock lifecycles
 

@@ -27,7 +27,7 @@ from ..stock_controller_registry import (
     decode_stock_controller_registry,
 )
 from .paths import ManagerPaths
-from .catalog import CatalogEntry, CatalogKind, CatalogSource
+from .catalog import CatalogEntry, CatalogKind, CatalogSource, IssueSeverity
 from .profile_lock import (
     ExclusiveProfileLock,
     PROFILE_LOCK_HANDLE_ENV_VAR,
@@ -41,6 +41,7 @@ from .runtime_profiles import unsupported_runtime_capabilities
 
 CURRENT_PERSISTENCE_LIMIT = 26
 STANDARD_MANIFESTS_ENV_VAR = "MAJESTY_MOD_MANAGER_STANDARD_MANIFESTS"
+QUEST_MANIFESTS_ENV_VAR = "MAJESTY_MOD_MANAGER_QUEST_MANIFESTS"
 
 
 class ManagerLaunchError(RuntimeError):
@@ -61,6 +62,7 @@ def launch_majesty(
     *,
     game_arguments: Sequence[str] = (),
     standard_mods: Sequence[CatalogEntry] = (),
+    quests: Sequence[CatalogEntry] = (),
     ensure_qol: bool = True,
     intent_registry: Path | None = None,
     capability_manifest: Path,
@@ -114,11 +116,15 @@ def launch_majesty(
     environment.pop(CONTROLLER_REGISTRY_ENVIRONMENT, None)
     environment.pop(PROFILE_LOCK_HANDLE_ENV_VAR, None)
     environment.pop(STANDARD_MANIFESTS_ENV_VAR, None)
+    environment.pop(QUEST_MANIFESTS_ENV_VAR, None)
     branch = detect_majesty_branch(paths.game_executable)
     if branch == GOG_BRANCH:
         manifests = _gog_standard_manifests(paths, ordered, standard_mods)
         if manifests:
             environment[STANDARD_MANIFESTS_ENV_VAR] = manifests
+        quest_manifests = _gog_quest_manifests(paths, quests)
+        if quest_manifests:
+            environment[QUEST_MANIFESTS_ENV_VAR] = quest_manifests
     try:
         capability_path = capability_manifest.resolve(strict=True)
         if not capability_path.is_file():
@@ -277,6 +283,41 @@ def launch_majesty(
         executable=paths.game_executable,
         runtime_dll=paths.runtime_dll,
     )
+
+
+def _gog_quest_manifests(paths: ManagerPaths, entries: Sequence[CatalogEntry]) -> str:
+    """Make valid downloaded quests available to Majesty's own quest selector."""
+    manifests: dict[str, Path] = {}
+    roots = tuple(root.resolve() for root in paths.workshop_roots)
+    for entry in entries:
+        if entry.source != CatalogSource.WORKSHOP:
+            continue
+        if entry.kind != CatalogKind.QUEST:
+            raise ManagerLaunchError("Only quests may be registered with the GOG quest loader.")
+        if entry.content_id is None or any(issue.severity == IssueSeverity.ERROR for issue in entry.issues):
+            continue
+        try:
+            manifest = entry.manifest_path.resolve(strict=True)
+            package = entry.package_root.resolve(strict=True)
+            if (
+                not manifest.is_file()
+                or manifest.suffix.casefold() != ".mqxml"
+                or manifest.parent != package
+                or not any(package == root or (package.parent == root and package.name.isdecimal()) for root in roots)
+                or any(ord(char) < 32 for char in str(manifest))
+            ):
+                raise ValueError("manifest is not a Workshop quest package manifest")
+            previous = manifests.setdefault(entry.content_id, manifest)
+            if previous != manifest:
+                raise ValueError("quest ID has multiple source manifests")
+        except (OSError, ValueError) as exc:
+            raise ManagerLaunchError(
+                f"Cannot register quest {entry.display_name} for GOG: {exc}. Rescan the installed quests."
+            ) from exc
+    value = "\n".join(f"{quest_id}\t{manifest}" for quest_id, manifest in manifests.items())
+    if len(value.encode("utf-16-le")) // 2 > 30000:
+        raise ManagerLaunchError("Downloaded quest manifest paths exceed the GOG launch limit.")
+    return value
 
 
 def _gog_standard_manifests(

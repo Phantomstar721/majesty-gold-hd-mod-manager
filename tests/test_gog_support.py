@@ -48,21 +48,25 @@ class GogSupportTests(unittest.TestCase):
             "stock.controller-recipes.v1",
         )), ())
 
-    def test_optional_steam_utilities_are_not_spawned_on_gog(self):
+    def test_optional_utilities_use_their_guarded_gog_installers(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             executable = root / "MajestyHD.exe"
             _write_synthetic_exe(executable, GOG_BRANCH)
-            spec = next(item for item in QOL_PATCHES if item.key == "map-drag")
-            scripts = root / "helpers" / spec.payload_slug / "scripts"
-            scripts.mkdir(parents=True)
-            for name in (spec.install_script_name, spec.remove_script_name):
-                (scripts / name).write_text("")
-            runner = Mock(return_value=subprocess.CompletedProcess([], 0))
-            service = QolService(repo_root=root, game_executable=executable, runner=runner)
-            status = service.inspect_patch(spec.key)
-            self.assertEqual(status.state, QolUtilityState.UNSUPPORTED)
-            runner.assert_not_called()
+            for spec in QOL_PATCHES:
+                if spec.preference_only or spec.required_by_manager:
+                    continue
+                with self.subTest(utility=spec.key):
+                    scripts = root / "helpers" / spec.payload_slug / "scripts"
+                    scripts.mkdir(parents=True)
+                    for name in (spec.install_script_name, spec.remove_script_name):
+                        (scripts / name).write_text("")
+                    runner = Mock(return_value=subprocess.CompletedProcess([], 0, stdout="Would install", stderr=""))
+                    service = QolService(repo_root=root, game_executable=executable, runner=runner)
+                    status = service.inspect_patch(spec.key)
+                    self.assertEqual(status.state, QolUtilityState.AVAILABLE)
+                    runner.assert_called_once()
+                    self.assertIn("-DryRun", runner.call_args.args[0])
 
     def test_both_installations_keep_redirected_documents_and_owned_helpers(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -18,3 +18,10 @@ Remember Active Mods repository and `docs/research.md` and
 `docs/custom-monster-icons.md` in the original Generic Visitor Lists repository.
 The GOG address and ownership trace is in
 [the Manager GOG audit](../docs/gog-support.md).
+
+The seven optional executable utilities are copied from the corresponding
+MIT-licensed packages in `majesty-gold-hd-qol-utilities/utilities` as of
+2026-09-19. Each retains its LICENSE. Their GOG adaptations and stock ownership
+trace are documented in [gog-qol.md](../docs/gog-qol.md). Packaging overlays all
+nine owned executable helpers onto the complete utility suite, preserving Skip
+Intro Videos and keeping the installed/restorer scripts on the same revision.

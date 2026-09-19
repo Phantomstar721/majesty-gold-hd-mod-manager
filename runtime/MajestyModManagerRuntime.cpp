@@ -18,6 +18,7 @@
 #include "GogControllerAudit.h"
 #include "GogRecipeAudit.h"
 #include "GogStandardModAudit.h"
+#include "GogQuestAudit.h"
 #include "ControllerLifecycleRegistry.h"
 #include "FreestyleCamRuntime.h"
 #include "IntentTextRegistry.h"
@@ -7432,6 +7433,7 @@ bool InstallSecondaryControllerHook() {
 }
 
 #include "GogStandardMods.inl"
+#include "GogWorkshopQuests.inl"
 
 DWORD WINAPI InitializeRuntime(void*) {
     g_imageBase = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
@@ -7513,6 +7515,9 @@ DWORD WINAPI InitializeRuntime(void*) {
     if (!InstallGogStandardMods()) {
         StopGogStandardModLaunch(
             "GOG Standard manifest registration could not be installed: invalid paths or unaudited stock loader bytes.");
+    }
+    if (!InstallGogWorkshopQuests()) {
+        StopGogQuestLaunch("GOG quest registration could not be installed: invalid paths or unaudited stock loader bytes.");
     }
     if (privateRewardFlagRecipes && !PrepareRewardFlagRuntimeRecords()) {
         StopUnsafeManagerRuntimeLaunch(

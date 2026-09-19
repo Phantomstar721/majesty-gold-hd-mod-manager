@@ -56,10 +56,9 @@ After the first launch, **Desktop Shortcut** creates an optional shortcut to
 the manager without moving it away from its required support files.
 
 For GOG, download the complete GitHub release ZIP and select your GOG
-`MajestyHD.exe`. The Manager can use already-downloaded Standard Workshop mods;
-it does not download Workshop subscriptions. Quest packages must be installed
-in the game's local Quests folder. Steam-only optional utilities and the legacy
-GOG 1.5.1.2 executable are not supported.
+`MajestyHD.exe`. The Manager can use already-downloaded Workshop mods and quests,
+and all bundled quality-of-life utilities support this version. It does not
+download Workshop subscriptions. The legacy GOG 1.5.1.2 executable is not supported.
 
 ## Updating
 

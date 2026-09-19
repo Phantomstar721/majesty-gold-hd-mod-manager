@@ -113,7 +113,7 @@ SUPPORTED_BRANCHES = (PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH)
 
 # Change this if status interpretation changes independently of the shipped
 # scripts/specs. UI/runtime rebuilds do not change canonical patch evidence.
-QOL_INSPECTION_CACHE_VERSION = 3
+QOL_INSPECTION_CACHE_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -514,7 +514,7 @@ class QolService:
                 detail="Installed" if installed else "Available",
             )
 
-        if branch is None or (branch == GOG_BRANCH and not spec.required_by_manager):
+        if branch is None:
             return QolUtilityStatus(
                 patch,
                 QolUtilityState.UNSUPPORTED,

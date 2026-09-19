@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iterator>
 #include "GogStandardModTests.h"
+#include "GogQuestTests.h"
 
 extern "C" unsigned char GogFixtureBytes[0x500000];
 
@@ -15,6 +16,7 @@ static bool Check(bool value, const char* name) {
 int main(int argc, char** argv) {
     if (argc < 2) return 2;
     StandardModTests::Run();
+    QuestTests::Run();
     std::string registryRoot;
     std::vector<const char*> executables;
     for (int i = 1; i < argc; ++i) {
@@ -39,6 +41,25 @@ int main(int argc, char** argv) {
                 bytes.data() + sections[i].PointerToRawData, sections[i].SizeOfRawData);
         g_imageBase = reinterpret_cast<std::uintptr_t>(mapped);
         g_buildProfile = &kGogBuildProfile;
+        // Inspect the generated utility payload, including code after its
+        // alignment padding. Each path must return to the GOG stock lifecycle.
+        for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+            if (std::strncmp(reinterpret_cast<const char*>(sections[i].Name), ".muqk", 8) != 0) continue;
+            const auto* code = mapped + sections[i].VirtualAddress;
+            if (code[0] == 0) continue; // a deliberately inert section
+            for (const auto offset : {42, 92}) {
+                if (!Check(RelativeCallTarget(code + offset) == g_imageBase + 0x78BB0,
+                        "unlock click/reset calls stock GOG map rebuild")) return 7;
+            }
+            for (const auto& target : {std::make_pair(19, 0x11DA47), std::make_pair(51, 0x79569),
+                    std::make_pair(62, 0x7980F), std::make_pair(110, 0x7999D)}) {
+                std::int32_t relative = 0;
+                std::memcpy(&relative, code + target.first + 1, 4);
+                if (!Check(code[target.first] == 0xE9 &&
+                        reinterpret_cast<std::uintptr_t>(code + target.first + 5) + relative == g_imageBase + target.second,
+                        "unlock stock GOG continuation")) return 7;
+            }
+        }
         g_stockControllerRegistry.Clear();
         g_runtimeFeatureRegistry = {};
         g_runtimeCapabilities.capabilities = {
@@ -62,12 +83,19 @@ int main(int argc, char** argv) {
                 sizeof(MajestyGogAudit::kRecipes) / sizeof(MajestyGogAudit::kRecipes[0])), "complete recipe bodies");
         valid = Check(ValidateMajestyBuildProfile(), "selected controller capability") && valid;
         valid = Check(ValidateGogStandardModProfile(), "Standard manifest stock lifecycle") && valid;
+        valid = Check(ValidateGogQuestProfile(), "Quest manifest stock lifecycle") && valid;
+        for (const auto& range : MajestyGogAudit::kWorkshopQuests) {
+            mapped[range.rva] ^= 1;
+            valid = Check(!ValidateGogQuestProfile(), "Quest lifecycle mutation rejection") && valid;
+            mapped[range.rva] ^= 1;
+        }
         for (const auto& range : MajestyGogAudit::kStandardMods) {
             mapped[range.rva] ^= 1;
             valid = Check(!ValidateGogStandardModProfile(), "Standard lifecycle mutation rejection") && valid;
             mapped[range.rva] ^= 1;
         }
         g_buildProfile = &kBeta2BuildProfile;
+        valid = Check(!ValidateGogQuestProfile(), "Quest bridge excludes Steam") && valid;
         valid = Check(!ValidateGogStandardModProfile(), "Standard bridge excludes Steam") && valid;
         g_buildProfile = &kGogBuildProfile;
         // Exercise every handoff policy: an empty registry skips these exact
