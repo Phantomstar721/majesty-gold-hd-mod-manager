@@ -40,7 +40,7 @@ void Run() {
     assert(Rate(10,40) == 512 && Rate(10,80) == 256 && Rate(6,5) == 2457);
     assert(Rate(0,1) == 0 && Rate(-1,10) == kInvalidData);
     assert(Rate(32768,10) == kInvalidData && Rate(10,0) == kInvalidData);
-    assert(InstallMapQueryRuntime(0,false,false,false));
+    assert(InstallMapQueryRuntime(0,MajestyBuildId::SteamBeta2,false,false));
 
     unsigned char unit[0x94] = {}, dunt[0x18] = {}, unitEngine[0x134] = {};
     unsigned char dmov[0x18] = {}, movementEngine[0x38] = {}, clock[0x24] = {};

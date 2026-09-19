@@ -27,6 +27,7 @@ from ..stock_controller_registry import (
     decode_stock_controller_registry,
 )
 from .paths import ManagerPaths
+from .catalog import CatalogEntry, CatalogKind, CatalogSource
 from .profile_lock import (
     ExclusiveProfileLock,
     PROFILE_LOCK_HANDLE_ENV_VAR,
@@ -34,10 +35,12 @@ from .profile_lock import (
     acquire_merged_profile_lock,
 )
 from .profile import normalize_guid, write_remembered_mods
-from .qol_service import QolService
+from .qol_service import GOG_BRANCH, QolService, detect_majesty_branch
+from .runtime_profiles import unsupported_runtime_capabilities
 
 
 CURRENT_PERSISTENCE_LIMIT = 26
+STANDARD_MANIFESTS_ENV_VAR = "MAJESTY_MOD_MANAGER_STANDARD_MANIFESTS"
 
 
 class ManagerLaunchError(RuntimeError):
@@ -57,6 +60,7 @@ def launch_majesty(
     active_mod_ids: Sequence[str],
     *,
     game_arguments: Sequence[str] = (),
+    standard_mods: Sequence[CatalogEntry] = (),
     ensure_qol: bool = True,
     intent_registry: Path | None = None,
     capability_manifest: Path,
@@ -109,6 +113,12 @@ def launch_majesty(
     environment.pop(RUNTIME_FEATURE_REGISTRY_ENV_VAR, None)
     environment.pop(CONTROLLER_REGISTRY_ENVIRONMENT, None)
     environment.pop(PROFILE_LOCK_HANDLE_ENV_VAR, None)
+    environment.pop(STANDARD_MANIFESTS_ENV_VAR, None)
+    branch = detect_majesty_branch(paths.game_executable)
+    if branch == GOG_BRANCH:
+        manifests = _gog_standard_manifests(paths, ordered, standard_mods)
+        if manifests:
+            environment[STANDARD_MANIFESTS_ENV_VAR] = manifests
     try:
         capability_path = capability_manifest.resolve(strict=True)
         if not capability_path.is_file():
@@ -120,6 +130,11 @@ def launch_majesty(
         raise ManagerLaunchError(
             f"The prepared runtime capability manifest is missing or invalid: {exc}"
         ) from exc
+    unavailable = unsupported_runtime_capabilities(
+        branch, prepared_capabilities
+    )
+    if unavailable:
+        raise ManagerLaunchError("GOG support is not yet audited for: " + ", ".join(unavailable))
     environment[RUNTIME_CAPABILITY_MANIFEST_ENV_VAR] = str(capability_path)
     try:
         feature_path = runtime_feature_registry.resolve(strict=True)
@@ -262,6 +277,51 @@ def launch_majesty(
         executable=paths.game_executable,
         runtime_dll=paths.runtime_dll,
     )
+
+
+def _gog_standard_manifests(
+    paths: ManagerPaths,
+    active_ids: Sequence[str],
+    entries: Sequence[CatalogEntry],
+) -> str:
+    """Supply exact selected Workshop manifests to GOG's stock startup loader.
+
+    Local mods are already discovered by Majesty. No packages are copied into
+    the shared Documents folder, and Active Mods remain the GUID projection.
+    One manifest can supply several selected variants; keep every expected ID
+    so the runtime verifies registration, while loading each manifest once.
+    """
+    selected = set(active_ids)
+    manifests: dict[str, Path] = {}
+    roots = tuple(root.resolve() for root in paths.workshop_roots)
+    for entry in entries:
+        if entry.source != CatalogSource.WORKSHOP:
+            continue
+        if entry.kind != CatalogKind.STANDARD or entry.content_id not in selected:
+            raise ManagerLaunchError("Only selected Standard mods may be registered for GOG.")
+        try:
+            manifest = entry.manifest_path.resolve(strict=True)
+            package = entry.package_root.resolve(strict=True)
+            if (
+                not manifest.is_file()
+                or manifest.suffix.casefold() != ".mmxml"
+                or manifest.parent != package
+                or not any(package == root or (package.parent == root and package.name.isdecimal()) for root in roots)
+                or any(ord(char) < 32 for char in str(manifest))
+            ):
+                raise ValueError("manifest is not a Workshop package manifest")
+            previous = manifests.setdefault(entry.content_id, manifest)
+            if previous != manifest:
+                raise ValueError("selected ID has multiple source manifests")
+        except (OSError, ValueError) as exc:
+            raise ManagerLaunchError(
+                f"Cannot register Standard mod {entry.display_name} for GOG: {exc}. Rescan the installed mods."
+            ) from exc
+    value = "\n".join(f"{mod_id}\t{manifests[mod_id]}" for mod_id in active_ids if mod_id in manifests)
+    # Windows counts UTF-16 code units, including any surrogate pairs.
+    if len(value.encode("utf-16-le")) // 2 > 30000:
+        raise ManagerLaunchError("Selected Standard manifest paths exceed the GOG launch limit.")
+    return value
 
 
 __all__ = [

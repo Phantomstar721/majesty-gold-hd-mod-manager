@@ -82,6 +82,23 @@ QLabel#gameBuild { color: #dfc77f; font-size: 11px; font-weight: 600; }
 QLabel#gameBuild[state="ready"] { color: #9bc9a3; }
 QLabel#gameBuild[state="danger"] { color: #f08a7f; }
 
+QComboBox#installSelector {
+    min-height: 26px;
+    padding: 2px 8px;
+    color: #f4eddd;
+    background-color: #181410;
+    border: 1px solid #4a4038;
+    border-radius: 4px;
+}
+QComboBox#installSelector:focus { border-color: #d0aa5c; }
+QComboBox#installSelector:disabled { color: #777469; }
+QComboBox#installSelector QAbstractItemView {
+    color: #f4eddd;
+    background-color: #181410;
+    selection-background-color: #55432c;
+    selection-color: #fff5dc;
+}
+
 QFrame#navigationBar {
     background-color: #181410;
     border-bottom: 1px solid #4a4038;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MajestyBuildId.h"
 #include "PrivateRecruitmentProfiles.h"
 #include <windows.h>
 #include <cstring>
@@ -26,8 +27,19 @@ inline std::uint32_t Fingerprint(const unsigned char* bytes, const Code& code) {
     return hash;
 }
 
-inline bool Validate(std::uintptr_t base, bool beta) {
-    for (const auto& code : beta ? kBeta : kPublic) {
+inline const Code* Profile(MajestyBuildId buildId) {
+    switch (buildId) {
+    case MajestyBuildId::SteamPublic: return kPublic;
+    case MajestyBuildId::SteamBeta2: return kBeta;
+    case MajestyBuildId::Gog: return kGog;
+    default: return nullptr;
+    }
+}
+inline bool Validate(std::uintptr_t base, MajestyBuildId buildId) {
+    const auto* profile = Profile(buildId);
+    if (profile == nullptr) return false;
+    for (std::size_t index = 0; index < sizeof(kPublic) / sizeof(kPublic[0]); ++index) {
+        const auto& code = profile[index];
         const auto* source = reinterpret_cast<const unsigned char*>(base + code.rva);
         if (Fingerprint(source, code) != code.hash) return false;
         for (std::size_t i = 0; i < code.branchCount; ++i) {
@@ -123,11 +135,16 @@ struct Presenters {
         for (void* code : tooltip) if (code) VirtualFree(code, 0, MEM_RELEASE);
         for (void* code : {count, setup, event}) if (code) VirtualFree(code, 0, MEM_RELEASE);
     }
-    bool Initialize(std::uintptr_t base, bool beta, std::uint32_t thirdPrice) {
-        if (recruit[0] != nullptr || thirdPrice <= 0x22CEu || !Validate(base, beta)) return false;
+    bool Initialize(std::uintptr_t base, MajestyBuildId buildId, std::uint32_t thirdPrice) {
+        if (recruit[0] != nullptr || thirdPrice <= 0x22CEu || !Validate(base, buildId)) return false;
         imageBase = base;
-        helpers = beta ? kBetaHelpers : kPublicHelpers;
-        const auto* profile = beta ? kBeta : kPublic;
+        switch (buildId) {
+        case MajestyBuildId::SteamPublic: helpers = kPublicHelpers; break;
+        case MajestyBuildId::SteamBeta2: helpers = kBetaHelpers; break;
+        case MajestyBuildId::Gog: helpers = kGogHelpers; break;
+        default: return false;
+        }
+        const auto* profile = Profile(buildId);
         recruit[0] = Clone<0>(profile[0], 0x1F48u, 0x1752u);
         recruit[1] = Clone<1>(profile[0], 0x1389u, 0x1F51u);
         recruit[2] = Clone<2>(profile[0], 0x1388u, thirdPrice);

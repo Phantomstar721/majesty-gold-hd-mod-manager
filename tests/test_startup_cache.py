@@ -114,6 +114,71 @@ class StartupCacheTests(unittest.TestCase):
                 snapshot.utilities[0], state=QolUtilityState.ERROR, installed=None),)))
             self.assertIsNone(cache.get_qol(signature, service))
 
+    def test_switching_installations_retains_checks_and_invalidates_only_changed_evidence(self):
+        from majesty_cam.manager.qol_service import GOG_BRANCH
+        from test_manager_qol_service import _write_synthetic_exe
+        from unittest.mock import Mock
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            paths = _manager_paths(root)
+            gog = root / "gog/MajestyHD.exe"
+            gog.parent.mkdir()
+            _write_synthetic_exe(paths.game_executable, PUBLIC_BRANCH)
+            _write_synthetic_exe(gog, GOG_BRANCH)
+            spec = QolPatchSpec("fixture", "Fixture", "Fixture", "fixture-repo", "Fixture",
+                                "fixture", "Install.ps1", "Remove.ps1", "already installed",
+                                required_by_manager=True)
+            scripts = paths.repo_root / "payload/qol/utilities/Fixture"
+            scripts.mkdir(parents=True)
+            for name in ("Install.ps1", "Remove.ps1", "PatchCommon.ps1"):
+                (scripts / name).write_text(name)
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "already installed", ""))
+            def service(**kwargs):
+                return QolService(**kwargs, prefs_path=root / "prefs", specs=(spec,), runner=runner)
+            with patch("majesty_cam.manager.controller.QolService", side_effect=service):
+                controller = ManagerController(paths=paths, registry=CompatibilityRegistry(specs={}))
+                for executable in (paths.game_executable, gog) * 3:
+                    controller.select_game_executable(executable)
+                    snapshot = controller.scan(force_refresh=True)
+                    self.assertTrue(snapshot.qol_utilities[0].installed)
+                self.assertEqual(runner.call_count, 2)
+
+                # Persisted entries also survive a Manager restart.
+                controller = ManagerController(paths=paths, registry=CompatibilityRegistry(specs={}))
+                controller.scan(force_refresh=True)
+                self.assertEqual(runner.call_count, 2)
+
+                _write_synthetic_exe(gog, GOG_BRANCH, appended_section=True)
+                controller.select_game_executable(gog)
+                controller.scan(force_refresh=True)
+                self.assertEqual(runner.call_count, 3)
+                controller.select_game_executable(paths.game_executable)
+                controller.scan(force_refresh=True)
+                self.assertEqual(runner.call_count, 3)
+
+                (scripts / "PatchCommon.ps1").write_text("changed inspection logic")
+                for executable in (paths.game_executable, gog):
+                    controller.select_game_executable(executable)
+                    controller.scan(force_refresh=True)
+                self.assertEqual(runner.call_count, 5)
+
+    def test_qol_cache_is_bounded_and_does_not_mix_installations(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            cache = StartupCache.load(root / "cache.json")
+            for index in range(10):
+                service = QolService(repo_root=root, game_executable=root / str(index) / "MajestyHD.exe", specs=())
+                cache.set_qol(str(index), QolCatalogSnapshot(service.game_executable, PUBLIC_BRANCH, ()))
+            cache.save()
+            cache = StartupCache.load(cache.path)
+            self.assertEqual(len(cache.qol["installations"]), 8)
+            latest = QolService(repo_root=root, game_executable=root / "9/MajestyHD.exe", specs=())
+            self.assertIsNotNone(cache.get_qol("9", latest))
+            wrong = QolService(repo_root=root, game_executable=root / "other/MajestyHD.exe", specs=())
+            self.assertIsNone(cache.get_qol("9", wrong))
+            self.assertIsNone(cache.get_qol("8", latest))
+
     def test_source_parser_changes_invalidate_cached_checks(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)

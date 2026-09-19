@@ -50,6 +50,7 @@ try:  # Keep non-GUI merger imports usable without the optional Qt runtime.
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
+        QComboBox,
         QFileDialog,
         QFrame,
         QHBoxLayout,
@@ -1225,6 +1226,17 @@ if _PYSIDE_IMPORT_ERROR is None:
             install_label.setAlignment(header_label_alignment)
             install_label.setFixedHeight(14)
             install.addWidget(install_label)
+            self.install_selector = QComboBox()
+            self.install_selector.setObjectName("installSelector")
+            self.install_selector.setAccessibleName("Detected game installations")
+            self.install_selector.setToolTip("Switch between detected Majesty installations")
+            self.install_selector.setMinimumContentsLength(24)
+            self.install_selector.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+            )
+            self.install_selector.activated.connect(self._select_detected_installation)
+            install.addWidget(self.install_selector)
+            self._refresh_installations()
             self.install_path = _ElidingLabel(str(self.controller.paths.game_path))
             self.install_path.setObjectName("installPath")
             self.install_path.setTextInteractionFlags(
@@ -1242,7 +1254,7 @@ if _PYSIDE_IMPORT_ERROR is None:
             install_actions = QHBoxLayout()
             install_actions.setSpacing(8)
             install_actions.addStretch(1)
-            self.choose_game_button = QPushButton("Choose…")
+            self.choose_game_button = QPushButton("Browse…")
             self.choose_game_button.setProperty("role", "headerAction")
             self.choose_game_button.setToolTip(
                 "Choose which MajestyHD.exe the manager should use"
@@ -1423,16 +1435,80 @@ if _PYSIDE_IMPORT_ERROR is None:
             )
             if not selected:
                 return
-            try:
-                self.controller.select_game_executable(Path(selected))
-            except (OSError, ValueError) as exc:
-                self._show_interaction_error(
-                    "Could not use that Majesty executable",
-                    exc,
+            self._select_game_executable(Path(selected))
+
+        def _refresh_installations(self, choices=None) -> None:
+            if choices is None:
+                discover = getattr(self.controller, "detected_installations", None)
+                choices = discover() if discover is not None else ()
+            self.install_selector.clear()
+            current = str(self.controller.paths.game_path.resolve()).casefold()
+            selected_index = -1
+            for executable, branch in choices:
+                store = "GOG" if branch.key.startswith("gog") else "Steam"
+                name = branch.display_name if store == "GOG" else f"Steam — {branch.display_name}"
+                label = f"{name} ({branch.version})"
+                # Distinguish multiple copies of the same storefront/build.
+                if sum(other.key == branch.key for _, other in choices) > 1:
+                    label += f" — {executable.parent}"
+                index = self.install_selector.count()
+                self.install_selector.addItem(label, str(executable))
+                self.install_selector.setItemData(
+                    index, str(executable), Qt.ItemDataRole.ToolTipRole
                 )
+                if str(executable.parent.resolve()).casefold() == current:
+                    selected_index = index
+            self.install_selector.setCurrentIndex(selected_index)
+            self.install_selector.setVisible(len(choices) > 1)
+
+        @Slot(int)
+        def _select_detected_installation(self, index: int) -> None:
+            selected = self.install_selector.itemData(index)
+            if self._busy or not selected:
                 return
+            if Path(selected) == self.controller.paths.game_executable:
+                return
+            self._select_game_executable(Path(selected))
+
+        def _select_game_executable(self, selected: Path) -> None:
+            if self._busy:
+                return
+            previous_executable = self.controller.paths.game_executable
+
+            def action(progress: Callable[[str], None]) -> object:
+                self.controller.select_game_executable(selected, replan=False)
+                progress("Looking for installed content")
+                snapshot = self.controller.scan(force_refresh=True, progress=progress)
+                discover = getattr(self.controller, "detected_installations", None)
+                return snapshot, discover() if discover is not None else ()
+
+            def failed(message: str, details: str) -> None:
+                current = self.controller.paths.game_executable
+                self.install_selector.setCurrentIndex(
+                    self.install_selector.findData(str(current))
+                )
+                self.install_path.setFullText(str(self.controller.paths.game_path))
+                if current != previous_executable:
+                    # A failed scan must not enable actions from the old install.
+                    self.snapshot = None
+                    self._initial_qol_check_complete = False
+                self._task_failed(message, details)
+
+            self.prepared_cache.clear()
+            self.blocked_cache.clear()
+            self._run_task(
+                "Switching Majesty installation",
+                action,
+                self._installation_finished,
+                failure=failed,
+            )
+
+        def _installation_finished(self, value: object) -> None:
+            snapshot, choices = value
+            self._initial_qol_check_complete = False
+            self._refresh_installations(choices)
             self.install_path.setFullText(str(self.controller.paths.game_path))
-            self._start_scan(force_refresh=True)
+            self._scan_finished(snapshot)
 
         @Slot()
         def _open_game_folder(self) -> None:
@@ -1738,13 +1814,15 @@ if _PYSIDE_IMPORT_ERROR is None:
             name: str,
             action: Callable[[Callable[[str], None]], object],
             success: Callable[[object], None],
+            *,
+            failure: Optional[Callable[[str, str], None]] = None,
         ) -> None:
             self._set_busy(True, name)
             worker = _ControllerTask(action)
             self._workers.add(worker)
             worker.signals.progress.connect(self._progress_changed)
             worker.signals.result.connect(success)
-            worker.signals.error.connect(self._task_failed)
+            worker.signals.error.connect(failure or self._task_failed)
             worker.signals.finished.connect(lambda task=worker: self._task_finished(task))
             QThreadPool.globalInstance().start(worker)
 
@@ -1781,7 +1859,7 @@ if _PYSIDE_IMPORT_ERROR is None:
         def _show_initial_required_qol_prompt(
             self, snapshot: ControllerSnapshot
         ) -> None:
-            """Direct the first-run check to missing launch prerequisites once."""
+            """Show missing prerequisites once after startup or an install switch."""
 
             if self._initial_qol_check_complete:
                 return
@@ -1790,7 +1868,9 @@ if _PYSIDE_IMPORT_ERROR is None:
             if not missing:
                 return
 
+            self.search.clear()
             self.tabs.setCurrentWidget(self.qol_page)
+            self.qol_page.scroll.verticalScrollBar().setValue(0)
             helper_list = "\n".join(f"• {name}" for name in missing)
             QMessageBox.warning(
                 self,
@@ -2124,12 +2204,14 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.progress.setVisible(busy)
             self.rescan_button.setEnabled(not busy)
             self.choose_game_button.setEnabled(not busy)
+            self.install_selector.setEnabled(not busy)
             self.open_game_folder_button.setEnabled(not busy)
             self.build_button.setEnabled(False if busy else self.build_button.isEnabled())
             self.launch_button.setEnabled(False if busy else self.launch_button.isEnabled())
             self._set_interactions_enabled(not busy)
 
         def _set_interactions_enabled(self, enabled: bool) -> None:
+            enabled = enabled and self.snapshot is not None
             self.search.setEnabled(enabled)
             for catalog_page in self.pages.values():
                 catalog_page.set_interactions_enabled(enabled)
@@ -2436,11 +2518,13 @@ def _qol_status_text(status: str) -> str:
     }.get(status, status.replace("_", " ").upper())
 
 
-def _qol_sort_key(utility: object) -> tuple[bool, str, str]:
-    """Put optional patches first, alphabetically within both groups."""
+def _qol_sort_key(utility: object) -> tuple[int, str, str]:
+    """Surface missing prerequisites before optional and installed helpers."""
 
+    required = bool(getattr(utility, "required_for_manager", False))
+    installed = str(getattr(utility, "status", "")).casefold() == "installed"
     return (
-        bool(getattr(utility, "required_for_manager", False)),
+        (2 if installed else 0) if required else 1,
         str(getattr(utility, "name", "")).casefold(),
         str(getattr(utility, "key", "")).casefold(),
     )

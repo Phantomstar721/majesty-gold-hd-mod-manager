@@ -38,7 +38,7 @@ void Run() {
     assert(Remaining(4000,1000,2000,1) == kNoExpiry);
     assert(Remaining(0,0,0xffffffffu,0) == 0x7fffffff);
     MajestyRuntimeFeatures::Registry registry;
-    assert(!InstallMapQueryRuntime(0,false,false,false,&registry));
+    assert(!InstallMapQueryRuntime(0,MajestyBuildId::SteamBeta2,false,false,&registry));
     registry.nativeTiming = true;
     registry.timingSpellIds = {actionId};
     registry.timingEffectorIds = {actionId};

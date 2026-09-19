@@ -1,3 +1,4 @@
+#include "MajestyBuildId.h"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -22,6 +23,9 @@ constexpr Profile kPublic = {
 constexpr Profile kBeta = {
     0x1ADE97, 0x1D5BF0, 0x175030, 0x181CF0, 0x23A220, 0x23A3D0,
     0x2ED50, 0x3E3FD4, 0x1D1930, 0x1D3BD0, 0x1D3980};
+constexpr Profile kGog = {
+    0x1AD1E7, 0x1D4F40, 0x174330, 0x180FF0, 0x23C370, 0x23C520,
+    0x2EC20, 0x3E426C, 0x1D0C80, 0x1D2F20, 0x1D2CD0};
 std::uintptr_t g_base = 0;
 const Profile* g_profile = nullptr;
 bool g_mapQuery = false, g_movementQuery = false;
@@ -39,6 +43,10 @@ constexpr MovementProfile kMovementBeta = {
     0x032B10, 0x16EC60, 0x1C3000, 0x3E3E8C,
     0x1CF090, 0x0488F0, 0x1CEF70, 0x3E3E58,
     0x1E3060, 0x218290, 0x364310, 0x2187A0};
+constexpr MovementProfile kMovementGog = {
+    0x0329E0, 0x16DF60, 0x1C2350, 0x3E4124,
+    0x1CE3E0, 0x048810, 0x1CE2C0, 0x3E40F0,
+    0x1E23B0, 0x2175E0, 0x3631D0, 0x217AF0};
 const MovementProfile* g_movementProfile = nullptr;
 
 struct TimingProfile {
@@ -57,6 +65,11 @@ constexpr TimingProfile kTimingBeta = {
     0x3E3FE4, 0x3E3E8C, 0x1C3000, 0x16EC60,
     0x1DE7B0, 0x1DF010, 0x222A00, 0x212160, 0x35414C,
     0x1CEF20, 0x0489D0, 0x1C4B90, 0x3614AC};
+constexpr TimingProfile kTimingGog = {
+    0x0310B0, 0x030E80, 0x1D3BF0, 0x3E4274,
+    0x3E427C, 0x3E4124, 0x1C2350, 0x16DF60,
+    0x1DDB00, 0x1DE360, 0x221D50, 0x2114B0, 0x353194,
+    0x1CE270, 0x0488F0, 0x1C3EE0, 0x36036C};
 const TimingProfile* g_timingProfile = nullptr;
 const MajestyRuntimeFeatures::Registry* g_timing = nullptr;
 
@@ -540,15 +553,21 @@ void __cdecl RegisterAfterStock() {
 }
 }
 
-bool InstallMapQueryRuntime(std::uintptr_t imageBase, bool publicBuild,
+bool InstallMapQueryRuntime(std::uintptr_t imageBase, MajestyBuildId buildId,
                            bool mapQuery, bool movementQuery,
                            const MajestyRuntimeFeatures::Registry* timing) {
     if (!mapQuery && !movementQuery && timing == nullptr) return true;
     if (timing != nullptr && !timing->nativeTiming) return false;
     g_base = imageBase;
-    g_profile = publicBuild ? &kPublic : &kBeta;
-    g_movementProfile = publicBuild ? &kMovementPublic : &kMovementBeta;
-    g_timingProfile = publicBuild ? &kTimingPublic : &kTimingBeta;
+    switch (buildId) {
+    case MajestyBuildId::SteamPublic:
+        g_profile = &kPublic; g_movementProfile = &kMovementPublic; g_timingProfile = &kTimingPublic; break;
+    case MajestyBuildId::SteamBeta2:
+        g_profile = &kBeta; g_movementProfile = &kMovementBeta; g_timingProfile = &kTimingBeta; break;
+    case MajestyBuildId::Gog:
+        g_profile = &kGog; g_movementProfile = &kMovementGog; g_timingProfile = &kTimingGog; break;
+    default: return false;
+    }
     g_timing = timing;
     g_mapQuery = mapQuery;
     g_movementQuery = movementQuery;

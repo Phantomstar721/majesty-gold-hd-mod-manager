@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$PublicExe,
     [Parameter(Mandatory = $true)][string]$Beta2Exe,
-    [string]$PatchedBeta2Exe
+    [string]$PatchedBeta2Exe,
+    [switch]$AllowModifiedReferences
 )
 
 $ErrorActionPreference = "Stop"
@@ -195,7 +196,11 @@ foreach ($profile in $profiles) {
     $pe = Read-Pe $profile.Path
     Assert-True ($pe.FileVersion -eq $profile.Version) "Wrong version for $($profile.Id)."
     Assert-True ($pe.Timestamp -eq $profile.Timestamp) "Wrong PE timestamp for $($profile.Id)."
-    Assert-True ($pe.Sha256 -eq $profile.Sha256) "Wrong pristine SHA-256 for $($profile.Id)."
+    if (-not $AllowModifiedReferences) {
+        Assert-True ($pe.Sha256 -eq $profile.Sha256) "Wrong pristine SHA-256 for $($profile.Id)."
+    }
+    # Modified references still require every exact stock site below. This
+    # option makes no whole-file pristine claim and never relaxes byte guards.
     foreach ($pattern in $profile.Patterns) { Assert-Pattern $pe $pattern }
     Assert-True ($runtimeSource.Contains('"' + $profile.Id + '"')) "Runtime omits $($profile.Id)."
     Assert-True ($runtimeSource.Contains(('0x{0:X8}' -f $profile.Timestamp))) "Runtime omits the $($profile.Id) timestamp."

@@ -84,6 +84,7 @@ def detect_manager_paths(
             *((saved_executable.parent,) if saved_executable is not None else ()),
             Path(r"C:\Program Files (x86)\Steam\steamapps\common\Majesty HD"),
             *(root / "steamapps" / "common" / GAME_DIRECTORY_NAME for root in steam_roots),
+            *_gog_install_roots(),
         ]
         game_path = (
             _first_with_file(game_candidates, GAME_EXECUTABLE_NAME)
@@ -124,6 +125,7 @@ def detect_manager_paths(
         / "Install-GenericVisitorLists.ps1"
     ]
     if not frozen:
+        visitor_candidates.append(repo_root / "helpers" / "generic-visitor-lists" / "scripts" / "Install-GenericVisitorLists.ps1")
         visitor_candidates.append(
             workspace_root
             / "majesty-gold-hd-generic-visitor-lists"
@@ -142,6 +144,7 @@ def detect_manager_paths(
         / "Install-ModPersistence.ps1"
     ]
     if not frozen:
+        remember_candidates.append(repo_root / "helpers" / "remember-active-mods" / "scripts" / "Install-ModPersistence.ps1")
         remember_candidates.append(
             workspace_root
             / "majesty-gold-hd-remember-active-mods"
@@ -181,6 +184,18 @@ def application_root() -> Path:
         bundled = getattr(sys, "_MEIPASS", None)
         return Path(bundled).resolve(strict=True)
     return Path(__file__).resolve().parents[3]
+
+
+def detected_game_executables(*, selected: Path) -> tuple[Path, ...]:
+    """List existing installs from the selected path and bounded store locations."""
+
+    candidates = [
+        selected,
+        *(root / "steamapps" / "common" / GAME_DIRECTORY_NAME / GAME_EXECUTABLE_NAME
+          for root in _steam_library_roots()),
+        *(root / GAME_EXECUTABLE_NAME for root in _gog_install_roots()),
+    ]
+    return tuple(path.resolve() for path in _unique_paths(candidates) if path.is_file())
 
 
 def default_documents_root() -> Path:
@@ -268,6 +283,33 @@ def _steam_library_roots() -> tuple[Path, ...]:
         for match in re.finditer(r'"path"\s+"([^"]+)"', text):
             expanded.append(Path(match.group(1).replace(r"\\", "\\")))
     return tuple(_unique_paths(expanded))
+
+
+def _gog_install_roots() -> tuple[Path, ...]:
+    """Read GOG's product-specific registration; never scan drives."""
+    roots: list[Path] = []
+    if os.name == "nt":
+        try:
+            import winreg
+            for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                for key_name in (
+                    r"SOFTWARE\WOW6432Node\GOG.com\Games\1423481910",
+                    r"SOFTWARE\GOG.com\Games\1423481910",
+                ):
+                    try:
+                        with winreg.OpenKey(hive, key_name) as key:
+                            value = winreg.QueryValueEx(key, "path")[0]
+                        if isinstance(value, str) and value.strip():
+                            roots.append(Path(os.path.expandvars(value)))
+                    except OSError:
+                        continue
+        except ImportError:
+            pass
+    roots.extend((
+        Path(r"C:\Program Files (x86)\GOG Galaxy\Games\Majesty Gold HD"),
+        Path(r"C:\GOG Games\Majesty Gold HD"),
+    ))
+    return tuple(_unique_paths(roots))
 
 
 def _first_with_file(candidates: Iterable[Path], filename: str) -> Path | None:

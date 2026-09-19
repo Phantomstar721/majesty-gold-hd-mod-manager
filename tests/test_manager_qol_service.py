@@ -352,7 +352,7 @@ class QolServiceTests(unittest.TestCase):
             self.assertFalse(status.applicable)
             self.assertIsNone(status.installed)
 
-    def test_manager_required_patch_cannot_be_removed(self):
+    def test_manager_required_patch_can_be_removed_and_reinstalled(self):
         spec = replace(_test_spec(), required_by_manager=True)
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -375,12 +375,19 @@ class QolServiceTests(unittest.TestCase):
 
             status = service.inspect_patch(spec.key)
             self.assertTrue(status.required_for_manager)
-            self.assertFalse(status.can_remove)
-            with self.assertRaisesRegex(QolServiceError, "required"):
-                service.remove(spec.key)
-            self.assertFalse(
-                any("-DryRun" not in command for command in runner.commands)
-            )
+            self.assertTrue(status.can_remove)
+            runner.commands.clear()
+            removed = service.remove(spec.key, current=status)
+            self.assertFalse(removed.installed)
+            self.assertTrue(removed.required_for_manager)
+            self.assertTrue(removed.can_install)
+            self.assertFalse(removed.can_remove)
+            self.assertEqual(len(runner.commands), 1)
+            self.assertEqual(Path(runner.commands[0][5]).name, spec.remove_script_name)
+            self.assertNotIn("-DryRun", runner.commands[0])
+            restored = service.apply(spec.key, current=removed)
+            self.assertTrue(restored.installed)
+            self.assertTrue(restored.can_remove)
 
     def test_ensure_required_uses_the_registry_and_skips_optional_helpers(self):
         first = replace(_test_spec(), key="required-one", required_by_manager=True)

@@ -70,6 +70,16 @@ constexpr FreestyleCamProfile kBeta2FreestyleProfile = {
     {0xA1, 0x18, 0x75, 0x7E, 0x00, 0x85, 0xC0},
 };
 
+constexpr FreestyleCamProfile kGogFreestyleProfile = {
+    "gog-1.5.2.28",
+    0x00286920, 0x00286980, 0x00287210, 0x00286DA0, 0x00286EDC,
+    0x00271160, 0x00283B31, 0x00281090,
+    0, // named-retention diagnostic is not audited for GOG
+    0x0025B2A0, {0x002D298A, 0x002D29AA},
+    0x0023B3B1, 0x003E7638,
+    {0xA1, 0x38, 0x76, 0x7E, 0x00, 0x85, 0xC0},
+};
+
 constexpr unsigned char kExpectedHandleUse[] = {
     0x8B, 0xC1, 0x8B, 0x48, 0x2C, 0x85, 0xC9, 0x74, 0x44};
 constexpr unsigned char kExpectedHandleUse2[] = {
@@ -1224,6 +1234,9 @@ bool InstallFreestyleCamRuntime(HMODULE runtimeModule, const char* profileId) {
         g_profile = &kPublicFreestyleProfile;
     } else if (std::strcmp(profileId, kBeta2FreestyleProfile.id) == 0) {
         g_profile = &kBeta2FreestyleProfile;
+    } else if (std::strcmp(profileId, kGogFreestyleProfile.id) == 0) {
+        if (g_diagnosticTracing) return false;
+        g_profile = &kGogFreestyleProfile;
     } else {
         LogFormat("installation refused unknown runtime profile %s", profileId);
         return false;

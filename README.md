@@ -12,6 +12,8 @@ needed by custom buildings, panels, and other advanced features.
 ## Features
 
 - Finds local and Steam Workshop mods and downloaded quests automatically.
+- Offers a detected-installation dropdown when multiple supported game versions
+  are present, with **Browse…** for other installation locations.
 - Organizes content into **Merge**, **Standard**, **Quests**, and
   **Quality of Life** tabs.
 - Enables detected mods by default and remembers your later choices.
@@ -25,7 +27,8 @@ needed by custom buildings, panels, and other advanced features.
   single-panel layouts at lower resolutions.
 - Leaves subscribed mods and downloaded quests unchanged.
 - Installs and manages the supported Majesty quality-of-life patches.
-- Supports both maintained Steam versions of Majesty Gold HD.
+- Supports both maintained Steam versions and GOG Gold HD 1.5.2.28. See
+  [GOG support and limitations](docs/gog-support.md).
 - Launches the game with the additional support required by prepared mods and
   Freestyle games.
 
@@ -43,14 +46,20 @@ application. Keep `Majesty Mod Manager.exe` beside its `_internal` folder.
 5. Select **Prepare Selected Mods** if the Merge tab contains selected mods.
 6. Select **Launch Majesty**.
 
-Continue launching through the manager whenever prepared Merge content is
-enabled. Ordinary Standard mods and downloaded quests remain usable through
-Majesty normally.
+Continue launching through the manager whenever prepared Merge content or
+GOG Standard mods from Workshop are enabled. Locally installed Standard mods
+and quests remain usable through Majesty normally.
 
 If finding Steam's Workshop folder is inconvenient, download the latest
 complete ZIP from [GitHub Releases](https://github.com/Phantomstar721/majesty-gold-hd-mod-manager/releases/latest).
 After the first launch, **Desktop Shortcut** creates an optional shortcut to
 the manager without moving it away from its required support files.
+
+For GOG, download the complete GitHub release ZIP and select your GOG
+`MajestyHD.exe`. The Manager can use already-downloaded Standard Workshop mods;
+it does not download Workshop subscriptions. Quest packages must be installed
+in the game's local Quests folder. Steam-only optional utilities and the legacy
+GOG 1.5.1.2 executable are not supported.
 
 ## Updating
 

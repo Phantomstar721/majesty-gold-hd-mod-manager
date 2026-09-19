@@ -28,7 +28,7 @@ def _required_utility(key: str, name: str, status: str) -> object:
             "status": status,
             "required_for_manager": True,
             "can_install": status == "available",
-            "can_remove": False,
+            "can_remove": status == "installed",
             "detail": "",
         },
     )()
@@ -103,6 +103,106 @@ class ManagerAppLayoutTests(unittest.TestCase):
         from PySide6.QtWidgets import QApplication
 
         cls.application = QApplication.instance() or QApplication(["manager-ui-tests"])
+
+    def test_detected_installation_switch_rescans_and_recovers_from_invalid_choice(self):
+        from majesty_cam.manager.qol_service import BETA2_BRANCH, GOG_BRANCH
+        steam = Path("Z:/Steam/MajestyHD.exe").resolve()
+        gog = Path("Z:/GOG/MajestyHD.exe").resolve()
+        controller = SimpleNamespace(
+            paths=SimpleNamespace(game_path=steam.parent, game_executable=steam),
+            detected_installations=lambda: ((steam, BETA2_BRANCH), (gog, GOG_BRANCH)),
+            scan=Mock(return_value=_snapshot_with_required_qol("installed", "installed")),
+        )
+        def select(path, *, replan=True):
+            self.assertFalse(replan)
+            controller.paths = SimpleNamespace(game_path=path.parent, game_executable=path)
+        controller.select_game_executable = Mock(side_effect=select)
+        with patch.object(manager_app.QTimer, "singleShot"):
+            window = manager_app.ManagerWindow(controller)
+        self.assertFalse(window.install_selector.isHidden())
+        self.assertIn("GOG", window.install_selector.itemText(1))
+        with patch.object(manager_app.QThreadPool, "globalInstance") as pool:
+            window.install_selector.activated.emit(1)
+            self.assertTrue(window._busy)
+            self.assertFalse(window.install_selector.isEnabled())
+            self.assertEqual(window.build_state.text(), "Switching Majesty installation")
+            controller.select_game_executable.assert_not_called()
+            worker = pool.return_value.start.call_args.args[0]
+            worker.run()
+        self.assertFalse(window._busy)
+        self.assertTrue(controller.scan.call_args.kwargs["force_refresh"])
+        self.assertEqual(controller.paths.game_executable, gog)
+        self.assertEqual(window.install_selector.currentData(), str(gog))
+        controller.select_game_executable.side_effect = ValueError("removed installation")
+        controller.scan.reset_mock()
+        with patch.object(window, "_task_failed") as error, patch.object(manager_app.QThreadPool, "globalInstance") as pool:
+            window.install_selector.activated.emit(0)
+            pool.return_value.start.call_args.args[0].run()
+            error.assert_called_once()
+            controller.scan.assert_not_called()
+        self.assertEqual(window.install_selector.currentData(), str(gog))
+        window._set_busy(True)
+        self.assertFalse(window.install_selector.isEnabled())
+        window._set_busy(False)
+        window.close()
+
+    def test_slow_installation_switch_keeps_ui_responsive_and_scan_failure_blocks_old_actions(self):
+        import threading
+        from PySide6.QtTest import QTest
+        from PySide6.QtCore import QThread
+        from majesty_cam.manager.qol_service import BETA2_BRANCH, GOG_BRANCH
+
+        steam = Path("Z:/Steam/MajestyHD.exe").resolve()
+        gog = Path("Z:/GOG/MajestyHD.exe").resolve()
+        started, release = threading.Event(), threading.Event()
+        worker_threads = []
+        controller = SimpleNamespace(
+            paths=SimpleNamespace(game_path=steam.parent, game_executable=steam),
+            detected_installations=lambda: ((steam, BETA2_BRANCH), (gog, GOG_BRANCH)),
+            scan=Mock(side_effect=OSError("fixture scan failed")),
+        )
+        def select(path, *, replan=True):
+            self.assertFalse(replan)
+            worker_threads.append(QThread.currentThread())
+            started.set()
+            if not release.wait(5):
+                raise RuntimeError("test did not release selection worker")
+            controller.paths = SimpleNamespace(game_path=path.parent, game_executable=path)
+        controller.select_game_executable = select
+        with patch.object(manager_app.QTimer, "singleShot"):
+            window = manager_app.ManagerWindow(controller)
+        window._scan_finished(_snapshot_with_required_qol("installed", "installed"))
+        try:
+            with patch.object(window, "_task_failed") as error:
+                window.install_selector.activated.emit(1)
+                self.assertTrue(started.wait(2))
+                self.assertNotEqual(worker_threads[0], self.application.thread())
+                tick = Mock()
+                manager_app.QTimer.singleShot(0, tick)
+                self.application.processEvents()
+                tick.assert_called_once()
+                self.assertTrue(window._busy)
+                self.assertFalse(window.progress.isHidden())
+                self.assertFalse(window.build_button.isEnabled())
+                self.assertFalse(window.launch_button.isEnabled())
+                release.set()
+                for _ in range(500):
+                    if not window._workers:
+                        break
+                    QTest.qWait(10)
+                self.assertFalse(window._workers)
+                error.assert_called_once()
+                self.assertIsNone(window.snapshot)
+                self.assertFalse(window.build_button.isEnabled())
+                self.assertFalse(window.launch_button.isEnabled())
+                self.assertFalse(window.search.isEnabled())
+                self.assertTrue(window.rescan_button.isEnabled())
+                self.assertEqual(window.install_selector.currentData(), str(gog))
+        finally:
+            release.set()
+            manager_app.QThreadPool.globalInstance().waitForDone(5000)
+            self.application.processEvents()
+            window.close()
 
     def test_combination_blocker_remains_clickable_and_opens_reason_without_building(self):
         controller = SimpleNamespace(paths=SimpleNamespace(game_path=Path("Z:/missing-majesty")))
@@ -310,24 +410,24 @@ class ManagerAppLayoutTests(unittest.TestCase):
 
         buttons = {button.text(): button for button in window.findChildren(QPushButton)}
         self.assertIn("Rescan Content", buttons)
-        self.assertIn("Choose…", buttons)
+        self.assertIn("Browse…", buttons)
         self.assertIn("Folder", buttons)
         self.assertIn("Desktop Shortcut", buttons)
         self.assertIn("mods and quests", buttons["Rescan Content"].toolTip())
-        self.assertIn("MajestyHD.exe", buttons["Choose…"].toolTip())
+        self.assertIn("MajestyHD.exe", buttons["Browse…"].toolTip())
         install_path = window.findChild(QLabel, "installPath")
         self.assertIsNotNone(install_path)
         self.assertGreaterEqual(install_path.minimumWidth(), 240)
         self.assertGreater(install_path.maximumWidth(), 1000)
-        self.assertEqual(buttons["Choose…"].height(), buttons["Folder"].height())
+        self.assertEqual(buttons["Browse…"].height(), buttons["Folder"].height())
         self.assertEqual(
             buttons["Folder"].height(), buttons["Rescan Content"].height()
         )
-        self.assertEqual(buttons["Choose…"].width(), buttons["Folder"].width())
+        self.assertEqual(buttons["Browse…"].width(), buttons["Folder"].width())
         self.assertEqual(
             buttons["Folder"].width(), buttons["Rescan Content"].width()
         )
-        self.assertEqual(buttons["Choose…"].property("role"), "headerAction")
+        self.assertEqual(buttons["Browse…"].property("role"), "headerAction")
         self.assertEqual(buttons["Folder"].property("role"), "headerAction")
         self.assertEqual(buttons["Desktop Shortcut"].property("role"), "quiet")
         self.assertEqual(
@@ -454,6 +554,86 @@ class ManagerAppLayoutTests(unittest.TestCase):
         self.assertEqual(window.tabs.currentIndex(), 0)
         self.assertTrue(window.build_button.isEnabled())
         self.assertTrue(window.launch_button.isEnabled())
+        window.close()
+
+    def test_required_helper_remove_button_updates_missing_prerequisites(self):
+        ready = _snapshot_with_required_qol("installed", "installed")
+        missing = _snapshot_with_required_qol("available", "installed")
+        controller = SimpleNamespace(
+            paths=SimpleNamespace(game_path=Path("Z:/missing-majesty")),
+            change_qol=Mock(return_value=missing),
+        )
+        with patch.object(manager_app.QTimer, "singleShot"):
+            window = manager_app.ManagerWindow(controller)
+        window._scan_finished(ready)
+        card = next(card for card in window.qol_page.cards if card.key == "generic-visitors")
+        self.assertEqual(card.action_button.text(), "Remove")
+        with patch.object(window, "_run_task") as run:
+            card.action_button.click()
+            action, finished = run.call_args.args[1:]
+            finished(action(lambda _: None))
+        controller.change_qol.assert_called_once_with("generic-visitors", False)
+        self.assertFalse(window.build_button.isEnabled())
+        self.assertFalse(window.launch_button.isEnabled())
+        self.assertEqual(window.qol_page.cards[0].key, "generic-visitors")
+        self.assertEqual(window.qol_page.cards[0].action_button.text(), "Install")
+        window.close()
+
+    def test_switching_installation_opens_missing_required_helpers_above_optional(self):
+        from majesty_cam.manager.qol_service import BETA2_BRANCH, GOG_BRANCH
+        steam = Path("Z:/Steam/MajestyHD.exe").resolve()
+        gog = Path("Z:/GOG/MajestyHD.exe").resolve()
+        controller = SimpleNamespace(
+            paths=SimpleNamespace(game_path=steam.parent, game_executable=steam),
+            detected_installations=lambda: ((steam, BETA2_BRANCH), (gog, GOG_BRANCH)),
+        )
+        def select(executable, *, replan=True):
+            self.assertFalse(replan)
+            controller.paths = SimpleNamespace(
+                game_path=executable.parent, game_executable=executable)
+        controller.select_game_executable = Mock(side_effect=select)
+        with patch.object(manager_app.QTimer, "singleShot"):
+            window = manager_app.ManagerWindow(controller)
+        ready = _snapshot_with_required_qol("installed", "installed")
+        missing = _snapshot_with_required_qol("available", "available")
+        optional = SimpleNamespace(key="auto-save", name="Auto Save", description="Optional",
+            status="unsupported", required_for_manager=False, can_install=False, can_remove=False)
+        missing = replace(missing, qol_utilities=(optional, *missing.qol_utilities))
+        controller.scan = Mock(return_value=missing)
+        with patch.object(manager_app.QMessageBox, "warning") as warning:
+            window._scan_finished(ready)
+            window.search.setText("Auto Save")
+            with patch.object(window, "_run_task") as run:
+                window.install_selector.activated.emit(1)
+                run.call_args.args[2](run.call_args.args[1](lambda _: None))
+            self.assertIs(window.tabs.currentWidget(), window.qol_page)
+            self.assertEqual(window.search.text(), "")
+            self.assertEqual([card.key for card in window.qol_page.cards],
+                             ["generic-visitors", "remember-mods", "auto-save"])
+            self.assertFalse(window.qol_page.cards[0].isHidden())
+            self.assertFalse(window.build_button.isEnabled())
+            self.assertFalse(window.launch_button.isEnabled())
+            warning.assert_called_once()
+            # Ordinary rescans do not pull the player away from another tab.
+            window.tabs.setCurrentIndex(0)
+            window._scan_finished(missing)
+            self.assertEqual(window.tabs.currentIndex(), 0)
+            warning.assert_called_once()
+            # Manual Browse uses the same prompt lifecycle, including switching
+            # to a ready installation and later back to one missing helpers.
+            controller.scan.return_value = ready
+            with patch.object(window, "_run_task") as run, patch.object(
+                manager_app.QFileDialog, "getOpenFileName", return_value=(str(steam), "")):
+                window._choose_game_executable()
+                run.call_args.args[2](run.call_args.args[1](lambda _: None))
+            warning.assert_called_once()
+            controller.scan.return_value = missing
+            with patch.object(window, "_run_task") as run, patch.object(
+                manager_app.QFileDialog, "getOpenFileName", return_value=(str(gog), "")):
+                window._choose_game_executable()
+                run.call_args.args[2](run.call_args.args[1](lambda _: None))
+            self.assertEqual(warning.call_count, 2)
+            self.assertIs(window.tabs.currentWidget(), window.qol_page)
         window.close()
 
     def test_saved_choices_are_plain_language_and_notices_stay_in_notice_bar(self) -> None:
@@ -696,28 +876,29 @@ class ManagerAppLayoutTests(unittest.TestCase):
         )
         card.close()
 
-    def test_qol_sort_places_required_patches_last(self) -> None:
-        utility = lambda name, required: type(  # noqa: E731
+    def test_qol_sort_prioritizes_missing_required_helpers(self) -> None:
+        utility = lambda name, required, status: type(  # noqa: E731
             "Utility",
             (),
             {
                 "name": name,
                 "key": name.casefold().replace(" ", "-"),
                 "required_for_manager": required,
+                "status": status,
             },
         )()
         values = (
-            utility("Remember Active Mods", True),
-            utility("Zoom Out More", False),
-            utility("Generic Visitor Lists", True),
-            utility("Auto Save", False),
+            utility("Remember Active Mods", True, "installed"),
+            utility("Zoom Out More", False, "available"),
+            utility("Generic Visitor Lists", True, "available"),
+            utility("Auto Save", False, "installed"),
         )
         self.assertEqual(
             [item.name for item in sorted(values, key=manager_app._qol_sort_key)],
             [
+                "Generic Visitor Lists",
                 "Auto Save",
                 "Zoom Out More",
-                "Generic Visitor Lists",
                 "Remember Active Mods",
             ],
         )
