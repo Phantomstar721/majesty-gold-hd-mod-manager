@@ -164,7 +164,7 @@ try {
         "runtime feature registry contains trailing bytes", "FindEnchantmentRow"
     ) "Runtime feature registry contract"
     Assert-ContainsAny @($controllerSource, $controllerHeader) @(
-        "kRegistryVersion = 15", "kMaximumRecordCount = 256",
+        "kRegistryVersion = 18", "kMaximumRecordCount = 256",
         "kMaximumPanelCount = 32", "kMaximumRegistryBytes = 512u * 1024u",
         "ParseRegistry", "FindPanelByParentDialog", "FindPanelByChildDialog",
         "FindRewardPanelByParentDialog", "FindHostileMonsterFlagByMode",
@@ -601,7 +601,7 @@ try {
         "g_stockQuestBoardSharedControl(controller, controlId)"
     ) "Package-declared MX05 child-retention and row-focus policies"
     $occupantParentInstall = Get-SourceSpan $runtimeSource `
-        "bool InstallOccupantParentVtable(std::uint32_t controller) {" `
+        "bool InstallOccupantParentVtable(std::uint32_t controller, bool recruitmentChild) {" `
         "bool InstallOccupantChildVtable(std::uint32_t controller) {"
     Assert-ContainsAny @($occupantParentInstall) @(
         "g_parentOccupantPanel->parentControllerBase",
@@ -630,14 +630,21 @@ try {
         "g_stockQuestBoardEvent(",
         "if (a3 == 0x09435358u)",
         "return;",
+        "RefreshChangedQuestBoardRevision(controller, board);"
+    ) "MX05 stock XSCX and revision dispatch"
+    $questRevisionRefresh = Get-SourceSpan $runtimeSource `
+        "void RefreshChangedQuestBoardRevision(" `
+        "void RefreshQuestBoardAfterAction("
+    Assert-Ordered $questRevisionRefresh @(
         "if (g_activeQuestRevision == static_cast<int>(revision)) return;",
         "g_questBoardPopulationRequested = true;",
-        "QuestBoardRefresh(controller, nullptr);"
+        "reinterpret_cast<ControllerSetup>((*static_cast<void***>(controller))[14])(controller);"
     ) "MX05 stock XSCX and revision refresh"
     foreach ($forbiddenQuestEventWrite in @(
         "SetControllerControlInteger(", "SendControllerMessage("
     )) {
-        if ($questEvent.Contains($forbiddenQuestEventWrite)) {
+        if ($questEvent.Contains($forbiddenQuestEventWrite) -or
+            $questRevisionRefresh.Contains($forbiddenQuestEventWrite)) {
             throw "MX05 quest event performs a non-stock child write: $forbiddenQuestEventWrite"
         }
     }
@@ -649,7 +656,7 @@ try {
         "FaultQuestBoardPresentation(",
         "the row-count callback did not return an integer",
         "the row count exceeded the bounded 64-row contract",
-        "every row must return a distinct live agent",
+        "every row must return a distinct identity",
         "return;"
     ) "Fault-contained live-agent-list presentation"
     if ($questPopulation.Contains("StopUnsafeManagerRuntimeLaunch(")) {

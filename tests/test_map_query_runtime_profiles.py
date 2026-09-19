@@ -7,7 +7,7 @@ import unittest
 from test_occupant_runtime_profiles import PeImage
 
 class MapQueryProfiles(unittest.TestCase):
-    def verify(self, variable, name, list_vtable, find_control, list_refresh):
+    def verify(self, variable, name, list_vtable=None, find_control=None, list_refresh=None):
         path = os.environ.get(variable)
         if not path:
             self.skipTest(variable + " is not set")
@@ -42,16 +42,19 @@ class MapQueryProfiles(unittest.TestCase):
         self.assertEqual(image.read(path_cost+0x128,8),bytes.fromhex("8b 4c 24 24 85 c9 74 5f"))
         # The bounded traversal clones the first orientation of the stock
         # expanding rectangle scan, not a row-major approximation.
-        search = 0x1c2f20 if name == "kPublic" else 0x1d8100
+        search = {"kPublic": 0x1c2f20, "kBeta": 0x1d8100, "kGog": 0x1d7450}[name]
         self.assertEqual(image.target(nearest+0x111),search)
         self.assertEqual(image.read(search+0x163,36),bytes.fromhex(
             "8b 44 24 1c 8b 4c 24 20 8b 7c 24 24 8b 54 24 28 "
             "48 49 47 42 89 44 24 1c 89 4c 24 20 89 7c 24 24 89 54 24 28"))
-        self.assertEqual(image.target(list_refresh+0x3b),find_control)
-        table = [value-image.base for value in struct.unpack("<42I", image.read(list_vtable,168))]
-        self.assertEqual(image.read(table[0xa0//4],4),bytes.fromhex("8b 44 24 04"))
+        if list_vtable is not None:
+            self.assertEqual(image.target(list_refresh+0x3b),find_control)
+            table = [value-image.base for value in struct.unpack("<42I", image.read(list_vtable,168))]
+            self.assertEqual(image.read(table[0xa0//4],4),bytes.fromhex("8b 44 24 04"))
 
     def test_public(self):
         self.verify("MAJESTY_PUBLIC_EXE","kPublic",0x34f76c,0x2524c0,0x97e20)
     def test_beta(self):
         self.verify("MAJESTY_BETA2_EXE","kBeta",0x369844,0x267920,0x98640)
+    def test_gog(self):
+        self.verify("MAJESTY_GOG_EXE", "kGog")

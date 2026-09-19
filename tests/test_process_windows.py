@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import sys
@@ -20,7 +21,10 @@ from majesty_cam.intent_text import (
     INTENT_REGISTRY_ENV_VAR,
     encode_intent_registry,
 )
-from majesty_cam.manager.launch import launch_majesty
+from majesty_cam.manager.launch import launch_majesty, ManagerLaunchError, STANDARD_MANIFESTS_ENV_VAR
+from majesty_cam.manager.launch import QUEST_MANIFESTS_ENV_VAR, _gog_quest_manifests
+from majesty_cam.manager.catalog import CatalogEntry, CatalogKind, CatalogSource
+from majesty_cam.manager.qol_service import GOG_BRANCH, BETA2_BRANCH
 from majesty_cam.manager.profile_lock import (
     PROFILE_LOCK_HANDLE_ENV_VAR,
     acquire_merged_profile_lock,
@@ -69,6 +73,113 @@ class WindowsProcessOptionsTests(unittest.TestCase):
 
 
 class ManagerProcessWiringTests(unittest.TestCase):
+    def test_gog_quests_register_separately_from_active_mods_and_do_not_copy_packages(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = replace(_manager_paths(root), workshop_roots=(root / "Workshop",))
+            for path in (paths.game_executable, paths.runtime_launcher, paths.runtime_dll):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fixture")
+            manifest = root / "Workshop" / "1234" / "adventure.mqxml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("<Majesty/>")
+            quest = replace(_standard_entry(MOD_ID, manifest), kind=CatalogKind.QUEST)
+            local = replace(quest, content_id="11223344-5566-7788-99AA-BBCCDDEEFF00", source=CatalogSource.LOCAL_QUESTS)
+            for branch in (GOG_BRANCH, BETA2_BRANCH):
+                with self.subTest(branch=branch.key), patch(
+                    "majesty_cam.manager.launch.detect_majesty_branch", return_value=branch
+                ), patch("majesty_cam.manager.launch.subprocess.Popen", return_value=SimpleNamespace(pid=123)) as popen, patch.dict(
+                    os.environ, {QUEST_MANIFESTS_ENV_VAR: "stale"}
+                ):
+                    result = launch_majesty(paths, [], quests=(quest, local), ensure_qol=False,
+                        capability_manifest=_capability_manifest(root), runtime_feature_registry=_feature_registry(root),
+                        controller_registry=_controller_registry(root))
+                environment = popen.call_args.kwargs["env"]
+                self.assertEqual(result.active_mod_ids, ())
+                self.assertNotIn(STANDARD_MANIFESTS_ENV_VAR, environment)
+                if branch == GOG_BRANCH:
+                    self.assertEqual(environment[QUEST_MANIFESTS_ENV_VAR], f"{MOD_ID}\t{manifest.resolve()}")
+                else:
+                    self.assertNotIn(QUEST_MANIFESTS_ENV_VAR, environment)
+            self.assertFalse(paths.local_quests_root.exists())
+            missing = replace(quest, manifest_path=manifest.with_name("missing.mqxml"))
+            foreign = root / "foreign" / "adventure.mqxml"
+            foreign.parent.mkdir()
+            foreign.write_text("<Majesty/>")
+            for bad in (missing, replace(quest, manifest_path=foreign, package_root=foreign.parent)):
+                with self.assertRaises(ManagerLaunchError):
+                    _gog_quest_manifests(paths, (bad,))
+
+    def test_gog_launch_registers_selected_workshop_variants_and_preserves_active_order(self):
+        second_id = "11223344-5566-7788-99AA-BBCCDDEEFF00"
+        local_id = "AAAABBBB-CCCC-DDDD-EEEE-123456789ABC"
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = replace(_manager_paths(root), workshop_roots=(root / "Workshop",))
+            for path in (paths.game_executable, paths.runtime_launcher, paths.runtime_dll):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fixture")
+            manifest = root / "Workshop" / "1234" / "variants.mmxml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("<Majesty/>")
+            entry = _standard_entry(MOD_ID, manifest)
+            variants = (entry, replace(entry, content_id=second_id),
+                        replace(entry, content_id=local_id, source=CatalogSource.LOCAL_MODS))
+            with patch("majesty_cam.manager.launch.detect_majesty_branch", return_value=GOG_BRANCH), patch(
+                "majesty_cam.manager.launch.subprocess.Popen", return_value=SimpleNamespace(pid=123)
+            ) as popen, patch.dict(os.environ, {STANDARD_MANIFESTS_ENV_VAR: "stale"}):
+                result = launch_majesty(paths, [second_id, MOD_ID, local_id], standard_mods=variants,
+                    ensure_qol=False, capability_manifest=_capability_manifest(root),
+                    runtime_feature_registry=_feature_registry(root), controller_registry=_controller_registry(root))
+            self.assertEqual(popen.call_args.kwargs["env"][STANDARD_MANIFESTS_ENV_VAR],
+                f"{second_id}\t{manifest.resolve()}\n{MOD_ID}\t{manifest.resolve()}")
+            self.assertEqual(result.active_mod_ids, (second_id, MOD_ID, local_id))
+            self.assertFalse(paths.local_mods_root.exists())
+
+    def test_standard_manifest_projection_does_not_leak_to_steam_or_empty_gog_selection(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = _manager_paths(root)
+            for path in (paths.game_executable, paths.runtime_launcher, paths.runtime_dll):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fixture")
+            for branch in (BETA2_BRANCH, GOG_BRANCH):
+                with self.subTest(branch=branch.key), patch(
+                    "majesty_cam.manager.launch.detect_majesty_branch", return_value=branch
+                ), patch("majesty_cam.manager.launch.subprocess.Popen", return_value=SimpleNamespace(pid=123)) as popen, patch.dict(
+                    os.environ, {STANDARD_MANIFESTS_ENV_VAR: "stale"}
+                ):
+                    entries = (_standard_entry(MOD_ID, root / "unavailable.mmxml"),) if branch == BETA2_BRANCH else ()
+                    launch_majesty(paths, [MOD_ID], standard_mods=entries, ensure_qol=False, capability_manifest=_capability_manifest(root),
+                        runtime_feature_registry=_feature_registry(root), controller_registry=_controller_registry(root))
+                self.assertNotIn(STANDARD_MANIFESTS_ENV_VAR, popen.call_args.kwargs["env"])
+
+    def test_gog_rejects_missing_unselected_and_foreign_standard_manifest_before_launch(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = replace(_manager_paths(root), workshop_roots=(root / "Workshop",))
+            for path in (paths.game_executable, paths.runtime_launcher, paths.runtime_dll):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fixture")
+            manifest = root / "Workshop" / "1234" / "selected.mmxml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("<Majesty/>")
+            foreign = root / "foreign.mmxml"
+            foreign.write_text("<Majesty/>")
+            entry = _standard_entry(MOD_ID, manifest)
+            invalid = (replace(entry, manifest_path=manifest.with_name("gone.mmxml")),
+                       replace(entry, content_id="11223344-5566-7788-99AA-BBCCDDEEFF00"),
+                       replace(entry, kind=CatalogKind.MERGE), _standard_entry(MOD_ID, foreign))
+            for bad in invalid:
+                with self.subTest(entry=bad), patch(
+                    "majesty_cam.manager.launch.detect_majesty_branch", return_value=GOG_BRANCH
+                ), patch("majesty_cam.manager.launch.subprocess.Popen") as popen, self.assertRaises(ManagerLaunchError):
+                    launch_majesty(paths, [MOD_ID], standard_mods=(bad,), ensure_qol=False,
+                        capability_manifest=_capability_manifest(root), runtime_feature_registry=_feature_registry(root),
+                        controller_registry=_controller_registry(root))
+                popen.assert_not_called()
+                self.assertFalse(paths.remembered_path.exists())
+
     def test_launch_fallback_uses_the_registry_driven_required_helper_service(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -372,6 +483,12 @@ class ManagerProcessWiringTests(unittest.TestCase):
             REPO_ROOT / "scripts" / "Build-ModManagerExe.ps1"
         ).read_text(encoding="utf-8")
         self.assertNotIn("--uac-admin", build_script)
+
+
+def _standard_entry(mod_id: str, manifest: Path) -> CatalogEntry:
+    return CatalogEntry(content_id=mod_id, raw_content_id=mod_id, display_name="Standard fixture",
+        kind=CatalogKind.STANDARD, source=CatalogSource.WORKSHOP, package_root=manifest.parent,
+        manifest_path=manifest, has_cam=False, merge_ready=False)
 
 
 def _manager_paths(root: Path) -> ManagerPaths:

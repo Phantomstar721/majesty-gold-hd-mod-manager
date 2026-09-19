@@ -729,7 +729,7 @@ int main() {
     const auto* mx09Record =
         MajestyStockBuildingControllers::Find(kMx09DialogId);
     const auto* mx09Profile =
-        MajestyStockBuildingControllers::Profile(mx09Record, true);
+        MajestyStockBuildingControllers::Profile(mx09Record, MajestyBuildId::SteamBeta2);
     assert(mx09Profile != nullptr && mx09Profile->entryCount == 13);
     auto** mx09StockTable = reinterpret_cast<void**>(
         mx09Image + mx09Profile->vtableRva);
@@ -838,7 +838,7 @@ int main() {
     const auto* ap31Record =
         MajestyStockBuildingControllers::Find(ap31Toggle.parentControllerBase);
     const auto* ap31Profile =
-        MajestyStockBuildingControllers::Profile(ap31Record, true);
+        MajestyStockBuildingControllers::Profile(ap31Record, MajestyBuildId::SteamBeta2);
     assert(ap31Profile != nullptr && ap31Profile->entryCount == 14);
     auto** ap31StockTable = reinterpret_cast<void**>(
         ap08Image + ap31Profile->vtableRva);

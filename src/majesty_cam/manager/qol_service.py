@@ -96,11 +96,24 @@ BETA2_BRANCH = MajestyBranch(
     ),
 )
 
-SUPPORTED_BRANCHES = (PUBLIC_BRANCH, BETA2_BRANCH)
+GOG_BRANCH = MajestyBranch(
+    key="gog",
+    display_name="GOG Gold HD",
+    version="1.5.2.28",
+    coff_timestamp=0x5BBB8DB8,
+    stock_sections=(
+        StockSectionSignature(".text", 0x34BEFD, 0x001000, 0x34C000, 0x000400, 0x60000020),
+        StockSectionSignature(".rdata", 0x0843F8, 0x34D000, 0x084400, 0x34C400, 0x40000040),
+        StockSectionSignature(".data", 0x05908C, 0x3D2000, 0x00D400, 0x3D0800, 0xC0000040),
+        StockSectionSignature(".rsrc", 0x000F34, 0x42C000, 0x001000, 0x3DDC00, 0x40000040),
+    ),
+)
+
+SUPPORTED_BRANCHES = (PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH)
 
 # Change this if status interpretation changes independently of the shipped
 # scripts/specs. UI/runtime rebuilds do not change canonical patch evidence.
-QOL_INSPECTION_CACHE_VERSION = 2
+QOL_INSPECTION_CACHE_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -297,7 +310,6 @@ class QolUtilityStatus:
             self.applicable
             and self.installed is True
             and self.patch.remove_available
-            and not self.required_for_manager
         )
 
     @property
@@ -419,10 +431,6 @@ class QolService:
             raise QolServiceError(
                 f"Cached QOL status does not describe {spec.name}."
             )
-        if not install and current.required_for_manager:
-            raise QolServiceError(
-                f"{current.name} is required by Majesty Mod Manager and cannot be removed."
-            )
         desired = install
         if current.installed is desired:
             return current
@@ -514,8 +522,7 @@ class QolService:
                 applicable=False,
                 installed=None,
                 detail=(
-                    "MajestyHD.exe is not the supported public 1.5.2.24 or "
-                    "beta2 1.5.2.28 layout."
+                    "This utility has no audited profile for the selected executable."
                 ),
             )
 
@@ -621,6 +628,7 @@ def resolve_qol_patch(repo_root: Path, spec: QolPatchSpec) -> ResolvedQolPatch:
             "manager-payload-qol-suite",
         ),
         (repo_root / "payload" / "qol" / spec.payload_slug, "manager-payload"),
+        (repo_root / "helpers" / spec.payload_slug, "manager-owned-helper"),
         (workspace_root / spec.repository, "standalone-repository"),
         (
             workspace_root
@@ -659,7 +667,9 @@ def detect_majesty_branch(path: Path) -> MajestyBranch | None:
     """Match the canonical QOL bundle's append-tolerant PE evidence."""
 
     try:
-        data = path.read_bytes()
+        with path.open("rb") as stream:
+            data = stream.read(0x400)
+            file_size = stream.seek(0, 2)
         if len(data) < 0x400 or data[:2] != b"MZ":
             return None
         pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
@@ -689,7 +699,7 @@ def detect_majesty_branch(path: Path) -> MajestyBranch | None:
         for index in range(section_count):
             offset = section_table + (index * 40)
             raw_size, raw_offset = struct.unpack_from("<II", data, offset + 16)
-            if raw_size and (raw_offset < 0x400 or raw_offset + raw_size > len(data)):
+            if raw_size and (raw_offset < 0x400 or raw_offset + raw_size > file_size):
                 return None
 
         branch = next(
@@ -755,6 +765,7 @@ def _combined_output(completed: subprocess.CompletedProcess[str]) -> str:
 
 __all__ = [
     "BETA2_BRANCH",
+    "GOG_BRANCH",
     "MajestyBranch",
     "PUBLIC_BRANCH",
     "QOL_PATCHES",

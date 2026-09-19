@@ -1,0 +1,391 @@
+{
+  "executable_sha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+  "utilities": {
+    "downloadable-quests-shortcut": [
+      {
+        "rva": 494512,
+        "offset": 491440,
+        "size": 742,
+        "sha256": "9C33E4FB877BC42C28804CF0AEB369D7EA7BC2A153F7A44F9650B1712367402F"
+      },
+      {
+        "rva": 495258,
+        "offset": 492186,
+        "size": 301,
+        "sha256": "6DB367BAD35638D221DDE26B3FF75E07635AF80CFCFB619EC1393B5C25A1D468"
+      },
+      {
+        "rva": 495568,
+        "offset": 492496,
+        "size": 253,
+        "sha256": "2F291141D8B98CFF3C7CA55BC596DD123315E9A581FBB0497B40C5ECD436BA65"
+      },
+      {
+        "rva": 495822,
+        "offset": 492750,
+        "size": 1275,
+        "sha256": "F1C91EC158B9C85022DD20526A5C9760A51CFA6F737205779D82ED1EC22275AE"
+      },
+      {
+        "rva": 497105,
+        "offset": 494033,
+        "size": 568,
+        "sha256": "FC931F426CE8A122F6AF5770EFCA9D0B4C293C6C92D490F0C4F03A9A83A98DD3"
+      },
+      {
+        "rva": 497679,
+        "offset": 494607,
+        "size": 10,
+        "sha256": "7C209C7B944AE8F87D9BBCBEF87BEC9205732FB1296DE340C9A8528FE30555C1"
+      },
+      {
+        "rva": 497693,
+        "offset": 494621,
+        "size": 375,
+        "sha256": "8942ED8B7354991D12DEE1441B4A0F1D23B788C6E00B6942243AE0537BBADDF1"
+      },
+      {
+        "rva": 498077,
+        "offset": 495005,
+        "size": 173,
+        "sha256": "BA1D47E8BDA277A001CE37FD4B7AD7D4B68A5D209B6BA2E83126EF62FDBD6B9E"
+      },
+      {
+        "rva": 490464,
+        "offset": 487392,
+        "size": 825,
+        "sha256": "1BA3A6AFA51B375FF9A244F8F04DAD703A3AB23A1D74EBF518ED942290E01BE3"
+      }
+    ],
+    "quest-map-drag": [
+      {
+        "rva": 494512,
+        "offset": 491440,
+        "size": 742,
+        "sha256": "9C33E4FB877BC42C28804CF0AEB369D7EA7BC2A153F7A44F9650B1712367402F"
+      },
+      {
+        "rva": 495258,
+        "offset": 492186,
+        "size": 301,
+        "sha256": "6DB367BAD35638D221DDE26B3FF75E07635AF80CFCFB619EC1393B5C25A1D468"
+      },
+      {
+        "rva": 495568,
+        "offset": 492496,
+        "size": 253,
+        "sha256": "2F291141D8B98CFF3C7CA55BC596DD123315E9A581FBB0497B40C5ECD436BA65"
+      },
+      {
+        "rva": 495822,
+        "offset": 492750,
+        "size": 1275,
+        "sha256": "F1C91EC158B9C85022DD20526A5C9760A51CFA6F737205779D82ED1EC22275AE"
+      },
+      {
+        "rva": 497105,
+        "offset": 494033,
+        "size": 568,
+        "sha256": "FC931F426CE8A122F6AF5770EFCA9D0B4C293C6C92D490F0C4F03A9A83A98DD3"
+      },
+      {
+        "rva": 497679,
+        "offset": 494607,
+        "size": 10,
+        "sha256": "7C209C7B944AE8F87D9BBCBEF87BEC9205732FB1296DE340C9A8528FE30555C1"
+      },
+      {
+        "rva": 497693,
+        "offset": 494621,
+        "size": 375,
+        "sha256": "8942ED8B7354991D12DEE1441B4A0F1D23B788C6E00B6942243AE0537BBADDF1"
+      },
+      {
+        "rva": 498077,
+        "offset": 495005,
+        "size": 173,
+        "sha256": "BA1D47E8BDA277A001CE37FD4B7AD7D4B68A5D209B6BA2E83126EF62FDBD6B9E"
+      },
+      {
+        "rva": 392208,
+        "offset": 389136,
+        "size": 232,
+        "sha256": "7B6FB62D2252AB06BE37541DC49B119012ECF86842BB2A2950B309652543701E"
+      },
+      {
+        "rva": 2399232,
+        "offset": 2396160,
+        "size": 152,
+        "sha256": "0A717192E40AA763AF7CD2A62CE9B9DB8A653A346DB781D603DBA2380B18FCE2"
+      },
+      {
+        "rva": 2399392,
+        "offset": 2396320,
+        "size": 5,
+        "sha256": "5FC155DB69ABE4DDBF3C6CDCFE0683D805109C24E5BCF05F7FB5517A21B26E74"
+      }
+    ],
+    "unlock-all-quests": [
+      {
+        "rva": 494512,
+        "offset": 491440,
+        "size": 742,
+        "sha256": "9C33E4FB877BC42C28804CF0AEB369D7EA7BC2A153F7A44F9650B1712367402F"
+      },
+      {
+        "rva": 495258,
+        "offset": 492186,
+        "size": 301,
+        "sha256": "6DB367BAD35638D221DDE26B3FF75E07635AF80CFCFB619EC1393B5C25A1D468"
+      },
+      {
+        "rva": 495568,
+        "offset": 492496,
+        "size": 253,
+        "sha256": "2F291141D8B98CFF3C7CA55BC596DD123315E9A581FBB0497B40C5ECD436BA65"
+      },
+      {
+        "rva": 495822,
+        "offset": 492750,
+        "size": 1275,
+        "sha256": "F1C91EC158B9C85022DD20526A5C9760A51CFA6F737205779D82ED1EC22275AE"
+      },
+      {
+        "rva": 497105,
+        "offset": 494033,
+        "size": 568,
+        "sha256": "FC931F426CE8A122F6AF5770EFCA9D0B4C293C6C92D490F0C4F03A9A83A98DD3"
+      },
+      {
+        "rva": 497679,
+        "offset": 494607,
+        "size": 10,
+        "sha256": "7C209C7B944AE8F87D9BBCBEF87BEC9205732FB1296DE340C9A8528FE30555C1"
+      },
+      {
+        "rva": 497693,
+        "offset": 494621,
+        "size": 375,
+        "sha256": "8942ED8B7354991D12DEE1441B4A0F1D23B788C6E00B6942243AE0537BBADDF1"
+      },
+      {
+        "rva": 498077,
+        "offset": 495005,
+        "size": 173,
+        "sha256": "BA1D47E8BDA277A001CE37FD4B7AD7D4B68A5D209B6BA2E83126EF62FDBD6B9E"
+      },
+      {
+        "rva": 1169991,
+        "offset": 1166919,
+        "size": 273,
+        "sha256": "9C8846E39FE8DD6E2E6086F302DFF0EBE5548392B94CF986148C6E2AA8B1166E"
+      }
+    ],
+    "suppress-all-message-flags": [
+      {
+        "rva": 304326,
+        "offset": 301254,
+        "size": 255,
+        "sha256": "615D19DD0CBC42826C37E2C3779A6FD2941AD858303239BA014A7178CD7E82A2"
+      },
+      {
+        "rva": 206448,
+        "offset": 203376,
+        "size": 243,
+        "sha256": "5CA99A13D25CAF8D61BB457742B70F14386D8FFF3875F33796377155EFA386E3"
+      }
+    ],
+    "remember-game-speed": [
+      {
+        "rva": 442608,
+        "offset": 439536,
+        "size": 72,
+        "sha256": "D606555A46088F663CF9B421DBCD5ACD94D7D671F430E0829B833205083655C5"
+      },
+      {
+        "rva": 442685,
+        "offset": 439613,
+        "size": 37,
+        "sha256": "6A8F06595DC0A51AE75D0FC84BD7126841AD335E0F3C17A5ADEB87245F042434"
+      },
+      {
+        "rva": 413520,
+        "offset": 410448,
+        "size": 1267,
+        "sha256": "5616D3F7073B5A5EAEED8DF37B122FC37FE6B08EB66A4AD1DB86262A3CC21CFE"
+      },
+      {
+        "rva": 414793,
+        "offset": 411721,
+        "size": 156,
+        "sha256": "07798B1150922C24E67FD6FFAC12B9F2CD5ADF348A26C26A83E7FBFB18C1E8E1"
+      },
+      {
+        "rva": 414955,
+        "offset": 411883,
+        "size": 577,
+        "sha256": "6AD094F32627D4EDB805BBBCEEBB32E29AFBC4A0544465E511A61E25672D24E4"
+      },
+      {
+        "rva": 892384,
+        "offset": 889312,
+        "size": 69,
+        "sha256": "C7B635762E3FED1A70A24B3C410821707D27F6DD69F37D445D3E5D76FED3D78A"
+      },
+      {
+        "rva": 892458,
+        "offset": 889386,
+        "size": 4,
+        "sha256": "E189CD29445B12AF3086849E2AE44215F3680C7E5DCF0B6B1B097507A49885CF"
+      },
+      {
+        "rva": 894784,
+        "offset": 891712,
+        "size": 233,
+        "sha256": "D1DF8E76AEE69620F03FF73560CB62D7A5359006A5E1DCE28112B973F8F94158"
+      },
+      {
+        "rva": 895022,
+        "offset": 891950,
+        "size": 32,
+        "sha256": "9333324017985B6B673412B853CF1E6C336E55DF07E56615838DB81D8A0C0AFE"
+      },
+      {
+        "rva": 437751,
+        "offset": 434679,
+        "size": 1069,
+        "sha256": "702BD5EFFB11107FED72A9585B25F347D23FB79E6AC1D7945F1D24D7B01E28C9"
+      },
+      {
+        "rva": 438826,
+        "offset": 435754,
+        "size": 319,
+        "sha256": "B83452842C8B486766ECC023E54D181BC39A4565D9A71CB80038B5D549B3C06A"
+      },
+      {
+        "rva": 439151,
+        "offset": 436079,
+        "size": 153,
+        "sha256": "923D086C061873437CE898E9B9E53771F06AC78418C8A3BA6B62552919B31A41"
+      },
+      {
+        "rva": 508384,
+        "offset": 505312,
+        "size": 283,
+        "sha256": "E6D4D2864144E653507297501159DE0073B24001FB7928056E6390C94C076D80"
+      },
+      {
+        "rva": 508673,
+        "offset": 505601,
+        "size": 60,
+        "sha256": "86C410DC8C54B954748CDE32BEAFF282EA4A2E42F575926867B1FFF4DCBD8282"
+      },
+      {
+        "rva": 171248,
+        "offset": 168176,
+        "size": 322,
+        "sha256": "1B8CCCD162BA244BF975A812976CE588E675465104E647D277565BB0FB685330"
+      },
+      {
+        "rva": 171576,
+        "offset": 168504,
+        "size": 13,
+        "sha256": "DAE0802394A84834D66EB05D13DEDBB68E0B5C63CE76FB0B601937F45BF4ECF3"
+      },
+      {
+        "rva": 171595,
+        "offset": 168523,
+        "size": 221,
+        "sha256": "16CA72B6601DF9041D0EA48167FFE1D7EA0E90AB752182BB24D1E3C3436FAC1C"
+      },
+      {
+        "rva": 887008,
+        "offset": 883936,
+        "size": 305,
+        "sha256": "AAEBDC423657AA2C005536175089BB4AF11B803A686E388B2BD325B8F06E1620"
+      }
+    ],
+    "remember-camera-zoom": [
+      {
+        "rva": 2039712,
+        "offset": 2036640,
+        "size": 609,
+        "sha256": "33D0FFAB3AC59FA6FFC664D508853A6FB4F2C1C83DDD0DB1791E59C2D859DA25"
+      },
+      {
+        "rva": 2040464,
+        "offset": 2037392,
+        "size": 198,
+        "sha256": "6A5B59DA87F382E684E4668FC3089B8BC138DE56AD255613A121E221BE59E16E"
+      },
+      {
+        "rva": 2040667,
+        "offset": 2037595,
+        "size": 168,
+        "sha256": "A2CE4A4EE317F986536BB4FA6441B81E15EF1E569F5A80D371DCF10AE16DB021"
+      }
+    ],
+    "lower-tracking-window": [
+      {
+        "rva": 437751,
+        "offset": 434679,
+        "size": 1069,
+        "sha256": "702BD5EFFB11107FED72A9585B25F347D23FB79E6AC1D7945F1D24D7B01E28C9"
+      },
+      {
+        "rva": 438826,
+        "offset": 435754,
+        "size": 319,
+        "sha256": "B83452842C8B486766ECC023E54D181BC39A4565D9A71CB80038B5D549B3C06A"
+      },
+      {
+        "rva": 439151,
+        "offset": 436079,
+        "size": 153,
+        "sha256": "923D086C061873437CE898E9B9E53771F06AC78418C8A3BA6B62552919B31A41"
+      },
+      {
+        "rva": 440167,
+        "offset": 437095,
+        "size": 365,
+        "sha256": "C103642F7E125C15268B5EF2B7522481F2F22AEB7B76335C6EF4E9537CE3B7C4"
+      },
+      {
+        "rva": 2346048,
+        "offset": 2342976,
+        "size": 145,
+        "sha256": "B68B945A00C0703F2981FD22A3A422887DDD7EB7476F4D73E64D30DAC307A618"
+      },
+      {
+        "rva": 155488,
+        "offset": 152416,
+        "size": 108,
+        "sha256": "1D1CD3A0B283D99B6D05E27105CD65034CFCF34566EEB12BA4CE79953F3F089C"
+      },
+      {
+        "rva": 351504,
+        "offset": 348432,
+        "size": 40,
+        "sha256": "DDC77C92AEE78F7D6230D0BBADBCA5E21CE4CB989845629ABF52E9A7D184FF63"
+      },
+      {
+        "rva": 365584,
+        "offset": 362512,
+        "size": 342,
+        "sha256": "724E391A18E55480DA657800CA3EC28E3DD9BB76CBC7A35EC1697C382A8F4A2A"
+      },
+      {
+        "rva": 352032,
+        "offset": 348960,
+        "size": 465,
+        "sha256": "21BE86098C85E17E10C7F8C59C3C5C5B0BB2A5768FDB11DDAD188B7BA0750B33"
+      },
+      {
+        "rva": 352512,
+        "offset": 349440,
+        "size": 610,
+        "sha256": "D1D5C036AAD0D3B6B5683A26C7A256D03EFE7FBCFE42C32C5333DC15C30E4AD8"
+      }
+    ]
+  }
+}

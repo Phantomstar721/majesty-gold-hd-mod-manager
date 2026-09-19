@@ -48,3 +48,6 @@ class MovementQueryProfiles(unittest.TestCase):
 
     def test_beta(self):
         self.verify("MAJESTY_BETA2_EXE", "Beta")
+
+    def test_gog(self):
+        self.verify("MAJESTY_GOG_EXE", "Gog")

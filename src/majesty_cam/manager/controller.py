@@ -37,6 +37,7 @@ from .paths import (
     GAME_SELECTION_FILENAME,
     ManagerPaths,
     detect_manager_paths,
+    detected_game_executables,
     save_game_executable_selection,
 )
 from .preflight import (
@@ -124,12 +125,25 @@ class ManagerController:
         self._managed_build_cache_loaded = False
         self.notices: list[str] = []
 
-    def select_game_executable(self, executable: Path) -> MajestyBranch:
+    def detected_installations(self) -> tuple[tuple[Path, MajestyBranch], ...]:
+        """Return supported installs, including a manually selected location."""
+
+        result = []
+        for executable in detected_game_executables(selected=self.paths.game_executable):
+            branch = detect_majesty_branch(executable)
+            if branch is not None:
+                result.append((executable, branch))
+        return tuple(result)
+
+    def select_game_executable(
+        self, executable: Path, *, replan: bool = True
+    ) -> MajestyBranch:
         """Validate and remember the Majesty executable used by this manager.
 
         All game-relative build, QOL, and launch services are rebound together;
         callers should follow this with a forced scan so catalog preflight and
         the displayed branch describe the newly selected installation.
+        A caller scanning immediately can defer replanning to that scan.
         """
 
         selected = executable.resolve(strict=True)
@@ -140,7 +154,7 @@ class ManagerController:
         branch = detect_majesty_branch(selected)
         if branch is None:
             raise ValueError(
-                "That executable is not the supported Standard or beta2 "
+                "That executable is not a supported Steam or GOG "
                 "Majesty Gold HD build."
             )
         save_game_executable_selection(
@@ -157,7 +171,8 @@ class ManagerController:
         self._qol_checked = False
         self._qol_input_signature = None
         self._prepared_merge_cache.clear()
-        self._replan()
+        if replan:
+            self._replan()
         self._managed_build_cache_loaded = False
         return branch
 
@@ -295,10 +310,6 @@ class ManagerController:
         spec = next((item for item in self.qol_service.specs if item.key == key), None)
         if spec is None:
             raise KeyError(key)
-        if not install and spec.required_by_manager:
-            raise ValueError(
-                f"{spec.name} is required when launching through Majesty Mod Manager."
-            )
         previous_catalog = self.qol_catalog
         previous_status = None
         if previous_catalog is not None:
@@ -518,6 +529,11 @@ class ManagerController:
             result = launch_majesty(
                 self.paths,
                 active_ids,
+                standard_mods=tuple(
+                    entry for entry in self.catalog.entries
+                    if entry.content_id in self.plan.selected_standard_ids
+                ),
+                quests=self.catalog.quests,
                 intent_registry=intent_registry,
                 capability_manifest=capability_manifest,
                 runtime_feature_registry=runtime_feature_registry,

@@ -13,6 +13,12 @@
 #if defined(CAM_SIEGE_CRASH_DIAGNOSTIC)
 #include "CrashDumpDiagnostic.h"
 #endif
+#include "MajestyBuildId.h"
+#include "GogAuditedRanges.h"
+#include "GogControllerAudit.h"
+#include "GogRecipeAudit.h"
+#include "GogStandardModAudit.h"
+#include "GogQuestAudit.h"
 #include "ControllerLifecycleRegistry.h"
 #include "FreestyleCamRuntime.h"
 #include "IntentTextRegistry.h"
@@ -28,6 +34,7 @@ namespace {
 struct MajestyBuildProfile {
     const char* id;
     DWORD peTimestamp;
+    MajestyBuildId buildId;
     std::uintptr_t secondaryControllerResultRva;
     unsigned char expectedResultSite[6];
     std::uintptr_t dialogCreationRva;
@@ -132,13 +139,18 @@ struct MajestyBuildProfile {
     std::uintptr_t postLiteralSystemAlertRva;
     std::uintptr_t flagModeConstructorRva;
     std::uintptr_t getFlagModeRegistryRva;
+    std::uintptr_t streamControlLookupRva;
+    std::uintptr_t listWrapperVtableRva;
+    std::size_t streamMessageSlot;
+    std::size_t streamIntegerSlot;
+    std::size_t streamTextSlot;
 };
 
 // Each profile is traced independently from the same stock dialog, Rage,
 // research, and UI lifecycles. Never derive one profile by applying a blanket
 // offset to the other: beta2 reorganizes different code regions differently.
 constexpr MajestyBuildProfile kPublicBuildProfile = {
-    "public-1.5.2.24", 0x5897B72F,
+    "public-1.5.2.24", 0x5897B72F, MajestyBuildId::SteamPublic,
     0x0002594A, {0x8B, 0x6B, 0x24, 0x83, 0xC3, 0x10},
     0x00025910, {0x83, 0xEC, 0x08, 0x53, 0x55, 0x56, 0x57},
     0x0010AC00, {0x6A, 0xFF, 0x68, 0x17, 0x0E, 0x70, 0x00},
@@ -188,10 +200,11 @@ constexpr MajestyBuildProfile kPublicBuildProfile = {
     0x0005D400, {0x57,0x68,0x04,0xBA,0x73,0x00,0xE8,0xB6,0xF7,0xFF,0xFF},
     0x0005D360, 0x0005D2D0, 0x00108510, 0x00067540, 0x001A7730,
     0x003C1394, 0x0006ABE0, 0x0006ACE0, 0x0019D1E0, 0x0019EF30,
+    0x002524C0, 0x0034F76C, 0x68, 0x5C, 0x50,
 };
 
 constexpr MajestyBuildProfile kBeta2BuildProfile = {
-    "beta2-1.5.2.28", 0x5A8A11D5,
+    "beta2-1.5.2.28", 0x5A8A11D5, MajestyBuildId::SteamBeta2,
     0x0002691A, {0x8B, 0x6B, 0x24, 0x83, 0xC3, 0x10},
     0x000268E0, {0x83, 0xEC, 0x08, 0x53, 0x55, 0x56, 0x57},
     0x0011B150, {0x6A, 0xFF, 0x68, 0xB7, 0x90, 0x71, 0x00},
@@ -241,7 +254,132 @@ constexpr MajestyBuildProfile kBeta2BuildProfile = {
     0x0005E430, {0x57,0x68,0xD4,0x4A,0x75,0x00,0xE8,0xB6,0xF7,0xFF,0xFF},
     0x0005E390, 0x0005E300, 0x0010A6E0, 0x00068780, 0x001BC6E0,
     0x003DFE4C, 0x0006BE70, 0x0006BFE0, 0x001B2190, 0x001B3EE0,
+    0x00267920, 0x00369844, 0x68, 0x5C, 0x50,
 };
+
+// GOG entries are populated only after their complete stock lifecycle is
+// audited. Unavailable capabilities are rejected before any address is used.
+template<std::size_t N>
+constexpr void ProfileBytes(unsigned char (&target)[N], const unsigned char (&source)[N]) {
+    for (std::size_t i = 0; i < N; ++i) target[i] = source[i];
+}
+constexpr MajestyBuildProfile MakeGogBuildProfile() {
+    MajestyBuildProfile p{};
+    p.id = "gog-1.5.2.28";
+    p.peTimestamp = 0x5BBB8DB8;
+    p.buildId = MajestyBuildId::Gog;
+    p.secondaryControllerResultRva = 0x00025BAA;
+    ProfileBytes(p.expectedResultSite, {0x8B, 0x6B, 0x24, 0x83, 0xC3, 0x10});
+    p.dialogCreationRva = 0x00025B70;
+    ProfileBytes(p.expectedCreationEntry, {0x83, 0xEC, 0x08, 0x53, 0x55, 0x56, 0x57});
+    p.dialogFactoryRva = 0x0010D060;
+    ProfileBytes(p.expectedFactoryEntry, {0x6A, 0xFF, 0x68, 0xC7, 0x5B, 0x71, 0x00});
+    p.customGuildFallbackRva = 0x0010E49F;
+    p.sharedGuildControllerRva = 0x0010E2FC;
+    p.uiManagerRva = 0x00025F60;
+    p.removeDialogRva = 0x00025AE0;
+    p.getPanelContextRva = 0x000686A0;
+    p.getCommandMetadataRva = 0x001D6590;
+    p.getPlayerAgentRva = 0x0002A390;
+    p.readPackedAttributeRva = 0x001CE2C0;
+    p.submitBuildingCommandRva = 0x000C5D30;
+    p.rageCommandDispatchRva = 0x000C6021;
+    ProfileBytes(p.expectedRageCommandDispatch, {0x8B, 0x4D, 0x0C, 0x51, 0x8B, 0xCF});
+    p.ragePrivateBranchRva = 0x000B2109;
+    ProfileBytes(p.expectedRagePrivateBranch, {0x68, 0x41, 0x45, 0x00, 0x00});
+    p.rageGplConstructionResumeRva = 0x000B2169;
+    p.simulationClockRva = 0x003E4274;
+    p.gameUpdateCallRva = 0x000254CD;
+    ProfileBytes(p.expectedGameUpdateCall, {0xE8, 0x1E, 0x17, 0x00, 0x00});
+    p.gameUpdateRva = 0x00026BF0;
+    p.refreshResearchRowsRva = 0x000A9980;
+    ProfileBytes(p.expectedRefreshResearchRowsEntry, {0x55, 0x8B, 0x6C, 0x24, 0x08, 0x57, 0x8B, 0x7D, 0x04});
+    p.refreshSingleResearchRowRva = 0x000A9710;
+    ProfileBytes(p.expectedRefreshSingleResearchRowEntry, {0x6A, 0xFF, 0x68, 0xA8, 0x7C, 0x70, 0x00});
+    p.canSubmitResearchRva = 0x000A99E0;
+    ProfileBytes(p.expectedCanSubmitResearchEntry, {0x8B, 0x44, 0x24, 0x04, 0x53, 0x56, 0x57, 0x50});
+    p.submitResearchCommandRva = 0x000C3CA0;
+    ProfileBytes(p.expectedSubmitResearchCommandEntry, {0x6A, 0xFF, 0x68, 0xBB, 0xB6, 0x70, 0x00});
+    p.researchCompletionRva = 0x000E0B70;
+    ProfileBytes(p.expectedResearchCompletionEntry, {0x6A, 0xFF, 0x68, 0xE0, 0xF7, 0x70, 0x00});
+    p.researchCompletionDispatchSlotRva = 0x003D46DC;
+    p.resolveResearchDescriptorRva = 0x000A9580;
+    ProfileBytes(p.expectedResolveResearchDescriptorEntry, {0x83, 0xEC, 0x08, 0x80, 0x3D, 0x04, 0x05, 0x7E, 0x00, 0x00});
+    p.resolveSpellDescriptorRva = 0x000AF250;
+    ProfileBytes(p.expectedResolveSpellDescriptorEntry, {0x83, 0xEC, 0x08, 0x80, 0x3D, 0x3C, 0x05, 0x7E, 0x00, 0x00});
+    p.refreshSingleSpellRowRva = 0x000AF370;
+    p.getCurrentPlayerRva = 0x00024C60;
+    p.researchCompletionNamePushRva = 0x000E0D17;
+    ProfileBytes(p.expectedResearchCompletionNamePush, {0x57, 0xC1, 0xF9, 0x17, 0x50});
+    p.heroEnchantmentsSwitchRva = 0x000A4830;
+    ProfileBytes(p.expectedHeroEnchantmentsSwitch, {0x3D, 0x43, 0x52, 0x42, 0x32});
+    p.heroEnchantmentsSwitchResumeRva = 0x000A4835;
+    p.speedTonicRowStringCallRva = 0x000A4898;
+    ProfileBytes(p.expectedSpeedTonicRowStringCall, {0xE8, 0xA3, 0x83, 0x19, 0x00});
+    p.stockStringAssignRva = 0x0023CC40;
+    ProfileBytes(p.expectedStockStringAssignEntry, {0x56, 0x57, 0x8B, 0x7C, 0x24, 0x0C, 0x8B, 0xF1});
+    p.resolveIntentTextRva = 0x0010ADE0;
+    ProfileBytes(p.expectedResolveIntentTextEntry, {0x56, 0xE8, 0x4A, 0x95, 0x06, 0x00});
+    p.intentTextTableProviderRva = 0x00174330;
+    p.resolveIntentTextResumeRva = 0x0010ADE6;
+    p.nameRegistryCompletionRva = 0x00112D6E;
+    ProfileBytes(p.expectedNameRegistryCompletion, {0x8B, 0x44, 0x24, 0x1C, 0x89, 0x58, 0x24});
+    p.stockOperatorNewRva = 0x002EDA2C;
+    ProfileBytes(p.expectedStockOperatorNewEntry, {0xFF, 0x25, 0x78, 0xD3, 0x74, 0x00});
+    p.nameGeneratorFactoryRva = 0x0010E4D0;
+    ProfileBytes(p.expectedNameGeneratorFactoryEntry, {0x6A, 0xFF, 0x68, 0xFE, 0x5B, 0x71, 0x00});
+    p.nameGeneratorConstructRva = 0x0010CFD0;
+    ProfileBytes(p.expectedNameGeneratorConstructEntry, {0x6A, 0xFF, 0x68, 0xAB, 0x58, 0x71, 0x00});
+    p.nameRegistryFindOrInsertRva = 0x00111FD0;
+    ProfileBytes(p.expectedNameRegistryFindOrInsertEntry, {0x8B, 0x54, 0x24, 0x04, 0x83, 0xEC, 0x10, 0x53});
+    p.sovereignSpellClickRva = 0x000AF2C0;
+    ProfileBytes(p.expectedSovereignSpellClickEntry, {0x8B, 0x44, 0x24, 0x04, 0x3D, 0x46, 0x11, 0x00, 0x00});
+    p.sovereignTargetManagerRva = 0x0005F520;
+    ProfileBytes(p.expectedSovereignTargetManagerEntry, {0x6A, 0xFF, 0x68, 0xDB, 0xE9, 0x6F, 0x00});
+    p.sovereignTargetCancelRva = 0x0005F920;
+    ProfileBytes(p.expectedSovereignTargetCancelEntry, {0x8B, 0x44, 0x24, 0x04, 0x56, 0x50, 0xE8, 0x35, 0xBB, 0xFF, 0xFF});
+    p.sovereignCursorTransitionRva = 0x0005FD75;
+    ProfileBytes(p.expectedSovereignCursorTransition, {0x8B, 0x16, 0x8B, 0x52, 0x48, 0x89, 0x46, 0x3C, 0x89, 0x5E, 0x40, 0x89, 0x5E, 0x38, 0x8B, 0x47, 0x04, 0x53, 0x50, 0x8B, 0xCE, 0xFF, 0xD2});
+    p.sovereignTargetCommitCallRva = 0x00066F45;
+    ProfileBytes(p.expectedSovereignTargetCommitCall, {0xE8, 0x76, 0x3D, 0x07, 0x00});
+    p.sovereignSubmitCommandRva = 0x000DACC0;
+    p.sovereignExecutorEntryRva = 0x000DAD70;
+    ProfileBytes(p.expectedSovereignExecutorEntry, {0x6A, 0xFF, 0x68, 0x47, 0xEA, 0x70, 0x00});
+    p.sovereignConstructionOverrideRva = 0x000DADF8;
+    ProfileBytes(p.expectedSovereignConstructionOverride, {0x8B, 0x4C, 0x24, 0x1C, 0x8B, 0xD8, 0x8B, 0x01, 0x8B});
+    p.sovereignConstructionOverrideSize = 0x00000006;
+    p.openDialogRva = 0x000B1290;
+    p.stockAp41HandlerRva = 0x000AA190;
+    p.stockAp41ActivationRva = 0x000AA0D0;
+    p.stockAp41RefreshRva = 0x000AA340;
+    p.attackRewardAmountRva = 0x003E052C;
+    p.flagModeOwnerRva = 0x003E0048;
+    p.getFlagModeManagerRva = 0x00055AE0;
+    p.getSelectedFlagModeRva = 0x00056620;
+    p.setFlagModeRva = 0x00055DC0;
+    p.modeRegistryCompletionRva = 0x0005F434;
+    ProfileBytes(p.expectedModeRegistryCompletion, {0x8B, 0x4C, 0x24, 0x10, 0x64, 0x89, 0x0D, 0x00, 0x00, 0x00, 0x00});
+    p.modeRegistryResumeRva = 0x0005F43F;
+    p.stockCaptureCallbackRva = 0x0005E350;
+    ProfileBytes(p.expectedStockCallbackCreate, {0x57, 0x68, 0x24, 0x3B, 0x75, 0x00, 0xE8, 0xB6, 0xF7, 0xFF, 0xFF});
+    p.stockCaptureValidatorRva = 0x0005E2B0;
+    p.stockFlagTargetCheckRva = 0x0005E220;
+    p.displayClassifierRva = 0x0010AE70;
+    p.selectedAgentRva = 0x000686A0;
+    p.findAttachedRelationRva = 0x001BBA30;
+    p.systemAlertOwnerRva = 0x003E00EC;
+    p.prepareSystemAlertRva = 0x0006BD90;
+    p.postLiteralSystemAlertRva = 0x0006BF00;
+    p.flagModeConstructorRva = 0x001B14E0;
+    p.getFlagModeRegistryRva = 0x001B3230;
+    p.streamControlLookupRva = 0x00267DA0;
+    p.listWrapperVtableRva = 0x00368704;
+    p.streamMessageSlot = 0x74;
+    p.streamIntegerSlot = 0x60;
+    p.streamTextSlot = 0x54;
+    return p;
+}
+constexpr MajestyBuildProfile kGogBuildProfile = MakeGogBuildProfile();
 
 const MajestyBuildProfile* g_buildProfile = nullptr;
 using OccupantPanel = MajestyStockControllers::OccupantActionPanelRecord;
@@ -1127,11 +1265,32 @@ bool SelectMajestyBuildProfile() {
         g_buildProfile = &kPublicBuildProfile;
     } else if (nt->FileHeader.TimeDateStamp == kBeta2BuildProfile.peTimestamp) {
         g_buildProfile = &kBeta2BuildProfile;
+    } else if (nt->FileHeader.TimeDateStamp == kGogBuildProfile.peTimestamp) {
+        struct SectionIdentity { char name[8]; DWORD size, rva, rawSize, rawOffset, flags; };
+        const SectionIdentity expected[] = {
+            {".text", 0x34BEFD, 0x1000, 0x34C000, 0x400, 0x60000020},
+            {".rdata", 0x843F8, 0x34D000, 0x84400, 0x34C400, 0x40000040},
+            {".data", 0x5908C, 0x3D2000, 0xD400, 0x3D0800, 0xC0000040},
+            {".rsrc", 0xF34, 0x42C000, 0x1000, 0x3DDC00, 0x40000040},
+        };
+        if (g_imageBase != 0x400000 || nt->FileHeader.NumberOfSections < 4 ||
+            nt->OptionalHeader.ImageBase != 0x400000 ||
+            nt->OptionalHeader.SectionAlignment != 0x1000 ||
+            nt->OptionalHeader.FileAlignment != 0x200 ||
+            nt->OptionalHeader.SizeOfHeaders != 0x400) return false;
+        const auto* sections = IMAGE_FIRST_SECTION(nt);
+        for (std::size_t i = 0; i < 4; ++i) {
+            const auto& a = sections[i]; const auto& e = expected[i];
+            if (std::memcmp(a.Name, e.name, 8) != 0 || a.Misc.VirtualSize != e.size ||
+                a.VirtualAddress != e.rva || a.SizeOfRawData != e.rawSize ||
+                a.PointerToRawData != e.rawOffset || a.Characteristics != e.flags) return false;
+        }
+        g_buildProfile = &kGogBuildProfile;
     } else {
         char message[192] = {};
         sprintf_s(
             message,
-            "Runtime refused unknown Majesty build timestamp 0x%08X; supported profiles are public-1.5.2.24 and beta2-1.5.2.28.",
+            "Runtime refused unknown Majesty build timestamp 0x%08X; supported profiles are public-1.5.2.24, beta2-1.5.2.28, and gog-1.5.2.28.",
             nt->FileHeader.TimeDateStamp);
         WriteLog(message);
         return false;
@@ -1458,6 +1617,54 @@ bool ValidatePrivateNameGeneratorProfile() {
 }
 
 bool ValidateMajestyBuildProfile() {
+    if (g_buildProfile->buildId == MajestyBuildId::Gog) {
+        if (HasRuntimeCapability(MajestyRuntimeCapabilities::kGenericControllerRecipes) &&
+            !MajestyGogAudit::Validate(g_imageBase, MajestyGogAudit::kRecipes,
+                sizeof(MajestyGogAudit::kRecipes) / sizeof(MajestyGogAudit::kRecipes[0]))) return false;
+        const bool map = HasRuntimeCapability(MajestyRuntimeCapabilities::kMapFogQuery);
+        const bool movement = HasRuntimeCapability(MajestyRuntimeCapabilities::kMovementQuery);
+        const bool timing = HasRuntimeCapability(MajestyRuntimeCapabilities::kNativeTiming);
+        if ((map || movement || timing) &&
+            !MajestyGogAudit::Validate(g_imageBase, MajestyGogAudit::kRegistration,
+                sizeof(MajestyGogAudit::kRegistration) / sizeof(MajestyGogAudit::kRegistration[0]))) return false;
+        if (map && !MajestyGogAudit::Validate(g_imageBase, MajestyGogAudit::kMap,
+                sizeof(MajestyGogAudit::kMap) / sizeof(MajestyGogAudit::kMap[0]))) return false;
+        if ((movement || timing) &&
+            !MajestyGogAudit::Validate(g_imageBase, MajestyGogAudit::kMovement,
+                sizeof(MajestyGogAudit::kMovement) / sizeof(MajestyGogAudit::kMovement[0]))) return false;
+        if (timing && !MajestyGogAudit::Validate(g_imageBase, MajestyGogAudit::kTiming,
+                sizeof(MajestyGogAudit::kTiming) / sizeof(MajestyGogAudit::kTiming[0]))) return false;
+        if (HasRuntimeCapability(MajestyRuntimeCapabilities::kExpandedBuildingSlots) &&
+            !MajestyGogAudit::Validate(g_imageBase, MajestyGogAudit::kCore,
+                sizeof(MajestyGogAudit::kCore) / sizeof(MajestyGogAudit::kCore[0]))) return false;
+        if (HasRuntimeCapability(MajestyRuntimeCapabilities::kFreestyleCamRebind) &&
+            !MajestyGogAudit::Validate(g_imageBase, MajestyGogAudit::kFreestyle,
+                sizeof(MajestyGogAudit::kFreestyle) / sizeof(MajestyGogAudit::kFreestyle[0]))) return false;
+        if (HasRuntimeCapability(MajestyRuntimeCapabilities::kGenericNameGenerator) &&
+            !MajestyGogAudit::Validate(g_imageBase, MajestyGogAudit::kNames,
+                sizeof(MajestyGogAudit::kNames) / sizeof(MajestyGogAudit::kNames[0]))) return false;
+        if (HasRuntimeCapability(MajestyRuntimeCapabilities::kGenericEnchantmentRow) &&
+            !MajestyGogAudit::Validate(g_imageBase, MajestyGogAudit::kEnchantments,
+                sizeof(MajestyGogAudit::kEnchantments) / sizeof(MajestyGogAudit::kEnchantments[0]))) return false;
+        if (HasRuntimeCapability(MajestyRuntimeCapabilities::kPrivateActivityText) &&
+            !MajestyGogAudit::Validate(g_imageBase, MajestyGogAudit::kIntent,
+                sizeof(MajestyGogAudit::kIntent) / sizeof(MajestyGogAudit::kIntent[0]))) return false;
+        for (const auto& capability : g_runtimeCapabilities.capabilities) {
+            if (capability != MajestyRuntimeCapabilities::kExpandedBuildingSlots &&
+                capability != MajestyRuntimeCapabilities::kFreestyleCamRebind &&
+                capability != MajestyRuntimeCapabilities::kGenericVisitorLists &&
+                capability != MajestyRuntimeCapabilities::kGenericNameGenerator &&
+                capability != MajestyRuntimeCapabilities::kGenericEnchantmentRow &&
+                capability != MajestyRuntimeCapabilities::kGenericControllerRecipes &&
+                capability != MajestyRuntimeCapabilities::kMapFogQuery &&
+                capability != MajestyRuntimeCapabilities::kMovementQuery &&
+                capability != MajestyRuntimeCapabilities::kNativeTiming &&
+                capability != MajestyRuntimeCapabilities::kPrivateActivityText) {
+                WriteLog("GOG runtime capability has not completed its stock lifecycle audit.");
+                return false;
+            }
+        }
+    }
     if (!g_stockControllerRegistry.occupantActionPanels.empty() ||
         !g_stockControllerRegistry.liveAgentLists.empty()) {
         if (!ValidateOccupantPanelProfile()) return false;
@@ -1639,7 +1846,7 @@ std::uint32_t SendControllerMessage(
     auto** vtable = *reinterpret_cast<void***>(panel);
     using SendControlMessage = std::uint32_t (__thiscall*)(
         void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t);
-    auto send = reinterpret_cast<SendControlMessage>(vtable[0x68 / sizeof(void*)]);
+    auto send = reinterpret_cast<SendControlMessage>(vtable[g_buildProfile->streamMessageSlot / sizeof(void*)]);
     return send(panel, controlId, message, parameter, value);
 }
 
@@ -1658,7 +1865,7 @@ bool SetControllerControlInteger(
     using SetControlInteger = void (__thiscall*)(
         void*, std::uint32_t, int, std::uint32_t);
     auto setInteger = reinterpret_cast<SetControlInteger>(
-        vtable[0x5C / sizeof(void*)]);
+        vtable[g_buildProfile->streamIntegerSlot / sizeof(void*)]);
     // Literal AP22 quantity-binding dispatch at Beta2
     // 0x004A34B1..0x004A34D0. AP22 targets the numeric binding embedded in
     // the type-5 quantity record, passes the calculated integer, and preserves
@@ -3202,6 +3409,17 @@ __declspec(naked) void PublicSovereignConstructionHook() {
     }
 }
 
+__declspec(naked) void GogSovereignExecutorHook() {
+    __asm {
+        push dword ptr [esp + 4]
+        call ResolvePrivateSovereignExecutorMode
+        mov dword ptr [esp + 4], eax
+        push -1
+        push 0070EA47h
+        jmp dword ptr [g_sovereignExecutorResume]
+    }
+}
+
 __declspec(naked) void Beta2SovereignConstructionHook() {
     __asm {
         push eax
@@ -3213,6 +3431,25 @@ __declspec(naked) void Beta2SovereignConstructionHook() {
 }
 
 bool InstallPrivateSovereignSpellRoute() {
+    const void* executorHook = nullptr;
+    const void* constructionHook = nullptr;
+    switch (g_buildProfile->buildId) {
+    case MajestyBuildId::SteamPublic:
+        executorHook = reinterpret_cast<const void*>(&PublicSovereignExecutorHook);
+        constructionHook = reinterpret_cast<const void*>(&PublicSovereignConstructionHook);
+        break;
+    case MajestyBuildId::SteamBeta2:
+        executorHook = reinterpret_cast<const void*>(&Beta2SovereignExecutorHook);
+        constructionHook = reinterpret_cast<const void*>(&Beta2SovereignConstructionHook);
+        break;
+    case MajestyBuildId::Gog:
+        executorHook = reinterpret_cast<const void*>(&GogSovereignExecutorHook);
+        // The complete GOG executor retains this exact six-byte construction
+        // boundary and stack frame; only its SEH entry differs from beta2.
+        constructionHook = reinterpret_cast<const void*>(&Beta2SovereignConstructionHook);
+        break;
+    default: return false;
+    }
     auto* commit = reinterpret_cast<unsigned char*>(
         g_imageBase + g_buildProfile->sovereignTargetCommitCallRva);
     auto* cursorTransition = reinterpret_cast<unsigned char*>(
@@ -3291,9 +3528,6 @@ bool InstallPrivateSovereignSpellRoute() {
     if (!VirtualProtect(executor, 7, PAGE_EXECUTE_READWRITE, &oldProtection)) {
         return false;
     }
-    const void* executorHook = g_buildProfile == &kPublicBuildProfile
-        ? reinterpret_cast<const void*>(&PublicSovereignExecutorHook)
-        : reinterpret_cast<const void*>(&Beta2SovereignExecutorHook);
     const auto executorRelative = static_cast<std::int32_t>(
         reinterpret_cast<std::uintptr_t>(executorHook) -
         (reinterpret_cast<std::uintptr_t>(executor) + 5));
@@ -3313,9 +3547,6 @@ bool InstallPrivateSovereignSpellRoute() {
             &oldProtection)) {
         return false;
     }
-    const void* constructionHook = g_buildProfile == &kPublicBuildProfile
-        ? reinterpret_cast<const void*>(&PublicSovereignConstructionHook)
-        : reinterpret_cast<const void*>(&Beta2SovereignConstructionHook);
     const auto constructionRelative = static_cast<std::int32_t>(
         reinterpret_cast<std::uintptr_t>(constructionHook) -
         (reinterpret_cast<std::uintptr_t>(construction) + 5));
@@ -3916,7 +4147,7 @@ bool InstallParentPanelControllerVtable(std::uint32_t controller) {
         const auto* catalogRecord =
             MajestyStockBuildingControllers::Find(kAp10DialogId);
         const auto* catalogProfile = MajestyStockBuildingControllers::Profile(
-            catalogRecord, g_buildProfile != &kPublicBuildProfile);
+            catalogRecord, g_buildProfile->buildId);
         if (catalogProfile == nullptr ||
             catalogProfile->entryCount != kAp10VtableEntries ||
             stockVtable != reinterpret_cast<void**>(
@@ -4288,7 +4519,7 @@ bool InstallRewardParentControllerVtable(std::uint32_t controller) {
         const auto* catalogRecord =
             MajestyStockBuildingControllers::Find(kMx09DialogId);
         const auto* catalogProfile = MajestyStockBuildingControllers::Profile(
-            catalogRecord, g_buildProfile != &kPublicBuildProfile);
+            catalogRecord, g_buildProfile->buildId);
         if (catalogProfile == nullptr ||
             catalogProfile->entryCount > kAp10VtableEntries ||
             stockVtable != reinterpret_cast<void**>(
@@ -4356,8 +4587,16 @@ constexpr OccupantBuildProfile kBeta2Occupants = {
     0x000BCB9A, 0x000BCBB1, 0x000995A0,
     0x000997EC, 0x000995D9, 0x000997F4, 0x00099618, 0x003577AC,
 };
+constexpr OccupantBuildProfile kGogOccupants = {
+    0x000BCE1D, 0x000BD18F, 0x000C6631, 0x000C5DE0, 0x0023C370, 0x000BD19A, 0x000BD1B1, 0x00099B50, 0x00099D9C, 0x00099B89, 0x00099DA4, 0x00099BC8, 0x00356904
+};
 const OccupantBuildProfile& OccupantProfile() {
-    return g_buildProfile == &kPublicBuildProfile ? kPublicOccupants : kBeta2Occupants;
+    switch (g_buildProfile->buildId) {
+    case MajestyBuildId::SteamPublic: return kPublicOccupants;
+    case MajestyBuildId::SteamBeta2: return kBeta2Occupants;
+    case MajestyBuildId::Gog: return kGogOccupants;
+    default: StopUnsafeManagerRuntimeLaunch("No audited occupant profile for this build.");
+    }
 }
 
 // The stock MX05 cost evaluator constructs one GPL call object, adds the
@@ -4411,9 +4650,16 @@ constexpr QuestBoardBuildProfile kBeta2QuestBoard = {
     0x00098F46, 0x00099020, 0x0009901B, 0x000990BC, 0x00287CB0,
     0x000BCB00, 0x000BCC10, 0x00098640,
 };
+constexpr QuestBoardBuildProfile kGogQuestBoard = {
+    0x000BCDF0, 0x00178AB0, 0x00178070, 0x00178090, 0x00178BF0, 0x00178950, 0x0016DF60, 0x0002EC20, 0x00178B90, 0x0023C520, 0x0035518C, 0x00099065, 0x00043120, 0x0009931D, 0x00099489, 0x0009944F, 0x0009921A, 0x000991E9, 0x00024280, 0x000994F6, 0x000995D0, 0x000995CB, 0x0009966C, 0x002871A0, 0x000BD100, 0x000BD210, 0x00098BF0
+};
 const QuestBoardBuildProfile& QuestBoardProfile() {
-    return g_buildProfile == &kPublicBuildProfile
-        ? kPublicQuestBoard : kBeta2QuestBoard;
+    switch (g_buildProfile->buildId) {
+    case MajestyBuildId::SteamPublic: return kPublicQuestBoard;
+    case MajestyBuildId::SteamBeta2: return kBeta2QuestBoard;
+    case MajestyBuildId::Gog: return kGogQuestBoard;
+    default: StopUnsafeManagerRuntimeLaunch("No audited live-agent-list profile for this build.");
+    }
 }
 
 bool ValidateSelectedParentControllerProfiles() {
@@ -4421,7 +4667,7 @@ bool ValidateSelectedParentControllerProfiles() {
     if (!g_stockControllerRegistry.privateRecruitments.empty()) {
         selected.push_back(0x32355041u);
         if (!MajestyPrivateRecruitment::Validate(
-                g_imageBase, g_buildProfile != &kPublicBuildProfile)) {
+                g_imageBase, g_buildProfile->buildId)) {
             WriteLog("Private AP52 recruitment refused: audited stock presenter bytes changed.");
             return false;
         }
@@ -4444,14 +4690,20 @@ bool ValidateSelectedParentControllerProfiles() {
     std::sort(selected.begin(), selected.end());
     selected.erase(std::unique(selected.begin(), selected.end()), selected.end());
 
-    const bool beta2 = g_buildProfile != &kPublicBuildProfile;
+    const auto buildId = g_buildProfile->buildId;
     for (const auto controllerId : selected) {
         const auto* record = MajestyStockBuildingControllers::Find(controllerId);
-        const auto* profile = MajestyStockBuildingControllers::Profile(record, beta2);
+        const auto* profile = MajestyStockBuildingControllers::Profile(record, buildId);
         if (profile == nullptr || profile->entryCount <= 8 ||
             profile->entryCount > kAp10VtableEntries) {
             WriteLog(
                 "Manager parent controller catalog is missing a safe stock class boundary.");
+            return false;
+        }
+        if (buildId == MajestyBuildId::Gog &&
+            !MajestyGogAudit::ValidateController(g_imageBase,
+                static_cast<std::size_t>(record->controllerClass))) {
+            WriteLog("GOG parent controller differs from its audited stock lifecycle.");
             return false;
         }
         auto** table = reinterpret_cast<void**>(
@@ -4762,7 +5014,9 @@ bool ValidateOccupantPanelProfile() {
     const unsigned char sharedControlCall[] = {0x55, 0x8B, 0xCE, 0xE8};
     const unsigned char selectionFocusEntry[] = {
         0x8B, 0x4E, 0x24, 0x8B, 0x01, 0x8B,
-        0x50, 0x68, 0x6A, 0x00, 0x6A, 0x00,
+        // The audited GOG stream uses +0x74; Steam uses +0x68.
+        0x50, static_cast<unsigned char>(g_buildProfile->streamMessageSlot),
+        0x6A, 0x00, 0x6A, 0x00,
     };
     const unsigned char actionFocusEntry[] = {
         0x8B, 0x17, 0x8B, 0x82, 0xB8, 0x00,
@@ -4848,14 +5102,14 @@ bool SetControllerControlText(
     void* panel = *reinterpret_cast<void**>(controller + 0x24);
     if (panel == nullptr) return false;
     auto** vtable = *reinterpret_cast<void***>(panel);
-    if (vtable == nullptr || vtable[0x50 / sizeof(void*)] == nullptr) {
+    if (vtable == nullptr || vtable[g_buildProfile->streamTextSlot / sizeof(void*)] == nullptr) {
         return false;
     }
     std::uint32_t nativeString[3] = {};
     OccupantString(nativeString, text);
     using SetControlText = void (__thiscall*)(
         void*, std::uint32_t, const void*);
-    reinterpret_cast<SetControlText>(vtable[0x50 / sizeof(void*)])(
+    reinterpret_cast<SetControlText>(vtable[g_buildProfile->streamTextSlot / sizeof(void*)])(
         panel, controlId, nativeString);
     using DestroyString = void (__thiscall*)(void*);
     reinterpret_cast<DestroyString>(
@@ -5804,10 +6058,10 @@ bool RefreshDataRecordListStock(void* controller) {
     if (dialog == nullptr) return false;
     using Find = void* (__thiscall*)(void*, std::uint32_t);
     void* list = reinterpret_cast<Find>(g_imageBase +
-        (g_buildProfile == &kPublicBuildProfile ? 0x002524C0 : 0x00267920))(dialog, 0x1388u);
+        g_buildProfile->streamControlLookupRva)(dialog, 0x1388u);
     if (list == nullptr) return false;
     const auto nativeVtable = g_imageBase +
-        (g_buildProfile == &kPublicBuildProfile ? 0x0034F76C : 0x00369844);
+        g_buildProfile->listWrapperVtableRva;
     if (*reinterpret_cast<std::uintptr_t*>(list) != nativeVtable) return false;
     // Literal CYDialogListboxItem message dispatch. Clear only MX05's
     // Unit-specific callback; its native text painter, scrollbar, mouse and
@@ -6062,7 +6316,7 @@ bool InstallOccupantParentVtable(std::uint32_t controller, bool recruitmentChild
     const auto* catalogRecord =
         MajestyStockBuildingControllers::Find(declaredBase);
     const auto* catalogProfile = MajestyStockBuildingControllers::Profile(
-        catalogRecord, g_buildProfile != &kPublicBuildProfile);
+        catalogRecord, g_buildProfile->buildId);
     if (catalogProfile == nullptr ||
         catalogProfile->entryCount > kAp10VtableEntries ||
         entry->stock != reinterpret_cast<void**>(
@@ -6074,7 +6328,7 @@ bool InstallOccupantParentVtable(std::uint32_t controller, bool recruitmentChild
     entry->thirdPrice = thirdPrice;
     entry->recruitmentMode = recruitmentMode;
     if (thirdPrice && !entry->recruitment.Initialize(
-            g_imageBase, g_buildProfile != &kPublicBuildProfile, thirdPrice)) {
+            g_imageBase, g_buildProfile->buildId, thirdPrice)) {
         delete entry;
         return false;
     }
@@ -7178,6 +7432,9 @@ bool InstallSecondaryControllerHook() {
     return true;
 }
 
+#include "GogStandardMods.inl"
+#include "GogWorkshopQuests.inl"
+
 DWORD WINAPI InitializeRuntime(void*) {
     g_imageBase = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
     const CapabilityManifestState capabilityManifest =
@@ -7255,6 +7512,13 @@ DWORD WINAPI InitializeRuntime(void*) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: the executable does not match every declared runtime capability profile.");
     }
+    if (!InstallGogStandardMods()) {
+        StopGogStandardModLaunch(
+            "GOG Standard manifest registration could not be installed: invalid paths or unaudited stock loader bytes.");
+    }
+    if (!InstallGogWorkshopQuests()) {
+        StopGogQuestLaunch("GOG quest registration could not be installed: invalid paths or unaudited stock loader bytes.");
+    }
     if (privateRewardFlagRecipes && !PrepareRewardFlagRuntimeRecords()) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: private reward flag callbacks could not be prepared from stock Fl00.");
@@ -7262,7 +7526,7 @@ DWORD WINAPI InitializeRuntime(void*) {
     if (g_runtimeFeatureRegistry.mapFogQuery || g_runtimeFeatureRegistry.movementQuery ||
         g_runtimeFeatureRegistry.nativeTiming) {
         RequireManagerRuntimeInstall(
-            InstallMapQueryRuntime(g_imageBase, g_buildProfile == &kPublicBuildProfile,
+            InstallMapQueryRuntime(g_imageBase, g_buildProfile->buildId,
                 g_runtimeFeatureRegistry.mapFogQuery, g_runtimeFeatureRegistry.movementQuery,
                 g_runtimeFeatureRegistry.nativeTiming ? &g_runtimeFeatureRegistry : nullptr),
             managerLaunch, "The stock GPL interface registration boundary did not match its profile.");

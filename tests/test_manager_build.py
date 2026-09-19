@@ -66,7 +66,7 @@ from majesty_cam.manager.compatibility import (
     ResolutionOwner,
     load_compatibility_registry,
 )
-from majesty_cam.manager.preflight import PreparedMergeMod
+from majesty_cam.manager.preflight import PreparedMergeMod, _package_file_inputs
 from majesty_cam.package import (
     ModDefinition, ModPackage, ModMetadata, LocalizedText,
     parse_mod_definition, mod_definition_mapping,
@@ -1374,6 +1374,62 @@ class ManagerBuildPlanTests(unittest.TestCase):
                     game_path=game,
                     phase="after symlink",
                 )
+
+    def test_revalidation_keeps_installation_identity_and_refreshes_package_hashes(self):
+        from majesty_cam.manager.qol_service import PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH
+        from test_manager_qol_service import _write_synthetic_exe
+        import shutil
+
+        registry = CompatibilityRegistry(specs={})
+        for branch in (PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH):
+            with self.subTest(branch=branch.key), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                game = root / "game"
+                _write_stock_activity_inputs(game)
+                executable = game / "MajestyHD.exe"
+                _write_synthetic_exe(executable, branch)
+                package_root = root / "MergeMod"
+                package_root.mkdir()
+                payload = package_root / "fixture.cam"
+                payload.write_bytes(b"original CAM")
+                (package_root / "fixture.mmxml").write_text(
+                    f'<Majesty><Mod id="{{{OTHER_ID}}}"><Cam>fixture.cam</Cam></Mod></Majesty>',
+                    encoding="utf-8",
+                )
+                prepared = replace(
+                    _prepared(OTHER_ID, "Other CAM", package_root, registry=registry),
+                    package_file_inputs=_package_file_inputs(package_root, definition=None),
+                )
+                self.assertIn("fixture.cam", dict(prepared.package_file_inputs))
+                catalog = Catalog(entries=(_merge_entry(OTHER_ID, "Other CAM", package_root),))
+                with patch("majesty_cam.manager.build.prepare_merge_package", return_value=prepared), patch(
+                    "majesty_cam.manager.build.discover_selected_private_activity_texts", return_value=()
+                ):
+                    plan = create_build_plan(catalog, {OTHER_ID: True}, registry=registry, game_path=game)
+                self.assertTrue(plan.valid)
+
+                # Installing a helper changes EXE metadata, not its build identity
+                # or the stock data used for composition.
+                _write_synthetic_exe(executable, branch, appended_section=True)
+                for phase in ("before composition", "before launch"):
+                    _require_current_plan_sources(plan, game_path=game, phase=phase)
+
+                other_game = root / "other-install"
+                shutil.copytree(game, other_game)
+                with self.assertRaisesRegex(ManagerBuildError, "changed before composition"):
+                    _require_current_plan_sources(plan, game_path=other_game, phase="before composition")
+
+                different_branch = PUBLIC_BRANCH if branch != PUBLIC_BRANCH else GOG_BRANCH
+                _write_synthetic_exe(executable, different_branch)
+                with self.assertRaisesRegex(ManagerBuildError, "changed before launch"):
+                    _require_current_plan_sources(plan, game_path=game, phase="before launch")
+                _write_synthetic_exe(executable, branch, appended_section=True)
+
+                # The fresh identity must not mask a real change behind cached
+                # package_file_inputs from preflight.
+                payload.write_bytes(b"changed CAM")
+                with self.assertRaisesRegex(ManagerBuildError, "changed before composition"):
+                    _require_current_plan_sources(plan, game_path=game, phase="before composition")
 
     def test_prepare_does_not_reparse_an_unchanged_package(self):
         registry = CompatibilityRegistry(specs={})

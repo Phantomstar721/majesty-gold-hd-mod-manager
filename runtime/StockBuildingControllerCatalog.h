@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MajestyBuildId.h"
 #include <cstddef>
 #include <cstdint>
 
@@ -107,6 +108,33 @@ static const ClassProfiles kClassProfiles[] = {
      {0x00357604u, 17, 0x000BA470u, 0x000BA2E0u, 0x000B9F80u, 0x000BA2F0u}},
 };
 
+static const VtableProfile kGogClassProfiles[] = {
+    {0x00354F94u, 17, 0x00096D20u, 0x00096990u, 0x00097670u, 0x00096F30u},
+    {0x00354F58u, 13, 0x00095CA0u, 0x00096750u, 0x00096550u, 0x000967B0u},
+    {0x00355084u, 13, 0x0009A120u, 0x0009A3C0u, 0x0009A140u, 0x0009A3D0u},
+    {0x0035518Cu, 13, 0x0009F130u, 0x0009F460u, 0x0009F4F0u, 0x0009F490u},
+    {0x003552B4u, 13, 0x000A1200u, 0x000A11B0u, 0x000A11C0u, 0x000A11F0u},
+    {0x00356344u, 17, 0x000B2670u, 0x000B1E40u, 0x000B1F30u, 0x000B2440u},
+    {0x003555C4u, 13, 0x000A5C20u, 0x000A5C40u, 0x000A5C50u, 0x00097C70u},
+    {0x00355614u, 14, 0x000A5DB0u, 0x000A5DE0u, 0x000A5FE0u, 0x000A5E00u},
+    {0x00355698u, 13, 0x000A6670u, 0x000A64D0u, 0x000A62F0u, 0x000A6550u},
+    {0x003556D4u, 17, 0x000A6C00u, 0x000A6A40u, 0x000A6A50u, 0x000A6BA0u},
+    {0x00355E64u, 17, 0x000AB050u, 0x000AB290u, 0x000AB2A0u, 0x00096F30u},
+    {0x003563CCu, 13, 0x000B2C00u, 0x000B2C20u, 0x000B2C30u, 0x000B2C60u},
+    {0x00356404u, 17, 0x000B2D40u, 0x000B2EB0u, 0x000B3010u, 0x000B3160u},
+    {0x00356484u, 17, 0x000B3EB0u, 0x000B40C0u, 0x000B3EE0u, 0x000B40E0u},
+    {0x0035652Cu, 13, 0x000B4920u, 0x000B45E0u, 0x000B45F0u, 0x000B4670u},
+    {0x00355594u, 11, 0x000A5A40u, 0x000A5AB0u, 0x000A5AE0u, 0x000A5B10u},
+    {0x00355210u, 11, 0x000A00D0u, 0x000A0500u, 0x000A0650u, 0x000A07B0u},
+    {0x003567D0u, 13, 0x000BBE10u, 0x000BBCB0u, 0x000BBA80u, 0x000BBCC0u},
+    {0x00356874u, 13, 0x000BCB00u, 0x000BCB60u, 0x000BCB70u, 0x000BCBA0u},
+    {0x003568ACu, 13, 0x000BCD00u, 0x000BCD60u, 0x000BCD70u, 0x000BCDA0u},
+    {0x003569A4u, 13, 0x000BDF30u, 0x000BE2A0u, 0x000BDF90u, 0x000BE260u},
+    {0x0035696Cu, 13, 0x000BDD40u, 0x000BDDE0u, 0x000BDD60u, 0x000BDE10u},
+    {0x003569DCu, 13, 0x000BE3D0u, 0x000BE2B0u, 0x000BE2C0u, 0x000BE2D0u},
+    {0x0035675Cu, 17, 0x000BAA70u, 0x000BA8E0u, 0x000BA580u, 0x000BA8F0u},
+};
+
 static const ControllerRecord kControllerRecords[] = {
     {0x31305041u, ControllerClass::Guild},  // AP01
     {0x32305041u, ControllerClass::Ap02},   // AP02
@@ -161,13 +189,16 @@ inline const ControllerRecord* Find(std::uint32_t controllerId) {
 }
 
 inline const VtableProfile* Profile(
-    const ControllerRecord* record, bool beta2) {
+    const ControllerRecord* record, MajestyBuildId buildId) {
     if (record == nullptr) return nullptr;
     const std::size_t index = static_cast<std::size_t>(record->controllerClass);
     if (index >= sizeof(kClassProfiles) / sizeof(kClassProfiles[0])) return nullptr;
-    return beta2
-        ? &kClassProfiles[index].beta2Build
-        : &kClassProfiles[index].publicBuild;
+    switch (buildId) {
+    case MajestyBuildId::SteamPublic: return &kClassProfiles[index].publicBuild;
+    case MajestyBuildId::SteamBeta2: return &kClassProfiles[index].beta2Build;
+    case MajestyBuildId::Gog: return &kGogClassProfiles[index];
+    default: return nullptr;
+    }
 }
 
 inline bool IsSupported(std::uint32_t controllerId) {

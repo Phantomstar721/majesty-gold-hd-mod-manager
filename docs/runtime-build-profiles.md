@@ -1,7 +1,8 @@
 # Runtime executable profiles
 
-The Majesty Mod Manager native runtime supports two explicit 32-bit Steam
-Majesty executables.
+The Majesty Mod Manager native runtime retains two explicit 32-bit Steam
+profiles and an audited GOG 1.5.2.28 profile. See
+[GOG audit and availability](gog-support.md) for capabilities and limitations.
 It selects the profile from the loaded PE timestamp, then validates every hook
 site before modifying the process. An unknown timestamp or mismatched byte
 guard stops installation before any hook is written.
@@ -10,6 +11,7 @@ guard stops installation before any hook is written.
 |---|---:|---:|---|
 | `public-1.5.2.24` | 1.5.2.24 | `0x5897B72F` | `AA9BE61DC095773CCC5C08B9E5729A30EE856258249371C5189CE52FB675DB00` |
 | `beta2-1.5.2.28` | 1.5.2.28 | `0x5A8A11D5` | `99848B5DB16CC3EA540D7E909CB24966AD9F3CD15D302CDE47AAB3BA81E3167E` |
+| `gog-1.5.2.28` | 1.5.2.28 | `0x5BBB8DB8` | `65C6DD32C3D873C2E320BDAA2DE1B00488AF85B44573FD0FD82F79A2FFD37792` |
 
 The optional Mod Manager activity-text hook has its own conditional profile
 guard. Its stock lifecycle, resolver RVAs, exact bytes, registry protocol, and

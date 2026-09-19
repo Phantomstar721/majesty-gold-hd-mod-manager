@@ -1,0 +1,180 @@
+{
+  "executable_sha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+  "ranges": [
+    {
+      "rva": "0xEFCBB",
+      "size": 54,
+      "fnv1a": "0x8AAD89BD",
+      "sha256": "6e338478751cc6cbea950cce5ae554c1d455b9779e9445108080d1ee1f8f93a9",
+      "label": "last local quest scan and finalize boundary"
+    },
+    {
+      "rva": "0x119650",
+      "size": 612,
+      "fnv1a": "0x323303FB",
+      "sha256": "5fc4e1bc934ec51e2ecc61f95d9acc7cab723f6a604e8cb784e21368bd5c4727",
+      "label": "recursive quest directory scanner"
+    },
+    {
+      "rva": "0x1195A0",
+      "size": 166,
+      "fnv1a": "0xCE487C09",
+      "sha256": "c2afee40b1696955f4037724aa0ca67b34817afa971871bb17cd2ac405b394a2",
+      "label": "quest manifest XML load and release"
+    },
+    {
+      "rva": "0x119520",
+      "size": 128,
+      "fnv1a": "0x4B8C414A",
+      "sha256": "21c587e8f144e302d61564bd635757ce8c6fd1ae99822bad507d8193a5afa3a7",
+      "label": "Quest node iteration"
+    },
+    {
+      "rva": "0x119380",
+      "size": 403,
+      "fnv1a": "0x753FCE1F",
+      "sha256": "89344b3b9a51fc0727fe31bb8ae9189f29a64fafd1ab7fb193c0ed96c694285f",
+      "label": "Quest registration and native duplicate handling"
+    },
+    {
+      "rva": "0x117F60",
+      "size": 172,
+      "fnv1a": "0x526800E8",
+      "sha256": "5945f0bc23dce57566f27250920a512712ab6c9ae7ab7093bedd797d64801d0b",
+      "label": "quest lookup by native GUID key"
+    },
+    {
+      "rva": "0x136B10",
+      "size": 182,
+      "fnv1a": "0xD772D17E",
+      "sha256": "280b623f655102501660222e2a622692570e90b9e2f6c4b8e9f2cb928bca635a",
+      "label": "native GUID key mapping"
+    },
+    {
+      "rva": "0x113860",
+      "size": 180,
+      "fnv1a": "0xCF7E171A",
+      "sha256": "19447aac16dc70c1b5eb63ede9e4f7d1a74a021fb9b52070767730c822720416",
+      "label": "Quest construction using stock Mod initialization"
+    },
+    {
+      "rva": "0x136C20",
+      "size": 298,
+      "fnv1a": "0xA801A6C9",
+      "sha256": "8b1fb35d1fe7a81f6d1534622e7eb640af64647ddb9a7cb0ce5e6fdb6ed46140",
+      "label": "GUID storage and XML document retention"
+    },
+    {
+      "rva": "0x113A30",
+      "size": 72,
+      "fnv1a": "0xFC67EB68",
+      "sha256": "dc6069ebd298ac30f38377b71658606f74afa80b57ab33f33536bf0a9d8b0019",
+      "label": "Quest destruction"
+    },
+    {
+      "rva": "0x135CE0",
+      "size": 119,
+      "fnv1a": "0x4CC980A2",
+      "sha256": "6516e0837750b51accc2c4ceb88d7f8fbbdebf1749f94ebc7a04df07e2bc6271",
+      "label": "base Mod destruction and XML release"
+    },
+    {
+      "rva": "0x118100",
+      "size": 50,
+      "fnv1a": "0x33340D66",
+      "sha256": "c10dda312e487afb0954e34a9dae658290f6f50f4dc6e10a43756a8786a0090c",
+      "label": "quest list insertion"
+    },
+    {
+      "rva": "0x1163C0",
+      "size": 168,
+      "fnv1a": "0x707EE74F",
+      "sha256": "7d9092aa3072ab2f606523222f1232bc0a1682b4709bf622f5ce3c3df6c60274",
+      "label": "quest list node construction"
+    },
+    {
+      "rva": "0x11A940",
+      "size": 108,
+      "fnv1a": "0xF24949DD",
+      "sha256": "e20927684c69c52e16646e7b8ecbfc3a2faeda78f5e8f81b5a0fe410392f4333",
+      "label": "quest list sentinel initialization"
+    },
+    {
+      "rva": "0x11A9B0",
+      "size": 105,
+      "fnv1a": "0xF99E0BEB",
+      "sha256": "0c1e3e6f5a7f8617621564e9bd9329043bd33bd22354111dc7127085e3f7f7a4",
+      "label": "quest list destruction"
+    },
+    {
+      "rva": "0x11CD90",
+      "size": 273,
+      "fnv1a": "0xF34F87E0",
+      "sha256": "b1dbae8d402f40eee46b33061cda3f2fb7b5bf1bc56e121130adb626eac6ecd2",
+      "label": "quest manager destruction"
+    },
+    {
+      "rva": "0x11CEB0",
+      "size": 1348,
+      "fnv1a": "0x4901AD19",
+      "sha256": "8cdd2067a9e4f8aad291183b1ad8c20f663aae104edd3a4ad56d89c4f8662599",
+      "label": "quest manager construction"
+    },
+    {
+      "rva": "0x11D400",
+      "size": 111,
+      "fnv1a": "0x10A1B92F",
+      "sha256": "0e9593c3905ba1e0501069e80f951e78e7f454d28a1587cc6bcd49db198ac1cd",
+      "label": "quest manager lazy creation"
+    },
+    {
+      "rva": "0x11DC90",
+      "size": 39,
+      "fnv1a": "0x41415D2E",
+      "sha256": "b94ad631941d93d29781d8f413ff3f5f73dd1b753a6488e1003365c053aff952",
+      "label": "quest manager destruction and owner clear"
+    },
+    {
+      "rva": "0xEF027",
+      "size": 5,
+      "fnv1a": "0x40B58505",
+      "sha256": "531ec1a93ecb2c80abb4cd90e8a2f04690556c5bcf7bf281fb318460acec8f9b",
+      "label": "stock resource teardown calls quest cleanup"
+    },
+    {
+      "rva": "0xF9DA0",
+      "size": 275,
+      "fnv1a": "0x81FF5494",
+      "sha256": "a33404bc9323380293f43ada0a56bd18281d7a3d157e9482ec79aeefc1445129",
+      "label": "XML manifest-relative resource directory"
+    },
+    {
+      "rva": "0x286530",
+      "size": 301,
+      "fnv1a": "0x55DDD320",
+      "sha256": "0f0ed0dd311c9d2d83c377ec2649bb61233eedf0c01fbc694248af661f4ead51",
+      "label": "native GUID parsing"
+    },
+    {
+      "rva": "0x2864B0",
+      "size": 128,
+      "fnv1a": "0xE682F849",
+      "sha256": "3e3a79098276ea810e216dc4e9625e28caaada8834096c3a29369e4320a23491",
+      "label": "native GUID hex parser"
+    },
+    {
+      "rva": "0x23C370",
+      "size": 69,
+      "fnv1a": "0x22529BDF",
+      "sha256": "506880c93f89182eed627e6bcc5bf842c293d7661fd2801f80470bf000a9d385",
+      "label": "stock string construction"
+    },
+    {
+      "rva": "0x23C520",
+      "size": 33,
+      "fnv1a": "0x788DA9A2",
+      "sha256": "52952ca379150ac317991d649d0edc62fe73a071c2841575521252af18514046",
+      "label": "stock string destruction"
+    }
+  ]
+}

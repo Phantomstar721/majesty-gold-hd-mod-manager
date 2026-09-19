@@ -19,13 +19,13 @@ void VerifyPrivateRecruitmentProfile(const char* environment, bool beta) {
     }
     using namespace MajestyPrivateRecruitment;
     const auto base = reinterpret_cast<std::uintptr_t>(image.data());
-    assert(Validate(base, beta));
+    assert(Validate(base, beta ? MajestyBuildId::SteamBeta2 : MajestyBuildId::SteamPublic));
     const auto* profile = beta ? kBeta : kPublic;
     image[profile[0].rva + 10] ^= 1;
-    assert(!Validate(base, beta));
+    assert(!Validate(base, beta ? MajestyBuildId::SteamBeta2 : MajestyBuildId::SteamPublic));
     image[profile[0].rva + 10] ^= 1;
     Presenters privateRows;
-    assert(privateRows.Initialize(base, beta, 0x7301));
+    assert(privateRows.Initialize(base, beta ? MajestyBuildId::SteamBeta2 : MajestyBuildId::SteamPublic, 0x7301));
     for (unsigned index = 0; index < 9; ++index) {
         const auto which = index < 3 ? 0u : index < 6 ? 1u : index-4;
         const auto choice = index < 6 ? index % 3 : 0;
@@ -52,7 +52,7 @@ void VerifyPrivateRecruitmentProfile(const char* environment, bool beta) {
         }
         assert(std::memcmp(copy, expected.data(), code.size) == 0);
     }
-    assert(Validate(base, beta)); // stock source remained untouched
+    assert(Validate(base, beta ? MajestyBuildId::SteamBeta2 : MajestyBuildId::SteamPublic)); // stock source remained untouched
 }
 unsigned recruitIndexSeen = 99;
 void* recruitControllerSeen = nullptr;

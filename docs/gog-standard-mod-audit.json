@@ -1,0 +1,166 @@
+{
+  "executable_sha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+  "ranges": [
+    {
+      "rva": "0xEFCF1",
+      "size": 43,
+      "fnv1a": "0xEAE5B8A2",
+      "sha256": "e4d81c64757ba32bc64c20135227a801444e87d2678aef5582175bfc7866a522",
+      "label": "startup scan arguments and call"
+    },
+    {
+      "rva": "0x139890",
+      "size": 611,
+      "fnv1a": "0x91003D32",
+      "sha256": "cfe41314ee53ccaf97551719995a86f5019158e2543638a7a53b6889cefc8dfb",
+      "label": "recursive directory scan"
+    },
+    {
+      "rva": "0x1397E0",
+      "size": 161,
+      "fnv1a": "0xFC507074",
+      "sha256": "f49cad53d5d9d6b1b4054e158337f217d65c7f3e825e365b69a007721ba30ac1",
+      "label": "manifest XML load and registration"
+    },
+    {
+      "rva": "0x139760",
+      "size": 115,
+      "fnv1a": "0xA9C6AAAE",
+      "sha256": "6b4f749924b3fad21770453f3efe6f7765eec30effa9faad4ce4fcc542bcd697",
+      "label": "Mod node iteration"
+    },
+    {
+      "rva": "0x139590",
+      "size": 464,
+      "fnv1a": "0x2E689754",
+      "sha256": "9bef6d7140c166c634c097e818d9d841414adaebc6db69273cb0636d3d53775b",
+      "label": "Mod registration and installed-list insertion"
+    },
+    {
+      "rva": "0xF9DA0",
+      "size": 275,
+      "fnv1a": "0x81FF5494",
+      "sha256": "a33404bc9323380293f43ada0a56bd18281d7a3d157e9482ec79aeefc1445129",
+      "label": "XML manifest path and relative directory ownership"
+    },
+    {
+      "rva": "0x136E70",
+      "size": 173,
+      "fnv1a": "0x69CE5E6A",
+      "sha256": "8337f2d2bd40b2eb8465e9c6b3c740dacda778185bd3ca54212339b7504096db",
+      "label": "Mod construction"
+    },
+    {
+      "rva": "0x136C20",
+      "size": 298,
+      "fnv1a": "0xA801A6C9",
+      "sha256": "8b1fb35d1fe7a81f6d1534622e7eb640af64647ddb9a7cb0ce5e6fdb6ed46140",
+      "label": "Mod initialization and XML retention"
+    },
+    {
+      "rva": "0x135CE0",
+      "size": 119,
+      "fnv1a": "0x4CC980A2",
+      "sha256": "6516e0837750b51accc2c4ceb88d7f8fbbdebf1749f94ebc7a04df07e2bc6271",
+      "label": "Mod destruction and XML release"
+    },
+    {
+      "rva": "0x138370",
+      "size": 50,
+      "fnv1a": "0x1A0915D9",
+      "sha256": "eb1d8ef6ee1cc39298e73f2530541c6af776e62969552f02e2d024358ed79732",
+      "label": "installed-list append"
+    },
+    {
+      "rva": "0x138EA0",
+      "size": 136,
+      "fnv1a": "0x426EC6C8",
+      "sha256": "8cb5c2b82062178d4f0722000ba9d787b041441939715a9006b88097b6f04a1b",
+      "label": "installed-list GUID lookup"
+    },
+    {
+      "rva": "0x138D90",
+      "size": 250,
+      "fnv1a": "0xD8A6FCB3",
+      "sha256": "5d6ef937b87543b8e5e0703162c883d86b9cc321326d187ca9a53006062d7f99",
+      "label": "stock installed and active list cleanup"
+    },
+    {
+      "rva": "0xEF068",
+      "size": 10,
+      "fnv1a": "0xDF51C9F9",
+      "sha256": "dc551b85c0f7eaf13b776c2d9d8779db59ae02bef8dc493e5e55f2521d6daa83",
+      "label": "resource teardown dispatch to mod cleanup"
+    },
+    {
+      "rva": "0x349AA0",
+      "size": 22,
+      "fnv1a": "0x2C2E8587",
+      "sha256": "be3a389393a346e55f29a181a717e6298e19204eba0bc9f590a2bb13c3b11f4d",
+      "label": "CRT installed-list initialization"
+    },
+    {
+      "rva": "0x31CAB0",
+      "size": 10,
+      "fnv1a": "0x958EFF8F",
+      "sha256": "8ddc6b3d23df86da967ce7575139fb8e6e59cf8adb5e9b0533a51103d191ac10",
+      "label": "CRT installed-list destruction"
+    },
+    {
+      "rva": "0x136AA0",
+      "size": 108,
+      "fnv1a": "0xAC4B183F",
+      "sha256": "9a3d3c0393fd4cff3f23434c207c389abf534999df4c91d2bb0805e336b3c524",
+      "label": "list sentinel construction"
+    },
+    {
+      "rva": "0x1366E0",
+      "size": 89,
+      "fnv1a": "0x1D5B21FF",
+      "sha256": "331631a643ab9743d0bbc23f4b0014ee31b83b665090b15c5b59a0f6bbdc00f1",
+      "label": "list destruction"
+    },
+    {
+      "rva": "0x35B1A4",
+      "size": 28,
+      "fnv1a": "0x23329486",
+      "sha256": "55bc8debf8c566025e723c0c1766553d15671dcbc19ff283320238de62514745",
+      "label": "Mod interface vtable"
+    },
+    {
+      "rva": "0x286530",
+      "size": 301,
+      "fnv1a": "0x55DDD320",
+      "sha256": "0f0ed0dd311c9d2d83c377ec2649bb61233eedf0c01fbc694248af661f4ead51",
+      "label": "native GUID text parser"
+    },
+    {
+      "rva": "0x2864B0",
+      "size": 128,
+      "fnv1a": "0xE682F849",
+      "sha256": "3e3a79098276ea810e216dc4e9625e28caaada8834096c3a29369e4320a23491",
+      "label": "native GUID hex parser"
+    },
+    {
+      "rva": "0x50E70",
+      "size": 110,
+      "fnv1a": "0x70EF8E7B",
+      "sha256": "54c4393fd3c44aee3dacfe9e551db0870e925efc81a9e6283231f7569bd6cadf",
+      "label": "native GUID equality"
+    },
+    {
+      "rva": "0x23C370",
+      "size": 69,
+      "fnv1a": "0x22529BDF",
+      "sha256": "506880c93f89182eed627e6bcc5bf842c293d7661fd2801f80470bf000a9d385",
+      "label": "native narrow string construction"
+    },
+    {
+      "rva": "0x23C520",
+      "size": 33,
+      "fnv1a": "0x788DA9A2",
+      "sha256": "52952ca379150ac317991d649d0edc62fe73a071c2841575521252af18514046",
+      "label": "native narrow string destruction"
+    }
+  ]
+}

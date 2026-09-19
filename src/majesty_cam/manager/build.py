@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -69,10 +69,12 @@ from ..stock_controller_registry import (
 from .catalog import Catalog, CatalogEntry, CatalogKind
 from .compatibility import CompatibilityRegistry
 from .paths import ManagerPaths
-from .preflight import PreparedMergeMod, prepare_merge_package
+from .preflight import PreparedMergeMod, _package_file_inputs, prepare_merge_package
 from .profile import normalize_guid
 from .profile_lock import ProfileLockError, acquire_merged_profile_lock
 from .startup_cache import metadata_signature, package_input_metadata_signature
+from .runtime_profiles import runtime_installation_identity, unsupported_runtime_capabilities
+from .qol_service import GOG_BRANCH
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
@@ -619,12 +621,23 @@ def create_build_plan(
     if private_activity_texts:
         capabilities.add(PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY)
 
+    runtime_identity = runtime_installation_identity(game_path)
+    unavailable = unsupported_runtime_capabilities(
+        GOG_BRANCH if runtime_identity[1] == "gog" else None, capabilities
+    )
+    if unavailable:
+        issues.append(BuildIssue(
+            "unaudited_runtime_profile",
+            "GOG support is not yet audited for: " + ", ".join(unavailable),
+        ))
+
     compatibility_file_inputs = tuple(
         sorted(compatibility_file_hashes.items(), key=lambda item: item[0].casefold())
     )
 
     fingerprint = _plan_fingerprint(
         prepared,
+        runtime_identity=runtime_identity,
         owner_resolutions=owner_resolutions,
         semantic_resolutions=semantic_resolutions,
         runtime_capabilities=capabilities,
@@ -1251,6 +1264,7 @@ def _parse_resolution_source(path: Path) -> tuple[SemanticItem, ...]:
 def _plan_fingerprint(
     prepared: Sequence[PreparedMergeMod],
     *,
+    runtime_identity: tuple[str, str] = ("", ""),
     owner_resolutions: Mapping[tuple[DefinitionKind, str], str],
     semantic_resolutions: Mapping[
         tuple[DefinitionKind, str], ScopedSemanticResolution
@@ -1314,6 +1328,7 @@ def _plan_fingerprint(
             )
             for (kind, name), resolution in semantic_resolutions.items()
         ),
+        "runtime_installation": runtime_identity,
         "runtime_capabilities": sorted(runtime_capabilities),
         "runtime_feature_registry_sha256": hashlib.sha256(
             encode_runtime_feature_registry(runtime_feature_registry)
@@ -1367,8 +1382,16 @@ def _require_current_plan_sources(
         return
     try:
         stock_compose_inputs = _fingerprint_stock_compose_inputs(game_path, plan.selected_merge)
+        # A metadata change invalidates preflight's cached package hashes too.
+        current_prepared = tuple(
+            replace(item, package_file_inputs=_package_file_inputs(
+                item.effective_root, definition=None
+            )) if item.package_file_inputs is not None else item
+            for item in plan.selected_merge
+        )
         current = _plan_fingerprint(
-            plan.selected_merge,
+            current_prepared,
+            runtime_identity=runtime_installation_identity(game_path),
             owner_resolutions=plan.resolution_owners,
             semantic_resolutions=plan.semantic_resolutions,
             runtime_capabilities=set(plan.runtime_capabilities),
@@ -1415,6 +1438,7 @@ def _plan_source_metadata_signature(
     )
     paths.extend(Path(raw_path) for raw_path, _sha256 in compatibility_file_inputs)
     if game_path is not None:
+        paths.append(game_path / "MajestyHD.exe")
         paths.extend(
             game_path / Path(relative)
             for relative, _sha256 in stock_compose_inputs

@@ -30,12 +30,12 @@ $runtimeSource = Join-Path $repoRoot "local\manager-runtime-release"
 $visitorRepo = if ($GenericVisitorListsRoot) {
     [IO.Path]::GetFullPath($GenericVisitorListsRoot)
 } else {
-    Join-Path $WorkspaceRoot "majesty-gold-hd-generic-visitor-lists"
+    Join-Path $repoRoot "helpers\generic-visitor-lists"
 }
 $rememberRepo = if ($RememberActiveModsRoot) {
     [IO.Path]::GetFullPath($RememberActiveModsRoot)
 } else {
-    Join-Path $WorkspaceRoot "majesty-gold-hd-remember-active-mods"
+    Join-Path $repoRoot "helpers\remember-active-mods"
 }
 $qolRepo = if ($QolUtilitiesRoot) {
     [IO.Path]::GetFullPath($QolUtilitiesRoot)
@@ -113,6 +113,22 @@ try {
     $qolTarget = Join-Path $stage "qol\utilities"
     New-Item -ItemType Directory -Path (Split-Path -Parent $qolTarget) -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $qolRepo "utilities") -Destination $qolTarget -Recurse
+    # The required helpers are owned and audited here, including their restore
+    # scripts. Keep the full-suite and launch payload on the same revision.
+    foreach ($helper in @(
+        @{ Source = $visitorRepo; Name = "Generic Visitor Lists" },
+        @{ Source = $rememberRepo; Name = "Remember Active Mods" },
+        @{ Source = (Join-Path $repoRoot "helpers\downloadable-quests-shortcut"); Name = "Downloadable Quests Shortcut" },
+        @{ Source = (Join-Path $repoRoot "helpers\quest-map-drag"); Name = "Quest Map Drag" },
+        @{ Source = (Join-Path $repoRoot "helpers\unlock-all-quests"); Name = "Unlock All Quests" },
+        @{ Source = (Join-Path $repoRoot "helpers\suppress-all-message-flags"); Name = "Suppress All Message Flags" },
+        @{ Source = (Join-Path $repoRoot "helpers\remember-game-speed"); Name = "Remember Game Speed" },
+        @{ Source = (Join-Path $repoRoot "helpers\remember-camera-zoom"); Name = "Remember Camera Zoom" },
+        @{ Source = (Join-Path $repoRoot "helpers\lower-tracking-window"); Name = "Lower Tracking Window" }
+    )) {
+        $helperTarget = Join-Path $qolTarget ($helper.Name + "\scripts")
+        Copy-Item -Path (Join-Path $helper.Source "scripts\*.ps1") -Destination $helperTarget -Force
+    }
     Copy-Item -LiteralPath (Join-Path $qolRepo "LICENSE") -Destination (Join-Path $stage "qol\LICENSE-qol-utilities.txt")
 
     $modsTarget = Join-Path $stage "mods\CustomGuildPhantomsHauntExpanded"

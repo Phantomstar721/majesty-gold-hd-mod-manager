@@ -1,4 +1,5 @@
 from pathlib import Path
+from dataclasses import replace
 from types import SimpleNamespace
 import json
 import sys
@@ -26,6 +27,8 @@ from majesty_cam.manager.paths import ManagerPaths
 from majesty_cam.manager.preflight import PreparedMergeMod
 from majesty_cam.manager.qol import QolPatchStatus
 from majesty_cam.manager.qol_service import (
+    GOG_BRANCH,
+    QOL_PATCHES,
     PUBLIC_BRANCH,
     QolCatalogSnapshot,
     QolPatchSpec,
@@ -207,6 +210,10 @@ class ManagerControllerTests(unittest.TestCase):
             controller = ManagerController(
                 paths=paths, registry=CompatibilityRegistry(specs={})
             )
+            standard = replace(_entry(STANDARD_ID, "Standard", paths.local_mods_root / "standard"),
+                               kind=CatalogKind.STANDARD, source=CatalogSource.WORKSHOP, has_cam=False)
+            unselected = replace(standard, content_id=VARIANT_A_ID)
+            controller.catalog = Catalog(entries=(standard, unselected))
             controller.plan = BuildPlan(
                 selected_standard_ids=(STANDARD_ID,),
                 selected_merge=(),
@@ -230,6 +237,7 @@ class ManagerControllerTests(unittest.TestCase):
                 controller.launch()
 
             self.assertIsNone(launch.call_args.kwargs["intent_registry"])
+            self.assertEqual(launch.call_args.kwargs["standard_mods"], (standard,))
             capability_path = launch.call_args.kwargs["capability_manifest"]
             self.assertEqual(capability_path, paths.empty_runtime_capability_manifest)
             self.assertEqual(capability_path.read_bytes(), encode_runtime_capability_manifest(()))
@@ -708,6 +716,41 @@ class ManagerControllerTests(unittest.TestCase):
             self.assertTrue(cached.utilities[0].installed)
             self.assertFalse(cached.utilities[1].installed)
 
+    def test_required_helper_removal_refreshes_cache_and_blocks_prepare_and_launch(self):
+        specs = tuple(spec for spec in QOL_PATCHES if spec.required_by_manager)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = _manager_paths(root, runtime_ready=True)
+            _write_synthetic_exe(paths.game_executable, GOG_BRANCH)
+            for spec in specs:
+                scripts = paths.repo_root / "payload" / "qol" / spec.payload_slug
+                scripts.mkdir(parents=True)
+                (scripts / spec.install_script_name).write_text("")
+                (scripts / spec.remove_script_name).write_text("")
+            runner = _MultiQolRunner(specs)
+            runner.installed = {spec.key: True for spec in specs}
+            service = QolService(repo_root=paths.repo_root, game_executable=paths.game_executable,
+                prefs_path=root / "prefs", specs=specs, runner=runner)
+            controller = ManagerController(paths=paths, registry=CompatibilityRegistry(specs={}))
+            controller.qol_service = service
+            controller._set_qol_catalog(service.inspect())
+            controller._qol_checked = True
+            self.assertTrue(controller.snapshot().can_launch)
+            for spec in specs:
+                runner.commands.clear()
+                removed = controller.change_qol(spec.key, False)
+                self.assertEqual(len(runner.commands), 1)
+                self.assertEqual(Path(runner.commands[0][5]).name, spec.remove_script_name)
+                self.assertFalse(removed.can_build)
+                self.assertFalse(removed.can_launch)
+                cached = StartupCache.load(paths.startup_cache_path).get_qol(
+                    qol_input_signature(service), service)
+                self.assertFalse(cached.get(spec.key).installed)
+                self.assertTrue(cached.get(spec.key).can_install)
+                restored = controller.change_qol(spec.key, True)
+                self.assertTrue(controller._required_qol_ready())
+                self.assertTrue(restored.can_launch)
+
     def test_select_game_executable_rebinds_and_remembers_supported_build(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -743,13 +786,28 @@ class ManagerControllerTests(unittest.TestCase):
             unknown = root / "alternate" / "MajestyHD.exe"
             unknown.parent.mkdir(parents=True)
             unknown.write_bytes(b"not Majesty")
-            with self.assertRaisesRegex(ValueError, "Standard or beta2"):
+            with self.assertRaisesRegex(ValueError, "Steam or GOG"):
                 controller.select_game_executable(unknown)
 
             renamed = root / "alternate" / "MajestyBackup.exe"
             _write_synthetic_exe(renamed, PUBLIC_BRANCH)
             with self.assertRaisesRegex(ValueError, "MajestyHD.exe"):
                 controller.select_game_executable(renamed)
+
+    def test_switch_followed_by_scan_plans_only_once(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = _manager_paths(root)
+            selected = root / "alternate/MajestyHD.exe"
+            selected.parent.mkdir()
+            _write_synthetic_exe(selected, PUBLIC_BRANCH)
+            controller = ManagerController(paths=paths, registry=CompatibilityRegistry(specs={}))
+            with patch.object(controller, "_replan", wraps=controller._replan) as replan:
+                controller.select_game_executable(selected, replan=False)
+                replan.assert_not_called()
+                self.assertFalse(controller._required_qol_ready())
+                controller.scan(force_refresh=True, inspect_qol=False)
+                replan.assert_called_once()
 
 
 def _manager_paths(root: Path, *, runtime_ready: bool = False) -> ManagerPaths:

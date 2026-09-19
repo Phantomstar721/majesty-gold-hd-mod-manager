@@ -41,9 +41,12 @@ from .qol_service import (
 )
 
 
-STARTUP_CACHE_SCHEMA_VERSION = 3
+STARTUP_CACHE_SCHEMA_VERSION = 4
 STARTUP_CACHE_FILENAME = "startup-cache.json"
+QOL_CACHE_SCHEMA_VERSION = 1
+_MAX_QOL_INSTALLATIONS = 8
 _STOCK_PREFLIGHT_INPUTS = (
+    Path("MajestyHD.exe"),
     Path("DataMX/mx_gpltext.cam"),
     Path("SDK/OriginalQuests/GPLMx/mx_defines.gpl"),
 )
@@ -71,6 +74,18 @@ class StartupCache:
         qol = value.get("qol")
         if not isinstance(qol, dict):
             qol = None
+        # Older Managers replace the shared startup cache with their own
+        # schema. Keep helper evidence in a separate, independently versioned
+        # file so opening one cannot evict this Manager's installation checks.
+        # The embedded v4 entry remains a migration fallback.
+        try:
+            qol_value = json.loads(path.with_suffix(".qol.json").read_text(encoding="utf-8"))
+            if (isinstance(qol_value, dict)
+                    and qol_value.get("schema_version") == QOL_CACHE_SCHEMA_VERSION
+                    and isinstance(qol_value.get("qol"), dict)):
+                qol = qol_value["qol"]
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            pass
         managed_build = value.get("managed_build")
         if not isinstance(managed_build, dict):
             managed_build = None
@@ -149,6 +164,15 @@ class StartupCache:
         self, signature: str, service: QolService
     ) -> QolCatalogSnapshot | None:
         raw = self.qol
+        if isinstance(raw, dict) and "installations" in raw:
+            rows = raw["installations"]
+            if not isinstance(rows, list):
+                return None
+            executable = str(service.game_executable.resolve(strict=False)).casefold()
+            raw = next((row for row in reversed(rows)
+                        if isinstance(row, dict) and row.get("game_executable") == executable), None)
+        # Accept the previous single-install cache only when its complete
+        # signature matches. The next inspection migrates it to the new shape.
         if not isinstance(raw, dict) or raw.get("signature") != signature:
             return None
         branch_key = raw.get("branch")
@@ -203,7 +227,12 @@ class StartupCache:
         ))
 
     def set_qol(self, signature: str, snapshot: QolCatalogSnapshot) -> None:
-        self.qol = {
+        executable = str(snapshot.game_executable.resolve(strict=False)).casefold()
+        previous = self.qol.get("installations", []) if isinstance(self.qol, dict) else []
+        rows = [row for row in previous
+                if isinstance(row, dict) and row.get("game_executable") != executable] if isinstance(previous, list) else []
+        rows.append({
+            "game_executable": executable,
             "signature": signature,
             "branch": snapshot.branch.key if snapshot.branch is not None else None,
             "utilities": [
@@ -217,7 +246,8 @@ class StartupCache:
                 }
                 for status in snapshot.utilities
             ],
-        }
+        })
+        self.qol = {"installations": rows[-_MAX_QOL_INSTALLATIONS:]}
 
     def get_managed_build(self, signature: str) -> dict[str, object] | None:
         raw = self.managed_build
@@ -268,12 +298,17 @@ class StartupCache:
         payload = {
             "schema_version": STARTUP_CACHE_SCHEMA_VERSION,
             "merge_preflight": self.preflight,
-            "qol": self.qol,
             "managed_build": self.managed_build,
             "catalog": self.catalog,
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            if self.qol is not None:
+                _atomic_write(
+                    self.path.with_suffix(".qol.json"),
+                    (json.dumps({"schema_version": QOL_CACHE_SCHEMA_VERSION,
+                                 "qol": self.qol}, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+                )
             _atomic_write(
                 self.path,
                 (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"),
@@ -323,7 +358,8 @@ def qol_input_signature(service: QolService) -> str:
     paths.extend(data.glob("UIData_*.dat"))
     scripts: dict[str, Path] = {}
     context = ["qol-inspection-v2", str(QOL_INSPECTION_CACHE_VERSION),
-               json.dumps([(spec.key, spec.installed_phrase, spec.preference_only)
+               json.dumps([(spec.key, spec.installed_phrase, spec.preference_only,
+                            spec.required_by_manager)
                            for spec in service.specs])]
     for spec in service.specs:
         patch = resolve_qol_patch(service.repo_root, spec)
