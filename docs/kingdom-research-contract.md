@@ -129,10 +129,16 @@ Description identifier of at most 64 characters, not a function or file path.
 Supply one package-owned `Unit/Overlay` Description cloned literally from stock
 `super_charge_effector` in `M_Overlays.xml`. Privatize its Name, ID, display text
 and ImageIDBase, and supply that private IMAG/art. DefaultSound may be changed
-to `0`. Keep the stock directionless, nonblocking, root-attached shape, menu 11,
-StackPriority 0, DialogID 0 and TransparentToMouse; do not add AttachmentPointID
-or behavior callbacks. Place the visual relative to the building through the
-private artwork's stock frame offsets, not a separate tracking controller.
+to `0`. Keep the stock directionless, nonblocking shape, menu 11, StackPriority 0,
+DialogID 0 and TransparentToMouse; do not add AttachmentPointID or behavior
+callbacks. Stock owns the effect under the building, but ownership does not
+make its visual origin the building origin: on a normal 2D building, the omitted
+AttachmentPointID resolves to Hotspot 1 in the parent's IMAG set 400. Register
+private artwork relative to that attachment using stock frame offsets and TILE
+hotspots, not a separate tracking controller. Preserve the native frame flags;
+they include layer visibility, not just mirroring. See the
+[stock overlay rendering audit](stock-overlay-rendering-audit.md) for the exact
+attachment, paired-stream and TILE-header rules.
 
 The Manager uses stock `CheckEffector`, `CreateEffector(..., 1, "Infinite")` and
 `DeleteEffector`. The effect is cosmetic: its presence never grants research.

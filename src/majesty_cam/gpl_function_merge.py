@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from collections import Counter
 from difflib import SequenceMatcher
 import re
-from typing import Mapping
+from typing import Callable, Mapping
 
 
 class FunctionMergeError(ValueError):
@@ -225,19 +225,219 @@ def _overlap(a, b):
     return a.start < b.end and b.start < a.end
 
 
-def _merge_node(base, variants, path):
+def _unparen(tokens):
+    while len(tokens) >= 2 and tokens[0] == "(" and tokens[-1] == ")":
+        depth = 0
+        for i, token in enumerate(tokens):
+            depth += (token == "(") - (token == ")")
+            if depth == 0:
+                break
+        if i != len(tokens) - 1:
+            break
+        tokens = tokens[1:-1]
+    return tokens
+
+
+def _literal_guard(tokens, operator):
+    tokens = _unparen(tokens)
+    # Deliberately only string properties, not arbitrary expressions, numeric
+    # coercion, agent aliases, or two different properties that happen to match.
+    if (len(tokens) == 5 and re.fullmatch(r"[a-z_][a-z_0-9]*", tokens[0])
+            and tokens[1] == "'s" and tokens[2].startswith('"')
+            and tokens[3] == operator and tokens[4].startswith('"')
+            and "\\" not in tokens[2] + tokens[4]):
+        return tokens[0], tokens[2], tokens[4]
+    return None
+
+
+class _GuardProof:
+    """Bounded, lazy source proof for disjoint single-branch insertions.
+
+    Stock uses property dispatch followed by ordinary if/else fall-through.
+    Preserve the entire original branch within that dispatch; never sort opaque
+    callbacks into a priority list. Helper guards are usable only when excluded
+    types return false before gameplay effects. No cross-build proof cache.
+    """
+
+    # Native queries used by stock travel/validity guards. GPL definitions take
+    # precedence, so a selected override cannot inherit this classification.
+    _QUERIES = frozenset(("haswaypoints", "isvalidgamepiece", "insidebuilding",
+                          "getattribute"))
+
+    def __init__(self, lookup):
+        self.lookup = lookup
+        self.parsed = {}
+        self.busy = set()
+        self.remaining = 256
+
+    def source(self, name):
+        if name not in self.parsed:
+            if len(self.parsed) >= 32:
+                raise FunctionMergeError("guard proof exceeds helper limit")
+            text = self.lookup(name) if self.lookup else None
+            self.parsed[name] = _Parser(text).function() if text else None
+        return self.parsed[name]
+
+    def readonly_expr(self, tokens):
+        if any(t in ("=", "+=", "-=", "*=", "/=", "<<", ">>") for t in tokens):
+            return False
+        for i, token in enumerate(tokens):
+            if i and token in ("+", "-") and tokens[i - 1] == token:
+                return False
+            if token == "(" and i:
+                previous = tokens[i - 1]
+                if (previous == ")" or previous.startswith('"')
+                        or re.fullmatch(r"[a-z_][a-z_0-9]*", previous)):
+                    return False  # attribute/local function-valued invocation
+            if token.startswith("$"):
+                if i + 1 >= len(tokens) or tokens[i + 1] != "(":
+                    return False  # function-valued/dynamic dispatch
+                if not self.readonly_function(token[1:]):
+                    return False
+        return True
+
+    def readonly_function(self, name):
+        if name in self.busy or len(self.busy) >= 16:
+            return False
+        parsed = self.source(name)
+        if parsed is None:
+            return name in self._QUERIES or name == "debugout"
+        self.busy.add(name)
+        try:
+            return self.readonly_nodes(parsed[2])
+        finally:
+            self.busy.remove(name)
+
+    def readonly_nodes(self, nodes):
+        for node in nodes:
+            self.remaining -= 1
+            if self.remaining < 0:
+                return False
+            if node.kind == "if":
+                if not (self.readonly_expr(node.head[2:-1])
+                        and self.readonly_nodes(node.body)
+                        and self.readonly_nodes(node.otherwise)):
+                    return False
+            elif node.kind == "statement" and node.head[0] == "return":
+                if not self.readonly_expr(node.head[1:-1]):
+                    return False
+            elif node.kind == "statement" and node.head[:2] == ("$debugout", "("):
+                # Stock isdead emits diagnostics on rejection, not game state.
+                if not self.readonly_expr(node.head[:-1]):
+                    return False
+            else:
+                return False
+        return True
+
+    def call_guard(self, tokens):
+        tokens = _unparen(tokens)
+        if len(tokens) != 4 or tokens[1] != "(" or tokens[3] != ")":
+            return None
+        name, _, arg, _ = tokens
+        if not name.startswith("$") or not re.fullmatch(r"[a-z_][a-z_0-9]*", arg):
+            return None
+        name = name[1:]
+        if name in self.busy or len(self.busy) >= 16:
+            return None
+        parsed = self.source(name)
+        if parsed is None:
+            return None
+        signature, declarations, body = parsed
+        # Local declarations are harmless unless they shadow the argument;
+        # the prefix proof below never accepts assignments to any local.
+        if (len(signature) != 8 or signature[3] != "agent"
+                or signature[5:] != (")", "is", "boolean")
+                or signature[4] in declarations):
+            return None
+        self.busy.add(name)
+        try:
+            for node in body:
+                self.remaining -= 1
+                if self.remaining < 0 or node.kind != "if" or node.otherwise:
+                    return None
+                if node.body != (_Node("statement", ("return", "false", ";")),):
+                    return None
+                condition = _unparen(node.head[2:-1])
+                guard = _literal_guard(condition, "!=")
+                if guard is None and condition[-2:] == ("==", "false"):
+                    guard = self.call_guard(condition[:-2])
+                if guard is not None:
+                    if guard[0] != signature[4]:
+                        return None
+                    return arg, guard[1], guard[2]
+                if not self.readonly_expr(condition):
+                    return None
+            return None
+        finally:
+            self.busy.remove(name)
+
+    def branch_guard(self, node):
+        if node.kind != "if" or node.otherwise:
+            return None
+        condition = _unparen(node.head[2:-1])
+        # A leading literal equality can guard further predicates. OR and
+        # negated/complex conditions never establish this domain.
+        depth = 0
+        first_and = None
+        for i, token in enumerate(condition):
+            depth += (token == "(") - (token == ")")
+            if depth == 0 and token == "||":
+                return None
+            if depth == 0 and token == "&&" and first_and is None:
+                first_and = i
+        guard = _literal_guard(condition[:first_and] if first_and else condition, "==")
+        if guard is not None:
+            return guard
+        if first_and is not None:
+            return None
+        if condition[-2:] == ("==", "true"):
+            condition = condition[:-2]
+        return self.call_guard(condition)
+
+    def partition(self, choices):
+        try:
+            cases = []
+            explicit_selector = False
+            for _, seq in choices:
+                if len(seq) != 1:
+                    return None
+                guard = self.branch_guard(seq[0])
+                if guard is None:
+                    return None
+                cases.append((guard, seq))
+                # Do not hoist a new property access ahead of the validity
+                # checks of a set of helper-only predicates. At least one
+                # original insertion must already read this selector directly.
+                condition = _unparen(seq[0].head[2:-1])
+                explicit_selector |= condition[:3] == (guard[0], "'s", guard[1])
+            selectors = {(g[0], g[1].casefold()) for g, _ in cases}
+            values = [g[2].casefold() for g, _ in cases]
+            if not explicit_selector or len(selectors) != 1 or len(set(values)) != len(values):
+                return None
+            # Dispatch on entry classification, not on a field possibly changed
+            # by an earlier callback. Original predicates/bodies remain intact.
+            result = ()
+            for (agent, prop, value), seq in sorted(cases, key=lambda c: c[0], reverse=True):
+                result = (_Node("if", ("if", "(", agent, "'s", prop, "==", value, ")"),
+                                seq, result),)
+            return result
+        except FunctionMergeError:
+            return None  # unsupported/ambiguous helper remains a normal conflict
+
+
+def _merge_node(base, variants, path, proof):
     changed = [(owner, node) for owner, node in variants if node != base]
     if not changed or all(node == changed[0][1] for _, node in changed):
         return _pick(base, variants, path)
     if base.kind == "statement" or any(node.kind != base.kind for _, node in changed):
         return _pick(base, variants, path)
     head = _pick(base.head, [(o, n.head) for o, n in variants], path + " condition")
-    body = _merge_sequence(base.body, [(o, n.body) for o, n in variants], path + " body")
-    otherwise = _merge_sequence(base.otherwise, [(o, n.otherwise) for o, n in variants], path + " else")
+    body = _merge_sequence(base.body, [(o, n.body) for o, n in variants], path + " body", proof)
+    otherwise = _merge_sequence(base.otherwise, [(o, n.otherwise) for o, n in variants], path + " else", proof)
     return _Node(base.kind, head, body, otherwise)
 
 
-def _merge_sequence(base, variants, path):
+def _merge_sequence(base, variants, path, proof):
     changed = [(owner, seq) for owner, seq in variants if seq != base]
     if not changed or all(seq == changed[0][1] for _, seq in changed):
         return _pick(base, variants, path)
@@ -267,9 +467,11 @@ def _merge_sequence(base, variants, path):
             result.extend(choices[0][1])
         elif original and all(len(seq) == len(original) for _, seq in choices):
             for index, node in enumerate(original):
-                result.append(_merge_node(node, [(o, seq[index]) for o, seq in choices], location))
+                result.append(_merge_node(node, [(o, seq[index]) for o, seq in choices], location, proof))
+        elif not original and (partition := proof.partition(choices)) is not None:
+            result.extend(partition)
         else:
-            _pick(original, choices, location)  # raises, never orders differing insertions
+            _pick(original, choices, location)  # raises: no proven disjoint dispatch
         cursor = end
     result.extend(base[cursor:])
     return tuple(result)
@@ -291,7 +493,8 @@ def _render(nodes, depth=1):
     return lines
 
 
-def merge_function(base_text: str, variants: Mapping[str, str]) -> str:
+def merge_function(base_text: str, variants: Mapping[str, str], *,
+                   function_lookup: Callable[[str], str | None] | None = None) -> str:
     """Combine disjoint instruction edits, or explain why composition is ambiguous.
 
     Only called for conflicting functions. Nothing in this module is installed
@@ -313,7 +516,8 @@ def merge_function(base_text: str, variants: Mapping[str, str]) -> str:
             value = _pick(base[1].get(name), [(o, p[1].get(name)) for o, p in sides], f"local {name}")
             if value is not None:
                 declarations[name] = value
-        body = _merge_sequence(base[2], [(o, p[2]) for o, p in sides], "body")
+        body = _merge_sequence(base[2], [(o, p[2]) for o, p in sides], "body",
+                               _GuardProof(function_lookup))
         lines = [_code(base[0]), "declare"]
         lines.extend(f"\t{kind} {name};" for name, kind in declarations.items())
         lines.extend(("begin", *_render(body), "end"))

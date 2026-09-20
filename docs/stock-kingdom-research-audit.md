@@ -261,10 +261,15 @@ polling loop, marker agent, saved native pointer or sidecar ledger is introduced
 ### Stock references and lifecycle
 
 - `M_Overlays.xml/super_charge_effector` supplies the literal directionless,
-  nonblocking root-attached Overlay, menu 11, StackPriority 0 and mouse-transparent
+  nonblocking parent-owned Overlay, menu 11, StackPriority 0 and mouse-transparent
   flags. Its own artwork is privatized, and the requested silent variant uses
   DefaultSound 0. The validator compares the complete descriptor shape, not
   merely a few favorable flags.
+- Parent ownership does not imply visual registration at the parent's origin.
+  The stock 2D path defaults an omitted AttachmentPointID to Hotspot 1 in the
+  parent's IMAG set 400. The earlier "root-attached" description was incorrect.
+  [Stock overlay rendering](stock-overlay-rendering-audit.md) records the native
+  attachment lookup, shared frame clock, visibility flags and TILE registration.
 - `DoWizTowerEnchant` uses `CreateEffector(unit, name, 1, "Infinite")`; the
   associated cancellation uses `DeleteEffector`. The adapter copies that
   attached-effector ownership, not the tower's unrelated active-script thread.

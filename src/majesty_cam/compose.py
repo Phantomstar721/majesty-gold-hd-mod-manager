@@ -4949,7 +4949,8 @@ def merge_gpl_resources(
         except (OSError, StockGplError, ValueError) as exc:
             raise ComposeError(f"Cannot compare conflicting scripts with stock: {exc}") from exc
     final = merge_sources([], parsed_by_owner, resolutions or None,
-                          function_ancestors=function_ancestors)
+                          function_ancestors=function_ancestors,
+                          function_loader=stock_function_loader)
     if final.conflicts:
         labels = {inventory.selected.alias: getattr(
             getattr(inventory.selected, "package", None), "display_name", inventory.selected.alias)

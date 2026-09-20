@@ -912,7 +912,35 @@ and redundant begin/end grouping do not create conflicts; string contents are
 preserved literally. Rendered branches are explicitly grouped to retain their
 original ownership, including nested else clauses.
 
-Different insertions at the same position, deletion versus modification,
+Single-branch insertions at the same position can additionally combine when
+they are restricted to different literal string values of the same agent
+property. The output uses stock-style property `if`/`else` dispatch and keeps
+each original predicate and body intact within its own case, followed by the
+unchanged stock fallback. Dispatch is based on the entry classification: one
+callback cannot mutate the selector and accidentally activate another case.
+Case ordering therefore does not choose a gameplay winner. Same-value cases,
+different agents/properties, OR predicates, else branches, and insertion
+sequences containing extra unguarded statements are not resolved this way.
+
+Restrictions may be proved through simple boolean helper rejection guards,
+including argument renaming and nested helpers. Before the restriction, only
+read-only checks and false returns are permitted; unknown calls, writes,
+dynamic function calls, cycles, and conflicting helper definitions invalidate
+the proof. Selected helper overrides take precedence over stock. The stock
+travel/validity queries admitted as native reads are HasWayPoints,
+IsValidGamePiece, InsideBuilding, and GetAttribute. Stock DebugOut diagnostics
+are non-gameplay operations; excluded cases can skip those rejection messages.
+No other opaque native calls are assumed read-only.
+At least one insertion must already access the selector directly; helper-only
+predicates remain blocked rather than hoisting a new property read ahead of
+their validity checks. The proof is bounded to
+32 helper definitions, 16 active helper levels and 256 visited statements.
+It uses the already parsed sources and lazily reads only needed stock helper
+definitions through the existing SDK loader. It adds no discovery work,
+compiler subprocesses, persistent helper cache, or runtime service. Helpers
+read as proof are not added to the output.
+
+Other different insertions at the same position, deletion versus modification,
 competing edits to one statement/condition/local, ambiguous repeated or moved
 instructions, changed signatures alongside body edits, and unsupported source
 structures stop preparation with the function, participating mod names, and

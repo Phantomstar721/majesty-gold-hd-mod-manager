@@ -524,6 +524,7 @@ def merge_semantic_items(
     ] = None,
     *,
     function_ancestors: Optional[Mapping[tuple[DefinitionKind, str], SemanticItem]] = None,
+    function_loader=None,
 ) -> SemanticMergeResult:
     """Perform an N-way merge using vanilla as the common ancestor.
 
@@ -557,6 +558,35 @@ def merge_semantic_items(
     selected: dict[tuple[DefinitionKind, str], SemanticItem] = {}
     conflicts: list[SemanticConflict] = []
     used_resolutions: set[tuple[DefinitionKind, str]] = set()
+
+    helper_cache = {}
+
+    def lookup_helper(name):
+        # Only invoked for colliding insertions. Reuse already parsed selected
+        # sources; never rescan packages, compile stock, or emit proof helpers.
+        from .gpl_function_merge import FunctionMergeError, _GuardProof, _tokens
+        key = semantic_key(DefinitionKind.FUNCTION, name)
+        if key in helper_cache:
+            return helper_cache[key]
+        explicit = normalized_resolutions.get(key)
+        if explicit is not None:
+            helper_cache[key] = explicit.text
+            return explicit.text
+        candidates = [side[key] for _, _, side in mods if key in side]
+        base = vanilla_by_key.get(key) or (function_ancestors or {}).get(key)
+        if base is not None:
+            candidates = [item for item in candidates if _tokens(item.text) != _tokens(base.text)]
+        texts = {_tokens(item.text): item.text for item in candidates}
+        if len(texts) > 1:
+            raise FunctionMergeError(f"helper {name} has competing definitions")
+        text = next(iter(texts.values()), base.text if base else None)
+        if text is None and function_loader is not None and name not in _GuardProof._QUERIES | {"debugout"}:
+            loaded = function_loader((name,))
+            for loaded_key, item in loaded.items():
+                helper_cache[loaded_key] = item.text
+            text = helper_cache.get(key)
+        helper_cache[key] = text
+        return text
 
     for key in all_keys:
         base = vanilla_by_key.get(key)
@@ -593,7 +623,7 @@ def merge_semantic_items(
                 try:
                     text = merge_function(ancestor.text, {
                         variant.side_name: variant.item.text for variant in variants
-                    })
+                    }, function_lookup=lookup_helper)
                     selected[key] = replace(
                         variants[0].item, text=text, span=None,
                         source_name="<stock-relative instruction merge>",
@@ -659,6 +689,7 @@ def merge_sources(
     ] = None,
     *,
     function_ancestors: Optional[Mapping[tuple[DefinitionKind, str], SemanticItem]] = None,
+    function_loader=None,
 ) -> SemanticMergeResult:
     """Flatten complete source sets and merge them with duplicate detection."""
 
@@ -670,7 +701,8 @@ def merge_sources(
         for side_name, sources in mod_sources.items()
     }
     return merge_semantic_items(vanilla_items, flattened_mods, resolutions,
-                                function_ancestors=function_ancestors)
+                                function_ancestors=function_ancestors,
+                                function_loader=function_loader)
 
 
 _INVENTORY_EXPRESSION_RE = re.compile(r"^#[A-Za-z_][A-Za-z0-9_]*$")
