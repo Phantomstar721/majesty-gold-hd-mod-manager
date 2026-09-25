@@ -14,6 +14,7 @@ EVENT_SIGNATURES = {
     "attack-flag-completed": ("agent", "agent"),
     "combat-experience-awarded": ("agent", "integer"),
     "exploration-experience-awarded": ("agent", "integer"),
+    "source-terrain-revealed": ("agent", "integer", "integer", "integer"),
 }
 EVENT_TYPE = "stock.gameplay-event-observer.v1"
 ACTIVITY_TYPE = "stock.activity-duration.v1"

@@ -654,9 +654,13 @@ def _sparse_component_archive(
         effective_image_payloads.setdefault(key, set()).add(entry.data)
 
     owned_images: list[CamEntry] = []
+    base_image_keys = set(_imag_entries(lineage.ancestors[0]))
     for entry in images:
         key = entry.name.rstrip(b"\0")[:4]
-        if entry.data not in effective_image_payloads.get(key, set()):
+        # Explicit expansion-only images are dependencies in an Any-dataset
+        # package, even when byte-identical to expansion stock. Original quests
+        # cannot fall through to an expansion archive they never load.
+        if key not in base_image_keys or entry.data not in effective_image_payloads.get(key, set()):
             owned_images.append(entry)
             continue
         # A byte-identical stock IMAG is still necessary evidence when the

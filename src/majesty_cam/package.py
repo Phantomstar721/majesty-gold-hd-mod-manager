@@ -18,6 +18,9 @@ from .shared_features import (
     SHARED_FEATURE_TYPES, SharedFeature, StockGameplayEventObserver,
     StockActivityDuration, parse_shared_feature, shared_feature_mapping,
 )
+from .typed_providers import (TypedBooleanProvider, TypedBooleanDispatch,
+    FEATURE_TYPES as TYPED_PROVIDER_TYPES, FEATURE_CLASSES as TYPED_PROVIDER_CLASSES,
+    parse_feature as parse_typed_provider, feature_mapping as typed_provider_mapping)
 from .gpl_features import (
     GplFeature,
     GplFeatureError,
@@ -200,7 +203,7 @@ class CustomBuildingDefinition:
 # Backward-compatible descriptive alias for the schema's AP78-specific record
 # name; the runtime module intentionally uses the reusable shorter class name.
 Ap78EnchantmentRowFeature = EnchantmentRowFeature
-PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature, GplFeature, SharedFeature, StockEquipment, KingdomResearch]
+PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature, GplFeature, SharedFeature, StockEquipment, KingdomResearch, TypedBooleanProvider, TypedBooleanDispatch]
 
 
 @dataclass(frozen=True)
@@ -575,6 +578,12 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             except ValueError as exc:
                 raise PackageFormatError(f"{context}: {exc}") from exc
             feature_key = (feature_type, feature.feature_key)
+        elif feature_type in TYPED_PROVIDER_TYPES:
+            try:
+                feature = parse_typed_provider(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context} is invalid: {exc}") from exc
+            feature_key = (feature_type, feature.feature_key.casefold())
         elif feature_type in SHARED_FEATURE_TYPES:
             try:
                 feature = parse_shared_feature(raw_feature)
@@ -622,6 +631,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 "stock.ap24-timed-rage-action.v1",
                 "stock.ap24-rage-command-action.v1",
                 "stock.ap69-sovereign-target-action.v1",
+                "stock.ap69-sovereign-target-action.v2",
                 "stock.ap41-fl00-hostile-monster-flag.v1",
             }:
                 local_identity = str(mapping["action_key"])
@@ -636,7 +646,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 "stock.ap52-recruitment-panel.v1",
             }:
                 local_identity = str(mapping["parent_building"])
-            elif feature_type == "stock.mx22-building-open-toggle.v1":
+            elif feature_type in ("stock.mx22-building-open-toggle.v1", "stock.mx22-building-open-toggle.v2"):
                 feature_key = (
                     feature_type,
                     str(mapping["toggle_key"]).casefold(),
@@ -645,7 +655,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 local_identity = ""
             else:  # pragma: no cover - the typed parser owns this closed union
                 local_identity = ""
-            if feature_type != "stock.mx22-building-open-toggle.v1":
+            if feature_type not in ("stock.mx22-building-open-toggle.v1", "stock.mx22-building-open-toggle.v2"):
                 feature_key = (
                     feature_type,
                     str(mapping["panel_key"]).casefold(),
@@ -1162,6 +1172,8 @@ def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
         }
     if isinstance(feature, (StockGameplayEventObserver, StockActivityDuration)):
         return shared_feature_mapping(feature)
+    if isinstance(feature, TYPED_PROVIDER_CLASSES):
+        return typed_provider_mapping(feature)
     if isinstance(
         feature,
         (

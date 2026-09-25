@@ -6,8 +6,10 @@ This contract applies only to packages shown in **Merge**. Standard `.mmxml`
 mods remain independent Active Mod selections; `.mqxml` quests are chosen
 through Majesty's stock quest browser rather than the Active Mods list. Source
 quests are catalog-only and are never rewritten or duplicated. The current catalog
-classification is syntactic: a Mod manifest containing a `CAM` directive is
-Merge, while a Mod manifest with no `CAM` directive is Standard. GPL/DAT- or
+classification routes a Mod manifest containing a `CAM` directive to Merge.
+A version-3 source-only package declaring the native `source-terrain-revealed`
+event also uses Merge without a dummy CAM; see the
+[source observation contract](source-exploration-events.md). Other GPL/DAT- or
 Descriptions-only mods are not yet routed through the semantic composer, so a
 Standard label is not proof that such a package cannot conflict. Semantic
 classification of those packages is a target, not current behavior.
@@ -23,7 +25,8 @@ dependency.
 
 ## Required package shape
 
-A merge-ready package must be complete and independently loadable. The manager
+A merge-ready package must be complete; runtime-dependent packages additionally
+require the Manager's launcher. The manager
 must be able to consume the installed package without its authoring repository.
 It must contain all of the following:
 
@@ -34,7 +37,9 @@ It must contain all of the following:
    `Descriptions`, and `GPL` (`Target` plus ordered `Source` children). Every
    composed dataset has `base="Any"`. Dataset variants and unknown directives
    are not silently flattened.
-3. At least one readable CAM and one GPL load. Each GPL target is nonempty and
+3. At least one readable CAM and one GPL load, except a version-3 source-only
+   package with the native source-observation dependency may omit CAM entirely.
+   Each GPL target is nonempty and
    each load has at least one declared `.gpl` or `.dat` Source. Authors must
    ship every source needed to reconstruct the compiled project; current
    preflight verifies presence and the build recompiles it, but cannot
@@ -244,6 +249,11 @@ Additional records use the same `panel_key`. Their exact required fields are:
 | `stock.ap24-timed-rage-action.v1` | `action_key`, `action_control_id`, `descriptor_template_control_id`, `level_price_template_control_id`, `required_level`, `gold_cost`, `resource_key`, `resource_cost`, `callback_symbol`, `duration_ms`, `icon_control_id`, `price_control_id`, `progress_control_id`, `active_display_control_id` |
 | `stock.ap24-rage-command-action.v1` | `action_key`, `action_control_id`, `visual_template_control_id`, `completion_template_research_control_id`, `required_level`, `resource_key`, `resource_cost`, `callback_symbol`, `icon_control_id`, `price_control_id` |
 | `stock.ap69-sovereign-target-action.v1` | `action_key`, `visual_control_id`, `private_control_id`, `visual_template_control_id`, `target_template_control_id`, `stock_target_mode`, `stock_executor_mode`, `private_mode`, `private_unit_id`, `cursor_ordinal`, `required_level`, `resource_key`, `resource_cost`, `icon_control_id`, `price_control_id` |
+| `stock.ap69-sovereign-target-action.v2` | Same fields as v1, plus `callback_symbol`; callback receives three agents: spell, exact source building, exact clicked target |
+
+The opt-in [source/target action contract](stock-sovereign-target-identity-audit.md)
+preserves both queued identities without nearby searches or polling. Existing
+v1 actions retain their two-argument birthscript behavior.
 
 An MX09-shaped building can instead open the stock AP41 reward lifecycle with
 this linked pair:
@@ -439,6 +449,10 @@ does not submit Embassy order `0x16` or create an Embassy recruit order; those
 side effects belong only to the Embassy. Toggle keys, parents, and commands
 must remain unambiguous across the complete merged selection. See
 [the building-toggle lifecycle](stock-building-open-toggle.md).
+
+For multiple independently saved boolean toggles on one parent, use
+[`stock.mx22-building-open-toggle.v2`](independent-building-toggles.md).
+It preserves the paired stock presentation without borrowing Embassy state.
 
 A package can attach a private hero task to Majesty's complete stock hero
 decision lifecycle without replacing any hero decision tree:

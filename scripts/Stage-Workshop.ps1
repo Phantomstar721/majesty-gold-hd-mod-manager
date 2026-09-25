@@ -95,6 +95,18 @@ try {
 
     Get-ChildItem -LiteralPath $applicationRoot -Force |
         Copy-Item -Destination $contentPath -Recurse -Force
+    # Playtesting writes diagnostics beside the runtime DLL. They are local
+    # support material, not Workshop content; leave the originals untouched.
+    $contentBoundary = [IO.Path]::GetFullPath($contentPath).TrimEnd('\') + '\'
+    Get-ChildItem -LiteralPath $contentPath -Recurse -File -Force |
+        Where-Object { $_.Extension -in @('.log', '.dmp', '.mdmp') } |
+        ForEach-Object {
+            $diagnosticPath = [IO.Path]::GetFullPath($_.FullName)
+            if (-not $diagnosticPath.StartsWith($contentBoundary, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Diagnostic path escapes Workshop content: $diagnosticPath"
+            }
+            Remove-Item -LiteralPath $diagnosticPath -Force
+        }
     Copy-Item -LiteralPath $instructionsSource -Destination (Join-Path $contentPath "START HERE.txt") -Force
     Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $contentPath "LICENSE.txt") -Force
     Copy-Item -LiteralPath (Join-Path $repoRoot "THIRD-PARTY-NOTICES.md") -Destination (Join-Path $contentPath "THIRD-PARTY-NOTICES.md") -Force

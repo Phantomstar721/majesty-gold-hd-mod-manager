@@ -557,7 +557,8 @@ def _parse_content_node(
     kind = (
         CatalogKind.QUEST
         if expected_tag == "Quest"
-        else (CatalogKind.MERGE if has_cam else CatalogKind.STANDARD)
+        else (CatalogKind.MERGE if has_cam or _declares_native_source_event(candidate.package_root)
+              else CatalogKind.STANDARD)
     )
     generated = _is_generated_package(candidate.package_root)
     tool_delivery = _is_tool_delivery(content_id, content)
@@ -591,7 +592,7 @@ def _parse_content_node(
             CatalogIssue(
                 code="multi_mod_merge_manifest",
                 message=(
-                    "A CAM-changing Mod must be the only Mod element in its "
+                    "A Merge Mod must be the only Mod element in its "
                     "manifest before it can be combined safely."
                 ),
                 severity=IssueSeverity.ERROR,
@@ -1404,6 +1405,24 @@ def _manifest_metadata(content: ET.Element) -> Tuple[str, ...]:
 
 def _normalize_metadata_text(value: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", value.casefold()).split())
+
+
+def _declares_native_source_event(package_root: Path) -> bool:
+    """Route a real native dependency, never arbitrary GPL/metadata, to Merge.
+
+    This is intent detection only. Normal strict readiness checks still reject
+    malformed declarations, wrong identities and unsupported schema versions.
+    """
+    from ..exploration_events import EVENT
+    from ..shared_features import EVENT_TYPE
+    try:
+        value = json.loads((package_root / DEFINITION_FILE_NAME).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return False
+    features = value.get("runtime_features", ()) if isinstance(value, dict) else ()
+    return isinstance(features, list) and any(
+        isinstance(feature, dict) and feature.get("type") == EVENT_TYPE
+        and feature.get("event") == EVENT for feature in features)
 
 
 def _merge_readiness(

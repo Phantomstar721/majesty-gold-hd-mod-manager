@@ -21,6 +21,9 @@ needed by custom buildings, panels, and other advanced features.
   from being enabled together.
 - Clearly marks content that cannot be combined safely.
 - Prepares one playable package when selected mods need to be combined.
+- Preserves required stock script dependencies and expansion-only artwork when
+  combining mods for original-game quests.
+- Reuses unchanged stock data to keep repeated selection checks responsive.
 - Combines independent changes within shared GPL functions and XML Descriptions,
   and stops with conflict details when edits cannot be reconciled.
 - Supports reusable list, research, reward, and recruitment panels, including

@@ -7,6 +7,7 @@
 #include <cwchar>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -410,6 +411,8 @@ bool HeroEffectRowsSelected();
 const MajestyRuntimeFeatures::KingdomResearchRecord* FindKingdomResearch(std::uint32_t command);
 bool CompleteKingdomResearch(std::uint32_t, void*, std::uint32_t, std::uint32_t, std::uint32_t);
 bool OccupantCallMatches(std::uintptr_t callRva, std::uintptr_t targetRva);
+bool HasSourceTargetActions();
+bool ValidateSourceTargetProfile();
 bool QuestSummaryCallMatches(
     std::uintptr_t callRva,
     std::uintptr_t targetRva,
@@ -1695,8 +1698,14 @@ bool ValidateMajestyBuildProfile() {
         if (!ValidateOccupantPanelProfile()) return false;
     }
     if (!ValidateSelectedParentControllerProfiles()) return false;
-    if (!g_stockControllerRegistry.liveAgentLists.empty() &&
+    if ((!g_stockControllerRegistry.liveAgentLists.empty() || HasSourceTargetActions() ||
+         std::any_of(g_stockControllerRegistry.buildingOpenToggles.begin(),
+                     g_stockControllerRegistry.buildingOpenToggles.end(),
+                     [](const MajestyStockControllers::BuildingOpenToggleRecord& item) {
+                         return !item.stateAttribute.empty();
+                     })) &&
         !ValidateQuestBoardProfile()) return false;
+    if (!ValidateSourceTargetProfile()) return false;
     // Preflight every site selected by MMCP before installing any hook from
     // those groups. Unselected specialized sites are deliberately untouched
     // and cannot reject an otherwise generic manager launch.
@@ -1946,14 +1955,59 @@ void WritePackedAttributeValue(
     void* context, std::uint32_t attributeId, int value);
 
 constexpr std::uint32_t kEmbassyActiveFlagAttributeId = 0x044D4541u;
+bool EvaluateIndependentToggle(const char*, void*, int, std::uint32_t*);
+std::map<std::string, std::uint32_t> g_privateToggleStates;
+std::uint32_t g_privateToggleController = 0;
+std::uint32_t g_privateToggleParentHandle = 0;
+
+void ResetPrivateToggleStates() {
+    g_privateToggleStates.clear();
+    g_privateToggleController = g_privateToggleParentHandle = 0;
+}
+
+template<class Function>
+void ForEachParentToggle(Function function) {
+    const auto* anchor = g_parentOpenToggleRecord;
+    if (anchor == nullptr) return;
+    function(*anchor);
+    for (const auto& item : g_stockControllerRegistry.buildingOpenToggles) {
+        if (item.parentDialogId == anchor->parentDialogId && item.toggleKey != anchor->toggleKey)
+            function(item);
+    }
+}
 
 void RefreshBuildingOpenToggle(std::uint32_t controller) {
-    const auto* toggle = g_parentOpenToggleRecord;
-    if (toggle == nullptr) return;
+    if (g_parentOpenToggleRecord == nullptr) return;
     auto* context = NativePanelContext(controller);
     if (context == nullptr) return;
-    const bool open = ReadPackedAttributeValue(
-        context, kEmbassyActiveFlagAttributeId, 0) != 0;
+    const auto handle = *reinterpret_cast<const std::uint32_t*>(context + 0x70);
+    if (g_privateToggleController != controller || g_privateToggleParentHandle != handle) {
+        ResetPrivateToggleStates();
+        g_privateToggleController = controller;
+        g_privateToggleParentHandle = handle;
+    }
+    ForEachParentToggle([&](const MajestyStockControllers::BuildingOpenToggleRecord& record) {
+    const auto* toggle = &record;
+    bool open = false;
+    if (toggle->stateAttribute.empty()) {
+        open = ReadPackedAttributeValue(context, kEmbassyActiveFlagAttributeId, 0) != 0;
+    } else {
+        auto cached = g_privateToggleStates.find(toggle->toggleKey);
+        if (cached == g_privateToggleStates.end()) {
+            std::uint32_t value = 0;
+            if (!EvaluateIndependentToggle(toggle->stateAccessorSymbol.c_str(), context, -1, &value)) {
+                WriteLog("Independent building toggle state could not be read.");
+                value = 2; // Cache failure until the stock panel context changes.
+            }
+            cached = g_privateToggleStates.emplace(toggle->toggleKey, value).first;
+        }
+        if (cached->second > 1) {
+            SetControllerControlVisible(controller, toggle->openCommandId, false);
+            SetControllerControlVisible(controller, toggle->closeCommandId, false);
+            return;
+        }
+        open = cached->second != 0;
+    }
     // Literal MX22 presenter order: hide the inactive action, show the action
     // that changes the current state, then send its stock enable message 0xA.
     SetControllerControlVisible(controller, toggle->openCommandId, !open);
@@ -1964,15 +2018,16 @@ void RefreshBuildingOpenToggle(std::uint32_t controller) {
         0x0Au,
         0u,
         0u);
+    });
 }
 
 bool HandleBuildingOpenToggle(
     void* controller, std::uint32_t command, int* result) {
-    const auto* toggle = g_parentOpenToggleRecord;
-    if (toggle == nullptr ||
-        (command != toggle->openCommandId && command != toggle->closeCommandId)) {
-        return false;
-    }
+    const MajestyStockControllers::BuildingOpenToggleRecord* toggle = nullptr;
+    ForEachParentToggle([&](const MajestyStockControllers::BuildingOpenToggleRecord& item) {
+        if (command == item.openCommandId || command == item.closeCommandId) toggle = &item;
+    });
+    if (toggle == nullptr) return false;
     auto* context = NativePanelContext(
         reinterpret_cast<std::uint32_t>(controller));
     if (context == nullptr) {
@@ -1981,7 +2036,16 @@ bool HandleBuildingOpenToggle(
     }
     // MX22 stores this durable state on the selected building. Do not submit
     // order 0x16: its GS_EmbassyRecruitOrder side effect belongs to Embassy.
-    WritePackedAttributeValue(
+    if (!toggle->stateAttribute.empty()) {
+        std::uint32_t value = 0;
+        if (!EvaluateIndependentToggle(toggle->stateAccessorSymbol.c_str(), context,
+                command == toggle->openCommandId ? 1 : 0, &value)) {
+            WriteLog("Independent building toggle command failed its saved-state adapter.");
+            *result = 0;
+            return true;
+        }
+        g_privateToggleStates[toggle->toggleKey] = value;
+    } else WritePackedAttributeValue(
         context,
         kEmbassyActiveFlagAttributeId,
         command == toggle->openCommandId ? 1 : 0);
@@ -2579,6 +2643,11 @@ void __cdecl ResearchCompletionBridge(
     WriteLog(trace);
 }
 
+void ExplorationStepBegin();
+void ExplorationStepEnd();
+void ExplorationWorldReady();
+void ExplorationOwnerChanging(void* unit);
+
 void __fastcall GameUpdateRefreshBridge(void* gameState, void*) {
     // This call site is Majesty's stock state-3 update dispatch. Run the
     // original update first, exactly as the unmodified main loop does, then
@@ -2594,7 +2663,9 @@ void __fastcall GameUpdateRefreshBridge(void* gameState, void*) {
             g_researchOwner.context);
     }
 
+    ExplorationStepBegin();
     g_stockGameUpdate(gameState);
+    ExplorationStepEnd();
     if (researchSubmissionPending &&
         CaptureSubmittedResearch(activityBeforeUpdate) &&
         InterlockedCompareExchange(&g_secondaryPanelActive, 0, 0) != 0) {
@@ -2623,6 +2694,7 @@ void __fastcall GameUpdateRefreshBridge(void* gameState, void*) {
 }
 
 bool InstallGameUpdateRefreshBridge() {
+    if (g_stockGameUpdate) return true;
     auto* callSite = reinterpret_cast<unsigned char*>(
         g_imageBase + g_buildProfile->gameUpdateCallRva);
     if (std::memcmp(
@@ -3348,6 +3420,8 @@ __declspec(naked) void SovereignCursorTransitionHook() {
     }
 }
 
+#include "SovereignSourceTargetRuntime.inl"
+
 extern "C" void __cdecl SubmitPrivateSovereignCommand(
     std::uint32_t mode,
     std::uint32_t player,
@@ -3362,7 +3436,13 @@ extern "C" void __cdecl SubmitPrivateSovereignCommand(
         mode == action->stockTargetMode) {
         const auto* meter = g_stockControllerRegistry.FindMeter(
             action->panelKey, action->resourceKey);
-        if (ResourceStock(meter) < static_cast<int>(action->resourceCost)) {
+        const bool paired = !action->sourceTargetCallback.empty();
+        void* source = paired ? g_sovereignUnitResolver(building) : nullptr;
+        if (paired && !SourceMatchesAction(source, player, *action)) return;
+        const int available = paired
+            ? (meter ? ReadPackedAttributeValue(source, meter->attributeId, 0) : 0)
+            : ResourceStock(meter);
+        if (available < static_cast<int>(action->resourceCost)) {
             // Stock temple spells still submit their current target packet
             // when the player cannot afford another cast. Their sovereign
             // executor rejects that packet at its native gold-affordability
@@ -3374,8 +3454,8 @@ extern "C" void __cdecl SubmitPrivateSovereignCommand(
             WriteLog("Submitted a depleted private target through the stock unaffordable-spell route.");
         } else {
             mode = action->privateMode;
-            target = building;
-            cost = 0;
+            if (paired) cost = building;
+            else { target = building; cost = 0; }
             WriteLog("Committed a private controller action through its stock sovereign target packet.");
         }
     }
@@ -3478,6 +3558,8 @@ bool InstallPrivateSovereignSpellRoute() {
         break;
     default: return false;
     }
+    const bool sourceTarget = HasSourceTargetActions();
+    if (sourceTarget) executorHook = reinterpret_cast<const void*>(&ExecuteSourceTargetSovereignCommand);
     auto* commit = reinterpret_cast<unsigned char*>(
         g_imageBase + g_buildProfile->sovereignTargetCommitCallRva);
     auto* cursorTransition = reinterpret_cast<unsigned char*>(
@@ -3552,6 +3634,19 @@ bool InstallPrivateSovereignSpellRoute() {
 
     g_sovereignExecutorResume =
         reinterpret_cast<std::uintptr_t>(executor) + 7;
+    if (sourceTarget) {
+        auto* trampoline = static_cast<unsigned char*>(VirtualAlloc(nullptr, 12,
+            MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        if (!trampoline) return false;
+        std::memcpy(trampoline, executor, 7);
+        trampoline[7] = 0xE9;
+        const auto jump = static_cast<std::int32_t>(g_sovereignExecutorResume -
+            reinterpret_cast<std::uintptr_t>(trampoline + 12));
+        std::memcpy(trampoline + 8, &jump, 4);
+        FlushInstructionCache(GetCurrentProcess(), trampoline, 12);
+        g_sourceTargetExecutor = reinterpret_cast<SovereignExecutor>(trampoline);
+        if (!InstallSourceTargetBirthHook()) return false;
+    }
     oldProtection = 0;
     if (!VirtualProtect(executor, 7, PAGE_EXECUTE_READWRITE, &oldProtection)) {
         return false;
@@ -4163,6 +4258,7 @@ void __cdecl ParentPanelControllerDestroyed(void*, void*) {
     g_parentPanelRecord = nullptr;
     g_parentRewardPanelRecord = nullptr;
     g_parentOpenToggleRecord = nullptr;
+    ResetPrivateToggleStates();
     g_parentRecruitment = nullptr;
     WriteLog(
         "Invalidated manager-owned parent-controller state at Majesty's stock teardown boundary.");
@@ -5010,6 +5106,41 @@ using QuestBoardScalarEvaluator = bool (*)(
 QuestBoardScalarEvaluator g_questBoardScalarEvaluator =
     &EvaluateQuestBoardScalar;
 
+bool EvaluateIndependentToggle(const char* symbol, void* parent, int operation, std::uint32_t* result) {
+    return g_questBoardScalarEvaluator(symbol, parent, true, operation, result, false) && *result <= 1;
+}
+
+bool EvaluateSourceTargetCallback(const char* symbol, void* spell, void* source, void* target) {
+    if (!symbol || !spell || !source || !target) return false;
+    const auto& p = QuestBoardProfile();
+    std::uint32_t text[3] = {};
+    __declspec(align(4)) unsigned char evaluator[0x40] = {};
+    using MakeString = void* (__thiscall*)(void*, const char*);
+    using MakeEvaluator = void* (__thiscall*)(void*, const void*);
+    using AddAgent = void (__thiscall*)(void*, void*);
+    using Call = void (__thiscall*)(void*);
+    reinterpret_cast<MakeString>(g_imageBase + OccupantProfile().stringConstructor)(text, symbol);
+    struct NativeCleanup {
+        void* object;
+        Call destroy;
+        ~NativeCleanup() { if (object) destroy(object); }
+    } textCleanup{text, reinterpret_cast<Call>(g_imageBase + p.stringDestructor)};
+    reinterpret_cast<MakeEvaluator>(g_imageBase + p.evaluatorConstructor)(evaluator, text);
+    NativeCleanup evaluatorCleanup{evaluator, reinterpret_cast<Call>(g_imageBase + p.evaluatorDestructor)};
+    reinterpret_cast<Call>(g_imageBase + p.stringDestructor)(text);
+    textCleanup.object = nullptr;
+    const bool resolved = *reinterpret_cast<const std::uint32_t*>(evaluator + 4) != 0;
+    if (resolved) {
+        auto add = reinterpret_cast<AddAgent>(g_imageBase + p.addAgent);
+        add(evaluator, spell);
+        add(evaluator, source);
+        add(evaluator, target);
+        reinterpret_cast<Call>(g_imageBase + p.execute)(evaluator);
+    }
+    if (!resolved) WriteLog("Private source-target callback could not be resolved.");
+    return resolved;
+}
+
 void* ResolveQuestBoardAgentNumber(std::uint32_t agentNumber) {
     if (agentNumber == 0 || agentNumber == 0xFFFFFFFFu) return nullptr;
     // Stock GplAgentRef is 16 bytes: vtable/type are not read by the proven
@@ -5244,7 +5375,7 @@ int __fastcall LiveAgentListControlHandoff(
 }
 bool WriteOccupantBranch(std::uintptr_t address, void* target, unsigned char opcode,
                          std::size_t size = 5) {
-    unsigned char patch[7] = {opcode, 0, 0, 0, 0, 0x90, 0x90};
+    unsigned char patch[8] = {opcode, 0, 0, 0, 0, 0x90, 0x90, 0x90};
     if (size < 5 || size > sizeof(patch)) return false;
     const auto relative = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(target) - address - 5);
     std::memcpy(patch + 1, &relative, 4);
@@ -6226,6 +6357,7 @@ bool InstallQuestBoardChildVtable(std::uint32_t controller) {
 }
 
 #include "KingdomResearchRuntime.inl"
+#include "ExplorationObservationRuntime.inl"
 
 struct OccupantParentClass {
     void* table[kAp10VtableEntries];
@@ -7676,6 +7808,10 @@ DWORD WINAPI InitializeRuntime(void*) {
     if (kingdomResearch) {
         RequireManagerRuntimeInstall(InstallKingdomResearchGate(), managerLaunch,
             "The kingdom research command boundary did not match the audited stock profile.");
+    }
+    if (HasRuntimeCapability(MajestyRuntimeCapabilities::kSourceExploration)) {
+        RequireManagerRuntimeInstall(ExplorationObservation::Install(), managerLaunch,
+            "Source exploration requires the audited Steam beta2 observation profile.");
     }
     if (ap10Ap69ControllerRecipes) {
         RequireManagerRuntimeInstall(

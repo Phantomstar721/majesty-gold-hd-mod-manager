@@ -7,7 +7,7 @@
 
 namespace MajestyStockControllers {
 
-constexpr std::uint32_t kRegistryVersion = 18;
+constexpr std::uint32_t kRegistryVersion = 20;
 constexpr std::uint32_t kMaximumRecordCount = 256;
 constexpr std::uint32_t kMaximumPanelCount = 32;
 constexpr std::uint32_t kMaximumLiveAgentListVariants = 64;
@@ -113,6 +113,7 @@ struct SovereignTargetActionRecord {
     std::uint32_t resourceCost;
     std::uint32_t iconControlId;
     std::uint32_t priceControlId;
+    std::string sourceTargetCallback; // Empty retains the v1 callback contract.
 };
 
 struct RewardPanelRecord {
@@ -151,6 +152,9 @@ struct BuildingOpenToggleRecord {
     std::uint32_t openCommandId;
     std::uint32_t closeCommandId;
     std::uint32_t parentControllerBase;
+    std::string stateAttribute;
+    std::string stateCallbackSymbol;
+    std::string stateAccessorSymbol; // Derived once, never supplied by the package.
 };
 
 struct LiveAgentListRowVariant {

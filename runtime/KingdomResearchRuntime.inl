@@ -99,6 +99,7 @@ void __fastcall ResearchBuildingSet(void* unit, void*, std::uint32_t attribute, 
 }
 void __fastcall ResearchBuildingOwnerChanged(void* unit, void*, int owner) {
     const auto previous = *reinterpret_cast<const int*>(static_cast<const unsigned char*>(unit)+0x80);
+    if (previous != owner) ExplorationOwnerChanging(unit);
     g_researchBuildingOwner(unit, owner);
     if (previous != owner) SyncKingdomResearchVisual(unit);
 }
@@ -115,6 +116,8 @@ void SyncKingdomResearchBuildingList(void* list) {
 }
 void __fastcall ResearchWorldReadyAfterStock(void* game, void*) {
     g_researchWorldReady(game);
+    ExplorationWorldReady();
+    if (!KingdomResearchVisualsSelected()) return;
     // Called once on initial entry/reload, after native objects, GPL state and
     // saved container links are available; never during serialization itself.
     void* root = *reinterpret_cast<void**>(g_imageBase+0x3E3FD4u);
@@ -123,6 +126,14 @@ void __fastcall ResearchWorldReadyAfterStock(void* game, void*) {
     void* catalog = *reinterpret_cast<void**>(static_cast<unsigned char*>(world)+0x8C);
     using Collection = void* (__thiscall*)(void*, int, int);
     SyncKingdomResearchBuildingList(reinterpret_cast<Collection>(g_imageBase+0x1B9030u)(catalog, 0, 0));
+}
+
+bool InstallSharedWorldReadyHook() {
+    if (g_researchWorldReady) return true;
+    if (!OccupantCallMatches(0x26234u,0x2AAB0u)) return false;
+    g_researchWorldReady = reinterpret_cast<ResearchWorldReady>(g_imageBase+0x2AAB0u);
+    return WriteOccupantBranch(g_imageBase+0x26234u,
+        reinterpret_cast<void*>(&ResearchWorldReadyAfterStock),0xE8);
 }
 
 // This is only a reentrant call-stack guard, never purchase persistence. Stock
@@ -300,8 +311,7 @@ bool InstallKingdomResearchGate() {
     };
     g_researchBuildingSet = reinterpret_cast<ResearchBuildingSetFunction>(g_imageBase+0x49950u);
     g_researchBuildingOwner = reinterpret_cast<ResearchBuildingOwner>(g_imageBase+0x1CF320u);
-    g_researchWorldReady = reinterpret_cast<ResearchWorldReady>(g_imageBase+0x2AAB0u);
     return replace(0x3531E8u, reinterpret_cast<const void*>(&ResearchBuildingSet)) &&
         replace(0x3530E4u, reinterpret_cast<const void*>(&ResearchBuildingOwnerChanged)) &&
-        WriteOccupantBranch(g_imageBase+0x26234u, reinterpret_cast<void*>(&ResearchWorldReadyAfterStock), 0xE8);
+        InstallSharedWorldReadyHook();
 }

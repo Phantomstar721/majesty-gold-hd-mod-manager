@@ -25,6 +25,7 @@ from ..compose import (
     validate_composed_package,
 )
 from ..gameplay_events import event_stock_paths
+from ..exploration_events import selected as exploration_selected, CAPABILITY as EXPLORATION_CAPABILITY
 from ..gpl import (
     DefinitionKind,
     SemanticItem,
@@ -79,7 +80,7 @@ from .qol_service import GOG_BRANCH
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
-PLAN_SCHEMA_VERSION = 6
+PLAN_SCHEMA_VERSION = 8
 STANDARD_SELECTION_ISSUE_CODES = frozenset(
     {
         "mutually_exclusive_mods",
@@ -564,7 +565,7 @@ def create_build_plan(
                 inventories,
                 tuple(sorted(capabilities)),
             )
-            if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows or runtime_feature_registry.movement_scales:
+            if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows or runtime_feature_registry.movement_scales or exploration_selected(inventories):
                 if game_path is None:
                     raise ValueError("Selected runtime features require an audited beta2 game installation")
                 require_beta2(game_path / "MajestyHD.exe")
@@ -590,6 +591,9 @@ def create_build_plan(
                 )
             )
             capabilities.discard(LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY)
+            capabilities.discard(EXPLORATION_CAPABILITY)
+            if exploration_selected(inventories):
+                capabilities.add(EXPLORATION_CAPABILITY)
             capabilities.discard(STOCK_CONTROLLER_RUNTIME_CAPABILITY)
             if _controller_record_count(controller_registry):
                 capabilities.add(STOCK_CONTROLLER_RUNTIME_CAPABILITY)
@@ -1470,7 +1474,7 @@ def _fingerprint_stock_compose_inputs(
             item.relative_path.as_posix(),
             item.sha256 if item.present else "absent",
         )
-        for item in snapshot_stock_compose_inputs(game_path, extra_relative_paths=event_stock_paths(
+        for item in snapshot_stock_compose_inputs(game_path, include_dataset_dependencies=True, extra_relative_paths=event_stock_paths(
             feature for prepared_item in prepared
             for feature in getattr(getattr(prepared_item.selected_mod.package, "definition", None),
                                    "runtime_features", ())))

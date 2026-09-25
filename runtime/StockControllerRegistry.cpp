@@ -475,7 +475,9 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
             !actions.insert(std::make_pair(item->panelKey, item->actionKey)).second ||
             !globalCommands.insert(item->privateControlId).second ||
             !privateModes.insert(item->privateMode).second ||
-            !privateUnits.insert(item->privateUnitId).second) {
+            !privateUnits.insert(item->privateUnitId).second ||
+            (!item->sourceTargetCallback.empty() &&
+             !callbacks.insert(FoldAsciiCase(item->sourceTargetCallback)).second)) {
             return Fail(error, "MMCR sovereign action references are invalid");
         }
         stockTargetModes.insert(item->stockTargetMode);
@@ -531,6 +533,7 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
     }
     std::set<std::string> toggleKeys;
     std::set<std::uint32_t> toggleParents;
+    std::set<std::string> toggleAttributes;
     std::set<std::uint32_t> toggleCommands;
     std::map<std::uint32_t, std::uint32_t> parentBases;
     for (const auto& item : registry.panels) {
@@ -549,7 +552,10 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
     for (const auto& item : registry.buildingOpenToggles) {
         const auto prior = parentBases.find(item.parentDialogId);
         if (!toggleKeys.insert(item.toggleKey).second ||
-            !toggleParents.insert(item.parentDialogId).second ||
+            (item.stateAttribute.empty() && !toggleParents.insert(item.parentDialogId).second) ||
+            (!item.stateAttribute.empty() &&
+             (!toggleAttributes.insert(FoldAsciiCase(item.stateAttribute)).second ||
+              !callbacks.insert(FoldAsciiCase(item.stateCallbackSymbol)).second)) ||
             !toggleCommands.insert(item.openCommandId).second ||
             !toggleCommands.insert(item.closeCommandId).second ||
             parentCommands.count({item.parentDialogId, item.openCommandId}) ||
@@ -888,7 +894,7 @@ bool ParseRegistry(
     if (version == 13) return Fail(error, "MMCR v13 live-agent lists lack the row-focus policy; rebuild with the current Manager");
     if ((version == 14 || version == 15 || version == 16) && counts[11] == 0)
         return Fail(error, "MMCR live-agent-list version without live-agent lists is noncanonical");
-    if (version >= 17 && counts[12] == 0)
+    if (version >= 17 && version < 19 && counts[12] == 0)
         return Fail(error, "MMCR v17 without private recruitment is noncanonical");
     std::uint64_t total = 0;
     for (std::size_t index = 0; index < 13; ++index) total += counts[index];
@@ -1128,6 +1134,12 @@ bool ParseRegistry(
              std::tie(item.panelKey, item.actionKey))) {
             return Fail(error, "MMCR sovereign action is invalid or noncanonical");
         }
+        if (version >= 20) {
+            std::uint32_t hasCallback = 0;
+            if (!reader.ReadU32(&hasCallback) || hasCallback > 1 ||
+                (hasCallback && !reader.ReadSymbol(&item.sourceTargetCallback)))
+                return Fail(error, "MMCR source-target callback is invalid");
+        }
         parsed.sovereignTargetActions.push_back(std::move(item));
     }
     for (std::uint32_t index = 0; index < counts[7]; ++index) {
@@ -1217,6 +1229,20 @@ bool ParseRegistry(
             (!parsed.buildingOpenToggles.empty() &&
              parsed.buildingOpenToggles.back().toggleKey >= item.toggleKey)) {
             return Fail(error, "MMCR building open toggle is invalid or noncanonical");
+        }
+        if (version >= 19) {
+            std::uint32_t privateState = 0;
+            if (!reader.ReadU32(&privateState) || privateState > 1)
+                return Fail(error, "MMCR toggle private-state flag is invalid");
+            if (privateState != 0) {
+                if (!reader.ReadSymbol(&item.stateAttribute) ||
+                    !reader.ReadSymbol(&item.stateCallbackSymbol) ||
+                    item.stateCallbackSymbol.size() > 54 ||
+                    FoldAsciiCase(item.stateAttribute).find("mm_") == 0 ||
+                    FoldAsciiCase(item.stateCallbackSymbol).find("mm_") == 0)
+                    return Fail(error, "MMCR toggle private state is invalid");
+                item.stateAccessorSymbol = "MM_Toggle_" + item.stateCallbackSymbol;
+            }
         }
         parsed.buildingOpenToggles.push_back(std::move(item));
     }
@@ -1315,6 +1341,12 @@ bool ParseRegistry(
             return Fail(error, "MMCR private recruitment record is invalid or noncanonical");
         parsed.privateRecruitments.push_back(std::move(item));
     }
+    if (version == 20 && std::none_of(parsed.sovereignTargetActions.begin(), parsed.sovereignTargetActions.end(),
+            [](const SovereignTargetActionRecord& item) { return !item.sourceTargetCallback.empty(); }))
+        return Fail(error, "MMCR v20 requires a source-target callback");
+    if (version == 19 && std::none_of(parsed.buildingOpenToggles.begin(), parsed.buildingOpenToggles.end(),
+            [](const BuildingOpenToggleRecord& item) { return !item.stateAttribute.empty(); }))
+        return Fail(error, "MMCR v19 requires independent toggle state");
     if (version == 18 && std::none_of(parsed.privateRecruitments.begin(), parsed.privateRecruitments.end(),
             [](const PrivateRecruitmentRecord& item) { return item.childDialogId != 0; }))
         return Fail(error, "MMCR v18 without recruitment children is noncanonical");

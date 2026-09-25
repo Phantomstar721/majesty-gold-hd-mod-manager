@@ -26,6 +26,7 @@ constexpr const char* kSupportedCapabilities[] = {
     kKingdomResearch,
     kHeroInfo,
     kMovementScale,
+    kSourceExploration,
 };
 
 void SetError(std::string* error, const char* message) {

@@ -4,7 +4,8 @@ param(
     [string]$WindowsSdkRoot = "",
     [switch]$FreestyleDiagnosticParity,
     [switch]$FreestyleDiagnosticNamedRetention,
-    [switch]$SiegeCrashDiagnostic
+    [switch]$SiegeCrashDiagnostic,
+    [switch]$ExplorationTests
 )
 
 $ErrorActionPreference = "Stop"
@@ -140,6 +141,16 @@ if ($LASTEXITCODE -ne 0) { throw "Runtime DLL build failed with exit code $LASTE
     (Join-Path $sourceRoot "MajestyBuildingRuntimeLauncher.cpp") `
     "/Fo$output\" "/Fe:$output\MajestyBuildingRuntimeLauncher.exe" /link @commonLibPaths
 if ($LASTEXITCODE -ne 0) { throw "Runtime launcher build failed with exit code $LASTEXITCODE" }
+
+if ($ExplorationTests) {
+    $fixtureSources = @($runtimeSources | Where-Object { [IO.Path]::GetFileName($_) -ne "MajestyModManagerRuntime.cpp" })
+    & $compiler /nologo /W4 /O2 /EHsc @commonIncludes @runtimeDefines `
+        @fixtureSources (Join-Path $repoRoot "tests\ExplorationNativeTests.cpp") `
+        "/Fo$output\" "/Fe:$output\ExplorationNativeTests.exe" /link @commonLibPaths @runtimeLibraries
+    if ($LASTEXITCODE -ne 0) { throw "Exploration native fixture build failed" }
+    & (Join-Path $output "ExplorationNativeTests.exe")
+    if ($LASTEXITCODE -ne 0) { throw "Exploration native fixture failed" }
+}
 
 Write-Host "Built x86 Majesty Mod Manager native runtime:"
 Write-Host $output

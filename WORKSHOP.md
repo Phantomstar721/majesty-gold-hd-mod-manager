@@ -6,10 +6,10 @@ support. Install this manager and launch Majesty through it to use them
 individually or together. It automatically finds and organizes your mods and
 quests, remembers your choices, and prepares anything that needs extra support.
 
-Update 0.3.8 adds GOG Gold HD support and easier switching between supported
-installations. It fixes crashes and missing hover descriptions in custom hero
-panels, corrects missing research effects, and supports percentage-based
-movement effects. Shared panel and mod-combining improvements are also included.
+The latest update improves compatibility between original-game quests and mods
+that use expansion content, preserves required building artwork and menu icons,
+and speeds up repeated checks of selected mods. It also expands shared support
+for independent building toggles and precisely targeted custom actions.
 Close Majesty and the Manager before updating. Afterwards, reopen the Manager,
 select Rescan Content, and Prepare Selected Mods (or Prepare Again) before
 launching Majesty.

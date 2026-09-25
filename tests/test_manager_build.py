@@ -1165,7 +1165,7 @@ class ManagerBuildPlanTests(unittest.TestCase):
                     catalog, {OTHER_ID: True}, registry=registry, game_path=game
                 )
 
-            self.assertEqual(len(first.stock_compose_inputs), 13)
+            self.assertEqual(len(first.stock_compose_inputs), 27)
             self.assertEqual(
                 dict(first.stock_compose_inputs)["DataMX/mx_maindata.cam"],
                 "absent",
@@ -1193,9 +1193,15 @@ class ManagerBuildPlanTests(unittest.TestCase):
                     build_merged_package(first, paths)
             composer.assert_not_called()
 
-    def test_stock_xml_change_addition_and_deletion_invalidate_plan(self):
+    def test_stock_source_change_addition_and_deletion_invalidate_plan(self):
         registry = CompatibilityRegistry(specs={})
         mutations = {
+            "GPL source": lambda game: (
+                game / "SDK/OriginalQuests/GPLMx/dependency_2.gpl"
+            ).write_bytes(b'expression #ExpansionOnly 20\n'),
+            "GPL project": lambda game: (
+                game / "SDK/OriginalQuests/GPLMx/Path_Build.gplproj"
+            ).write_bytes(b'source="dependency_3.gpl"\n'),
             "change": lambda game: (
                 game / "SDK/OriginalQuests/Data/stock.xml"
             ).write_bytes(b"<Descriptions changed='yes' />"),
@@ -1630,6 +1636,8 @@ def _prepared(
 
 
 def _write_stock_activity_inputs(game: Path) -> None:
+    from majesty_cam.stock_gpl import STOCK_GPL_RUNTIME_PAIRS
+    from test_stock_gpl import _manifest
     payloads = {
         "Data/textdata.cam": b"stock text CAM",
         "Data/miscdata.cam": b"stock Original misc CAM",
@@ -1642,6 +1650,19 @@ def _write_stock_activity_inputs(game: Path) -> None:
         "SDK/OriginalQuests/Data/stock.xml": b"<Descriptions />",
         "SDK/OriginalQuests/DataMX/stock-mx.xml": b"<Descriptions />",
     }
+    payloads['Data/MajestyDatasetDefinitions.xml'] = _manifest('Majesty', None, (
+        '$(MajestyBytecodeDataPath)/Bytecode.bcd',
+        '$(MajestyExpansionBytecodeDataPath)/MX_Compatibility.bcd',
+    )).encode('utf-8')
+    payloads['DataMX/MajestyExpansionDatasetDefinitions.xml'] = _manifest(
+        'MajestyExpansion', 'Majesty', tuple(
+            f'$(MajestyExpansionBytecodeDataPath)/{pair.target_relative.name}'
+            for pair in STOCK_GPL_RUNTIME_PAIRS[2:])).encode('utf-8')
+    for index, pair in enumerate(STOCK_GPL_RUNTIME_PAIRS):
+        project = Path('SDK/OriginalQuests') / pair.project_relative
+        source_name = f'dependency_{index}.gpl'
+        payloads[project.as_posix()] = f'source="{source_name}"\n'.encode('ascii')
+        payloads[(project.parent / source_name).as_posix()] = b'// dependency fixture\n'
     for relative, payload in payloads.items():
         path = game / relative
         path.parent.mkdir(parents=True, exist_ok=True)

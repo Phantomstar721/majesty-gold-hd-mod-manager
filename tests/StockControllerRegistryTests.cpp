@@ -633,6 +633,57 @@ int main() {
                 toggles.data(), size, &registry, &error)) return 40;
     }
 
+    auto independent = Header(0, 0, 0, 0, 0, 0, 0);
+    independent[4] = 19;
+    AppendU32(&independent, 0); // occupants
+    AppendU32(&independent, 2); // same-parent toggles
+    AppendU32(&independent, 0); // lists
+    AppendU32(&independent, 0); // recruitment
+    for (unsigned index = 0; index < 2; ++index) {
+        AppendString(&independent, index == 0 ? "auto" : "open");
+        AppendU32(&independent, FourCC("Z001"));
+        AppendU32(&independent, 0x5D01 + index * 2);
+        AppendU32(&independent, 0x5D02 + index * 2);
+        AppendU32(&independent, FourCC("AP08"));
+        AppendU32(&independent, index == 0 ? 1 : 0);
+        if (index == 0) {
+            AppendString(&independent, "ExampleAuto");
+            AppendString(&independent, "Example_Auto_Enabled");
+        }
+    }
+    if (!MajestyStockControllers::ParseRegistry(
+            independent.data(), independent.size(), &registry, &error) ||
+        registry.buildingOpenToggles.size() != 2 ||
+        registry.buildingOpenToggles[0].stateAccessorSymbol != "MM_Toggle_Example_Auto_Enabled" ||
+        !registry.buildingOpenToggles[1].stateAttribute.empty()) {
+        std::fprintf(stderr, "Independent toggle MMCR rejected: %s\n", error.c_str());
+        return 91;
+    }
+    for (std::size_t size = 0; size < independent.size(); ++size) {
+        if (MajestyStockControllers::ParseRegistry(
+                independent.data(), size, &registry, &error)) return 92;
+    }
+
+    auto sourceTarget = Header(1, 1, 0, 0, 0, 0, 1);
+    sourceTarget[4] = 20;
+    for (int i = 0; i < 4; ++i) AppendU32(&sourceTarget, 0);
+    AppendPanel(&sourceTarget, "brewing", "CGAL", "CGBR", "ALB", 0x1F49);
+    AppendMeter(&sourceTarget);
+    AppendSovereignAction(&sourceTarget);
+    const auto markerOffset = sourceTarget.size();
+    AppendU32(&sourceTarget, 1);
+    AppendString(&sourceTarget, "Private_Source_Target");
+    if (!MajestyStockControllers::ParseRegistry(sourceTarget.data(), sourceTarget.size(), &registry, &error) ||
+        registry.sovereignTargetActions[0].sourceTargetCallback != "Private_Source_Target") {
+        std::fprintf(stderr, "Source-target MMCR rejected: %s\n", error.c_str());
+        return 93;
+    }
+    for (std::size_t size = 0; size < sourceTarget.size(); ++size) {
+        if (MajestyStockControllers::ParseRegistry(sourceTarget.data(), size, &registry, &error)) return 94;
+    }
+    sourceTarget[markerOffset] = 2;
+    if (!ExpectInvalid(sourceTarget, "source-target callback")) return 95;
+
     auto quests = Header(0, 0, 0, 0, 0, 0, 0);
     quests[4] = 15;
     AppendU32(&quests, 0);  // occupant panels

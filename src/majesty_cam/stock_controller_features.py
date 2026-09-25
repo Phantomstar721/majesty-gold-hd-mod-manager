@@ -221,6 +221,15 @@ class StockMx22BuildingOpenToggle:
 
 
 @dataclass(frozen=True)
+class StockMx22IndependentToggle(StockMx22BuildingOpenToggle):
+    """A literal MX22 control pair backed by a private saved GPL boolean."""
+
+    state_attribute: str = ""
+    state_callback_symbol: str = ""
+    type: str = "stock.mx22-building-open-toggle.v2"
+
+
+@dataclass(frozen=True)
 class StockAp41Fl00HostileMonsterFlag:
     """AP41/Fl00 reward placement restricted to hostile stock monsters."""
 
@@ -347,9 +356,16 @@ class StockAp69SovereignTargetAction:
     type: str = "stock.ap69-sovereign-target-action.v1"
 
 
+@dataclass(frozen=True)
+class StockAp69SourceTargetAction(StockAp69SovereignTargetAction):
+    callback_symbol: str = ""
+    type: str = "stock.ap69-sovereign-target-action.v2"
+
+
 ControllerFeature = Union[
     StockAp52PrivateRecruitment,
     StockMx22BuildingOpenToggle,
+    StockMx22IndependentToggle,
     StockMx04Mx05OccupantActionPanel,
     StockMx05LiveAgentListPanel,
     StockAp10Ap69SecondaryPanel,
@@ -361,6 +377,7 @@ ControllerFeature = Union[
     StockAp24TimedRageAction,
     StockAp24RageCommandAction,
     StockAp69SovereignTargetAction,
+    StockAp69SourceTargetAction,
 ]
 
 
@@ -368,6 +385,7 @@ _FEATURE_TYPES = {
     "stock.ap52-private-recruitment.v1": StockAp52PrivateRecruitment,
     "stock.ap52-recruitment-panel.v1": StockAp52RecruitmentPanel,
     "stock.mx22-building-open-toggle.v1": StockMx22BuildingOpenToggle,
+    "stock.mx22-building-open-toggle.v2": StockMx22IndependentToggle,
     "stock.mx04-mx05-occupant-action-panel.v1": StockMx04Mx05OccupantActionPanel,
     "stock.mx05-live-agent-list-panel.v1": StockMx05LiveAgentListPanel,
     "stock.mx05-data-record-list-panel.v1": StockMx05DataRecordListPanel,
@@ -380,6 +398,7 @@ _FEATURE_TYPES = {
     "stock.ap24-timed-rage-action.v1": StockAp24TimedRageAction,
     "stock.ap24-rage-command-action.v1": StockAp24RageCommandAction,
     "stock.ap69-sovereign-target-action.v1": StockAp69SovereignTargetAction,
+    "stock.ap69-sovereign-target-action.v2": StockAp69SourceTargetAction,
 }
 
 _FEATURE_ORDER = {name: index for index, name in enumerate(_FEATURE_TYPES)}
@@ -733,6 +752,13 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
     if isinstance(feature, StockMx22BuildingOpenToggle):
         _logical(feature.toggle_key, "toggle_key")
         _logical(feature.parent_building, "parent_building")
+        if isinstance(feature, StockMx22IndependentToggle):
+            for value, label in ((feature.state_attribute, "state_attribute"),
+                                 (feature.state_callback_symbol, "state_callback_symbol")):
+                if not isinstance(value, str) or not _GPL_SYMBOL.fullmatch(value) or value.casefold().startswith("mm_"):
+                    raise ControllerFeatureError(f"{label} must be a private bounded GPL identifier")
+            if len(feature.state_callback_symbol) > 54:
+                raise ControllerFeatureError("state_callback_symbol must fit its generated adapter (54 characters)")
         _distinct_controls(
             "MX22 building open toggle",
             feature.open_command_id,
@@ -1036,6 +1062,8 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
             feature.price_control_id,
         )
     elif isinstance(feature, StockAp69SovereignTargetAction):
+        if isinstance(feature, StockAp69SourceTargetAction):
+            _gpl_symbol(feature.callback_symbol)
         _logical(feature.action_key, "action_key")
         _logical(feature.resource_key, "resource_key")
         _control(feature.visual_template_control_id, "visual_template_control_id")
@@ -1140,7 +1168,13 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
 
     toggles = [item for item in features if isinstance(item, StockMx22BuildingOpenToggle)]
     _unique_field(toggles, "toggle_key", "building toggle_key")
-    _unique_field(toggles, "parent_building", "building toggle parent")
+    _unique_field([item for item in toggles if not isinstance(item, StockMx22IndependentToggle)],
+                  "parent_building", "legacy building toggle parent")
+    private_toggles = [item for item in toggles if isinstance(item, StockMx22IndependentToggle)]
+    for field in ("state_attribute", "state_callback_symbol"):
+        values = [getattr(item, field).casefold() for item in private_toggles]
+        if len(values) != len(set(values)):
+            raise ControllerFeatureError(f"independent toggle {field} is duplicated")
     toggle_commands = set()
     for toggle in toggles:
         for command in (toggle.open_command_id, toggle.close_command_id):
@@ -1167,7 +1201,7 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
     # exact spelling in the emitted record, but reserve callback identities by
     # their case-folded spelling so two packages cannot register aliases for
     # the same function.
-    callbacks = set()
+    callbacks = {item.state_callback_symbol.casefold() for item in private_toggles}
     global_private_commands = {}
     private_modes = set()
     stock_sovereign_modes = set()
@@ -1325,7 +1359,7 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
                     (feature.stock_target_mode, feature.stock_executor_mode)
                 )
             _claim_controls(controls, feature.panel_key, feature.type, *visible)
-            if isinstance(feature, (StockAp24TimedRageAction, StockAp24RageCommandAction)):
+            if isinstance(feature, (StockAp24TimedRageAction, StockAp24RageCommandAction, StockAp69SourceTargetAction)):
                 callback_identity = feature.callback_symbol.casefold()
                 if callback_identity in callbacks:
                     raise ControllerFeatureError("duplicate private GPL callback symbol")
@@ -1363,7 +1397,10 @@ def _feature_sort_key(feature: ControllerFeature) -> tuple:
         if isinstance(feature, StockMx22BuildingOpenToggle)
         else feature.panel_key
     )
-    return (_FEATURE_ORDER[feature.type], logical_key, identity,
+    order_type = "stock.mx22-building-open-toggle.v1" if isinstance(feature, StockMx22IndependentToggle) else feature.type
+    if isinstance(feature, StockAp69SourceTargetAction):
+        order_type = "stock.ap69-sovereign-target-action.v1"
+    return (_FEATURE_ORDER[order_type], logical_key, identity,
             _canonical_record_bytes(feature))
 
 
@@ -1567,8 +1604,10 @@ __all__ = [
     "StockAp24RageCommandAction",
     "StockAp24TimedRageAction",
     "StockAp69SovereignTargetAction",
+    "StockAp69SourceTargetAction",
     "StockAp99ResearchRow",
     "StockMx22BuildingOpenToggle",
+    "StockMx22IndependentToggle",
     "StockAp52PrivateRecruitment",
     "StockAp52RecruitmentPanel",
     "StockMx04Mx05OccupantActionPanel",

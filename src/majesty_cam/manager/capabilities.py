@@ -12,6 +12,7 @@ from ..equipment import EQUIPMENT_FEATURE_TYPE
 from ..hero_info import HERO_INFO_TYPE
 from ..movement_scale import MOVEMENT_SCALE_TYPE
 from ..kingdom_research import KINGDOM_RESEARCH_TYPE
+from ..exploration_events import CAPABILITY as EXPLORATION_CAPABILITY
 from ..runtime_features import (
     ENCHANTMENT_ROW_RUNTIME_CAPABILITY,
     NAME_GENERATOR_RUNTIME_CAPABILITY,
@@ -39,6 +40,7 @@ DERIVED_RUNTIME_CAPABILITIES = frozenset(
         HERO_INFO_TYPE,
         MOVEMENT_SCALE_TYPE,
         KINGDOM_RESEARCH_TYPE,
+        EXPLORATION_CAPABILITY,
         STOCK_CONTROLLER_RUNTIME_CAPABILITY,
     )
 )

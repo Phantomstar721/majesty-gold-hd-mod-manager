@@ -40,6 +40,7 @@ EVENT_FUNCTIONS = {
     "tournament-completed": ("enter_tourney", "exit_fair"),
     "combat-experience-awarded": ("attack_end",),
     "exploration-experience-awarded": ("travel_to_exp",),
+    "source-terrain-revealed": (),
 }
 
 
@@ -341,4 +342,7 @@ begin
         end
 end
 ''')
+    if "source-terrain-revealed" in requested:
+        from .exploration_events import service_source
+        generated(service_source(requested["source-terrain-revealed"]))
     return SemanticMergeResult(tuple(items.values()), result.conflicts)

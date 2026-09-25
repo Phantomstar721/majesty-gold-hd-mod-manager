@@ -16,6 +16,7 @@ import uuid
 import xml.etree.ElementTree as ET
 
 from ._subprocess import no_console_window_options
+from .stock_input_cache import StockInputCache
 from .equipment import EquipmentRegistration, EQUIPMENT_FEATURE_TYPE, require_beta2
 from .movement_scale import (OverlayMovementScale, MOVEMENT_SCALE_TYPE,
                              validate_movement_scale_evidence)
@@ -101,6 +102,7 @@ from .shared_composition import validate_shared_bindings, event_subscribers
 from .shared_features import shared_feature_mapping
 from .activity_time import add_activity_service
 from .gameplay_events import event_stock_paths
+from .exploration_events import selected as exploration_selected, CAPABILITY as EXPLORATION_CAPABILITY
 from .gameplay_events import (EVENT_FUNCTIONS, STOCK_EVENT_FILES,
                               add_gameplay_event_observers)
 from .intent_text import (
@@ -205,6 +207,7 @@ from .stock_controller_features import (
     StockAp24RageCommandAction,
     StockAp24TimedRageAction,
     StockAp69SovereignTargetAction,
+    StockAp69SourceTargetAction,
     StockAp99ResearchRow,
     UpgradeRequirement,
     legacy_controller_features,
@@ -790,7 +793,10 @@ def inventory_package(selected: SelectedMod) -> PackageInventory:
                         f"{type(directive).__name__}"
                     )
 
-    if not cam_paths and not selected.semantic_passthrough:
+    from .exploration_events import requires_native_observation
+    source_runtime_package = (getattr(selected.package.definition, "schema_version", None) == 3 and
+                              requires_native_observation(selected.package.definition))
+    if not cam_paths and not selected.semantic_passthrough and not source_runtime_package:
         raise ComposeError(f"{selected.alias}: package has no CAM resources")
     if not gpl_loads and not selected.semantic_passthrough:
         raise ComposeError(f"{selected.alias}: package has no GPL load")
@@ -1606,6 +1612,27 @@ def _shared_bindings(inventories: Sequence[PackageInventory]):
         raise ComposeError(str(exc)) from exc
 
 
+def _typed_provider_dispatches(inventories):
+    from .typed_providers import FEATURE_CLASSES, compose_dispatches
+    packages = []
+    has_features = any(isinstance(feature, FEATURE_CLASSES)
+        for inventory in inventories
+        for feature in getattr(getattr(getattr(inventory.selected, "package", None),
+                                       "definition", None), "runtime_features", ()))
+    if not has_features:
+        return ()
+    for inventory in inventories:
+        package = inventory.selected.package
+        features = tuple(feature for feature in package.definition.runtime_features
+                         if isinstance(feature, FEATURE_CLASSES))
+        packages.append((_normalized_mod_uuid(package.mod_id), features,
+                         _parse_inventory_gpl_sources(inventory)))
+    try:
+        return compose_dispatches(packages)
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
+
+
 def _load_stock_gameplay_event_items(game_path: Path, events):
     root = game_path / "SDK" / "OriginalQuests" / "GPLMx"
     names = {name for event in events for name in EVENT_FUNCTIONS[event]}
@@ -2144,6 +2171,7 @@ def _apply_art_resolutions(
         owner: _analysis_owned_imag_keys(
             analysis,
             effective_stock_image_payloads=effective_stock_payloads,
+            base_stock_imag_keys=_base_art_image_keys(stock, fallthrough_ancestors),
         )
         for owner, analysis in analysis_by_owner.items()
     }
@@ -2408,6 +2436,7 @@ def _compose_art_domain(
         owned_image_keys = _analysis_owned_imag_keys(
             analysis_by_owner[owner],
             effective_stock_image_payloads=effective_stock_image_payloads,
+            base_stock_imag_keys=_base_art_image_keys(stock, fallthrough_ancestors),
         )
         imag_entries = tuple(
             entry
@@ -2763,10 +2792,16 @@ def _effective_analysis_tile_entries(
     return tuple(entries)
 
 
+def _base_art_image_keys(stock: CamArchive, ancestors: Sequence[CamArchive]) -> frozenset[bytes]:
+    return frozenset(entry.name.rstrip(b"\0")[:4]
+                     for entry in _require_section(ancestors[0] if ancestors else stock, b"IMAG").entries)
+
+
 def _analysis_owned_imag_keys(
     analysis: ArtArchiveAnalysis,
     *,
     effective_stock_image_payloads: Mapping[bytes, set[bytes]],
+    base_stock_imag_keys: frozenset[bytes] | None = None,
 ) -> frozenset[bytes]:
     """Return only IMAG records whose visual result this provider changes.
 
@@ -2786,6 +2821,9 @@ def _analysis_owned_imag_keys(
             entry.name.rstrip(b"\x00")[:4], set()
         )
     }
+    if base_stock_imag_keys is not None:
+        keys.update(entry.name.rstrip(b"\0")[:4] for entry in analysis.imag_entries
+                    if entry.name.rstrip(b"\0")[:4] not in base_stock_imag_keys)
     private_tiles = set(analysis.tile_delta.changed_indices).difference(
         analysis.retained_tile_dependencies
     )
@@ -4682,6 +4720,7 @@ def merge_gpl_resources(
     stock_unit_death: SemanticItem | None = None,
     stock_gameplay_event_items: Mapping[str, SemanticItem] | None = None,
     stock_spell_evaluation: SemanticItem | None = None,
+    dataset_dependency_resolver: Callable[[SemanticMergeResult], SemanticMergeResult] | None = None,
 ) -> GplComposeResult:
     parsed_by_owner: dict[str, list[ParsedSemanticSource]] = {}
     for inventory in inventories:
@@ -5094,6 +5133,16 @@ def merge_gpl_resources(
                 {key[1]: item for key, item in ancestors.items()})
     except ValueError as exc:
         raise ComposeError(str(exc)) from exc
+    from .action_callback_bridge import add_bridges
+    from .building_toggle_state import add_state_functions, selected as selected_toggles
+    try:
+        final = add_bridges(final, inventories)
+        final = add_state_functions(final, selected_toggles(inventories))
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
+    dispatches = _typed_provider_dispatches(inventories)
+    if dispatches:
+        final = SemanticMergeResult((*final.items, *dispatches), final.conflicts)
     if private_activity_texts:
         try:
             audit_private_activity_text_resolver_aliases(
@@ -5112,6 +5161,11 @@ def merge_gpl_resources(
             tuple(item for item in final.items if item.key in required_patch_keys),
             final.conflicts,
         )
+    if dataset_dependency_resolver is not None:
+        try:
+            final = dataset_dependency_resolver(final)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
     return GplComposeResult(
         source_set=final.emit_project_source_set(),
         conflicts=initial.conflicts,
@@ -5211,6 +5265,19 @@ def validate_gpl_feature_evidence(
 ) -> tuple[GplFeatureEvidence, ...]:
     """Validate and deterministically order source-composed GPL callbacks."""
 
+    _typed_provider_dispatches(inventories)
+    from .building_toggle_state import selected as selected_toggles, validate_declarations
+    if selected_toggles(inventories):
+        try:
+            owners = tuple((inventory.selected.alias, selected_toggles((inventory,))) for inventory in inventories)
+            sources = tuple((inventory.selected.alias, _parse_inventory_gpl_sources(inventory)) for inventory in inventories)
+            stock = tuple(_parse_semantic_source_file(game_path / relative)
+                          for relative in ("SDK/OriginalQuests/GPL/prototype.gpl",
+                                           "SDK/OriginalQuests/GPLMx/mx_prototype.gpl")
+                          if game_path is not None and (game_path / relative).is_file())
+            validate_declarations(owners, sources, stock)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
     private_trees, spell_equivalents = _private_hero_bindings(inventories)
     if spell_equivalents and game_path is not None:
         try:
@@ -5225,6 +5292,10 @@ def validate_gpl_feature_evidence(
         # packages, including packages that do not declare a shared service.
         protected_names = {item.normalized_name for item in
             add_activity_service(SemanticMergeResult((), ()), shared).items}
+        if "source-terrain-revealed" in events:
+            from .exploration_events import service_source
+            protected_names.update(item.normalized_name for item in
+                parse_gpl(service_source(events["source-terrain-revealed"])).items)
         if protected_names:
             for inventory in inventories:
                 for source in _parse_inventory_gpl_sources(inventory):
@@ -5626,8 +5697,37 @@ def compile_gpl(
     )
 
 
+_STOCK_SNAPSHOT_CACHE = StockInputCache()
+
+
 def snapshot_stock_compose_inputs(
     game_path: Path, *, extra_relative_paths: Sequence[Path] = (),
+    include_dataset_dependencies: bool = False,
+) -> tuple[StockComposeInput, ...]:
+    root = game_path.resolve(strict=True)
+    extra = tuple(extra_relative_paths)
+
+    def paths():
+        dependencies = ()
+        if include_dataset_dependencies:
+            from .dataset_dependencies import stock_dependency_paths
+            dependencies = stock_dependency_paths(root)
+        return tuple(root / p for p in (
+            *_enumerate_stock_compose_relative_paths(root),
+            *_STOCK_COMPOSE_XML_DIRECTORIES, *_STOCK_COMPOSE_OPTIONAL_INPUTS,
+            *extra, *dependencies))
+
+    try:
+        return _STOCK_SNAPSHOT_CACHE.get(root, (extra, include_dataset_dependencies), paths,
+            lambda: _snapshot_stock_compose_inputs_uncached(root,
+                extra_relative_paths=extra, include_dataset_dependencies=include_dataset_dependencies))
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
+
+
+def _snapshot_stock_compose_inputs_uncached(
+    game_path: Path, *, extra_relative_paths: Sequence[Path] = (),
+    include_dataset_dependencies: bool = False,
 ) -> tuple[StockComposeInput, ...]:
     """Hash the complete, deterministic installed-stock composition input set.
 
@@ -5648,6 +5748,13 @@ def snapshot_stock_compose_inputs(
         *((relative, False) for relative in _STOCK_COMPOSE_OPTIONAL_INPUTS),
         *((relative, True) for relative in extra_relative_paths),
     )
+    dependency_paths = ()
+    if include_dataset_dependencies:
+        from .dataset_dependencies import stock_dependency_paths
+        dependency_paths = stock_dependency_paths(root)
+        existing = {p.as_posix().casefold() for p, _ in input_specs}
+        input_specs += tuple((p, True) for p in dependency_paths
+                             if p.as_posix().casefold() not in existing)
 
     snapshots: list[StockComposeInput] = []
     seen: set[str] = set()
@@ -5705,6 +5812,8 @@ def snapshot_stock_compose_inputs(
             "installed stock Description inputs changed while creating the "
             "composition snapshot"
         )
+    if include_dataset_dependencies and dependency_paths != stock_dependency_paths(root):
+        raise ComposeError('installed stock GPL project inputs changed while creating the composition snapshot')
     for snapshot in snapshots:
         if snapshot.relative_path not in _STOCK_COMPOSE_OPTIONAL_INPUTS:
             continue
@@ -6870,6 +6979,13 @@ def _require_controller_feature_evidence(
                     f"package-owned GPL function; found {len(matches)}"
                 )
         elif isinstance(feature, StockAp69SovereignTargetAction):
+            if isinstance(feature, StockAp69SourceTargetAction):
+                callbacks = gpl_functions.get(feature.callback_symbol.casefold(), ())
+                if len(callbacks) != 1:
+                    raise ComposeError(f"{inventory.selected.alias}: source-target callback requires exactly one package-owned function: {feature.callback_symbol}")
+                item = next(item for source in callback_sources for item in source.items
+                            if item.kind is DefinitionKind.FUNCTION and item.name.casefold() == feature.callback_symbol.casefold())
+                _require_source_target_callback_signature(item.text, feature.callback_symbol)
             matches = [
                 element
                 for element in descriptions
@@ -6882,6 +6998,15 @@ def _require_controller_feature_evidence(
                     f"{feature.private_unit_id!r} requires exactly one "
                     "package-owned Character Description"
                 )
+
+
+def _require_source_target_callback_signature(text: str, symbol: str) -> None:
+    from .gpl import _mask_non_code
+    agent = r"agent\s+[A-Za-z_][A-Za-z0-9_]*"
+    pattern = (r"\s*function\s+" + re.escape(symbol) + r"\s*\(\s*" + agent +
+               r"\s*,\s*" + agent + r"\s*,\s*" + agent + r"\s*\)\s*(?:declare|begin)\b")
+    if re.match(pattern, _mask_non_code(text), re.IGNORECASE) is None:
+        raise ComposeError(f"source-target callback {symbol!r} must take (agent Spell, agent Source, agent Target) with no return type")
 
 
 def _require_occupant_callback_signature(text: str, symbol: str, cost: bool) -> None:
@@ -7017,6 +7142,7 @@ def prepare_final_gpl_resources(
         else (None, None, None)
     )
     events = event_subscribers(_shared_bindings(inventories))
+    from .dataset_dependencies import close_dataset_dependencies, load_dataset_symbols
     return merge_gpl_resources(
         inventories,
         resolution_owners=resolution_owners,
@@ -7025,6 +7151,8 @@ def prepare_final_gpl_resources(
         private_activity_texts=private_activity_texts,
         stock_semantic_sources=stock_semantic_sources,
         stock_function_loader=lambda names: load_stock_function_ancestors(game_path, names),
+        dataset_dependency_resolver=lambda result: close_dataset_dependencies(
+            result, load_dataset_symbols(game_path)) if result.items else result,
         stock_integer_expression_sources=(
             (_load_stock_activity_text_expression_source(game_path),)
             if private_activity_texts
@@ -7170,7 +7298,7 @@ def compose_package(
     runtime_feature_registry = resolve_runtime_feature_registry(
         inventories, runtime_capabilities
     )
-    if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows or runtime_feature_registry.movement_scales:
+    if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows or runtime_feature_registry.movement_scales or exploration_selected(inventories):
         require_beta2(game_path / "MajestyHD.exe")
     runtime_feature_registry_payload = encode_runtime_feature_registry(
         runtime_feature_registry
@@ -7189,6 +7317,7 @@ def compose_package(
         ),
         runtime_feature_registry=runtime_feature_registry,
         controller_registry=controller_result.registry,
+        has_source_exploration=exploration_selected(inventories),
     )
     text_result = merge_text_resources(
         game_path,
@@ -7466,6 +7595,7 @@ def _derive_runtime_capabilities(
     has_private_activity_text: bool,
     runtime_feature_registry: RuntimeFeatureRegistry = RuntimeFeatureRegistry(),
     controller_registry: ResolvedControllerRegistry | None = None,
+    has_source_exploration: bool = False,
 ) -> tuple[tuple[str, ...], bytes]:
     """Validate caller capabilities and derive evidence-owned hook groups.
 
@@ -7479,6 +7609,9 @@ def _derive_runtime_capabilities(
             encode_runtime_capability_manifest(runtime_capabilities)
         )
         effective = set(provided)
+        effective.discard(EXPLORATION_CAPABILITY)
+        if has_source_exploration:
+            effective.add(EXPLORATION_CAPABILITY)
         effective.discard(PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY)
         effective.discard(STOCK_CONTROLLER_RUNTIME_CAPABILITY)
         if has_private_activity_text:
@@ -7993,6 +8126,14 @@ def _validate_generated_runtime_evidence(
                 gpl_functions[key] = gpl_functions.get(key, 0) + 1
                 gpl_function_texts[key] = item.text
 
+    from .exploration_events import validate_service
+    try:
+        validate_service(gpl_function_texts,
+                         EXPLORATION_CAPABILITY in definition.runtime_capabilities,
+                         gpl_functions)
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
+
     for panel in controller_registry.panels:
         parent = panel.parent_dialog_id.to_bytes(4, "little")
         child = panel.child_dialog_id.to_bytes(4, "little")
@@ -8080,20 +8221,32 @@ def _validate_generated_runtime_evidence(
         )
 
     for panel in controller_registry.occupant_action_panels:
+        from .action_callback_bridge import validate_bridge
+        try:
+            callback, body = validate_bridge(panel.action_callback_symbol, gpl_function_texts, gpl_functions)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+        _require_occupant_callback_signature(body, callback, False)
         for symbol in (panel.cost_callback_symbol, panel.action_callback_symbol):
             if gpl_functions.get(symbol.casefold(), 0) != 1:
                 raise ComposeError(f"generated occupant callback {symbol!r} must exist exactly once")
             _require_occupant_callback_signature(
                 gpl_function_texts[symbol.casefold()], symbol,
-                symbol == panel.cost_callback_symbol,
+                True,
             )
     for panel in controller_registry.live_agent_lists:
+        from .action_callback_bridge import validate_bridge
+        try:
+            callback, body = validate_bridge(panel.action_callback_symbol, gpl_function_texts, gpl_functions)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+        _require_live_agent_list_callback_signature(body, callback, ("agent",), "boolean")
         callbacks = [
             (panel.row_count_callback_symbol, ("agent",), "integer"),
             (panel.row_agent_id_callback_symbol, ("agent", "integer"), "integer"),
             (panel.revision_callback_symbol, ("agent",), "integer"),
             (panel.action_cost_callback_symbol, ("agent",), "integer"),
-            (panel.action_callback_symbol, ("agent",), "boolean"),
+            (panel.action_callback_symbol, ("agent",), "integer"),
         ]
         if panel.row_value_callback_symbol is not None:
             callbacks.append((
@@ -8120,6 +8273,12 @@ def _validate_generated_runtime_evidence(
                 result_type,
             )
     for toggle in controller_registry.building_open_toggles:
+        if toggle.state_attribute:
+            from .building_toggle_state import validate_state_functions
+            try:
+                validate_state_functions(toggle, gpl_function_texts, gpl_functions)
+            except ValueError as exc:
+                raise ComposeError(str(exc)) from exc
         parent = toggle.parent_dialog_id.to_bytes(4, "little")
         if parent not in building_dialogs:
             raise ComposeError(
@@ -8147,6 +8306,11 @@ def _validate_generated_runtime_evidence(
                 f"requires exactly one generated GPL function; found {count}"
             )
     for action in controller_registry.sovereign_target_actions:
+        if isinstance(action, StockAp69SourceTargetAction):
+            symbol = action.callback_symbol.casefold()
+            if gpl_functions.get(symbol) != 1:
+                raise ComposeError(f"generated source-target callback missing or duplicated: {action.callback_symbol}")
+            _require_source_target_callback_signature(gpl_function_texts[symbol], action.callback_symbol)
         matches = [
             element
             for element in descriptions
@@ -8331,7 +8495,7 @@ def _build_report(
     staging: Path,
     validation: Mapping[str, object],
 ) -> dict:
-    stock_inputs = snapshot_stock_compose_inputs(game_path, extra_relative_paths=event_stock_paths(
+    stock_inputs = snapshot_stock_compose_inputs(game_path, include_dataset_dependencies=True, extra_relative_paths=event_stock_paths(
         feature for selected in selected_mods
         for feature in getattr(selected.package.definition, "runtime_features", ())))
     selected_payload = []

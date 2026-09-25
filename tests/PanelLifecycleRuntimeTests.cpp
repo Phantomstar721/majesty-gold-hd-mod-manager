@@ -3,6 +3,7 @@
 #include "../runtime/MajestyModManagerRuntime.cpp"
 #include <cassert>
 #include <cstdio>
+#include <cstdlib>
 
 namespace {
 struct StreamedDialog { void** table; };
@@ -480,6 +481,16 @@ void Initialize() {
 
 int recruitmentRefreshCount = 0;
 bool secondaryContainerAvailable = true;
+std::map<void*, std::uint32_t> toggleSavedValues;
+int toggleStateCalls = 0;
+bool ToggleScalar(const char* symbol, void* owner, bool hasInteger, int operation,
+                  std::uint32_t* result, bool) {
+    assert(std::strcmp(symbol, "MM_Toggle_Example_Enabled") == 0 && hasInteger);
+    ++toggleStateCalls;
+    if (operation == 0 || operation == 1) toggleSavedValues[owner] = operation;
+    *result = toggleSavedValues[owner];
+    return true;
+}
 void __fastcall RecruitmentSetup(void* object, void*) {
     auto* mode = reinterpret_cast<std::uint32_t*>(static_cast<unsigned char*>(object) + 0x30);
     assert(*mode == 1); // literal AP69 setup prefix must precede stock layout
@@ -587,7 +598,12 @@ void RecruitmentChildLifecycle() {
 }
 }
 
+#include "SovereignSourceTargetChecks.inl"
+
 int main() {
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    _set_error_mode(_OUT_TO_STDERR);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
     Initialize();
     RecruitmentChildLifecycle();
     // 1. Single-panel replacement: native deletion of ONLY the parent preserves
@@ -717,6 +733,33 @@ int main() {
     assert(packedValue == 0 && lastVisibleControl == 0x5D02 && lastVisibleValue == 0);
     assert(lastMessageControl == 0x5D01 && lastMessage == 0x0A);
     assert(!HandleBuildingOpenToggle(&parent, 0x7777, &toggleResult));
+
+    // Independent pairs keep the literal presenter, but never touch Embassy's flag.
+    g_stockControllerRegistry.buildingOpenToggles.push_back(
+        {"auto", 0x31303042, 0x5D03, 0x5D04, kMx09DialogId,
+         "ExampleAuto", "Example_Enabled", "MM_Toggle_Example_Enabled"});
+    g_parentOpenToggleRecord = &g_stockControllerRegistry.buildingOpenToggles[0];
+    g_questBoardScalarEvaluator = &ToggleScalar;
+    ResetPrivateToggleStates();
+    toggleSavedValues.clear(); toggleStateCalls = 0;
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(&parent));
+    const int firstToggleRead = toggleStateCalls;
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(&parent));
+    assert(firstToggleRead == 1 && toggleStateCalls == 1); // no paint polling GPL
+    assert(lastMessageControl == 0x5D03);
+    assert(HandleBuildingOpenToggle(&parent, 0x5D03, &toggleResult));
+    assert(toggleSavedValues[contextA] == 1 && packedValue == 0 && submitCount == 0);
+    assert(lastMessageControl == 0x5D04);
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(&replacementParent));
+    assert(toggleSavedValues[contextB] == 0 && lastMessageControl == 0x5D03);
+    ResetPrivateToggleStates(); // close/reopen reads persisted state again
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(&parent));
+    assert(lastMessageControl == 0x5D04);
+    assert(HandleBuildingOpenToggle(&parent, 0x5D04, &toggleResult));
+    assert(toggleSavedValues[contextA] == 0 && packedValue == 0);
+    g_stockControllerRegistry.buildingOpenToggles.pop_back();
+    g_parentOpenToggleRecord = &g_stockControllerRegistry.buildingOpenToggles[0];
+    ResetPrivateToggleStates();
 
     // 12. The native creation-result hook installs the combined parent vtable
     // after stock setup has already run.  Reward+occupant+toggle parents must
@@ -1417,5 +1460,6 @@ int main() {
     ClearSecondaryPanelControllerOwnedState();
     assert(g_renderedDataRecordRevision == -1 && g_questOfferPresentationCount == 0);
     assert(g_questOfferPresentations[0].recordKey == 0);
+    SovereignChecks::Run();
     std::puts("Panel lifecycle x86 tests passed.");
 }

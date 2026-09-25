@@ -29,6 +29,30 @@ from majesty_cam.art import analyze_art_archive
 
 
 class StockArtTests(unittest.TestCase):
+    def test_expansion_only_stock_image_survives_sparse_and_final_composition(self):
+        from types import SimpleNamespace
+        from majesty_cam.compose import _compose_art_domain
+        from majesty_cam.art import parse_stock_imag_tile_references
+        base = _archive((_image(b"BASE", 300, 0),), (_tile(0, marker=7),), palette=b"SPLT")
+        expansion = _archive((_image(b"BASE", 300, 0), _image(b"EXPN", 300, 1)),
+                             (_tile(0, marker=7), _tile(1, marker=9)), palette=b"SPLT")
+        carried = _archive((_image(b"EXPN", 300, 1),),
+                           (_tile(0, marker=7), _tile(1, marker=9)), palette=b"SPLT")
+        lineage = StockArtLineage('fixture', (Path('base.cam'), Path('mx.cam')),
+                                  (base, expansion), expansion)
+        sparse = _sparse_component_archive(lineage, (carried,))
+        self.assertEqual([e.name[:4] for e in _section(sparse, b'IMAG').entries], [b'EXPN'])
+        analysis = analyze_art_archive(expansion, sparse, mod_id='owner', fallthrough_ancestors=(base, expansion))
+        inventory = SimpleNamespace(selected=SimpleNamespace(alias='owner'))
+        result = _compose_art_domain('fixture', 'main', expansion,
+            ((inventory, Path('mod.cam'), sparse),), (analysis,), fallthrough_ancestors=(base, expansion))
+        image = _section(result.archive, b'IMAG').entries[0]
+        tiles = _section(result.archive, b'TILE').entries
+        self.assertEqual(image.name[:4], b'EXPN')
+        ref = parse_stock_imag_tile_references(image.data, tile_count=len(tiles)).references[0]
+        self.assertEqual(tiles[ref.tile_index].data, _tile(1, marker=9))
+        self.assertEqual(_section(result.archive, b'SPLT').entries[1].data, b'\x02')
+
     def test_empty_named_inheritance_survives_sparse_collapse(self):
         original = _named_tiles(_archive((_image(b"MAIN", 300, 1),),
                                          (b"", _tile(0, marker=7)), palette=b"SPLT"), b"Adept")

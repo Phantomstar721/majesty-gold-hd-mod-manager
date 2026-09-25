@@ -15,7 +15,7 @@ replacement controllers.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 import struct
@@ -23,6 +23,7 @@ import tempfile
 from typing import Iterable, Mapping, Optional, Tuple, Type
 
 from .stock_building_controllers import is_stock_building_controller
+from .action_callback_bridge import bridge_symbol
 from .stock_controller_features import (
     MAX_CONTROLLER_FEATURES,
     MAX_FEATURE_TEXT_BYTES,
@@ -38,6 +39,7 @@ from .stock_controller_features import (
     StockMx09Ap41RewardPanel,
     StockMx04Mx05OccupantActionPanel,
     StockMx22BuildingOpenToggle,
+    StockMx22IndependentToggle,
     StockAp52PrivateRecruitment,
     StockAp52RecruitmentPanel,
     StockAp17UpgradeResearchGate,
@@ -45,6 +47,7 @@ from .stock_controller_features import (
     StockAp24RageCommandAction,
     StockAp24TimedRageAction,
     StockAp69SovereignTargetAction,
+    StockAp69SourceTargetAction,
     StockAp99ResearchRow,
     UpgradeRequirement,
     normalize_controller_features,
@@ -52,7 +55,7 @@ from .stock_controller_features import (
 
 
 CONTROLLER_REGISTRY_MAGIC = b"MMCR"
-CONTROLLER_REGISTRY_VERSION = 18
+CONTROLLER_REGISTRY_VERSION = 20
 STOCK_CONTROLLER_RUNTIME_CAPABILITY = "stock.controller-recipes.v1"
 CONTROLLER_REGISTRY_ENVIRONMENT = "MAJESTY_MOD_MANAGER_CONTROLLERS"
 CONTROLLER_REGISTRY_RELATIVE_PATH = Path(
@@ -125,6 +128,8 @@ class ResolvedBuildingOpenToggleRecord:
     open_command_id: int
     close_command_id: int
     parent_controller_base: str
+    state_attribute: str = ""
+    state_callback_symbol: str = ""
 
 
 @dataclass(frozen=True)
@@ -289,7 +294,7 @@ def resolve_stock_controller_registry(
             occupant_panels.append(ResolvedOccupantActionPanelRecord(
                 item.panel_key, parent, child, item.open_command_id,
                 0x10000 + len(occupant_panels), item.cost_callback_symbol,
-                item.action_callback_symbol,
+                bridge_symbol(item.action_callback_symbol),
                 (occupant_parent_bases or {}).get(item.panel_key, "AP10"),
             ))
         elif isinstance(item, StockMx05LiveAgentListPanel):
@@ -356,7 +361,7 @@ def resolve_stock_controller_registry(
                 item.row_variant_callback_symbol, text_ids.row_variants,
                 item.row_value_callback_symbol,
                 text_ids.row_value_suffix_intent_id, item.action_cost_callback_symbol,
-                item.action_callback_symbol,
+                bridge_symbol(item.action_callback_symbol),
                 (occupant_parent_bases or {}).get(item.panel_key, "AP08"),
                 item.stay_on_panel_after_action,
                 item.focus_selected_row_on_click,
@@ -386,6 +391,8 @@ def resolve_stock_controller_registry(
         toggles.append(ResolvedBuildingOpenToggleRecord(
             item.toggle_key, parent, item.open_command_id,
             item.close_command_id, controller_base,
+            getattr(item, "state_attribute", ""),
+            getattr(item, "state_callback_symbol", ""),
         ))
     recruitment_features = tuple(item for item in features if isinstance(item, StockAp52PrivateRecruitment))
     resolved_recruitment_parents = dict(recruitment_parents or {})
@@ -558,7 +565,14 @@ def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> by
     ) else 14
     if any(item.data_record_rows for item in registry.live_agent_lists):
         version = 16
-    if registry.private_recruitments:
+    source_target = any(isinstance(item, StockAp69SourceTargetAction) for item in registry.sovereign_target_actions)
+    if source_target or any(item.state_attribute for item in registry.building_open_toggles):
+        version = 20 if source_target else 19
+        sections += (registry.occupant_action_panels, registry.building_open_toggles,
+                     registry.live_agent_lists, registry.private_recruitments)
+        writer.data += _RECRUITMENT_HEADER.pack(
+            CONTROLLER_REGISTRY_MAGIC, version, *(len(section) for section in sections))
+    elif registry.private_recruitments:
         version = 18 if any(item.child_dialog_id for item in registry.private_recruitments) else 17
         sections += (registry.occupant_action_panels, registry.building_open_toggles,
                      registry.live_agent_lists, registry.private_recruitments)
@@ -649,11 +663,11 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
             "MMCR v13 live-agent lists lack the row-focus policy; "
             "rebuild with the current Manager"
         )
-    if version in (17, 18):
+    if version in (17, 18, 19, 20):
         if len(payload) < _RECRUITMENT_HEADER.size:
             raise ControllerRegistryError(f"MMCR v{version} header is truncated")
         magic, version, *counts = _RECRUITMENT_HEADER.unpack_from(payload)
-        if counts[12] == 0:
+        if version < 19 and counts[12] == 0:
             raise ControllerRegistryError(f"MMCR v{version} without private recruitment is noncanonical")
     elif version in (14, 15, 16):
         if len(payload) < _LIST_HEADER.size:
@@ -685,7 +699,7 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
         raise ControllerRegistryError("MMCR panel count is outside bounds")
 
     reader = _Reader(payload)
-    if version in (17, 18):
+    if version in (17, 18, 19, 20):
         reader.cursor = _RECRUITMENT_HEADER.size
     elif version in (14, 15, 16):
         reader.cursor = _LIST_HEADER.size
@@ -831,6 +845,10 @@ def _encode_feature(writer: _Writer, feature: object, version: int) -> None:
         writer.u32(feature.resource_cost)
         writer.u32(feature.icon_control_id)
         writer.u32(feature.price_control_id)
+        if version >= 20:
+            writer.u32(int(isinstance(feature, StockAp69SourceTargetAction)))
+            if isinstance(feature, StockAp69SourceTargetAction):
+                writer.symbol(feature.callback_symbol)
     elif isinstance(feature, ResolvedRewardPanelRecord):
         writer.u32(feature.parent_dialog_id)
         writer.u32(feature.child_dialog_id)
@@ -848,6 +866,11 @@ def _encode_feature(writer: _Writer, feature: object, version: int) -> None:
         writer.u32(feature.open_command_id)
         writer.u32(feature.close_command_id)
         writer.fourcc(feature.parent_controller_base)
+        if version >= 19:
+            writer.u32(1 if feature.state_attribute else 0)
+            if feature.state_attribute:
+                writer.symbol(feature.state_attribute)
+                writer.symbol(feature.state_callback_symbol)
     elif isinstance(feature, ResolvedPrivateRecruitmentRecord):
         writer.u32(feature.parent_dialog_id)
         writer.u32(feature.third_price_control_id)
@@ -920,11 +943,18 @@ def _decode_feature(
             reader.fourcc("parent_controller_base"),
         )
     if kind is StockMx22BuildingOpenToggle:
-        return ResolvedBuildingOpenToggleRecord(
+        item = ResolvedBuildingOpenToggleRecord(
             panel, reader.u32("parent_dialog_id"),
             reader.u32("open_command_id"), reader.u32("close_command_id"),
-            reader.fourcc("parent_controller_base"),
-        )
+            reader.fourcc("parent_controller_base"))
+        if version >= 19:
+            private = reader.u32("toggle private state")
+            if private not in (0, 1):
+                raise ControllerRegistryError("toggle private-state flag must be boolean")
+            if private:
+                item = replace(item, state_attribute=reader.symbol("toggle state attribute"),
+                               state_callback_symbol=reader.symbol("toggle state callback"))
+        return item
     if kind is StockMx05LiveAgentListPanel:
         parent = reader.u32("parent_dialog_id")
         child = reader.u32("child_dialog_id")
@@ -1058,11 +1088,21 @@ def _decode_feature(
         cursor = reader.u32("cursor_ordinal")
         level = reader.u32("required_level")
         resource = reader.logical("resource_key")
-        return StockAp69SovereignTargetAction(
+        record = StockAp69SovereignTargetAction(
             panel, action, *controls, *modes, cursor, level, resource,
             reader.u32("resource_cost"), reader.u32("icon_control_id"),
             reader.u32("price_control_id"),
         )
+        if version >= 20:
+            flag = reader.u32("source_target_callback")
+            if flag not in (0, 1):
+                raise ControllerRegistryError("MMCR source-target callback marker is invalid")
+            if flag:
+                from dataclasses import asdict
+                fields = asdict(record)
+                fields.pop("type")
+                return StockAp69SourceTargetAction(**fields, callback_symbol=reader.symbol("callback_symbol"))
+        return record
     if kind is StockMx09Ap41RewardPanel:
         return ResolvedRewardPanelRecord(
             panel, reader.u32("parent_dialog_id"), reader.u32("child_dialog_id"),
@@ -1316,7 +1356,7 @@ def _validate_resolved_registry(
         if item.toggle_key in toggle_by_key:
             raise ControllerRegistryError("MMCR building toggle_key is duplicated")
         _resolved_dialog_id(item.parent_dialog_id, "parent_dialog_id")
-        if item.parent_dialog_id in toggle_parents:
+        if not item.state_attribute and item.parent_dialog_id in toggle_parents:
             raise ControllerRegistryError("MMCR building toggle parent is duplicated")
         if item.open_command_id in toggle_commands or item.close_command_id in toggle_commands:
             raise ControllerRegistryError("MMCR building toggle command is duplicated")
@@ -1333,17 +1373,25 @@ def _validate_resolved_registry(
                 "MMCR building toggle parent controller base conflicts with another recipe"
             )
         parent_bases[item.parent_dialog_id] = item.parent_controller_base
-        toggle_parents.add(item.parent_dialog_id)
+        if not item.state_attribute:
+            toggle_parents.add(item.parent_dialog_id)
         toggle_commands.update((item.open_command_id, item.close_command_id))
         parent_commands.update((
             (item.parent_dialog_id, item.open_command_id),
             (item.parent_dialog_id, item.close_command_id),
         ))
         toggle_by_key[item.toggle_key] = item
-        author_features.append(StockMx22BuildingOpenToggle(
-            item.toggle_key, _resolved_parent_key(item.parent_dialog_id),
-            item.open_command_id, item.close_command_id,
-        ))
+        if bool(item.state_attribute) != bool(item.state_callback_symbol):
+            raise ControllerRegistryError("independent toggle state/callback must be paired")
+        if item.state_attribute:
+            author_features.append(StockMx22IndependentToggle(
+                item.toggle_key, _resolved_parent_key(item.parent_dialog_id),
+                item.open_command_id, item.close_command_id,
+                state_attribute=item.state_attribute, state_callback_symbol=item.state_callback_symbol))
+        else:
+            author_features.append(StockMx22BuildingOpenToggle(
+                item.toggle_key, _resolved_parent_key(item.parent_dialog_id),
+                item.open_command_id, item.close_command_id))
     recruitment_by_key = {}
     recruitment_parents = set()
     for item in registry.private_recruitments:
