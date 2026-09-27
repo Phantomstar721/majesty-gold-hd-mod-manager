@@ -249,7 +249,7 @@ class StandardScriptTests(TestCase):
         from majesty_cam.potion_policy import Plan, Action, POTIONS, parse_feature
         from majesty_cam.private_phantom_policy import POLICY
         from majesty_cam.stock_gpl import load_stock_function_ancestors
-        from majesty_cam.compose import compile_gpl, prepare_final_gpl_resources, ComposeError
+        from majesty_cam.compose import compile_gpl, prepare_final_gpl_resources, prepare_gpl_bundle, ComposeError
         from tempfile import TemporaryDirectory
         root = Path('C:/Program Files (x86)/Steam/steamapps/workshop/content/73230/3743606613')
         game = Path('C:/Program Files (x86)/Steam/steamapps/common/Majesty HD')
@@ -269,3 +269,49 @@ class StandardScriptTests(TestCase):
             self.assertIn('phantom', items[name])
         with TemporaryDirectory() as temp:
             compile_gpl(merged.source_set, game/'SDK/Gplbcc.exe', Path(temp)/'fixture')
+            bundle = prepare_gpl_bundle(game, (), potion_plan=plan, standard_script_inputs=(native,))
+            patches = dict(bundle.patches)
+            self.assertIn('MajestyExpansion', patches)
+            common = bundle.common.source_set.gpl_text.lower()
+            self.assertNotIn('mk_goblin_priest', common)
+            self.assertNotIn('mk_goblin_priest', patches.get('Majesty', result('')).source_set.gpl_text.lower())
+            self.assertIn('mk_goblin_priest', patches['MajestyExpansion'].source_set.gpl_text.lower())
+            for scope, output in bundle.outputs:
+                if output.source_set.files:
+                    compile_gpl(output.source_set, game/'SDK/Gplbcc.exe', Path(temp)/scope)
+
+    def test_installed_native_hero_trees_keep_quest_callbacks_in_both_scopes(self):
+        from majesty_cam.compose import PackageInventory, SelectedMod, prepare_gpl_bundle, compile_gpl
+        from majesty_cam.standard_scripts import read
+        from majesty_cam.gpl_features import StockHeroQuestLifecycle
+        from majesty_cam.package import ModDefinition
+        from test_private_hero_gpl import CALLBACKS
+        game = Path('C:/Program Files (x86)/Steam/steamapps/common/Majesty HD')
+        root = Path('C:/Program Files (x86)/Steam/steamapps/workshop/content/73230/3743606613')
+        if not (root/'Monster Kingdom.mmxml').is_file() or not (game/'SDK/Gplbcc.exe').is_file():
+            self.skipTest('requires installed source fixture')
+        native = read(SimpleNamespace(package_root=root, manifest_path=root/'Monster Kingdom.mmxml',
+                      content_id='BFA127E5-3AE4-47BF-BEE0-BDC27BAEE50C', display_name='Native source fixture'))
+        lifecycle = StockHeroQuestLifecycle('quests', ('mx_healer', 'mx_adept', 'mx_monk'), 'Resume', 'Consider', 'Reset', 'Death')
+        definition = ModDefinition(3, '11111111-1111-1111-1111-111111111111', 'Quest', 'Quest', (), runtime_features=(lifecycle,))
+        package = SimpleNamespace(definition=definition, mod_id=definition.mod_id, display_name='Quest')
+        callbacks = parse_gpl(CALLBACKS[:CALLBACKS.index('function reset_tasks')].replace('\nbegin', '\ndeclare\nbegin'))
+        inventory = PackageInventory(SelectedMod('quest', package), (), (), (), (), semantic_sources=(callbacks,))
+        bundle = prepare_gpl_bundle(game, (inventory,), standard_script_inputs=(native,))
+        for scope in ('Majesty', 'MajestyExpansion'):
+            outputs = (bundle.common, *(r for s, r in bundle.patches if s == scope))
+            items = {i.normalized_name:i.text.lower() for r in outputs for i in parse_gpl(r.source_set.gpl_text).items}
+            for tree_name in ('healer_tree', 'adept_tree', 'monk_tree'):
+                self.assertIn('$resume', items[tree_name])
+                self.assertIn('$consider', items[tree_name])
+            self.assertIn('$reset', items['reset_tasks'])
+            self.assertIn('$death', items['unit_call_deathscript'])
+            if scope == 'Majesty':
+                self.assertNotIn('$deletealleffectors', items['unit_call_deathscript'])
+                self.assertNotIn('$stopmoving', items['reset_tasks'])
+            else:
+                self.assertIn('mk_deathstep', items['unit_call_deathscript'])
+        with TemporaryDirectory() as temp:
+            for scope, output in bundle.outputs:
+                if output.source_set.files:
+                    compile_gpl(output.source_set, game/'SDK/Gplbcc.exe', Path(temp)/scope)

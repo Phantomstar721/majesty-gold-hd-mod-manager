@@ -510,7 +510,7 @@ class ManagerController:
                     raise ManagerLaunchError(str(exc)) from exc
                 if snapshot.managed_build is None:
                     raise ManagerLaunchError("The generated Merge profile is missing.")
-                active_ids.append(snapshot.managed_build.mod_id)
+                active_ids.extend(snapshot.managed_build.active_mod_ids)
                 intent_registry = (
                     snapshot.managed_build.output_root
                     / Path(INTENT_REGISTRY_RELATIVE_PATH)
@@ -648,6 +648,7 @@ class ManagerController:
             "manifest_name": result.manifest.name,
             "report_name": result.report.name,
             "mod_id": result.mod_id,
+            "generated_mod_ids": list(result.active_mod_ids),
             "fingerprint": result.fingerprint,
             "selected_source_ids": list(result.selected_source_ids),
         }
@@ -660,6 +661,7 @@ class ManagerController:
             "manifest_name",
             "report_name",
             "mod_id",
+            "generated_mod_ids",
             "fingerprint",
             "selected_source_ids",
         }:
@@ -686,11 +688,17 @@ class ManagerController:
                     root / Path(RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH)
                 ),
                 mod_id=normalize_guid(str(raw["mod_id"])),
+                generated_mod_ids=tuple(normalize_guid(str(i)) for i in raw['generated_mod_ids']),
                 fingerprint=str(raw["fingerprint"]),
                 selected_source_ids=tuple(
                     normalize_guid(str(item)) for item in selected
                 ),
             )
+            from ..scoped_output import SCOPES, scoped_mod_id
+            expected_ids = (result.mod_id, *(normalize_guid(scoped_mod_id(result.mod_id, scope))
+                for scope in SCOPES if normalize_guid(scoped_mod_id(result.mod_id, scope)) in result.generated_mod_ids))
+            if result.generated_mod_ids != expected_ids:
+                return None
             if not all(
                 path.is_file()
                 for path in (
@@ -862,16 +870,17 @@ class ManagerController:
             sentinel_path = root / MANAGER_OUTPUT_SENTINEL
             try:
                 sentinel = json.loads(sentinel_path.read_text(encoding="utf-8"))
-                generated_id = normalize_guid(sentinel["mod_id"])
+                generated_ids = tuple(normalize_guid(i) for i in sentinel.get('generated_mod_ids', [sentinel['mod_id']]))
                 expanded = tuple(
                     normalize_guid(value)
                     for value in sentinel["selected_source_ids"]
                 )
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-                generated_id = ""
+                generated_ids = ()
                 expanded = ()
-            if generated_id and expanded:
-                generated_by_id[generated_id] = expanded
+            if expanded:
+                for generated_id in generated_ids:
+                    generated_by_id[generated_id] = expanded
 
         # Older Manager builds had only the report. Preserve their one-time
         # import path, but never trust a cached generated ID for the current

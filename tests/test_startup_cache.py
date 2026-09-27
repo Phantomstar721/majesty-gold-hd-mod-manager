@@ -225,6 +225,27 @@ class StartupCacheTests(unittest.TestCase):
         with patch.object(sys, "frozen", True, create=True):
             self.assertEqual(_manager_cache_identity_paths(), (Path(sys.executable),))
 
+    def test_script_conflict_lexer_and_catalog_changes_invalidate_cached_catalog(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            manager = root / "manager"
+            manager.mkdir()
+            lexer = root / "gpl_function_merge.py"
+            catalog = manager / "catalog.py"
+            lexer.write_text("old lexer")
+            catalog.write_text("old conflict check")
+            with patch("majesty_cam.manager.startup_cache.__file__", str(manager / "startup_cache.py")), \
+                    patch.object(sys, "frozen", False, create=True):
+                paths = _manager_cache_identity_paths()
+                cache = StartupCache.load(root / "cache.json")
+                for changed in (lexer, catalog):
+                    with self.subTest(changed=changed.name):
+                        signature = metadata_signature(paths)
+                        cache.set_catalog(signature, Catalog(entries=(), issues=()))
+                        self.assertIsNotNone(cache.get_catalog(signature))
+                        changed.write_text("updated token-based conflict check")
+                        self.assertIsNone(cache.get_catalog(metadata_signature(paths)))
+
     def test_catalog_round_trip_and_installed_content_change_invalidation(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)

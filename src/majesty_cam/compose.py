@@ -597,6 +597,7 @@ class ComposePackageResult:
     profile_slug: str
     report: Path
     validation: Mapping[str, object]
+    generated_mod_ids: tuple[str, ...] = ()
 
 
 _PROFILE_NAMESPACE = uuid.UUID("634a1b44-a04c-5f83-bb0f-8ace03b8900b")
@@ -5895,6 +5896,21 @@ def _parse_inventory_gpl_sources(
     ]
 
 
+def _compiler_source_bytes(text: str) -> bytes:
+    try:
+        return text.encode('cp1252')
+    except UnicodeEncodeError:
+        # Some native source packages use UTF-8 decorations in comments. They
+        # carry no GPL semantics. Never replace characters in code or literals.
+        from .gpl_function_merge import _LEX
+        text = _LEX.sub(lambda match: match.group().encode('cp1252', errors='replace').decode('cp1252')
+                        if match.group().startswith(('//', '/*')) else match.group(), text)
+        try:
+            return text.encode('cp1252')
+        except UnicodeEncodeError as exc:
+            raise ComposeError('GPL code or a string literal cannot be represented in the stock compiler encoding') from exc
+
+
 def compile_gpl(
     source_set: GplProjectSourceSet,
     compiler: Path,
@@ -5912,7 +5928,7 @@ def compile_gpl(
         source_set.project_text.encode("cp1252")
     )
     for filename, text in source_set.files.items():
-        (output_directory / filename).write_bytes(text.encode("cp1252"))
+        (output_directory / filename).write_bytes(_compiler_source_bytes(text))
     target = output_directory / f"{stem}.bcd"
     process = subprocess.run(
         (str(compiler), "-in", project_name, "-out", target.name, "-stdout"),
@@ -7347,14 +7363,37 @@ def prepare_final_gpl_resources(
     potion_plan=None,
     standard_script_inputs=(),
     script_dataset="any",
+    dataset_symbols=None,
 ) -> GplComposeResult:
     """Build the exact final GPL source set used by both Prepare and Build."""
+
+    from .dataset_dependencies import close_dataset_dependencies, load_dataset_symbols
+    def stock_symbols():
+        nonlocal dataset_symbols
+        if dataset_symbols is None:
+            dataset_symbols = load_dataset_symbols(game_path)
+        return dataset_symbols
+
+    def stock_functions(names):
+        if script_dataset == 'any':
+            return load_stock_function_ancestors(game_path, names)
+        stock = stock_symbols()
+        found = {}
+        for name in names:
+            name = name.casefold()
+            if name in stock.expansion_functions:
+                loader = (stock.base_function_loader if script_dataset == 'majesty'
+                          and name in stock.base_functions else stock.function_loader)
+                # Base-absent extension helpers keep the existing explicit
+                # expansion import; an existing base body is never replaced.
+                found[(DefinitionKind.FUNCTION, name)] = loader(name)
+        return found
 
     providers = None
     if standard_script_inputs:
         from .standard_scripts import Providers, for_dataset, participant_inventories
         providers = Providers(standard_script_inputs,
-            lambda names: load_stock_function_ancestors(game_path, names),
+            stock_functions,
             game_path / 'SDK/Gplbcc.exe', script_dataset)
         if any(isinstance(feature, StockHeroQuestLifecycle) for inventory in inventories
                for feature in inventory.selected.package.definition.runtime_features):
@@ -7410,10 +7449,15 @@ def prepare_final_gpl_resources(
         if has_hero_quest_lifecycle
         else (None, None, None)
     )
+    if has_hero_quest_lifecycle and script_dataset != 'any':
+        trees, reset, death = hero_quest_stock_items
+        effective = stock_functions(tuple(i.name for i in (*trees.values(), reset, death)))
+        hero_quest_stock_items = (
+            {script: effective.get(item.key, item) for script, item in trees.items()},
+            effective.get(reset.key, reset), effective.get(death.key, death))
     events = event_subscribers(_shared_bindings(inventories))
-    from .dataset_dependencies import close_dataset_dependencies, load_dataset_symbols
     context_bindings = _source_context_bindings(inventories)
-    context_stock = load_dataset_symbols(game_path) if context_bindings else None
+    context_stock = stock_symbols() if context_bindings else None
     result = merge_gpl_resources(
         inventories,
         standard_providers=providers,
@@ -7430,9 +7474,10 @@ def prepare_final_gpl_resources(
         inventory_death_drop_exclusions=inventory_death_drop_exclusions,
         private_activity_texts=private_activity_texts,
         stock_semantic_sources=stock_semantic_sources,
-        stock_function_loader=lambda names: load_stock_function_ancestors(game_path, names),
+        stock_function_loader=stock_functions,
         dataset_dependency_resolver=lambda result: close_dataset_dependencies(
-            result, load_dataset_symbols(game_path), provided=providers.lookup if providers else None) if result.items else result,
+            result, stock_symbols(), provided=providers.lookup if providers else None,
+            dataset=script_dataset) if result.items else result,
         stock_integer_expression_sources=(
             (_load_stock_activity_text_expression_source(game_path),)
             if private_activity_texts
@@ -7462,7 +7507,24 @@ def prepare_final_gpl_resources(
                    for inventory in inventories for feature in inventory.selected.package.definition.runtime_features)
             else None),
     )
+    if providers is not None and script_dataset != 'any':
+        from .scoped_output import audit_scope_dependencies
+        audit_scope_dependencies(result, providers, stock_symbols())
     return result
+
+
+def prepare_gpl_bundle(game_path, inventories, *, standard_script_inputs=(), **kwargs):
+    """Compose scoped scripts only; artwork and source proofs are shared."""
+    from .scoped_output import ScriptBundle, partition
+    inputs = tuple(item for item in standard_script_inputs if item.loads or item.participants)
+    if not inputs:
+        return ScriptBundle(prepare_final_gpl_resources(game_path, inventories, **kwargs))
+    from .dataset_dependencies import load_dataset_symbols
+    stock = load_dataset_symbols(game_path)
+    views = tuple(prepare_final_gpl_resources(game_path, inventories,
+                  standard_script_inputs=inputs, script_dataset=scope, dataset_symbols=stock, **kwargs)
+                  for scope in ('majesty', 'majestyexpansion'))
+    return partition(*views)
 
 
 def compose_package(
@@ -7498,6 +7560,7 @@ def compose_package(
     private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
     prepared_inventories: Sequence[PackageInventory] | None = None,
     standard_script_inputs=(),
+    max_generated_mods: int | None = None,
 ) -> ComposePackageResult:
     """Generate one atomic, self-contained local profile from any N packages.
 
@@ -7707,7 +7770,7 @@ def compose_package(
         descriptions = transform_descriptions(descriptions, spell_policy_plan)
     except ValueError as exc:
         raise ComposeError(str(exc)) from exc
-    gpl = prepare_final_gpl_resources(
+    script_bundle = prepare_gpl_bundle(
         game_path,
         inventories,
         resolution_owners=resolution_owners,
@@ -7719,13 +7782,19 @@ def compose_package(
         potion_plan=potion_plan,
         standard_script_inputs=standard_script_inputs,
     )
+    gpl = script_bundle.common
+    if max_generated_mods is not None and len(script_bundle.outputs) > max_generated_mods:
+        raise ComposeError('This selection needs ' + str(len(script_bundle.outputs)) +
+                           ' generated Mod IDs, exceeding the active-mod persistence limit. '
+                           'Deselect some Standard mods before preparing.')
 
     output_mod_id = _generated_mod_id(selected_mods, profile_slug)
     # Classify once while preparing, from resolved source and effective actions.
     # The runtime only filters AP78 rows; it never rewrites learned spell nodes.
     action_records = dict(stock_description_records)
     action_records.update({record.key: record for record in descriptions.document.records})
-    hidden_actions = derive_hidden_action_ids(gpl.source_set.gpl_text or "", action_records.values())
+    hidden_actions = tuple(sorted({action for _, output in script_bundle.outputs
+        for action in derive_hidden_action_ids(output.source_set.gpl_text or "", action_records.values())}))
     if hidden_actions:
         require_supported_runtime(game_path / "MajestyHD.exe")
         runtime_feature_registry = replace(runtime_feature_registry, hidden_inventory_actions=hidden_actions)
@@ -7784,14 +7853,17 @@ def compose_package(
             strings_path.write_bytes(strings.payload)
             strings_paths.append(strings_path)
 
-        compiled = compile_gpl(
-            gpl.source_set,
-            game_path / "SDK" / "Gplbcc.exe",
-            staging / "GPL",
-        )
-        target = data_directory / "Merged.bcd"
-        shutil.copy2(compiled.target, target)
-        compiled.target.unlink()
+        compiled_outputs = {}
+        for scope, output in script_bundle.outputs:
+            if not output.source_set.files:
+                continue
+            directory = staging / 'GPL' if scope == 'Any' else staging / 'GPL' / scope
+            compiled_output = compile_gpl(output.source_set, game_path / 'SDK/Gplbcc.exe', directory)
+            filename = 'Merged.bcd' if scope == 'Any' else f'Merged-{scope}.bcd'
+            shutil.copy2(compiled_output.target, data_directory / filename)
+            compiled_output.target.unlink()
+            compiled_outputs[scope] = compiled_output
+        compiled = compiled_outputs.get('Any')
 
         manifest_name = f"CAMManager-{profile_slug}.mmxml"
         manifest_path = staging / manifest_name
@@ -7804,6 +7876,7 @@ def compose_package(
                 description_filename=descriptions_path.name,
                 strings_filenames=tuple(path.name for path in strings_paths),
                 source_set=gpl.source_set,
+                scoped_sources=tuple((scope, output.source_set) for scope, output in script_bundle.patches),
             )
         )
         (staging / "mod-definition.json").write_text(
@@ -7852,6 +7925,15 @@ def compose_package(
             validation=validation,
         )
         report_name = "CAM-MERGE-REPORT.json"
+        from .scoped_output import scoped_mod_id
+        generated_records = [
+            {'mod_id': output_mod_id if scope == 'Any' else scoped_mod_id(output_mod_id, scope),
+             'scope': scope,
+             'compiled_bcd_size': compiled_outputs[scope].size if scope in compiled_outputs else 0,
+             'standard_source_ids': [item.package.mod_id for item in standard_script_inputs
+                                     if scope == 'Any' or 'any' in item.bases or scope.casefold() in item.bases]}
+            for scope, _ in script_bundle.outputs]
+        report_payload['generated_records'] = generated_records
         (staging / report_name).write_text(
             json.dumps(report_payload, indent=2) + "\n", encoding="utf-8"
         )
@@ -7874,6 +7956,7 @@ def compose_package(
         profile_slug=profile_slug,
         report=output_root / report_name,
         validation=validation,
+        generated_mod_ids=tuple(record['mod_id'] for record in generated_records),
     )
 
 
@@ -8106,7 +8189,9 @@ def _validate_generated_cam_outputs(
 def validate_composed_package(root: Path) -> Mapping[str, object]:
     """Reparse every emitted resource and verify the generated load graph."""
 
-    package = load_package(root)
+    from .scoped_output import load_generated_bundle
+    packages = load_generated_bundle(root)
+    package = packages[0]
     if len(package.datasets) != 1 or len(package.datasets[0].loads) != 1:
         raise ComposeError("generated package does not contain one Any/Load graph")
     load = package.datasets[0].loads[0]
@@ -8121,14 +8206,15 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
         load.descriptions[0].absolute_path.read_bytes(),
         source=str(load.descriptions[0].absolute_path),
     )
-    if len(load.gpl) != 1:
-        raise ComposeError("generated package does not contain one GPL project")
-    gpl_load = load.gpl[0]
-    if gpl_load.target.absolute_path.stat().st_size == 0:
-        raise ComposeError("generated GPL target is empty")
+    if len(load.gpl) > 1:
+        raise ComposeError("generated common package contains multiple GPL projects")
+    all_gpl = tuple(g for p in packages for g in p.datasets[0].loads[0].gpl)
+    for gpl_load in all_gpl:
+        if gpl_load.target.absolute_path.stat().st_size == 0 or not gpl_load.sources:
+            raise ComposeError("generated GPL target or sources are empty")
     parsed_sources = 0
     controlled_follower_marker_references: set[str] = set()
-    for source in gpl_load.sources:
+    for source in (source for gpl_load in all_gpl for source in gpl_load.sources):
         text = _read_source_text(source.absolute_path)
         controlled_follower_marker_references.update(
             re.findall(r"\bMCF[0-9A-F]{12}[1-4]\b", text)
@@ -8257,12 +8343,18 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
             "generated controller registry and generic MMCP hook selection disagree"
         )
 
-    generated_inventory = inventory_package(SelectedMod("generated", package))
-    _validate_generated_runtime_evidence(
-        generated_inventory,
-        runtime_features,
-        controller_registry,
-    )
+    generated_inventory = inventory_package(SelectedMod("generated", package, semantic_passthrough=True))
+    patch_loads = {p.datasets[0].base: p.datasets[0].loads[0].gpl for p in packages[1:]}
+    for scope in ('Majesty', 'MajestyExpansion') if patch_loads else ('Any',):
+        view = replace(generated_inventory, gpl_loads=(*load.gpl, *patch_loads.get(scope, ())))
+        # Each native view must remain a conflict-free, complete source graph.
+        sources = [_parse_semantic_source_file(source.absolute_path) for g in view.gpl_loads for source in g.sources]
+        for source in sources:
+            require_complete_semantic_coverage(source)
+        keys = [item.key for source in sources for item in source.items]
+        if len(set(keys)) != len(keys):
+            raise ComposeError(f'{scope}: generated common and scoped scripts duplicate a definition')
+        _validate_generated_runtime_evidence(view, runtime_features, controller_registry)
     return {
         "status": "passed",
         "manifest": package.manifest_path.name,
@@ -8270,7 +8362,8 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
         "cams": cam_summaries,
         "description_count": len(document.records),
         "gpl_source_item_count": parsed_sources,
-        "bcd_size": gpl_load.target.absolute_path.stat().st_size,
+        "bcd_size": sum(g.target.absolute_path.stat().st_size for g in all_gpl),
+        "generated_records": [{'mod_id': p.mod_id, 'scope': p.datasets[0].base} for p in packages],
         "private_activity_text_count": len(private_activity_texts),
         "runtime_capability_count": len(runtime_capabilities),
         "runtime_name_generator_count": len(runtime_features.name_generators),
@@ -8759,6 +8852,7 @@ def _build_manifest(
     description_filename: str,
     source_set: GplProjectSourceSet,
     strings_filenames: Sequence[str] = (),
+    scoped_sources=(),
 ) -> bytes:
     root = ET.Element("Majesty")
     mod = ET.SubElement(root, "Mod", {"id": mod_id})
@@ -8779,16 +8873,25 @@ def _build_manifest(
     )
     for strings_filename in strings_filenames:
         ET.SubElement(load, "Strings").text = f"Data\\{strings_filename}"
-    gpl = ET.SubElement(load, "GPL")
-    ET.SubElement(gpl, "Target").text = "Data\\Merged.bcd"
-    if source_set.dat_filename is not None:
-        ET.SubElement(gpl, "Source").text = (
-            f"GPL\\{source_set.dat_filename}"
-        )
-    if source_set.gpl_filename is not None:
-        ET.SubElement(gpl, "Source").text = (
-            f"GPL\\{source_set.gpl_filename}"
-        )
+    def add_gpl(block, sources, scope):
+        if not sources.files:
+            return
+        gpl = ET.SubElement(block, 'GPL')
+        ET.SubElement(gpl, 'Target').text = 'Data\\Merged.bcd' if scope == 'Any' else f'Data\\Merged-{scope}.bcd'
+        prefix = 'GPL' if scope == 'Any' else f'GPL\\{scope}'
+        for filename in sources.files:
+            ET.SubElement(gpl, 'Source').text = f'{prefix}\\{filename}'
+    add_gpl(load, source_set, 'Any')
+    from .scoped_output import scoped_mod_id
+    for scope, sources in scoped_sources:
+        if not sources.files:
+            raise ComposeError('cannot emit an empty scoped Mod record')
+        patch = ET.SubElement(root, 'Mod', {'id': scoped_mod_id(mod_id, scope)})
+        ET.SubElement(patch, 'Name').text = internal_name + scope
+        ET.SubElement(patch, 'DisplayName', {'lang': 'en_US'}).text = display_name + ' (' + scope + ' scripts)'
+        config = ET.SubElement(patch, 'DataConfiguration')
+        scoped_load = ET.SubElement(ET.SubElement(config, 'Dataset', {'base': scope}), 'Load')
+        add_gpl(scoped_load, sources, scope)
     ET.indent(root, space="\t")
     return ET.tostring(root, encoding="utf-8") + b"\n"
 
@@ -9135,7 +9238,7 @@ def _build_report(
                     )
                 ],
                 "shared_services": list(gpl.shared_services),
-                "compiled_bcd_size": compiled.size,
+                "compiled_bcd_size": compiled.size if compiled is not None else 0,
             },
             "art": {
                 result.domain: _art_report_payload(result)

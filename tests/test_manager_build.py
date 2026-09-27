@@ -460,7 +460,7 @@ class ManagerBuildPlanTests(unittest.TestCase):
                 "majesty_cam.manager.build.validate_composed_package",
                 return_value={"manifest": manifest.name},
             ), patch(
-                "majesty_cam.manager.build.load_package", return_value=package
+                "majesty_cam.scoped_output.load_generated_bundle", return_value=(package,)
             ):
                 self.assertIsNotNone(read_managed_build(root))
                 protected = (

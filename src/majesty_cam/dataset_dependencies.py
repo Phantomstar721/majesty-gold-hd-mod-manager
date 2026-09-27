@@ -36,6 +36,7 @@ class DatasetSymbols:
     base_functions: frozenset[str]
     expansion_functions: frozenset[str]
     function_loader: Optional[Callable[[str], SemanticItem]] = None
+    base_function_loader: Optional[Callable[[str], SemanticItem]] = None
 
 
 def stock_dependency_paths(game_path: Path) -> tuple[Path, ...]:
@@ -87,7 +88,7 @@ def _load_dataset_symbols(root: Path) -> DatasetSymbols:
     manifests = tuple(_capture_file(root, p) for p in (_BASE_MANIFEST, _EXPANSION_MANIFEST))
     _validate_runtime_manifests(_StockSnapshot(root, manifests, ''))
     expressions = {}; functions = set(); payloads = {}; function_sources = {}
-    base_expressions = frozenset(); base_functions = frozenset()
+    base_expressions = frozenset(); base_functions = frozenset(); base_function_sources = {}
     for index, pair in enumerate(STOCK_GPL_RUNTIME_PAIRS):
         project = Path('SDK/OriginalQuests') / pair.project_relative
         project_path = _require_safe_file(root, project)
@@ -104,15 +105,20 @@ def _load_dataset_symbols(root: Path) -> DatasetSymbols:
         if index == 1:  # Base includes MX_Compatibility, not just Bytecode.
             base_expressions = frozenset(expressions)
             base_functions = frozenset(functions)
+            base_function_sources = dict(function_sources)
     def function_loader(name: str) -> SemanticItem:
         path, payload = function_sources[name]
         return _ancestor_source_parse(path, payload).require(DefinitionKind.FUNCTION, name)
 
+    def base_function_loader(name: str) -> SemanticItem:
+        path, payload = base_function_sources[name]
+        return _ancestor_source_parse(path, payload).require(DefinitionKind.FUNCTION, name)
+
     return DatasetSymbols(base_expressions, expressions, base_functions, frozenset(functions),
-                          function_loader)
+                          function_loader, base_function_loader)
 
 
-def close_dataset_dependencies(result: SemanticMergeResult, stock: DatasetSymbols, *, provided=None) -> SemanticMergeResult:
+def close_dataset_dependencies(result: SemanticMergeResult, stock: DatasetSymbols, *, provided=None, dataset='any') -> SemanticMergeResult:
     """Link absent stock helpers transitively without changing their lifecycle.
 
     Loading a GPL function defines it; it does not execute its body. Existing
@@ -120,12 +126,16 @@ def close_dataset_dependencies(result: SemanticMergeResult, stock: DatasetSymbol
     Only missing names are added, never expansion replacements for base names.
     """
     result.require_clean()
+    if dataset not in ('any', 'majesty', 'majestyexpansion'):
+        raise ValueError(f'unsupported dependency dataset: {dataset}')
+    available_expr = stock.expansion_expressions if dataset == 'majestyexpansion' else stock.base_expressions
+    available_funcs = stock.expansion_functions if dataset == 'majestyexpansion' else stock.base_functions
     owned_expr = {i.normalized_name for i in result.items if i.kind is DefinitionKind.EXPRESSION}
     owned_funcs = {i.normalized_name for i in result.items if i.kind is DefinitionKind.FUNCTION}
     added = {}; visiting = set(); errors = set(); added_functions = {}
 
     def expression(name: str, chain: str):
-        if name in stock.base_expressions or name in owned_expr or name in added:
+        if name in available_expr or name in owned_expr or name in added:
             return
         item = stock.expansion_expressions.get(name)
         if item is None:
@@ -163,7 +173,7 @@ def close_dataset_dependencies(result: SemanticMergeResult, stock: DatasetSymbol
             if name.startswith('#'):
                 expression(name, f'{item.source_name}: {item.name}')
             elif (name[1:] in stock.expansion_functions
-                  and name[1:] not in stock.base_functions
+                  and name[1:] not in available_funcs
                   and name[1:] not in owned_funcs
                   and name[1:] not in added_functions):
                 if provided is not None and provided((DefinitionKind.FUNCTION, name[1:])) is not None:

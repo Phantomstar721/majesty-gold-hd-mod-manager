@@ -180,5 +180,7 @@ source corrections are:
   explicitly checking the unresolved `Any` restriction and a separate expansion
   script composition. This does not build or publish a user profile.
 
-The [scope plan](mod-dataset-scope-plan.md) remains design work, not implemented
-publication or an in-game acceptance result. The test executable is unchanged.
+This checkpoint preceded scoped publication. The subsequent user-authorized
+[scope implementation](mod-dataset-scope-plan.md) supersedes that boundary; its
+implementation notes distinguish source/fixture verification from the remaining
+in-game acceptance.

@@ -82,7 +82,7 @@ from .. import standard_scripts
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
-PLAN_SCHEMA_VERSION = 9
+PLAN_SCHEMA_VERSION = 10
 STANDARD_SELECTION_ISSUE_CODES = frozenset(
     {
         "mutually_exclusive_mods",
@@ -263,6 +263,11 @@ class ManagerBuildResult:
     mod_id: str
     fingerprint: str
     selected_source_ids: tuple[str, ...]
+    generated_mod_ids: tuple[str, ...] = ()
+
+    @property
+    def active_mod_ids(self) -> tuple[str, ...]:
+        return self.generated_mod_ids or (self.mod_id,)
 
     @property
     def runtime_feature_registry(self) -> Path:
@@ -702,7 +707,12 @@ def refresh_standard_script_inputs(plan: BuildPlan, entries: Sequence[CatalogEnt
     """Refresh selected source identity without repeating Merge preflight."""
     by_id = {entry.content_id: entry for entry in entries}
     selected = tuple(by_id[key] for key in plan.selected_standard_ids) if plan.has_merge else ()
-    issues = tuple(issue for issue in plan.issues if issue.code != "standard_script_inputs")
+    issues = tuple(issue for issue in plan.issues if issue.code not in ("standard_script_inputs", "active_id_limit"))
+    from .launch import CURRENT_PERSISTENCE_LIMIT
+    minimum = len(plan.selected_standard_ids) + int(plan.has_merge)
+    if minimum > CURRENT_PERSISTENCE_LIMIT:
+        issues += (BuildIssue('active_id_limit', f'This selection needs at least {minimum} active Mod IDs; '
+                    f'the limit is {CURRENT_PERSISTENCE_LIMIT}. Deselect some Standard mods.'),)
     signature = ""
     try:
         signature = standard_scripts.fingerprint(selected)
@@ -964,6 +974,7 @@ def build_merged_package(
             private_activity_texts=private_activity_texts,
             prepared_inventories=inventories,
             standard_script_inputs=tuple(standard_scripts.read(e) for e in plan.standard_script_entries),
+            max_generated_mods=_remaining_generated_slots(plan),
         )
         _require_current_plan_sources(
             plan, game_path=paths.game_path, phase="during composition"
@@ -997,9 +1008,10 @@ def build_merged_package(
                 "build plan."
             )
         sentinel = {
-            "schema_version": 4,
+            "schema_version": 5,
             "fingerprint": plan.fingerprint,
             "mod_id": normalize_guid(result.mod_id),
+            "generated_mod_ids": [normalize_guid(i) for i in (result.generated_mod_ids or (result.mod_id,))],
             "selected_source_ids": list(plan.selected_merge_source_ids),
             "intent_registry": {
                 "path": INTENT_REGISTRY_RELATIVE_PATH,
@@ -1061,6 +1073,7 @@ def build_merged_package(
         mod_id=normalize_guid(result.mod_id),
         fingerprint=plan.fingerprint,
         selected_source_ids=plan.selected_merge_source_ids,
+        generated_mod_ids=tuple(normalize_guid(i) for i in (result.generated_mod_ids or (result.mod_id,))),
     )
 
 
@@ -1072,7 +1085,9 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
         return None
     try:
         value = json.loads(sentinel_path.read_text(encoding="utf-8"))
-        if not isinstance(value, dict) or set(value) != {
+        if not isinstance(value, dict):
+            return None
+        expected_keys = {
             "schema_version",
             "fingerprint",
             "mod_id",
@@ -1082,9 +1097,12 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
             "runtime_feature_registry",
             "controller_registry",
             "generated_files",
-        }:
+        }
+        if value.get('schema_version') == 5:
+            expected_keys.add('generated_mod_ids')
+        if set(value) != expected_keys:
             return None
-        if value.get("schema_version") != 4:
+        if value.get("schema_version") not in (4, 5):
             return None
         expected_files = _parse_generated_file_inventory(value["generated_files"])
         actual_files = {
@@ -1191,7 +1209,9 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
         validation = validate_composed_package(path)
         if validation.get("manifest") != manifests[0].name:
             return None
-        package = load_package(path, manifest_path=manifests[0])
+        from ..scoped_output import load_generated_bundle
+        packages = load_generated_bundle(path, manifest_path=manifests[0])
+        package = packages[0]
         if (
             package.definition is None
             or package.definition.schema_version != 2
@@ -1201,6 +1221,15 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
         mod_id = normalize_guid(value["mod_id"])
         if normalize_guid(package.mod_id) != mod_id:
             return None
+        ids = tuple(normalize_guid(p.mod_id) for p in packages)
+        if value.get('generated_mod_ids', [mod_id]) != list(ids):
+            return None
+        if value['schema_version'] == 5:
+            records = report.get('generated_records')
+            if not isinstance(records, list) or [
+                (normalize_guid(r['mod_id']), r['scope']) for r in records
+            ] != [(normalize_guid(p.mod_id), p.datasets[0].base) for p in packages]:
+                return None
         return ManagerBuildResult(
             output_root=path,
             manifest=manifests[0],
@@ -1211,6 +1240,7 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
             selected_source_ids=tuple(
                 normalize_guid(item) for item in value.get("selected_source_ids", [])
             ),
+            generated_mod_ids=ids,
         )
     except (
         OSError,
@@ -1223,6 +1253,11 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
         PackageFormatError,
     ):
         return None
+
+
+def _remaining_generated_slots(plan):
+    from .launch import CURRENT_PERSISTENCE_LIMIT
+    return CURRENT_PERSISTENCE_LIMIT - len(plan.selected_standard_ids)
 
 
 def _generated_file_inventory(path: Path) -> list[dict[str, str]]:

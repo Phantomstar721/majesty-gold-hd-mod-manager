@@ -115,6 +115,7 @@ class DatasetDependenciesTests(unittest.TestCase):
             self.assertIn('compatible', stock.base_functions)
             self.assertNotIn('#expansion', stock.base_expressions)
             self.assertIn('Result = 6', stock.function_loader('shared').text)
+            self.assertIn('Result = 1', stock.base_function_loader('shared').text)
             sources[2].write_text('expression #Expansion 21\n')
             updated = load_dataset_symbols(game)
             self.assertIn('21', updated.expansion_expressions['#expansion'].text)

@@ -26,6 +26,7 @@ from majesty_cam.package import (
     PackageFormatError,
     load_mod_definition,
 )
+from majesty_cam.gpl_function_merge import FunctionMergeError, _tokens
 
 from .capabilities import (
     DERIVED_RUNTIME_CAPABILITIES,
@@ -980,7 +981,7 @@ def _semantic_file_definitions_cached(
     if parsed is None:
         return ()
     return tuple(
-        (f"{item.kind.value}:{item.normalized_name}", _content_digest(item.text))
+        (f"{item.kind.value}:{item.normalized_name}", _script_digest(item.text))
         for item in parsed.items
     )
 
@@ -1021,9 +1022,19 @@ def _read_analysis_text(path: Path) -> Optional[str]:
     return None
 
 
-def _content_digest(text: str) -> str:
-    normalized = "\n".join(line.rstrip() for line in text.replace("\r", "").split("\n"))
-    return hashlib.sha256(normalized.strip().encode("utf-8")).hexdigest()
+def _script_digest(text: str) -> str:
+    """Compare GPL/DAT tokens, not comments or source presentation.
+
+    Reuse the instruction merger's lexer: identifiers are case-insensitive,
+    while quoted values and instruction order remain exact. JSON retains token
+    boundaries so removing whitespace cannot fuse distinct instructions.
+    """
+    try:
+        normalized = json.dumps(_tokens(text), separators=(",", ":"))
+    except FunctionMergeError:
+        # Tolerant discovery must not crash or claim malformed strings equal.
+        normalized = "unparsed:" + text
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _description_definition_key(element: ET.Element) -> Optional[str]:

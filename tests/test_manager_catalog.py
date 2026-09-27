@@ -17,6 +17,7 @@ from majesty_cam.manager.catalog import (
     IssueSeverity,
     MAJESTY_SCRIPT_MERGER_ID,
     TOOL_DELIVERY_ISSUE_CODE,
+    _script_digest,
     normalize_content_id,
     scan_catalog,
 )
@@ -936,6 +937,65 @@ class ManagerCatalogTests(unittest.TestCase):
 
             self.assertEqual(alternate.unresolved_overlap_ids, (base.content_id, copy.content_id))
             self.assertNotIn(copy.content_id, base.unresolved_overlap_ids)
+
+    def test_standard_overlap_ignores_comments_formatting_and_identifier_case(self):
+        source = '''expression #SharedValue 100
+function shared(agent unit)
+coordinate target;
+begin
+    // Original explanation.
+    target = $LocationOf(unit);
+    $Message(unit, "Keep // this /* exact */ value");
+end
+'''
+        equivalent = '''EXPRESSION #sharedvalue /* Same value. */ 100
+FUNCTION SHARED(AGENT UNIT)
+COORDINATE TARGET;
+BEGIN
+
+    /* A completely different explanation. */
+    TARGET=$locationof(UNIT); // End-of-line comment.
+    $message(UNIT,"Keep // this /* exact */ value");
+END
+'''.replace("\n", "\r\n")
+        with TemporaryDirectory() as tmp:
+            mods = Path(tmp)
+            for index, text in enumerate((source, equivalent)):
+                package = mods / str(index)
+                (package / "GPL").mkdir(parents=True)
+                _write_standard_source_mod(
+                    package, f"00000000-0000-4000-8000-{index:012d}",
+                    f"Source {index}", text,
+                )
+            entries = scan_catalog(local_mods_root=mods).standard
+            self.assertEqual(len(entries), 2)
+            self.assertEqual(len(entries[0].content_definitions), 2)
+            self.assertEqual(entries[0].content_definitions, entries[1].content_definitions)
+            self.assertTrue(all(not entry.unresolved_overlap_ids for entry in entries))
+
+    def test_script_fingerprints_preserve_real_changes_and_token_boundaries(self):
+        pairs = (
+            ("expression #Value 100", "expression #Value 200"),
+            ("$First(unit);", "$Second(unit);"),
+            ("a += 1;", "a = 1;"),
+            ("$First(); $Second();", "$Second(); $First();"),
+            ('unit\'s "Title" = "SomeCase";', 'unit\'s "Title" = "somecase";'),
+            ('"two words"', '"two  words"'),
+            ('"//one"', '"//two"'),
+            ('"/*one*/"', '"/*two*/"'),
+            (r'"say \"one\""', r'"say \"two\""'),
+            ("$First(a, b);", "$First(ab);"),
+            ("foo bar", "foobar"),
+        )
+        for first, second in pairs:
+            with self.subTest(first=first, second=second):
+                self.assertNotEqual(_script_digest(first), _script_digest(second))
+
+    def test_script_fingerprint_keeps_malformed_quoted_source_conservative(self):
+        first = 'function shared() begin $Message("unfinished); end'
+        second = first.replace("unfinished", "different")
+        self.assertEqual(_script_digest(first), _script_digest(first))
+        self.assertNotEqual(_script_digest(first), _script_digest(second))
 
     def test_precompiled_mod_uses_bundled_gpl_source_as_overlap_evidence(self):
         with TemporaryDirectory() as tmp:

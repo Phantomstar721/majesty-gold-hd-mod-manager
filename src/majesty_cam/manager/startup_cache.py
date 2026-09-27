@@ -825,7 +825,7 @@ def _manager_cache_identity_paths() -> tuple[Path, ...]:
     if getattr(sys, "frozen", False):
         return (Path(sys.executable),)
     module_root = Path(__file__).resolve().parent
-    return (module_root.parent / "gpl.py",) + tuple(
+    return (module_root.parent / "gpl.py", module_root.parent / "gpl_function_merge.py") + tuple(
         module_root / name
         for name in (
             "startup_cache.py",

@@ -332,6 +332,8 @@ class Providers:
         for fallback in fallbacks:
             if fallback is not None and fallback.key not in items:
                 native = self.lookup(fallback.key)
+                if native is None and self.dataset != 'any':
+                    native = self.stock((fallback.name,)).get(fallback.key)
                 if native is not None:
                     items[fallback.key] = native
         output = []

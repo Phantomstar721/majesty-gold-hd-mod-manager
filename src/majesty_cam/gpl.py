@@ -983,9 +983,28 @@ def hero_quest_anchor_matches(target: SemanticItem, stock_script: str):
     pursue = matches(r"pursue_entertainment\s*\(\s*thisagent\s*\)")
     bazaar = matches(r"purchase_bazaar\s*\(\s*thisagent\s*,\s*70\s*\)")
     if stock_script in {"mx_healer", "mx_monk"}:
-        if pursue or len(bazaar) != 1:
+        if not pursue and not bazaar:
+            # Original quests omit Bazaar. Preserve the very same stock gap:
+            # expansion inserts its Bazaar decision between these neighbours.
+            # Require the literal pair, not an arbitrary last if/return.
+            if stock_script == 'mx_healer':
+                before = matches(r'follow_heal_check\s*\(\s*thisagent\s*,\s*,\s*50\s*\)')
+                after = matches(r'seed_resource_check\s*\(\s*thisagent\s*,\s*50\s*\)')
+                expected = 'if ($follow_heal_check(ThisAgent, "tax_collector", 50) == FALSE)'
+            else:
+                before = matches(r'collect_special_item\s*\(\s*thisagent\s*,\s*70\s*\)')
+                after = matches(r'go_home\s*\(\s*thisagent\s*,\s*60\s*\)')
+                expected = 'if ($collect_special_item(ThisAgent, 70) == FALSE)'
+            from .gpl_function_merge import _tokens
+            if (len(before) != 1 or len(after) != 1 or before[0].end() > after[0].start()
+                    or masked[before[0].end():after[0].start()].strip()
+                    or _tokens(target.text[before[0].start():before[0].end()]) != _tokens(expected)):
+                raise ValueError(f'{target.name} does not retain its original-game stock consideration gap')
+            consider = before[0]
+        elif pursue or len(bazaar) != 1:
             raise ValueError(f"{target.name} does not contain its recognized stock post-Purchase_Bazaar consideration anchor")
-        consider = bazaar[0]
+        else:
+            consider = bazaar[0]
     else:
         if len(pursue) != 1:
             raise ValueError(f"{target.name} does not contain exactly one recognized stock post-Pursue_Entertainment consideration anchor")
@@ -1010,7 +1029,8 @@ def add_hero_quest_lifecycle_callbacks(
     Resume callbacks run after ``Check_Nearby`` declines and immediately
     before the unchanged ``Check_rewards`` call.  Consider callbacks run after
     stock ``Pursue_Entertainment`` declines; Healer and Monk use their audited
-    post-``Purchase_Bazaar`` continuation because those two stock trees omit
+    post-``Purchase_Bazaar`` continuation (the same gap between its original
+    neighbours in base quests) because those two stock trees omit
     entertainment.  Reset callbacks run before stock ``Reset_Tasks`` clears
     Target/scripts, and death callbacks run after stock
     ``DeleteAllEffectors`` and before ``IGDeathScript``.  A TRUE boolean
@@ -1153,6 +1173,19 @@ def add_hero_quest_lifecycle_callbacks(
         re.IGNORECASE,
     )
     reset_matches = list(reset_anchor.finditer(reset_item.text))
+    from .gpl_function_merge import _tokens
+    base_reset = '''function reset_tasks(agent thisagent)
+declare
+begin
+thisagent's "target" = $Nullagent();
+thisagent's "activescript" = thisagent's "basicscript";
+thisagent's "backscript" = thisagent's "basicscript";
+$clearlist(thisagent's "hostiles");
+end'''
+    if not reset_matches and stock_reset_tasks is not None and _tokens(stock_reset_tasks.text) == _tokens(base_reset):
+        reset_matches = list(re.finditer(
+            r'''(?P<begin>\bbegin\s*\r?\n)(?P<body>[\s\S]*?thisagent's\s+"target"\s*=\s*\$Nullagent\s*\(\s*\)\s*;)''',
+            reset_item.text, re.I))
     if len(reset_matches) != 1:
         raise ValueError("reset_tasks does not contain the recognized stock entry anchor")
     reset_match = reset_matches[0]
@@ -1175,6 +1208,29 @@ def add_hero_quest_lifecycle_callbacks(
         re.IGNORECASE | re.MULTILINE,
     )
     death_matches = list(death_anchor.finditer(death_item.text))
+    base_death = '''function Unit_Call_Deathscript(agent thisagent)
+declare
+begin
+if ($validfunction(thisagent's "IGDeathScript") == TRUE)
+(thisagent's "IGDeathScript")(thisagent);
+end'''
+    if not death_matches:
+        # Native replacements may add work between cleanup and death dispatch.
+        # Prove both stock operations are still top-level and in that order;
+        # then attach at dispatch without moving or dropping the intervening work.
+        from .gpl_function_merge import _Parser
+        body = _Parser(death_item.text).function()[2]
+        cleanup = _tokens('$DeleteAllEffectors(ThisAgent);')
+        dispatch = _tokens('if ($ValidFunction(ThisAgent\'s "IGDeathScript") == TRUE)')
+        deletes = [i for i, node in enumerate(body) if node.kind == 'statement' and node.head == cleanup]
+        calls = [i for i, node in enumerate(body) if node.kind == 'if' and node.head == dispatch]
+        original_stock = (stock_unit_death is not None
+                          and _tokens(stock_unit_death.text) == _tokens(base_death))
+        if len(calls) == 1 and ((original_stock and not deletes)
+                                or (len(deletes) == 1 and deletes[0] < calls[0])):
+            death_matches = list(re.finditer(
+                r'''(?P<callback>^[ \t]*if\s*\(\s*\$validfunction\s*\(\s*thisagent's\s+"IGDeathScript"\s*\)\s*==\s*TRUE\s*\))''',
+                death_item.text, re.I | re.M))
     if len(death_matches) != 1:
         raise ValueError(
             "Unit_Call_Deathscript does not contain the recognized stock cleanup anchor"

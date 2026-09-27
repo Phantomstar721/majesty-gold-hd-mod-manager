@@ -1,13 +1,18 @@
-# Standard script providers — unshipped design draft
+# Standard script providers — pre-release implementation
 
-This work is not packaged for testing and is not release-ready. The defects in the
+This work requires in-game acceptance before release. The defects in the
 [initial review](standard-script-provider-review.md) have been corrected in source
-as described in its follow-up. Scoped GPL composition can be evaluated separately,
-but publication still produces one `Any` Mod; a differing base/expansion script
-now reports the exact conflicting symbol instead of flattening it. See the
-[scoped-output recommendation](mod-dataset-scope-plan.md) for the remaining design.
+as described in its follow-up. Generated output now uses common `Any` content
+plus optional native original/expansion script patches. See the
+[scoped-output design](mod-dataset-scope-plan.md) for implementation and acceptance details.
 
 ## Generic source registration
+
+Standard script overlap checks compare GPL/DAT tokens, ignoring comments,
+formatting and identifier case. Quoted values, operators and instruction order
+remain significant. Identical instructions do not require a load-order winner.
+This check reuses the cached scan; it does not compile scripts or add selection-time
+file reads. XML description comparisons remain unchanged.
 
 A Standard mod remains independently enabled and classified as Standard. Its
 normal `.mmxml` GPL `Target` and ordered `Source` children register the editable
@@ -50,7 +55,7 @@ discovery/auditing. Those operations receive effective native fallback functions
 the actual result undergoes final checks and unused native copies are pruned.
 Dataset dependency closure does not re-import stock over a proven native helper.
 
-## Remaining dataset boundary
+## Native dataset boundary
 
 Do not flatten `MajestyExpansion` scripts into the generated `Any` profile.
 Do not assume extra Dataset siblings are selected by the game. Static inspection
@@ -59,7 +64,10 @@ of beta2's mod type reader at VA `0x4FA050` and source-resource enumerator at
 conditional multi-Dataset dispatch. The experimental sibling-output path was
 removed before packaging.
 
-The recommended design is one managed output bundle with shared content and
+The implementation uses one managed output bundle with shared content and
 optional native scoped patch records, not a copied Standard mod or a runtime
-dispatcher. The recommendation and static all-version evidence are recorded in
-the scope plan. Publishing those records is not implemented or playtested yet.
+dispatcher. Static all-version evidence is recorded in the scope plan. Generated
+records share artwork, descriptions and runtime registries. Native selection may
+show the script patches individually; the Manager groups them as one prepared
+selection and activates Standard IDs, common output, then scoped patches.
+No base/expansion transition or save/load playtest is claimed yet.

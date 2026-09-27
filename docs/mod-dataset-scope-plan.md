@@ -1,7 +1,8 @@
-# Dataset-aware generated output: recommended plan
+# Dataset-aware generated output
 
-Status: investigated and outlined, not implemented for publication. Applies to
-Steam public, Steam beta2 and GOG. No runtime dispatcher is proposed.
+Status: implemented in source, pending in-game acceptance. Applies to Steam
+public, Steam beta2 and GOG through their existing native Mod loader. No runtime
+dispatcher or additional executable hooks are used.
 
 ## Recommendation in plain terms
 
@@ -138,3 +139,39 @@ publication, old generated bundle recognition and removal of a now-empty delta.
 Measure cold/warm Prepare separately, including additional compiler launches.
 
 No claim of complete scoped-output support should be made before those checks.
+
+## Implementation notes, 2026-09-27
+
+`prepare_gpl_bundle` reuses the captured Standard source/proof inputs and one
+stock dataset-symbol snapshot. With no Standard GPL input it retains the original
+single-composition path. With native script inputs it composes the two effective
+GPL views, using original stock bodies wherever they exist for original quests.
+Base-absent expansion helpers required by Manager features still use the existing
+explicit dependency closure. Expansion views do not import already-loaded stock
+helpers redundantly. Common definitions must occur identically in both complete
+views; missing definitions are not filled from the opposite view. Known
+opposite-scope native references, including callback assignments, are rejected.
+
+The original Healer and Monk decision trees omit Bazaar. Their callback gap is
+the same pair of stock decisions between which expansion inserts Bazaar. The
+original reset/death helpers also omit expansion's StopMoving/DeleteAllEffectors
+calls. Their literal stock bodies are recognized separately and preserved.
+Native additions between cleanup and death dispatch are retained; the dispatch
+must remain a unique top-level branch after cleanup in the expansion form.
+
+Generated schema-5 ownership includes the complete active-ID list. Readback
+checks record order/scope/identity, scope-owned paths, every output hash, and
+runtime evidence against each common-plus-scoped source view. Schema-4
+single-record output remains readable. Saved selection expansion and the startup
+cache carry all generated IDs. The guaranteed minimum ID count is checked during
+selection; exact delta count is checked before compilation/publication so a
+near-limit selection is not rejected merely because it *might* need two patches.
+Launch retains its independent 26-ID guard.
+
+The source checks include literal installed potion and hero-tree source fixtures,
+separate compilation of emitted script parts, dependency isolation, no-difference
+and one-sided outputs, multi-record readback, altered IDs/paths/files, launch order,
+selection restoration and empty common script output. These are not a live
+base/expansion transition or save/load result. The normal owned-directory atomic
+replacement remains the publication mechanism; optional deltas disappear with
+their replaced bundle rather than being retained as dummy save dependencies.
