@@ -13,8 +13,12 @@ from unittest.mock import patch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from majesty_cam.gpl import DefinitionKind
-from majesty_cam.compose import ComposeError, PackageInventory, SelectedMod
+from majesty_cam.gpl import DefinitionKind, SemanticMergeResult, parse_gpl
+from majesty_cam.compose import (ComposeError, GplComposeResult, PackageInventory, SelectedMod,
+                                 finalize_script_runtime_feature_registry)
+from majesty_cam.descriptions import parse_descriptions
+from majesty_cam.scoped_output import ScriptBundle
+from majesty_cam.inventory_spell_display import CAPABILITY as INVENTORY_DISPLAY_CAPABILITY
 from majesty_cam.intent_text import (
     INTENT_REGISTRY_RELATIVE_PATH,
     allocate_private_activity_text_ids,
@@ -28,7 +32,10 @@ from majesty_cam.runtime_features import (
     MapFogQueryFeature,
     MovementQueryFeature,
     NativeTimingFeature,
+    RuntimeFeatureRegistry,
     RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH,
+    decode_runtime_feature_registry,
+    derive_feature_runtime_capabilities,
     encode_runtime_feature_registry,
 )
 from majesty_cam.stock_controller_registry import (
@@ -44,6 +51,7 @@ from majesty_cam.manager.build import (
     _parse_resolution_source,
     _publish_staging,
     _require_current_plan_sources,
+    _validate_finalized_runtime_registries,
     _is_manager_owned_output,
     _order_standard_ids,
     build_merged_package,
@@ -76,6 +84,72 @@ from majesty_cam.package import (
 HAUNT_ID = "8C48289E-7C70-4426-8913-133F3544A182"
 ALCHEMIST_ID = "42BA4603-2B13-446D-A2A4-6CF3A55DDAC3"
 OTHER_ID = "48CDD934-B338-4373-A4A4-A99A8E7F917F"
+
+
+class FinalizedRegistryHandoffTests(unittest.TestCase):
+    def fixture(self, source=None):
+        planned = RuntimeFeatureRegistry(map_fog_query=True, movement_query=True,
+                                         native_timing=NativeTimingFeature(('AB01',), ('EF01',)))
+        source = source if source is not None else (
+            'function LearnPrivate(agent Actor) declare begin '
+            '$LearnSpell(Actor, "First", FALSE); $LearnSpell(Actor, "Second", FALSE); end')
+        generated = GplComposeResult(
+            SemanticMergeResult(parse_gpl(source).items, ()).emit_project_source_set(), (), (), (), ())
+        descriptions = SimpleNamespace(document=parse_descriptions(
+            b'<Descriptions><Description type="Action" subType="Standard" ID="ZZ01" Name="First">'
+            b'<Game><Flags value="IsSpell"/></Game></Description>'
+            b'<Description type="Action" subType="Standard" ID="AA02" Name="Second">'
+            b'<Game><Flags value="IsSpell"/></Game></Description></Descriptions>'))
+        finalized, payload = finalize_script_runtime_feature_registry(
+            planned, ScriptBundle(generated), {}, descriptions)
+        capabilities = derive_feature_runtime_capabilities((), planned)
+        emitted_capabilities = derive_feature_runtime_capabilities(capabilities, finalized)
+        return planned, capabilities, finalized, decode_runtime_feature_registry(payload), emitted_capabilities
+
+    def test_source_derived_nonempty_classification_survives_the_plan_handoff(self):
+        values = self.fixture()
+        planned, capabilities, finalized, emitted, emitted_capabilities = values
+        self.assertEqual(finalized.hidden_inventory_actions, ('ZZ01', 'AA02'))
+        self.assertEqual(replace(finalized, hidden_inventory_actions=()), planned)
+        self.assertNotIn(INVENTORY_DISPLAY_CAPABILITY, capabilities)
+        self.assertIn(INVENTORY_DISPLAY_CAPABILITY, emitted_capabilities)
+        self.assertNotEqual(emitted, planned)
+        _validate_finalized_runtime_registries(*values)
+
+    def test_no_source_classification_retains_the_exact_plan(self):
+        values = self.fixture('function Empty() declare begin end')
+        self.assertEqual(values[0], values[2])
+        self.assertEqual(values[1], values[4])
+        _validate_finalized_runtime_registries(*values)
+
+    def test_emitted_hidden_ids_cannot_authorize_themselves(self):
+        values = self.fixture()
+        for hidden in ((), ('ZZ01',), ('XX03',)):
+            with self.subTest(hidden=hidden), self.assertRaisesRegex(ManagerBuildError, 'finalized source evidence'):
+                _validate_finalized_runtime_registries(
+                    *values[:3], replace(values[3], hidden_inventory_actions=hidden), values[4])
+
+    def test_finalized_source_result_cannot_change_prevalidated_fields(self):
+        values = self.fixture()
+        for changes in ({'map_fog_query': False}, {'movement_query': False}, {'native_timing': None}):
+            changed = replace(values[2], **changes)
+            with self.subTest(changes=changes), self.assertRaisesRegex(ManagerBuildError, 'validated build plan'):
+                _validate_finalized_runtime_registries(
+                    *values[:2], changed, changed,
+                    derive_feature_runtime_capabilities(values[1], changed))
+        with self.assertRaisesRegex(ManagerBuildError, 'validated build plan'):
+            _validate_finalized_runtime_registries(*values[:2], None, *values[3:])
+
+    def test_emitted_capabilities_must_match_source_evidence_exactly(self):
+        values = self.fixture()
+        for capabilities in (values[1], tuple(sorted((*values[4], 'stock.equipment.v1'))),
+                             tuple(c for c in values[4] if c != 'stock.map-fog-query.v1')):
+            with self.subTest(capabilities=capabilities), self.assertRaisesRegex(ManagerBuildError, 'finalized source evidence'):
+                _validate_finalized_runtime_registries(*values[:4], capabilities)
+        empty = self.fixture('function Empty() declare begin end')
+        with self.assertRaisesRegex(ManagerBuildError, 'finalized source evidence'):
+            _validate_finalized_runtime_registries(
+                *empty[:4], tuple(sorted((*empty[4], INVENTORY_DISPLAY_CAPABILITY))))
 
 
 class ManagerBuildPlanTests(unittest.TestCase):

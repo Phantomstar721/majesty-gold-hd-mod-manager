@@ -21,7 +21,7 @@ class FunctionMergeError(ValueError):
 _LEX = re.compile(
     r'\s+|//[^\r\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|'
     r"'s\b|[$#]?[A-Za-z_][A-Za-z_0-9]*|0[xX][0-9A-Fa-f]+|\d+(?:\.\d+)?|"
-    r"==|!=|<=|>=|&&|\|\||\+=|-=|\*=|/=|<<|>>|[^\s]",
+    r"==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|/=|<<|>>|[^\s]",
     re.IGNORECASE,
 )
 
@@ -139,10 +139,61 @@ class _Parser:
         return signature, declarations, body
 
 
+def same_function_instructions(left: str, right: str) -> bool:
+    """Compare exact instructions and scopes, ignoring only source layout.
+
+    Keep the token-equal path for already-identical source. Otherwise require
+    the complete supported function grammar; never infer equivalent predicates,
+    helper calls, reordered statements, or changed string literals.
+    """
+    try:
+        if _tokens(left) == _tokens(right):
+            return True
+        return _Parser(left).function() == _Parser(right).function()
+    except FunctionMergeError:
+        return False
+
+
+class _SourceParser(_Parser):
+    """The same grammar with original body spans for source-preserving edits.
+
+    Ordinary merge parsing pays no offset-tracking cost. A span includes the
+    complete body statement (including explicit begin/end), but excludes an
+    if's else branch. Node spans cover whole statements, including their else.
+    Offsets refer to the unmodified source, not rendered code.
+    """
+
+    def __init__(self, text):
+        super().__init__(text)
+        self._offsets = tuple(match.span() for match in _LEX.finditer(text)
+                              if not match.group().isspace()
+                              and not match.group().startswith(("//", "/*")))
+        self._statement_ends = {}
+        self.body_spans = {}
+        self.node_spans = {}
+
+    def statement(self, depth=0):
+        start = self.pos
+        block = self.peek() == "begin"
+        structured = self.peek() in ("if", "while", "foreach")
+        nodes = super().statement(depth)
+        self._statement_ends[start] = self.pos
+        if not block:
+            self.node_spans[id(nodes[0])] = (self._offsets[start][0], self._offsets[self.pos - 1][1])
+        if structured:
+            node = nodes[0]
+            body_start = start + len(node.head)
+            body_end = self._statement_ends[body_start]
+            self.body_spans[id(node)] = (
+                self._offsets[body_start][0], self._offsets[body_end - 1][1]
+            )
+        return nodes
+
+
 def _short(value):
     if isinstance(value, _Node):
         return _code(value.head)[:140]
-    if isinstance(value, tuple) and value and isinstance(value[0], _Node):
+    if isinstance(value, tuple) and value and isinstance(value[0], (_Node, tuple)):
         return " / ".join(_short(node) for node in value)[:180]
     return _code(value)[:140] if isinstance(value, tuple) else str(value)
 
@@ -425,6 +476,89 @@ class _GuardProof:
             return None  # unsupported/ambiguous helper remains a normal conflict
 
 
+def _guard_chain(node):
+    """An ordered short-circuit chain, with no else or interleaved statements."""
+    heads = []
+    while node.kind == 'if' and not node.otherwise:
+        heads.append(node.head)
+        if len(node.body) != 1 or node.body[0].kind != 'if' or node.body[0].otherwise:
+            return tuple(heads), node.body
+        node = node.body[0]
+    return (), ()
+
+
+def _align_guard_chain(base, heads, owner, path):
+    """Bind exact guards first; only one-for-one anchored edits have identity."""
+    if len(set(heads)) != len(heads):
+        raise FunctionMergeError(f'{path}: {owner}: repeated/ambiguous decision checks')
+    positions = {head: i for i, head in enumerate(base)}
+    ids = [positions.get(head) for head in heads]
+    shared = {i for i in ids if i is not None}
+
+    def gaps(values):
+        previous, pending = -1, []
+        for i, identity in enumerate((*values, len(base))):
+            if identity is None:
+                pending.append(i)
+            else:
+                if pending:
+                    yield (previous, identity), pending
+                previous, pending = identity, []
+
+    missing = dict(gaps(tuple(i if i in shared else None for i in range(len(base)))))
+    for anchors, additions in gaps(ids):
+        removed = missing.get(anchors, ())
+        if len(removed) == len(additions) == 1:
+            ids[additions[0]] = removed[0]
+    if {i for i in ids if i is not None} != set(range(len(base))):
+        raise FunctionMergeError(f'{path}: {owner}: removed or ambiguously replaced decision checks')
+    replacements = {i: head for i, head in zip(ids, heads) if i is not None}
+    insertions = {anchors: tuple(heads[i] for i in additions) for anchors, additions in gaps(ids)}
+    return tuple(i for i in ids if i is not None), replacements, insertions
+
+
+def _merge_guard_chain(base, variants, path, proof):
+    original, tail = _guard_chain(base)
+    chains = [(owner, *_guard_chain(node)) for owner, node in variants]
+    if len(original) < 2 or any(len(heads) < 2 for _, heads, _ in chains):
+        return None
+    if not any(len(heads) != len(original) or
+               any(head in original and head != original[i] for i, head in enumerate(heads))
+               for _, heads, _ in chains):
+        return None  # Same-depth condition/body edits already have identity.
+    if len(set(original)) != len(original):
+        raise FunctionMergeError(f'{path}: repeated/ambiguous stock decision checks')
+    aligned = [(owner, *_align_guard_chain(original, heads, owner, path))
+               for owner, heads, _ in chains]
+    # A mod's explicit reordering is retained. Different reorderings need a
+    # decision; neither mod name nor input order establishes gameplay priority.
+    anchors = tuple(_Node('if', head) for head in original)
+    ordered = _pick(anchors, [(o, tuple(anchors[i] for i in ids)) for o, ids, _, _ in aligned],
+                    path + ' decision-check priority')
+    order = tuple(original.index(node.head) for node in ordered)
+    conditions = tuple(_pick(head, [(o, values[i]) for o, _, values, _ in aligned],
+                             path + f' condition [{_code(head)}]')
+                       for i, head in enumerate(original))
+    boundaries = (-1, *order, len(original))
+    gaps = tuple(zip(boundaries, boundaries[1:]))
+    if any(gap not in gaps for _, _, _, additions in aligned for gap in additions):
+        raise FunctionMergeError(f'{path}: decision-check insertion anchors were moved apart')
+    heads = []
+    for gap in gaps:
+        heads.extend(_pick((), [(o, additions.get(gap, ())) for o, _, _, additions in aligned],
+                           path + ' decision-check insertion gap'))
+        if gap[1] != len(original):
+            heads.append(conditions[gap[1]])
+    if len(set(heads)) != len(heads):
+        raise FunctionMergeError(f'{path}: merged decision checks would be duplicated')
+    body = _merge_sequence(tail, [(o, end) for o, _, end in chains], path + ' fall-through', proof)
+    # Rebuild literal nesting: every predicate still runs at most once, and
+    # later checks/the original tail run only if all earlier checks allow it.
+    for head in reversed(heads):
+        body = (_Node('if', head, body),)
+    return body[0]
+
+
 def _merge_node(base, variants, path, proof):
     changed = [(owner, node) for owner, node in variants if node != base]
     if not changed or all(node == changed[0][1] for _, node in changed):
@@ -448,13 +582,98 @@ def _merge_node(base, variants, path, proof):
         for node in reversed(chain):
             merged = _Node(node.kind, node.head, node.body, (merged,))
         return merged
+    chain = _merge_guard_chain(base, variants, path, proof)
+    if chain is not None:
+        return chain
     head = _pick(base.head, [(o, n.head) for o, n in variants], path + " condition")
     body = _merge_sequence(base.body, [(o, n.body) for o, n in variants], path + " body", proof)
     otherwise = _merge_sequence(base.otherwise, [(o, n.otherwise) for o, n in variants], path + " else", proof)
     return _Node(base.kind, head, body, otherwise)
 
 
+def _align_return_fallthrough(base, variants, path='body'):
+    """Compare equivalent else/fall-through layouts at one lexical scope.
+
+    An else after an unconditional return can execute in exactly the same
+    cases as the immediately following statements. Require the unique guard
+    and its terminal return in EVERY input, including unchanged sides. If a
+    side removes/conditionalizes that return, lifting the other sides' else
+    would hide a real control-flow conflict. Do not infer exits from calls,
+    loops or nested conditions, or move anything across its enclosing scope.
+    """
+    groups = []
+    for nodes in (base, *(seq for _, seq in variants)):
+        guards = {}
+        for node in nodes:
+            if node.kind == 'if':
+                guards.setdefault(node.head, []).append(node)
+        groups.append(guards)
+    eligible = set()
+    for head in groups[0]:
+        matches = [group.get(head, ()) for group in groups]
+        if not all(len(found) == 1 for found in matches):
+            continue
+        branches = [found[0] for found in matches]
+        if not any(node.otherwise for node in branches) or all(node.otherwise for node in branches):
+            continue
+        returns = [bool(node.body and node.body[-1].kind == 'statement'
+                        and node.body[-1].head[0] == 'return') for node in branches]
+        if any(returns) and not all(returns):
+            raise FunctionMergeError(f'{path} near [{_code(head)}]: '
+                                     'return/else layout changed alongside incompatible termination')
+        if all(returns):
+            eligible.add(head)
+    if not eligible:
+        return base, variants
+
+    def align(nodes):
+        result = []
+        for node in nodes:
+            if node.kind == 'if' and node.head in eligible and node.otherwise:
+                result.append(_Node(node.kind, node.head, node.body))
+                result.extend(node.otherwise)
+            else:
+                result.append(node)
+        return tuple(result)
+
+    return align(base), [(owner, align(seq)) for owner, seq in variants]
+
+
+def _require_branch_identity(base, variants, path):
+    """Do not identify several rewritten sibling branches by their positions.
+
+    One replacement bounded by unchanged identities can be a condition edit.
+    Several changed heads can equally be moved-and-edited branches, and a
+    repeated head does not identify which branch owns a body edit. Decline
+    those cases instead of guessing from body similarity or rewriting code.
+    This guard is needed only when different edits will actually be combined;
+    an identical or single-provider replacement is retained literally.
+    """
+    if len(base) < 2:
+        return
+    original = Counter(_identity(node) for node in base if node.kind != 'statement')
+    for owner, nodes in variants:
+        after = Counter(_identity(node) for node in nodes if node.kind != 'statement')
+        unmatched = 0
+        ambiguous = False
+        for before, node in zip(base, nodes):
+            if before == node or before.kind == node.kind == 'statement':
+                continue
+            identity = _identity(before)
+            if identity != _identity(node):
+                unmatched += 1
+            elif original[identity] != 1 or after[identity] != 1:
+                ambiguous = True
+        if unmatched > 1 or ambiguous:
+            raise FunctionMergeError(f'{path}: {owner}: ambiguous branch identity; '
+                                     'moved or rewritten branches need an explicit resolution')
+
+
 def _merge_sequence(base, variants, path, proof):
+    changed = [(owner, seq) for owner, seq in variants if seq != base]
+    if not changed or all(seq == changed[0][1] for _, seq in changed):
+        return _pick(base, variants, path)
+    base, variants = _align_return_fallthrough(base, variants, path)
     changed = [(owner, seq) for owner, seq in variants if seq != base]
     if not changed or all(seq == changed[0][1] for _, seq in changed):
         return _pick(base, variants, path)
@@ -483,6 +702,7 @@ def _merge_sequence(base, variants, path, proof):
         if all(seq == choices[0][1] for _, seq in choices):
             result.extend(choices[0][1])
         elif original and all(len(seq) == len(original) for _, seq in choices):
+            _require_branch_identity(original, choices, location)
             for index, node in enumerate(original):
                 result.append(_merge_node(node, [(o, seq[index]) for o, seq in choices], location, proof))
         elif not original and (partition := proof.partition(choices)) is not None:
@@ -530,6 +750,12 @@ def merge_function(base_text: str, variants: Mapping[str, str], *,
         declarations = {}
         keys = sorted(set(base[1]).union(*(set(p[1]) for _, p in sides)))
         for name in keys:
+            if name not in base[1]:
+                additions = [(owner, parsed) for owner, parsed in sides if name in parsed[1]]
+                if additions and any(parsed != additions[0][1] for _, parsed in additions[1:]):
+                    owners = ', '.join(owner for owner, _ in additions)
+                    raise FunctionMergeError(f'local {name}: independently introduced by {owners}; '
+                                             'shared storage needs an explicit resolution')
             value = _pick(base[1].get(name), [(o, p[1].get(name)) for o, p in sides], f"local {name}")
             if value is not None:
                 declarations[name] = value

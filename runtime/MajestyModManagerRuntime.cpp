@@ -5410,16 +5410,42 @@ int __fastcall LiveAgentListControlHandoff(
 }
 bool WriteOccupantBranch(std::uintptr_t address, void* target, unsigned char opcode,
                          std::size_t size = 5) {
-    unsigned char patch[8] = {opcode, 0, 0, 0, 0, 0x90, 0x90, 0x90};
-    if (size < 5 || size > sizeof(patch)) return false;
+    // The guarded instruction span can exceed the five-byte branch itself
+    // (AP78's cmp/je gate is nine bytes). Pad the entire displaced span.
+    unsigned char patch[16];
+    if (size < 5 || size > sizeof(patch)) {
+        char message[160] = {};
+        sprintf_s(message, "Runtime branch patch at 0x%08X rejected: unsupported span %u (5..%u bytes).",
+            static_cast<unsigned int>(address), static_cast<unsigned int>(size),
+            static_cast<unsigned int>(sizeof(patch)));
+        WriteLog(message);
+        return false;
+    }
+    std::memset(patch, 0x90, sizeof(patch));
+    patch[0] = opcode;
     const auto relative = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(target) - address - 5);
     std::memcpy(patch + 1, &relative, 4);
     DWORD previous = 0, ignored = 0;
     auto* destination = reinterpret_cast<void*>(address);
-    if (!VirtualProtect(destination, size, PAGE_EXECUTE_READWRITE, &previous)) return false;
+    if (!VirtualProtect(destination, size, PAGE_EXECUTE_READWRITE, &previous)) {
+        char message[160] = {};
+        sprintf_s(message, "Runtime branch patch at 0x%08X could not enable writes (Windows error %lu).",
+            static_cast<unsigned int>(address), GetLastError());
+        WriteLog(message);
+        return false;
+    }
     std::memcpy(destination, patch, size);
-    FlushInstructionCache(GetCurrentProcess(), destination, size);
-    return VirtualProtect(destination, size, previous, &ignored) != 0;
+    const bool flushed = FlushInstructionCache(GetCurrentProcess(), destination, size) != 0;
+    const DWORD flushError = flushed ? ERROR_SUCCESS : GetLastError();
+    const bool restored = VirtualProtect(destination, size, previous, &ignored) != 0;
+    if (!flushed || !restored) {
+        const DWORD restoreError = restored ? ERROR_SUCCESS : GetLastError();
+        char message[192] = {};
+        sprintf_s(message, "Runtime branch patch at 0x%08X failed to finalize (cache error %lu, protection error %lu).",
+            static_cast<unsigned int>(address), flushError, restoreError);
+        WriteLog(message);
+    }
+    return flushed && restored;
 }
 bool InstallOccupantPanelRoute() {
     if (!ValidateOccupantPanelProfile()) return false;
@@ -7908,7 +7934,7 @@ DWORD WINAPI InitializeRuntime(void*) {
     }
     if (!g_runtimeFeatureRegistry.hiddenInventoryActions.empty()) {
         RequireManagerRuntimeInstall(InstallInventorySpellDisplay(), managerLaunch,
-            "inventory-only spell row filter");
+            "Failed to install the inventory-only spell row filter at the stock AP78 visibility gate.");
     }
     if (privateEnchantmentRows) {
         RequireManagerRuntimeInstall(

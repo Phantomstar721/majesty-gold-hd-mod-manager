@@ -9,19 +9,22 @@ environments where the optional desktop runtime has not been bundled yet.
 from __future__ import annotations
 
 import ctypes
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import sys
 import traceback
+from threading import Event
 from typing import Callable, Iterable, Mapping, Optional
 
 from .catalog import CatalogEntry, CatalogKind, CatalogSource, IssueSeverity
 from .brand_assets import BrandAssets, ensure_brand_assets
 from .controller import ControllerSnapshot, ManagerController
 from .build import BuildIssue, standard_content_conflicts
+from .conflict_preview import ConflictPreview, preview_standard_choice, rule_label
 from .preflight import PreparedMergeMod
 from .shortcuts import ShortcutError, create_manager_desktop_shortcut
 from .workshop import open_workshop_item
+from ..script_review import ScriptReviewCancelled
 
 
 try:  # Keep non-GUI merger imports usable without the optional Qt runtime.
@@ -51,6 +54,7 @@ try:  # Keep non-GUI merger imports usable without the optional Qt runtime.
         QApplication,
         QCheckBox,
         QComboBox,
+        QDialog,
         QFileDialog,
         QFrame,
         QHBoxLayout,
@@ -58,6 +62,7 @@ try:  # Keep non-GUI merger imports usable without the optional Qt runtime.
         QLineEdit,
         QMainWindow,
         QMessageBox,
+        QPlainTextEdit,
         QProgressBar,
         QPushButton,
         QScrollArea,
@@ -118,7 +123,86 @@ class _LegacyQolUtility:
     can_remove: bool = False
 
 
+@dataclass
+class _ScriptReviewRequest:
+    conflicts: tuple
+    preferences: dict[str, str] = field(default_factory=dict)
+    finished: Event = field(default_factory=Event)
+    decisions: Optional[dict[str, str]] = None
+    error: Optional[Exception] = None
+
+
 if _PYSIDE_IMPORT_ERROR is None:
+
+    class _ConflictChoiceDialog(QDialog):
+        """Preview a candidate without applying it until explicitly accepted."""
+
+        def __init__(self, options, previews: Mapping[str, ConflictPreview], current=None, parent=None):
+            super().__init__(parent)
+            self.setObjectName("conflictChoiceDialog")
+            self.setWindowTitle(f"{APP_NAME} — Preview conflict choices")
+            self._previews = previews
+            self.winner = None
+            layout = QVBoxLayout(self)
+            introduction = QLabel(
+                "These mods supply different versions of shared game rules. "
+                "Compare each choice below before saving it.")
+            introduction.setWordWrap(True)
+            introduction.setTextFormat(Qt.TextFormat.PlainText)
+            layout.addWidget(introduction)
+            self.choice = QComboBox()
+            self.choice.setObjectName("conflictChoice")
+            self.choice.setAccessibleName("Preferred mod for shared rules")
+            self.choice.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            self.choice.setMinimumContentsLength(25)
+            for key, name in options:
+                self.choice.addItem(name, key)
+            if current is not None:
+                index = self.choice.findData(current)
+                if index >= 0:
+                    self.choice.setCurrentIndex(index)
+            layout.addWidget(self.choice)
+            self.summary = QPlainTextEdit()
+            self.summary.setReadOnly(True)
+            self.summary.setAccessibleName("Resulting Standard mod rules")
+            layout.addWidget(self.summary, 1)
+            self.details_button = QPushButton("Show technical details")
+            self.details_button.setCheckable(True)
+            self.details_button.toggled.connect(self._toggle_details)
+            layout.addWidget(self.details_button)
+            self.technical = QPlainTextEdit()
+            self.technical.setReadOnly(True)
+            self.technical.setMaximumHeight(180)
+            self.technical.setVisible(False)
+            layout.addWidget(self.technical)
+            actions = QHBoxLayout()
+            actions.addStretch(1)
+            cancel = QPushButton("Cancel")
+            cancel.clicked.connect(self.reject)
+            actions.addWidget(cancel)
+            self.apply_button = QPushButton("Save this choice")
+            self.apply_button.clicked.connect(self._save_choice)
+            actions.addWidget(self.apply_button)
+            layout.addLayout(actions)
+            self.choice.currentIndexChanged.connect(self._refresh_preview)
+            self._refresh_preview()
+            available = self.screen().availableGeometry()
+            self.resize(min(840, available.width() - 60), min(650, available.height() - 60))
+
+        def _refresh_preview(self, *_args):
+            preview = self._previews[self.choice.currentData()]
+            self.summary.setPlainText(preview.summary)
+            self.technical.setPlainText(preview.technical)
+            self.choice.setToolTip(self.choice.currentText())
+
+        def _toggle_details(self, visible):
+            self.technical.setVisible(visible)
+            self.details_button.setText("Hide technical details" if visible else "Show technical details")
+
+        def _save_choice(self):
+            self.winner = self.choice.currentData()
+            self.accept()
+
 
     class _ElidingLabel(QLabel):
         """Keep long install paths readable without forcing the window wider."""
@@ -195,6 +279,7 @@ if _PYSIDE_IMPORT_ERROR is None:
         error = Signal(str, str)
         progress = Signal(str)
         finished = Signal()
+        cancelled = Signal()
 
 
     class _ControllerTask(QRunnable):
@@ -209,6 +294,8 @@ if _PYSIDE_IMPORT_ERROR is None:
         def run(self) -> None:
             try:
                 result = self.action(self.signals.progress.emit)
+            except ScriptReviewCancelled:
+                self.signals.cancelled.emit()
             except Exception as exc:  # The UI is the controller's error boundary.
                 self.signals.error.emit(str(exc) or type(exc).__name__, traceback.format_exc())
             else:
@@ -1120,6 +1207,7 @@ if _PYSIDE_IMPORT_ERROR is None:
         """The user-facing manager shell backed by one ManagerController."""
 
         steam_requested = Signal(str)
+        script_review_requested = Signal(object)
 
         def __init__(self, controller: Optional[ManagerController] = None) -> None:
             super().__init__()
@@ -1131,10 +1219,14 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.prepared_cache: dict[str, PreparedMergeMod] = {}
             self.blocked_cache: dict[str, PreparedMergeMod] = {}
             self._workers: set[_ControllerTask] = set()
+            self._pending_script_review = None
+            self._shutting_down = Event()
             self._busy = False
             self._task_name = ""
             self._initial_qol_check_complete = False
             self.steam_requested.connect(self._open_workshop_item)
+            self.script_review_requested.connect(self._review_script_conflicts)
+            QApplication.instance().aboutToQuit.connect(self._cancel_script_review)
 
             try:
                 self.brand_assets = ensure_brand_assets(
@@ -1368,6 +1460,12 @@ if _PYSIDE_IMPORT_ERROR is None:
 
             activity = QVBoxLayout()
             activity.setSpacing(4)
+            self.review_mod_preferences = QCheckBox("Review mod preferences")
+            self.review_mod_preferences.setToolTip(
+                "Choose preferred mods again on the next Prepare, including saved preferences. "
+                "Cancelling keeps your previous completed setup and choices.")
+            self.review_mod_preferences.setEnabled(False)
+            activity.addWidget(self.review_mod_preferences)
             self.build_state = QLabel("Scanning installed content…")
             self.build_state.setObjectName("buildState")
             activity.addWidget(self.build_state)
@@ -1573,11 +1671,51 @@ if _PYSIDE_IMPORT_ERROR is None:
                 if self.snapshot is not None and not self.snapshot.plan.has_merge:
                     self._render_snapshot(self.snapshot)
                 return
+            review_scripts = self.review_mod_preferences.isChecked()
             self._run_task(
                 "Preparing your selected mods",
-                lambda progress: self.controller.build(progress=progress),
+                lambda progress: self.controller.build(progress=progress,
+                    script_conflict_resolver=self._request_script_review,
+                    review_scripts=review_scripts),
                 self._build_finished,
             )
+
+        def _request_script_review(self, conflicts, *, preferences=None):
+            """Worker-side bridge: Qt owns the dialog, the snapshot stays paused."""
+            request = _ScriptReviewRequest(tuple(conflicts), dict(preferences or {}))
+            self._pending_script_review = request
+            if self._shutting_down.is_set():
+                self._pending_script_review = None
+                return None
+            self.script_review_requested.emit(request)
+            request.finished.wait()
+            self._pending_script_review = None
+            if request.error is not None:
+                raise request.error
+            return request.decisions
+
+        @Slot(object)
+        def _review_script_conflicts(self, request):
+            if request.finished.is_set() or self._shutting_down.is_set():
+                request.finished.set()
+                return
+            try:
+                from .script_review_dialog import ScriptReviewDialog
+                dialog = ScriptReviewDialog(request.conflicts, parent=self,
+                                            preferences=request.preferences)
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    request.decisions = dialog.decisions
+            except Exception as exc:
+                request.error = exc
+            finally:
+                request.finished.set()
+
+        @Slot()
+        def _cancel_script_review(self):
+            self._shutting_down.set()
+            request = self._pending_script_review
+            if request is not None:
+                request.finished.set()
 
         def _show_build_issues(self) -> None:
             if self._busy or self.snapshot is None or not self.snapshot.plan.issues:
@@ -1717,42 +1855,17 @@ if _PYSIDE_IMPORT_ERROR is None:
                     conflict.right_id,
                 ):
                     continue
-                dialog = QMessageBox(self)
-                dialog.setIcon(QMessageBox.Icon.Warning)
-                dialog.setWindowTitle(f"{APP_NAME} — Choose which Mod wins")
-                dialog.setText(
-                    f"{conflict.left_name} and {conflict.right_name} change "
-                    f"{len(conflict.change_keys)} of the same game "
-                    f"{'setting' if len(conflict.change_keys) == 1 else 'settings'}."
-                )
-                dialog.setInformativeText(
-                    "Majesty loads Standard Mods as complete packages, so one of "
-                    "these Mods must load last and supply all of their shared "
-                    "changes. Choose the version you prefer."
-                )
-                dialog.setDetailedText(
-                    "\n".join(
-                        f"• {_game_change_label(key)}"
-                        for key in conflict.change_keys
-                    )
-                )
-                left_button = dialog.addButton(
-                    conflict.left_name,
-                    QMessageBox.ButtonRole.AcceptRole,
-                )
-                right_button = dialog.addButton(
-                    conflict.right_name,
-                    QMessageBox.ButtonRole.AcceptRole,
-                )
-                dialog.addButton(QMessageBox.StandardButton.Cancel)
-                dialog.exec()
-                clicked = dialog.clickedButton()
-                if clicked is left_button:
-                    winner = conflict.left_id
-                elif clicked is right_button:
-                    winner = conflict.right_id
-                else:
+                options = ((conflict.left_id, conflict.left_name), (conflict.right_id, conflict.right_name))
+                previews = {
+                    key: preview_standard_choice(
+                        self.snapshot.catalog, self.snapshot.selections, self.controller.order,
+                        self.controller.standard_conflict_winners, conflict, key,
+                    ) for key, _name in options
+                }
+                dialog = _ConflictChoiceDialog(options, previews, winner, self)
+                if dialog.exec() != QDialog.DialogCode.Accepted:
                     return False
+                winner = dialog.winner
                 self.snapshot = self.controller.set_standard_conflict_winner(
                     conflict.left_id,
                     conflict.right_id,
@@ -1823,8 +1936,13 @@ if _PYSIDE_IMPORT_ERROR is None:
             worker.signals.progress.connect(self._progress_changed)
             worker.signals.result.connect(success)
             worker.signals.error.connect(failure or self._task_failed)
+            worker.signals.cancelled.connect(self._prepare_cancelled)
             worker.signals.finished.connect(lambda task=worker: self._task_finished(task))
             QThreadPool.globalInstance().start(worker)
+
+        @Slot()
+        def _prepare_cancelled(self):
+            self.build_state.setText("Prepare cancelled — your last completed setup is unchanged")
 
         @Slot(str)
         def _progress_changed(self, message: str) -> None:
@@ -1888,6 +2006,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                 raise RuntimeError("Controller returned an invalid build result") from exc
             snapshot = _require_snapshot(snapshot)
             self.snapshot = snapshot
+            self.review_mod_preferences.setChecked(False)
             self.build_state.setText("Your selected mods are ready")
             self._render_snapshot(snapshot)
 
@@ -2212,6 +2331,7 @@ if _PYSIDE_IMPORT_ERROR is None:
 
         def _set_interactions_enabled(self, enabled: bool) -> None:
             enabled = enabled and self.snapshot is not None
+            self.review_mod_preferences.setEnabled(bool(enabled and self.snapshot.plan.has_merge))
             self.search.setEnabled(enabled)
             for catalog_page in self.pages.values():
                 catalog_page.set_interactions_enabled(enabled)
@@ -2314,18 +2434,7 @@ def _kind_text(entry: "CatalogEntry", *, tool_delivery: bool = False) -> str:
 def _game_change_label(key: str) -> str:
     """Turn a semantic inventory key into concise player-facing text."""
 
-    parts = key.split(":")
-    raw_name = parts[-1] if parts else key
-    name = raw_name.replace("_", " ").replace("-", " ").strip()
-    label = " ".join(word.capitalize() for word in name.split()) or key
-    family = {
-        "dat_block": "Game data",
-        "gpl_function": "Game rule",
-        "gpl_thread": "Game behavior",
-        "gpl_trigger": "Game event",
-        "description": "Game description",
-    }.get(parts[0].casefold() if parts else "", "Game change")
-    return f"{family}: {label}"
+    return f"{rule_label(key)} [{key}]"
 
 
 def _is_phantoms_haunt(entry: "CatalogEntry") -> bool:

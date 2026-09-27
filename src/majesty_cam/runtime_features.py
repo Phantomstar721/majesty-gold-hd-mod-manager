@@ -41,6 +41,7 @@ _MAX_NAME_GENERATORS = 256
 _MAX_ENCHANTMENT_ROWS = 1024
 _MAX_DISPLAY_TEXT_BYTES = 512
 _MAX_REGISTRY_BYTES = 1024 * 1024
+_MAX_HIDDEN_INVENTORY_ACTIONS = 1024
 
 _LEGACY_ALCHEMIST_NAMES = "alchemist.nm18-name-generator"
 _LEGACY_PHANTOM_NAMES = "phantom.nm19-name-generator"
@@ -441,8 +442,13 @@ def encode_runtime_feature_registry(
     )
     if isinstance(features, RuntimeFeatureRegistry):
         keys = tuple(_fourcc_u32(value) for value in features.hidden_inventory_actions)
-        if len(keys) > 1024 or keys != tuple(sorted(set(keys))):
-            raise ValueError("hidden inventory actions must be sorted, unique and bounded")
+        if len(keys) > _MAX_HIDDEN_INVENTORY_ACTIONS:
+            raise ValueError(f"hidden inventory action count {len(keys)} exceeds "
+                             f"the runtime limit of {_MAX_HIDDEN_INVENTORY_ACTIONS}")
+        if len(keys) != len(set(keys)):
+            raise ValueError("hidden inventory actions contain duplicate IDs")
+        if keys != tuple(sorted(keys)):
+            raise ValueError("hidden inventory actions are not in numeric FourCC order")
         registry = replace(registry, hidden_inventory_actions=features.hidden_inventory_actions)
     visual_research = any(item.active_effector for item in registry.kingdom_research)
     chunks = [
@@ -742,7 +748,7 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
             raise ValueError("hidden inventory action count is truncated")
         count = struct.unpack_from("<I", payload, offset)[0]
         offset += 4
-        if not 1 <= count <= 1024 or offset + 4 * count > len(payload):
+        if not 1 <= count <= _MAX_HIDDEN_INVENTORY_ACTIONS or offset + 4 * count > len(payload):
             raise ValueError("hidden inventory actions are invalid or truncated")
         keys = struct.unpack_from(f"<{count}I", payload, offset)
         offset += 4 * count

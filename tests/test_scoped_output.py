@@ -12,7 +12,7 @@ from majesty_cam.compose import (GplComposeResult, _build_manifest, validate_com
 from majesty_cam.gpl import parse_gpl, SemanticMergeResult, DefinitionKind
 from majesty_cam.scoped_output import (partition, source_items, scoped_mod_id,
                                       load_generated_bundle, audit_scope_dependencies)
-from majesty_cam.standard_scripts import Providers
+from majesty_cam.standard_scripts import Providers, StandardScripts
 from majesty_cam.dataset_dependencies import DatasetSymbols, close_dataset_dependencies
 from majesty_cam.package import PackageFormatError, load_package
 from majesty_cam.manager.build import (ManagerBuildResult, _remaining_generated_slots,
@@ -103,7 +103,33 @@ class ScopedOutputTests(unittest.TestCase):
             bundle = prepare_gpl_bundle(Path('.'), (), standard_script_inputs=())
         self.assertEqual(bundle.common, a)
         self.assertEqual(bundle.patches, ())
-        prepare.assert_called_once_with(Path('.'), ())
+        prepare.assert_called_once()
+        self.assertEqual(prepare.call_args.args, (Path('.'), ()))
+        self.assertEqual(prepare.call_args.kwargs['script_dataset'], 'any')
+        self.assertEqual(prepare.call_args.kwargs['standard_script_inputs'], ())
+
+    def test_scoped_views_keep_source_ancestry_separate_from_native_fallbacks(self):
+        from majesty_cam.compose import prepare_final_gpl_resources
+        base = parse_gpl(function('Shared', 1)).items[0]
+        sdk = parse_gpl(function('Shared', 2)).items[0]
+        stock = DatasetSymbols(frozenset(), {}, frozenset(('shared',)), frozenset(('shared',)),
+                               lambda _: sdk, lambda _: base)
+        seen = []
+        def inspect(*_args, **kwargs):
+            source = kwargs['source_ancestor_loader'](('Shared',))
+            native = kwargs['stock_function_loader'](('Shared',))
+            seen.append((source[base.key], native[base.key]))
+            providers = kwargs['standard_providers']
+            self.assertEqual(providers.source_ancestor_loader(('Shared',))[base.key], sdk)
+            self.assertEqual(providers.stock(('Shared',))[base.key], native[base.key])
+            return result('')
+        with patch('majesty_cam.compose.merge_gpl_resources', side_effect=inspect), \
+                patch('majesty_cam.compose.load_stock_function_ancestors',
+                      side_effect=AssertionError('stock snapshot was needlessly reread')):
+            for scope in ('majesty', 'majestyexpansion'):
+                prepare_final_gpl_resources(Path('.'), (), script_dataset=scope, dataset_symbols=stock,
+                                            standard_script_inputs=(provider(function('Native')),))
+        self.assertEqual(seen, [(sdk, base), (sdk, sdk)])
 
     def test_stock_imports_are_needed_only_in_original_quest_view(self):
         caller = SemanticMergeResult(parse_gpl('function Call()\nbegin\n$Extra();\nend\n').items, ())
@@ -123,6 +149,39 @@ class ScopedOutputTests(unittest.TestCase):
         audit_scope_dependencies(result(function('Call')), providers, stock)
         audit_scope_dependencies(result('function Call()\ndeclare\ninteger NativeOnly;\nbegin\n'
                                         'NativeOnly = 1;\nend\n'), providers, stock)
+
+    def test_scope_availability_uses_compiled_ownership_without_source_parsing(self):
+        from test_bcd import compiled
+        def opaque(name, dataset, source=None, owned='NativeOnly'):
+            target = Path(name + '.bcd')
+            path = Path(name + '.gpl')
+            block = SimpleNamespace(target=SimpleNamespace(absolute_path=target, relative_path=str(target)),
+                                    sources=() if source is None else (SimpleNamespace(absolute_path=path),))
+            return StandardScripts(name, SimpleNamespace(mod_id=name), (block,), (), (), (),
+                bases=(dataset,), payloads=() if source is None else ((path, source.encode()),),
+                compiled_payloads=((target, compiled((DefinitionKind.FUNCTION, owned))),))
+        stock = DatasetSymbols(frozenset(), {}, frozenset(), frozenset())
+        caller = result('function Call()\nbegin\n$NativeOnly();\nend\n')
+        expansion = opaque('Expansion', 'majestyexpansion')
+        base = opaque('Base', 'majesty')
+        with patch('majesty_cam.compose._parse_semantic_source_file_cached',
+                   side_effect=AssertionError('availability must not parse source')):
+            with self.assertRaisesRegex(ValueError, 'available only in the other dataset'):
+                audit_scope_dependencies(caller, Providers((expansion,), None, Path('unused'), 'majesty'), stock)
+            audit_scope_dependencies(caller, Providers((base, expansion), None, Path('unused'), 'majesty'), stock)
+            # Source declarations absent from native bytecode do not create
+            # false availability or false opposite-scope ownership.
+            ghost = opaque('Ghost', 'majestyexpansion', function('NativeOnly'), owned='Other')
+            audit_scope_dependencies(caller, Providers((ghost,), None, Path('unused'), 'majesty'), stock)
+            malformed = opaque('Malformed', 'majesty', 'unparsed invalid source')
+            audit_scope_dependencies(caller, Providers((malformed, expansion), None, Path('unused'), 'majesty'), stock)
+
+    def test_scope_availability_rejects_unreadable_compiled_index(self):
+        native = replace(provider(''), loads=(SimpleNamespace(target=None),), bases=('majestyexpansion',))
+        stock = DatasetSymbols(frozenset(), {}, frozenset(), frozenset())
+        with self.assertRaisesRegex(ValueError, 'cannot determine compiled GPL ownership'):
+            audit_scope_dependencies(result(function('Caller')),
+                Providers((native,), None, Path('unused'), 'majesty'), stock)
 
     def test_manifest_and_validation_cover_both_effective_views(self):
         with TemporaryDirectory() as tmp:
@@ -201,8 +260,8 @@ class ScopedOutputTests(unittest.TestCase):
 
     def test_owned_bundle_readback_requires_scope_report_and_every_file(self):
         import hashlib
-        for scoped in (False, True):
-            with self.subTest(scoped=scoped), TemporaryDirectory() as tmp:
+        for version, scoped in ((4, False), (5, True), (6, False), (6, True), (7, False), (7, True)):
+            with self.subTest(scoped=scoped, version=version), TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 package_fixture(root, result(function('Common')),
                     (('MajestyExpansion', result(function('Extra'))),) if scoped else ())
@@ -216,15 +275,17 @@ class ScopedOutputTests(unittest.TestCase):
                 controller = record(CONTROLLER_REGISTRY_RELATIVE_PATH, record_count=0)
                 report = {'runtime': dict(capabilities=[], capability_manifest=capability,
                                           feature_registry=feature, controller_registry=controller)}
-                if scoped:
+                if version >= 5:
                     report['generated_records'] = [dict(mod_id=p.mod_id, scope=p.datasets[0].base) for p in packages]
                 report_path = root/'CAM-MERGE-REPORT.json'
                 report_path.write_text(json.dumps(report))
-                sentinel = dict(schema_version=5 if scoped else 4, fingerprint='fixture', mod_id=ids[0],
+                sentinel = dict(schema_version=version, fingerprint='fixture', mod_id=ids[0],
                     selected_source_ids=[], intent_registry=record(Path(INTENT_REGISTRY_RELATIVE_PATH), record_count=0),
                     capability_manifest=capability, runtime_feature_registry=feature, controller_registry=controller,
                     generated_files=_generated_file_inventory(root))
-                if scoped: sentinel['generated_mod_ids'] = ids
+                if version >= 5: sentinel['generated_mod_ids'] = ids
+                if version == 6: sentinel['script_choices'] = {'exact-input-identity': function('Example')}
+                if version == 7: sentinel['mod_preferences'] = {'["first","second"]': 'first'}
                 (root/MANAGER_OUTPUT_SENTINEL).write_text(json.dumps(sentinel))
                 loaded = read_managed_build(root)
                 self.assertIsNotNone(loaded)

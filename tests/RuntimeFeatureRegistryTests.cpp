@@ -335,15 +335,20 @@ int main() {
         registry.kingdomResearch.size() != 1 || registry.heroInfoRows.size() != 1) return 43;
     auto hidden = Header(9, 0, 0);
     AppendU32(&hidden, 128); AppendU32(&hidden, 2);
-    AppendU32(&hidden, FourCC("A020")); AppendU32(&hidden, FourCC("A021"));
+    // Numeric little-endian FourCC order differs from alphabetical ID order.
+    AppendU32(&hidden, FourCC("ZZ01")); AppendU32(&hidden, FourCC("AA02"));
     if (!MajestyRuntimeFeatures::ParseRegistry(hidden.data(), hidden.size(), &registry, &error) ||
-        registry.hiddenInventoryActions != std::vector<std::uint32_t>{FourCC("A020"), FourCC("A021")}) return 44;
+        registry.hiddenInventoryActions != std::vector<std::uint32_t>{FourCC("ZZ01"), FourCC("AA02")}) return 44;
     for (std::size_t size = 0; size < hidden.size(); ++size)
         if (MajestyRuntimeFeatures::ParseRegistry(hidden.data(), size, &registry, &error) ||
             !registry.hiddenInventoryActions.empty()) return 45;
     auto duplicate = hidden;
-    duplicate[31] = duplicate[27];
+    for (std::size_t i = 0; i < 4; ++i) duplicate[28+i] = duplicate[24+i];
     if (MajestyRuntimeFeatures::ParseRegistry(duplicate.data(), duplicate.size(), &registry, &error)) return 46;
+    auto alphabetic = Header(9, 0, 0);
+    AppendU32(&alphabetic, 128); AppendU32(&alphabetic, 2);
+    AppendU32(&alphabetic, FourCC("AA02")); AppendU32(&alphabetic, FourCC("ZZ01"));
+    if (!ExpectInvalid(alphabetic, "sorted unique FourCCs")) return 47;
     std::puts("Runtime feature registry parser tests passed.");
     return 0;
 }

@@ -1419,6 +1419,10 @@ def _feature_sort_key(feature: ControllerFeature) -> tuple:
     order_type = "stock.mx22-building-open-toggle.v1" if isinstance(feature, StockMx22IndependentToggle) else feature.type
     if isinstance(feature, StockAp69SourceTargetAction):
         order_type = "stock.ap69-sovereign-target-action.v1"
+    if isinstance(feature, StockMx05LiveAgentListPanel):
+        # Live-agent and data-record rows share one MMCR section, whose
+        # panel-key order also allocates their positional action command IDs.
+        order_type = "stock.mx05-live-agent-list-panel.v1"
     return (_FEATURE_ORDER[order_type], logical_key, identity,
             _canonical_record_bytes(feature))
 

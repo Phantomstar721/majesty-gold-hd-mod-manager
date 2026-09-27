@@ -14,6 +14,18 @@ remain significant. Identical instructions do not require a load-order winner.
 This check reuses the cached scan; it does not compile scripts or add selection-time
 file reads. XML description comparisons remain unchanged.
 
+The conflict preview reuses this inventory and the same native Standard ordering
+routine used by Prepare. It reports last providers per definition across all
+selected Standards, separately for the original and expansion datasets. It does
+not merge scripts or apply a new precedence policy. Unknown effects retain an
+explicit fallback label; routine labels never claim particular damage formulas.
+Literal numeric expressions are recorded while tokenizing, without evaluating
+expressions or rereading files. Original/expansion scope follows the stock first
+Dataset rule, consistently across the three supported executable profiles.
+The preview cannot prove hidden compiled behavior or predict later generated
+Merge adjustments. A cyclic order has no reported final provider, and unresolved
+multi-mod choices are shown as provisional instead of silently resolved.
+
 A Standard mod remains independently enabled and classified as Standard. Its
 normal `.mmxml` GPL `Target` and ordered `Source` children register the editable
 source. No dummy CAM, per-behavior replacement table, or conversion to Merge is
@@ -32,18 +44,28 @@ definitions touched by the generated profile participate in reconciliation:
 - A generated stock fallback yields to the native replacement without emitting
   an unnecessary duplicate.
 - Independent edits combine through the existing instruction merger.
-- Competing edits report the provider and function instead of selecting stock.
+- Competing edits join the consolidated script review instead of selecting stock.
 - Unrelated Standard scripts, descriptions, artwork and other assets stay native.
 
 For overlapping inputs, the installed compiler must reproduce the declared BCD.
 A filename-only compiler probe identifies diagnostic filename positions. Only
 those proven fields and their exact envelope-size adjustment are normalized;
 instruction bytes, operands, strings and line numbers are not discarded. A
-compiled-only provider is not rejected merely for being selected. If composition
-needs a definition it may own, missing source evidence is reported as unknown
-ownership, not a confirmed conflict. A later known native winner can make earlier
-opaque input irrelevant. Proofs and parsed inputs use bounded process-local caches
+compiled-only provider is indexed from its native declaration tables during
+composition, using the already captured BCD bytes. Functions, expressions,
+prototypes and DAT records are distinguished from references to other scripts.
+Unrelated compiled-only files remain native without source registration. A real
+overlap names the exact provider, target and definition requiring matching source;
+it does not claim the two behaviors are irreconcilable. Unsupported or damaged
+tables remain explicitly unknown. A later native winner can make earlier opaque
+input irrelevant, including separate GPL targets within one package. Only a
+winning source-backed target needs compiler proof. See the
+[all-version BCD trace](stock-bcd-ownership.md).
+Proofs and parsed inputs use bounded process-local caches
 invalidated by declared inputs and compiler identity. Nothing polls during play.
+Source parsing is lazy per winning compiled block. Known base/expansion
+availability uses those same compiled definition indexes, including source-less
+native inputs; unrelated source cannot create or erase runtime ownership.
 
 Standard source/target/declaration identities and selected order participate in
 the prepared-plan fingerprint and are rechecked before publication. Checkbox and
@@ -54,6 +76,29 @@ Authored script changes are reconciled before generated callbacks and subsequent
 discovery/auditing. Those operations receive effective native fallback functions;
 the actual result undergoes final checks and unused native copies are pruned.
 Dataset dependency closure does not re-import stock over a proven native helper.
+Authored Standard/Merge comparisons share the same SDK source ancestry used by
+the instruction merger, while native defaults continue to use the destination
+dataset's stock. Ordered, short-circuit decision checks can combine an explicit
+priority change with independently anchored edits; competing orders and uncertain
+anchors remain conflicts. See [decision-chain reconciliation](stock-decision-chain-merge.md).
+Equivalent `else` and fall-through layouts after a proven unconditional return
+also compare consistently, without suppressing real removal-versus-edit conflicts.
+
+Automatic reconciliation compares a Merge result with the effective Standard
+owner. If that cannot be combined safely, the choice names the actual authored
+mods, never a synthetic "Combined Merge mods" entry. One preference per mod pair
+applies to every unresolved overlap in original and expansion quests. A preferred
+mod supplies its conflicting definition; independently compatible contributions
+from other mods are then retained through the existing merger. Safe results
+elsewhere remain combined. Authored compatibility definitions retain their real
+participant provenance at this boundary instead of being replaced by the original
+unresolved sources. Selected-owner rules expose only their accepted winner.
+An indivisible multi-mod compatibility definition must win or lose consistently
+against an outside mod; preferences cannot silently split it apart.
+Source/bytecode mismatch and missing ownership
+evidence are not selectable overrides. Generated callbacks, scope checks,
+compilation and final validation run after decisions. See
+[script conflict review](script-conflict-review.md).
 
 ## Native dataset boundary
 

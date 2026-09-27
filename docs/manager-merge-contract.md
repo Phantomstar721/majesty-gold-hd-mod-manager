@@ -509,18 +509,22 @@ whole stock `Purchase_Equipment` function:
 The named GPL function must exist exactly once in that package and use
 `Function YourMod_Rental_Check (agent ThisAgent) is boolean`. It returns TRUE
 only after it has prepared the same Target, TaskName, and intent state expected
-by stock `Use_Building`. The manager inserts all declared callbacks in stable
-package/key order only after the complete effective purchase chain—including
-package-owned additions and stock `Stat_Boost_Check`—has declined. A TRUE
-result then passes through stock's single final `ActiveScript = Use_Building`
-and `return TRUE` block. Unrecognized or reordered stock anchors fail the
-build. See [the purchase-tail lifecycle](stock-purchase-equipment-tail.md).
+by stock `Use_Building`. The manager preserves the complete effective purchase
+function and calls it first. Only when it returns FALSE are declared callbacks
+offered in stable package/key order. An existing successful purchase is left
+alone; the first successful callback receives the stock
+`ActiveScript = Use_Building` / `return TRUE` handoff. This supports replacement
+functions which use helpers or different item ordering without rewriting
+their internals. Wrong signatures, private-symbol collisions and direct
+self-function references fail closed. See
+[the purchase-tail lifecycle](stock-purchase-equipment-tail.md).
 
 For a choice that must come after all Magic Bazaar items, use the parallel
 `stock.gplmx-purchase-bazaar-tail.v1` record with the same `callback_key` and
 `callback_symbol` fields. Its callback has the same `(agent) is boolean`
-signature. The manager inserts it after the complete effective Bazaar item
-scan and before `Purchase_Bazaar`'s final Flag/`Use_Building` handoff. Use the
+signature. The manager offers it after the complete effective Bazaar choice
+returns FALSE, including an early decline; callbacks must check their own
+eligibility rather than inheriting Bazaar-specific gates. Use the
 equipment-tail and Bazaar-tail types according to Majesty's actual hero
 decision order; they are distinct extension points and are sorted
 independently.
@@ -931,6 +935,18 @@ and redundant begin/end grouping do not create conflicts; string contents are
 preserved literally. Rendered branches are explicitly grouped to retain their
 original ownership, including nested else clauses.
 
+For a contiguous chain of nested `if` checks without `else`, an explicit priority
+change can coexist with independently anchored check insertions or replacements.
+Exact unique stock conditions establish identity; one-for-one replacements need
+the same surrounding stock anchors. A check's replacement follows that identity
+when it moves. Only one distinct changed stock order is accepted, and insertion
+anchors must remain adjacent in that order. Competing insertions, different
+changed orders, duplicate identities, deletions or uncertain replacements stop
+with a conflict. The output remains literal nested `if` statements with the
+original short-circuit/fall-through behavior, not a new scheduler or a sorted
+callback list. Same-shape edits retain the existing structural comparison.
+See [the stock lifecycle and boundaries](stock-decision-chain-merge.md).
+
 Single-branch insertions at the same position can additionally combine when
 they are restricted to different literal string values of the same agent
 property. The output uses stock-style property `if`/`else` dispatch and keeps
@@ -959,6 +975,11 @@ definitions through the existing SDK loader. It adds no discovery work,
 compiler subprocesses, persistent helper cache, or runtime service. Helpers
 read as proof are not added to the output.
 
+Helper-based proofs also require the effective Standard definition to be absent
+or instruction-identical to the proof source. A later mod preference must
+not invalidate an automatically generated caller dispatch. Unknown ownership
+declines that proof rather than guessing the helper's behavior.
+
 Other different insertions at the same position, deletion versus modification,
 competing edits to one statement/condition/local, ambiguous repeated or moved
 instructions, changed signatures alongside body edits, and unsupported source
@@ -967,6 +988,8 @@ the competing instruction or reason. Unrelated stock functions are never
 emitted. No package names, gameplay events, or reward rules are hardcoded into
 this merger. It preserves authored changes; it cannot infer missing behavior
 or prove that independently authored gameplay rules are compatible at runtime.
+Independently introduced locals with the same name in different modified bodies
+and ambiguous edited/reordered sibling branches also require explicit resolution.
 The normal GPL compiler remains the final language validation step.
 
 The merge report's `gpl.instruction_merges` records automatically combined
@@ -974,11 +997,20 @@ functions, participating owners, stock source paths, and stock-function hashes,
 separately from explicit compatibility resolutions. This does not change
 Standard-mod classification or native load order.
 
-Explicit overlap resolutions currently come from checked-in compatibility
+Explicit overlap resolutions can come from checked-in compatibility
 metadata: selected-owner rules or supplied complete GPL/DAT semantic
 definitions. This is separate from custom-text binding, which is automatic and
-UUID-agnostic. There is no interactive diff3/manual conflict editor. Any
-unrecognized overlap aborts Build. If multiple simultaneously applicable rules
+UUID-agnostic. Remaining authored-script conflicts are collected across both
+effective datasets in the [mod preference review](script-conflict-review.md), before
+generated feature transforms. Users choose a preferred mod once per pair, using
+player-facing categories rather than code. The preference selects that mod's
+definition for every unresolved overlap between those mods; independently safe
+contributions from other mods are retained using the same instruction merger.
+It does not disable the other mod or change safely combined definitions. Three-or-more-mod
+overlaps use the same pair preferences, and cyclic preferences are rejected.
+There is no source editor, arbitrary helper rewriting, or inferred gameplay priority. Noninteractive
+callers receive the consolidated diagnostics and cannot proceed without decisions.
+If multiple simultaneously applicable rules
 name the same semantic item, Build also stops; registry order never chooses a
 winner. A requested item must appear exactly once in its resolution source.
 Each supplied semantic resolution is scoped to the mods named by that

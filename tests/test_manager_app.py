@@ -104,6 +104,52 @@ class ManagerAppLayoutTests(unittest.TestCase):
 
         cls.application = QApplication.instance() or QApplication(["manager-ui-tests"])
 
+    def test_conflict_preview_switching_does_not_apply_until_saved(self):
+        from majesty_cam.manager.conflict_preview import ConflictPreview
+        options = (("a", "Rules <A>"), ("b", "Rules & B"))
+        previews = {"a": ConflictPreview("First preview <literal>", "First technical"),
+                    "b": ConflictPreview("Second preview", "Second technical")}
+        dialog = manager_app._ConflictChoiceDialog(options, previews, "b")
+        self.assertEqual(dialog.choice.currentData(), "b")
+        self.assertEqual(dialog.summary.toPlainText(), "Second preview")
+        self.assertIsNone(dialog.winner)
+        dialog.choice.setCurrentIndex(0)
+        self.assertEqual(dialog.summary.toPlainText(), "First preview <literal>")
+        self.assertEqual(dialog.technical.toPlainText(), "First technical")
+        self.assertIsNone(dialog.winner)
+        self.assertTrue(dialog.technical.isHidden())
+        dialog.details_button.click()
+        self.assertFalse(dialog.technical.isHidden())
+        dialog.apply_button.click()
+        self.assertEqual(dialog.winner, "a")
+        self.assertEqual(dialog.result(), manager_app.QDialog.DialogCode.Accepted)
+        cancelled = manager_app._ConflictChoiceDialog(options, previews)
+        cancelled.reject()
+        self.assertIsNone(cancelled.winner)
+
+    def test_conflict_review_saves_only_an_accepted_preview(self):
+        from test_conflict_preview import entry, catalog_for
+        first = entry(1, "First", {"function:damage": "a"})
+        second = entry(2, "Second", {"function:damage": "b"})
+        snapshot = replace(_snapshot_with_required_qol("installed", "installed"),
+                           catalog=catalog_for(first, second),
+                           selections={first.content_id: True, second.content_id: True})
+        controller = SimpleNamespace(order=(first.content_id, second.content_id),
+                                     standard_conflict_winners={},
+                                     set_standard_conflict_winner=Mock(return_value=snapshot))
+        window = SimpleNamespace(snapshot=snapshot, controller=controller, _render_snapshot=Mock())
+        with patch.object(manager_app, "_ConflictChoiceDialog") as dialog:
+            dialog.return_value.exec.return_value = manager_app.QDialog.DialogCode.Rejected
+            self.assertFalse(manager_app.ManagerWindow._resolve_selected_conflicts(window))
+            controller.set_standard_conflict_winner.assert_not_called()
+            window._render_snapshot.assert_not_called()
+            dialog.return_value.exec.return_value = manager_app.QDialog.DialogCode.Accepted
+            dialog.return_value.winner = second.content_id
+            self.assertTrue(manager_app.ManagerWindow._resolve_selected_conflicts(window))
+        controller.set_standard_conflict_winner.assert_called_once_with(
+            first.content_id, second.content_id, second.content_id)
+        window._render_snapshot.assert_called_once_with(snapshot)
+
     def test_detected_installation_switch_rescans_and_recovers_from_invalid_choice(self):
         from majesty_cam.manager.qol_service import BETA2_BRANCH, GOG_BRANCH
         steam = Path("Z:/Steam/MajestyHD.exe").resolve()

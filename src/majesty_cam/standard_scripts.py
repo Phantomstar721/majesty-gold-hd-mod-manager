@@ -10,7 +10,6 @@ from functools import cached_property
 from pathlib import Path
 import hashlib
 import tempfile
-import shutil
 import subprocess
 import json
 import re
@@ -22,6 +21,7 @@ from .gpl_features import StockHeroQuestParticipant
 from .gpl_function_merge import merge_function, FunctionMergeError, _tokens, _Parser
 from .package import GplLoad, ModPackage, load_standard_component, load_mod_definition
 from .stock_input_cache import StockInputCache
+from .bcd import definition_keys, BcdIndexError
 
 _CACHE = StockInputCache(capacity=64)
 _PROOFS = StockInputCache(capacity=32)
@@ -38,12 +38,11 @@ class StandardScripts:
     bases: tuple[str, ...] = ()
     digests: tuple[tuple[str, str | None], ...] = ()
     payloads: tuple[tuple[Path, bytes], ...] = ()
+    compiled_payloads: tuple[tuple[Path, bytes], ...] = ()
 
     @cached_property
     def parsed_sources(self):
-        from .compose import _parse_semantic_source_file_cached
-        sources = self.sources or tuple(_parse_semantic_source_file_cached(str(path), data)
-                                        for path, data in self.payloads)
+        sources = self.sources or tuple(self._parse_source(path) for path, _ in self.payloads)
         for source in sources:
             require_complete_semantic_coverage(source)
         return sources
@@ -53,12 +52,76 @@ class StandardScripts:
         # Majesty replaces definitions in manifest/project load order.
         return {item.key: item for source in self.parsed_sources for item in source.items}
 
+    @cached_property
+    def _block_indexes(self):
+        return {}
+
+    @cached_property
+    def _parsed_by_path(self):
+        return {}
+
+    @cached_property
+    def _items_by_path(self):
+        return {}
+
+    @cached_property
+    def _payload_by_path(self):
+        return dict(self.payloads)
+
+    def _parse_source(self, path):
+        from .compose import _parse_semantic_source_file_cached
+        if path not in self._parsed_by_path:
+            if path not in self._payload_by_path:
+                raise ValueError(f'{self.name}: registered source {path} is absent from the input snapshot')
+            source = _parse_semantic_source_file_cached(str(path), self._payload_by_path[path])
+            require_complete_semantic_coverage(source)
+            self._parsed_by_path[path] = source
+            self._items_by_path[path] = {item.key: item for item in source.items}
+        return self._parsed_by_path[path]
+
+    def _block_keys(self, index):
+        if index not in self._block_indexes:
+            target = getattr(self.loads[index], 'target', None)
+            data = dict(self.compiled_payloads).get(getattr(target, 'absolute_path', None))
+            if data is None:
+                raise BcdIndexError('compiled target is absent from the input snapshot')
+            try:
+                self._block_indexes[index] = definition_keys(data)
+            except BcdIndexError as exc:
+                raise BcdIndexError(f'{target.relative_path}: {exc}') from exc
+        return self._block_indexes[index]
+
+    @cached_property
+    def compiled_keys(self):
+        """Native availability uses the same compiled ownership as lookup."""
+        if not self.loads:
+            return frozenset(self.items)
+        try:
+            return frozenset(key for index in range(len(self.loads)) for key in self._block_keys(index))
+        except BcdIndexError as exc:
+            raise ValueError(f'{self.name}: cannot determine compiled GPL ownership: {exc}') from exc
+
+    def owner(self, key):
+        """Last native load owning this key; source is optional, ownership is not."""
+        if not self.loads:  # Semantic-only callers/fixtures.
+            return (None, self.items[key]) if key in self.items else None
+        for index in reversed(range(len(self.loads))):
+            block = self.loads[index]
+            if key not in self._block_keys(index):
+                continue
+            source = None
+            for path in block.sources:
+                self._parse_source(path.absolute_path)
+                source = self._items_by_path[path.absolute_path].get(key, source)
+            return index, source
+        return None
+
 
 def read(entry):
     """Snapshot declared files once; defer semantic parsing until composition.
 
     No project discovery or compiler work belongs in selection/plan refresh.
-    Source-less bytecode remains explicitly unknown, not a claimed conflict.
+    Bytecode indexing and source parsing are deferred until composition.
     """
     root = entry.package_root.resolve()
     package = None
@@ -106,7 +169,9 @@ def read(entry):
         return StandardScripts(entry.display_name, package, loads, (),
                                participants, paths, tuple(base for base, _ in pairs), digests,
                                tuple((p.absolute_path, payloads[p.absolute_path])
-                                     for block in loads for p in block.sources))
+                                     for block in loads for p in block.sources),
+                               tuple((block.target.absolute_path, payloads[block.target.absolute_path])
+                                     for block in loads))
     return _CACHE.get(root, (entry.content_id, str(entry.manifest_path)), inputs, load)
 
 
@@ -128,11 +193,13 @@ def for_dataset(inputs, dataset):
     return tuple(item for item in inputs if not item.bases or item.bases[0] in ('any', dataset))
 
 
-def verify(item, compiler):
+def verify(item, compiler, block_index=None):
     """Prove manifest sources reproduce loaded BCD; cache by bounded inputs."""
     from .compose import no_console_window_options
     def prove():
-        for block in item.loads:
+        sources = dict(item.payloads)
+        targets = dict(item.compiled_payloads)
+        for block in (item.loads if block_index is None else (item.loads[block_index],)):
             if not block.sources:
                 raise ValueError(f'{item.name}: {block.target.relative_path} has no registered GPL sources; '
                                  'cannot safely preserve its scripts in the generated profile')
@@ -145,7 +212,7 @@ def verify(item, compiler):
                 directory = Path(temp)
                 (directory / 'Proof.gplproj').write_text(project, encoding='ascii')
                 for name, path in files.items():
-                    shutil.copyfile(path, directory / name)
+                    (directory / name).write_bytes(sources[path])
                 def run(output):
                     try:
                         return subprocess.run((str(compiler), '-in', 'Proof.gplproj', '-out', output, '-stdout'),
@@ -158,14 +225,14 @@ def verify(item, compiler):
                     raise ValueError(f'{item.name}: registered source compilation failed: '
                                      + process.stdout.decode('cp1252', errors='replace')[-1500:])
                 exact = target.read_bytes()
-                runtime = block.target.absolute_path.read_bytes()
+                runtime = targets[block.target.absolute_path]
                 if exact != runtime:
                     # BCD stores source filenames in diagnostic records. Prove
                     # their exact locations with a filename-only compiler probe;
                     # never erase arbitrary strings or instruction bytes.
                     probe_project = project.replace('Source', 'ProbeX')
                     for name, path in files.items():
-                        shutil.copyfile(path, directory / name.replace('Source', 'ProbeX'))
+                        (directory / name.replace('Source', 'ProbeX')).write_bytes(sources[path])
                     (directory / 'Proof.gplproj').write_text(probe_project, encoding='ascii')
                     process = run('Probe.bcd')
                     probe_path = directory / 'Probe.bcd'
@@ -178,6 +245,7 @@ def verify(item, compiler):
         return True
     stamp = compiler.stat()
     return _PROOFS.get(item.package.root, (item.package.mod_id,
+                      block_index, item.digests,
                       tuple(load.target.relative_path for load in item.loads), str(compiler),
                       stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns),
                       lambda: item.paths, prove)
@@ -236,26 +304,46 @@ def _matches_source_locations(runtime, exact, probe, names):
 def participant_inventories(inputs):
     from .compose import SelectedMod, PackageInventory
     result = []
-    owners = {key: item.package.mod_id for item in inputs for key in item.items}
     for item in inputs:
         if not item.participants:
             continue
-        keys = {f.hero_script.casefold() for f in item.participants}
+        keys = tuple(dict.fromkeys(f.hero_script.casefold() for f in item.participants))
+        owned = []
         for key in keys:
-            if (DefinitionKind.FUNCTION, key) not in item.items:
+            owner = item.owner((DefinitionKind.FUNCTION, key))
+            if owner is None or owner[1] is None:
                 raise ValueError(f'{item.name}: quest participant {key} has no manifest-registered source')
-            if owners.get((DefinitionKind.FUNCTION, key)) != item.package.mod_id:
+            winner = _native_winner(inputs, (DefinitionKind.FUNCTION, key))
+            if winner is None or winner[0].package.mod_id != item.package.mod_id:
                 raise ValueError(f'{item.name}: quest participant {key} is replaced by a later Standard mod; '
                                  'the effective provider must declare its own participation')
-        owned = tuple(x for x in item.items.values()
-                      if x.kind is DefinitionKind.FUNCTION and x.normalized_name in keys)
+            owned.append(owner[1])
         definition = replace(item.package.definition, runtime_features=item.participants)
         package = replace(item.package, definition=definition)
         selected = SelectedMod(alias='standard-' + package.mod_id.strip('{}').lower(),
                                package=package, semantic_passthrough=True)
         result.append(PackageInventory(selected, (), (), (), (),
-                      semantic_sources=(ParsedSemanticSource(item.name, '', owned),)))
+                      semantic_sources=(ParsedSemanticSource(item.name, '', tuple(owned)),)))
     return tuple(result)
+
+
+def _native_winner(inputs, key):
+    for provider in reversed(inputs):
+        try:
+            owner = provider.owner(key)
+        except BcdIndexError as exc:
+            raise ValueError(f'{provider.name}: cannot determine compiled GPL ownership for '
+                             f'{key[0].value}:{key[1]}: {exc}') from exc
+        if owner is None:
+            continue
+        index, source = owner
+        if source is None:
+            target = provider.loads[index].target.relative_path
+            raise ValueError(f'{provider.name}: {target} supplies {key[0].value}:{key[1]}, '
+                             'which the generated profile also needs to change; matching manifest '
+                             'Source files are required to combine this specific definition safely')
+        return provider, source, index
+    return None
 
 
 class Providers:
@@ -266,26 +354,22 @@ class Providers:
     the end. Scoped output is deliberately not manufactured here.
     """
 
-    def __init__(self, inputs, stock_loader, compiler, dataset='any'):
+    def __init__(self, inputs, stock_loader, compiler, dataset='any', *, source_ancestor_loader=None):
         if dataset not in ('any', 'majesty', 'majestyexpansion'):
             raise ValueError(f'unsupported output dataset {dataset}')
         self.inputs = tuple(inputs)
         self.stock_loader = stock_loader
+        self.source_ancestor_loader = source_ancestor_loader
         self.compiler = compiler
         self.dataset = dataset
         self.native = {}
+        self.native_names = {}
+        self.native_owners = {}
         self.ancestors = {}
         self.verified = set()
 
     def _winner(self, key, dataset):
-        for provider in reversed(for_dataset(self.inputs, dataset)):
-            # No source means unknown ownership, not a confirmed conflict.
-            if any(not load.sources for load in provider.loads):
-                raise ValueError(f'{provider.name}: cannot determine whether compiled-only GPL overlaps '
-                                 f'{key[0].value}:{key[1]}; declare matching Source files in its manifest')
-            if key in provider.items:
-                return (provider, provider.items[key])
-        return None
+        return _native_winner(for_dataset(self.inputs, dataset), key)
 
     def stock(self, names):
         missing = tuple(n for n in names if (DefinitionKind.FUNCTION, n.casefold()) not in self.ancestors)
@@ -314,23 +398,44 @@ class Providers:
         for winner in winners:
             if winner is None:
                 continue
-            provider, _ = winner
-            if provider.package.mod_id not in self.verified:
-                verify(provider, self.compiler)
-                self.verified.add(provider.package.mod_id)
+            provider, _, index = winner
+            identity = (provider.package.mod_id, index)
+            if identity not in self.verified:
+                verify(provider, self.compiler, index)
+                self.verified.add(identity)
         native = next(w[1] for w in winners if w)
         self.native[key] = native
+        self.native_names[key] = ', '.join(dict.fromkeys(w[0].name for w in winners if w))
+        owners = {w[0].package.mod_id.strip('{}').casefold() for w in winners if w}
+        self.native_owners[key] = tuple(sorted(owners))
         return native
+
+    def native_label(self, key):
+        self.lookup(key)
+        return self.native_names.get(key, 'Standard mod')
+
+    def native_candidate(self, key):
+        from .script_review import ScriptCandidate
+        item = self.lookup(key)
+        if item is None:
+            return None
+        owners = self.native_owners[key]
+        if len(owners) != 1:
+            raise ValueError('Different Standard owners require separate quest-scope choices')
+        return ScriptCandidate(self.native_label(key), item, owners[0])
 
     def functions(self, names):
         stock = self.stock(names)
         return {key: item for name in names for key in ((DefinitionKind.FUNCTION, name.casefold()),)
                 for item in (self.lookup(key) or stock.get(key),) if item is not None}
 
-    def reconcile(self, result, fallbacks=()):
+    def reconcile(self, result, fallbacks=(), *, review=None, skip_keys=(), merge_candidates=None,
+                  merge_compatibility_groups=None):
+        from .script_review import ScriptConflict
+        skip_keys = frozenset(skip_keys)
         items = dict((item.key, item) for item in result.items)
         for fallback in fallbacks:
-            if fallback is not None and fallback.key not in items:
+            if fallback is not None and fallback.key not in items and fallback.key not in skip_keys:
                 native = self.lookup(fallback.key)
                 if native is None and self.dataset != 'any':
                     native = self.stock((fallback.name,)).get(fallback.key)
@@ -338,6 +443,9 @@ class Providers:
                     items[fallback.key] = native
         output = []
         for item in items.values():
+            if item.key in skip_keys:
+                output.append(item)
+                continue
             native = self.lookup(item.key)
             if native is None or _tokens(item.text) == _tokens(native.text):
                 output.append(item)
@@ -346,14 +454,42 @@ class Providers:
             if base is not None and _tokens(item.text) == _tokens(base.text):
                 output.append(native)
                 continue
+            # Both sides here are authored source. Their shared SDK ancestry
+            # is not necessarily the destination quest's native stock body.
+            # Keep the latter for fallbacks above and functions(), not diffing.
+            if item.kind is DefinitionKind.FUNCTION and self.source_ancestor_loader is not None:
+                base = self.source_ancestor_loader((item.name,)).get(item.key, base)
+            if base is not None and _tokens(item.text) == _tokens(base.text):
+                output.append(native)
+                continue
+            error = None
             if base is None:
-                raise ValueError(f'{native.source_name}: cannot safely combine {item.kind.value}:{item.name}; '
-                                 'Standard and generated definitions differ without a stock ancestor')
-            try:
-                text = merge_function(base.text, {native.source_name: _align_parameters(base.text, native.text),
-                                                  'Manager profile': _align_parameters(base.text, item.text)})
-            except FunctionMergeError as exc:
-                raise ValueError(f'{native.source_name}: cannot safely combine function:{item.name}: {exc}') from exc
+                error = 'Standard and generated definitions differ without a stock ancestor'
+            else:
+                try:
+                    text = merge_function(base.text, {native.source_name: _align_parameters(base.text, native.text),
+                                                      'Manager profile': _align_parameters(base.text, item.text)})
+                except FunctionMergeError as exc:
+                    error = str(exc)
+            if error is not None:
+                if review is None:
+                    raise ValueError(f'{native.source_name}: cannot safely combine {item.kind.value}:{item.name}: {error}')
+                # A combined result is not a mod the player can prefer. Keep
+                # the real authored candidates through automatic composition.
+                candidates = tuple((merge_candidates or {}).get(item.key, ()))
+                if base is not None:
+                    candidates = tuple(candidate for candidate in candidates
+                                       if _tokens(candidate.item.text) != _tokens(base.text))
+                if not candidates:
+                    raise ValueError(f'{item.name}: cannot attribute the conflicting generated behavior '
+                                     'to an authored mod; a mod preference cannot override Manager requirements')
+                conflict = ScriptConflict(self.dataset, item.key, item.name, error, base,
+                    (self.native_candidate(item.key), *candidates),
+                    compatibility_groups=tuple((merge_compatibility_groups or {}).get(item.key, ())))
+                resolved = review.resolve(conflict)
+                if resolved is not None:
+                    output.append(resolved)
+                continue
             output.append(replace(item, text=text, span=None))
         return SemanticMergeResult(tuple(output), result.conflicts)
 

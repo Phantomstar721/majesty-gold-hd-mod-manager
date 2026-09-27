@@ -111,6 +111,8 @@ class CatalogEntry:
     unresolved_overlap_ids: Tuple[str, ...] = ()
     unresolved_overlap_names: Tuple[str, ...] = ()
     content_definitions: Tuple[Tuple[str, str], ...] = ()
+    dataset_base: str = "any"
+    content_values: Tuple[Tuple[str, str], ...] = ()
 
     @property
     def selectable(self) -> bool:
@@ -626,6 +628,11 @@ def _parse_content_node(
             ):
                 merge_ready = False
 
+    dataset = _native_dataset(content)
+    definitions, values = (
+        _content_definition_analysis(dataset, candidate.package_root)
+        if kind is CatalogKind.STANDARD and dataset is not None else ((), ())
+    )
     return CatalogEntry(
         content_id=content_id,
         raw_content_id=raw_content_id,
@@ -641,11 +648,10 @@ def _parse_content_node(
         issues=tuple(_attach_content_id(issues, content_id)),
         description=description,
         details=details,
-        content_definitions=(
-            _content_definition_fingerprints(content, candidate.package_root)
-            if kind is CatalogKind.STANDARD
-            else ()
-        ),
+        content_definitions=definitions,
+        dataset_base=(dataset.get("base", "unknown").casefold()
+                      if dataset is not None else "unknown"),
+        content_values=values,
     )
 
 
@@ -873,10 +879,17 @@ def _declared_load_resource_keys(content: ET.Element) -> frozenset[str]:
 _MAX_ANALYZED_CONTENT_BYTES = 16 * 1024 * 1024
 
 
-def _content_definition_fingerprints(
+def _native_dataset(content: ET.Element) -> Optional[ET.Element]:
+    # Majesty selects the first direct Dataset in the first DataConfiguration.
+    config = next((node for node in content if _local_name(node.tag) == "DataConfiguration"), None)
+    return (next((node for node in config if _local_name(node.tag) == "Dataset"), None)
+            if config is not None else None)
+
+
+def _content_definition_analysis(
     content: ET.Element,
     package_root: Path,
-) -> Tuple[Tuple[str, str], ...]:
+) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
     """Inventory behavior-defining content without compiling or mutating it.
 
     Ordinary Majesty Mods remain loaded independently. This inventory identifies
@@ -887,6 +900,7 @@ def _content_definition_fingerprints(
     """
 
     definitions: dict[str, str] = {}
+    values: dict[str, str] = {}
     for load in content.iter():
         if _local_name(load.tag) != "Load":
             continue
@@ -894,8 +908,11 @@ def _content_definition_fingerprints(
             kind = _local_name(resource.tag).casefold()
             if kind == "gpl":
                 for path in _gpl_analysis_sources(resource, package_root):
-                    for key, digest in _semantic_file_definitions(path):
+                    for key, digest, literal in _semantic_file_definitions(path):
                         definitions[key] = digest
+                        values.pop(key, None)
+                        if literal is not None:
+                            values[key] = literal
             elif kind == "descriptions":
                 path = _safe_declared_package_file(package_root, _element_text(resource))
                 if path is None:
@@ -911,7 +928,7 @@ def _content_definition_fingerprints(
                     key = _description_definition_key(child)
                     if key is not None:
                         definitions[key] = _xml_digest(child)
-    return tuple(sorted(definitions.items()))
+    return tuple(sorted(definitions.items())), tuple(sorted(values.items()))
 
 
 def _gpl_analysis_sources(resource: ET.Element, package_root: Path) -> Tuple[Path, ...]:
@@ -952,7 +969,7 @@ def _gpl_analysis_sources(resource: ET.Element, package_root: Path) -> Tuple[Pat
     return tuple(result)
 
 
-def _semantic_file_definitions(path: Path) -> Tuple[Tuple[str, str], ...]:
+def _semantic_file_definitions(path: Path) -> tuple[tuple[str, str, Optional[str]], ...]:
     try:
         info = path.stat()
     except OSError:
@@ -967,7 +984,7 @@ def _semantic_file_definitions_cached(
     path_text: str,
     _mtime_ns: int,
     _size: int,
-) -> Tuple[Tuple[str, str], ...]:
+) -> tuple[tuple[str, str, Optional[str]], ...]:
     path = Path(path_text)
     payload = _read_analysis_bytes(path)
     if payload is None:
@@ -981,7 +998,7 @@ def _semantic_file_definitions_cached(
     if parsed is None:
         return ()
     return tuple(
-        (f"{item.kind.value}:{item.normalized_name}", _script_digest(item.text))
+        (f"{item.kind.value}:{item.normalized_name}", *_script_fingerprint(item.text))
         for item in parsed.items
     )
 
@@ -1023,18 +1040,31 @@ def _read_analysis_text(path: Path) -> Optional[str]:
 
 
 def _script_digest(text: str) -> str:
+    return _script_fingerprint(text)[0]
+
+
+def _script_fingerprint(text: str) -> tuple[str, Optional[str]]:
     """Compare GPL/DAT tokens, not comments or source presentation.
 
     Reuse the instruction merger's lexer: identifiers are case-insensitive,
     while quoted values and instruction order remain exact. JSON retains token
     boundaries so removing whitespace cannot fuse distinct instructions.
     """
+    literal = None
     try:
-        normalized = json.dumps(_tokens(text), separators=(",", ":"))
+        tokens = _tokens(text)
+        normalized = json.dumps(tokens, separators=(",", ":"))
+        if tokens[:1] == ("expression",):
+            value = tokens[2:]
+            if value and value[-1] == ";":
+                value = value[:-1]
+            if (len(value) == 1 or (len(value) == 2 and value[0] in ("-", "+"))):
+                if re.fullmatch(r"(?:0x[0-9a-f]+|\d+(?:\.\d+)?)", value[-1]):
+                    literal = "".join(value)
     except FunctionMergeError:
         # Tolerant discovery must not crash or claim malformed strings equal.
         normalized = "unparsed:" + text
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest(), literal
 
 
 def _description_definition_key(element: ET.Element) -> Optional[str]:

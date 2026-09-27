@@ -34,6 +34,21 @@ Stock references are the installed SDK's `GPLMx/DecisionTrees/mx_*.gpl`,
 
 A TRUE provider callback short-circuits the remaining stock decision cascade.
 Missing, duplicated or reordered anchors fail with the private tree's name.
+These anchors are verified as parsed decision branches, not adjacent lines:
+explicit `begin/end`, comments and source formatting do not change eligibility.
+The nearby decision's false-result continuation must contain the rewards check
+as its sole immediate child. Consideration must remain beneath that rewards
+check on the same conditional path, not in a sibling, loop or `else` branch.
+Callbacks guard the complete existing continuation; original instructions,
+comments, enclosing branches and `else` ownership remain intact. The original
+Healer/Monk continuation gaps use the same structural checks.
+Reset and death anchors likewise use statement boundaries, not line breaks.
+Reset callbacks precede the original entry sequence; death callbacks run before
+the existing top-level death dispatch and after the original cleanup and any
+intervening mod work. Conditional, missing, repeated or reversed cleanup anchors
+are not treated as formatting differences. Original-game stock functions retain
+their audited target-reset and death-dispatch boundaries without adding expansion
+cleanup behavior.
 Without a selected provider for that analogue, the tree remains unchanged and
 has no dependency on any provider's symbols. Stock dispatch still owns timing;
 there is no Manager per-tick scan.

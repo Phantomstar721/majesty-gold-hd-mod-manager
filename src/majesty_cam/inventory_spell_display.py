@@ -19,7 +19,8 @@ def hidden_action_names(source):
         if tokens[i+2:i+3] != ("(",):
             return ()  # Indirect reference; no provable argument contract.
         args, part, depth = [], [], 1
-        for token in tokens[i+3:]:
+        for cursor in range(i + 3, len(tokens)):
+            token = tokens[cursor]
             if token == "(":
                 depth += 1
             elif token == ")":

@@ -225,6 +225,22 @@ class StartupCacheTests(unittest.TestCase):
         with patch.object(sys, "frozen", True, create=True):
             self.assertEqual(_manager_cache_identity_paths(), (Path(sys.executable),))
 
+    def test_source_feature_boundary_changes_invalidate_cached_checks(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch("majesty_cam.manager.startup_cache.__file__", str(root / "manager/startup_cache.py")), \
+                    patch.object(sys, "frozen", False, create=True):
+                paths = _manager_cache_identity_paths()
+                for name in ("compose.py", "gameplay_events.py", "event_boundaries.py",
+                             "potion_policy.py", "source_context.py", "dataset_dependencies.py",
+                             "inventory_spell_display.py", "runtime_features.py", "stock_controller_features.py"):
+                    with self.subTest(module=name):
+                        before = metadata_signature(paths)
+                        changed = root / name
+                        self.assertIn(changed.resolve(), paths)
+                        changed.write_text("updated source boundary", encoding="ascii")
+                        self.assertNotEqual(metadata_signature(paths), before)
+
     def test_script_conflict_lexer_and_catalog_changes_invalidate_cached_catalog(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
@@ -264,6 +280,8 @@ class StartupCacheTests(unittest.TestCase):
                 content_id=MOD_ID,
                 raw_content_id=MOD_ID,
                 display_name="Fixture Mod",
+                dataset_base="majestyexpansion",
+                content_values=(("expression:#value", "8"),),
                 kind=CatalogKind.STANDARD,
                 source=CatalogSource.LOCAL_MODS,
                 package_root=package,

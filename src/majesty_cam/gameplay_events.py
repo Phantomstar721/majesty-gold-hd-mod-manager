@@ -9,7 +9,9 @@ from typing import Mapping, Sequence
 
 from .gpl import (DefinitionKind, SemanticItem, SemanticMergeResult,
                   _mask_non_code, parse_gpl)
+from .gpl_function_merge import _Node, _tokens
 from .shared_features import EVENT_SIGNATURES, StockGameplayEventObserver
+from .event_boundaries import EventBoundary
 
 STOCK_EVENT_FILES = {
     "shapeshift_potion_end": "TaskModules/Subtasks/mx_Spells.gpl",
@@ -23,6 +25,7 @@ STOCK_EVENT_FILES = {
     "attack_flag_death_callback": "DecisionTrees/Modules/mx_check_rewards.gpl",
     "dropgoldinradius": "mx_Monster_Deaths.gpl",
     "dropgoldinradius_sameplayer": "mx_Monster_Deaths.gpl",
+    "give_gold": "mx_Monster_Deaths.gpl",
     "caravan_go_trade": "TaskModules/Characters/Henchmen/mx_caravan.gpl",
     "enter_tourney": "TaskModules/Buildings/mx_Fairgrounds.gpl",
     "exit_fair": "TaskModules/Buildings/mx_Fairgrounds.gpl",
@@ -51,8 +54,7 @@ def event_stock_paths(features) -> tuple[Path, ...]:
     paths = {
         STOCK_EVENT_FILES[name]
         for feature in features if isinstance(feature, StockGameplayEventObserver)
-        for name in (*EVENT_FUNCTIONS[feature.event],
-                     *(("shapeshift_potion_end",) if feature.event == "potion-consumed" else ()))
+        for name in EVENT_FUNCTIONS[feature.event]
     }
     if any(getattr(feature, "type", "") == "stock.bazaar-potion-policy.v1" for feature in features):
         paths.update(("TaskModules/Buildings/Magic_Bazaar.gpl", "TaskModules/Subtasks/mx_Spells.gpl"))
@@ -110,89 +112,66 @@ def _additive_title_reference(reference: str, current: str):
     return expanded, tuple(reversed(changes))
 
 
-def _early_consumption_returns(reference: str, current: str) -> tuple[int, ...] | None:
-    """Prove inserted consume-only branches without accepting arbitrary rewrites.
+def _potion_consumption_boundaries(editor):
+    """Observe actual consume/forget pairs, not the selected potion's effects.
 
-    Stock's dead-caster guard, normal effects, consumption and cleanup must all
-    remain literal. The only admitted addition is one or more conditional
-    consume/forget/return blocks between that guard and the first effector.
-    Predicates stay author-owned; no title, package ID or private type is known
-    here. Return source offsets at which to observe the additional consumption.
+    Preserve the entry guard and exact item, spell and recipient arguments.
+    The selected effects remain author-owned. Notify on completion of every
+    path that consumed the item, including explicit early returns.
     """
-    expected = stock_tokens(reference)
-    matches = [m for m in _TOKENS.finditer(current)
-               if not m.group().startswith(("//", "/*"))]
-    actual = tuple(m.group() if m.group().startswith('"') else m.group().casefold()
-                   for m in matches)
-    if actual == expected:
-        return ()
-    calls = lambda name: [i for i in range(len(expected) - 1)
-                          if expected[i:i + 2] == ("$", name)]
-    effects, consumed, forgotten = calls("createeffector"), calls("deleteinventoryitem"), calls("forgetspell")
-    if not effects or len(consumed) != 1 or len(forgotten) != 1:
-        return None
-    start = effects[0]
-    try:
-        consumed_end = expected.index(";", consumed[0]) + 1
-        forgotten_end = expected.index(";", forgotten[0]) + 1
-    except ValueError:
-        return None
-    if consumed_end != forgotten[0] or actual[:start] != expected[:start]:
-        return None
-    body = expected[consumed[0]:forgotten_end] + ("return", ";", "end")
-    cursor = start
-    returns = []
-    while actual[cursor:cursor + 2] == ("if", "("):
-        condition = cursor + 2
-        depth = 1
-        while condition < len(actual) and depth:
-            depth += (actual[condition] == "(") - (actual[condition] == ")")
-            condition += 1
-        if depth or actual[condition:condition + 1] != ("begin",):
-            return None
-        body_start = condition + 1
-        if actual[body_start:body_start + len(body)] != body:
-            return None
-        returns.append(matches[body_start + len(body) - 3].start())
-        cursor = body_start + len(body)
-    if not returns or actual[:start] + actual[cursor:] != expected:
-        return None
-    return tuple(returns)
-
-
-def _stock_preserving_prelude(reference: str, current: str) -> bool:
-    """Allow straight-line callback preludes while retaining the entire stock body.
-
-    Cloning an existing wrapper must also clone its prelude; dropping it would
-    remove another mod's behavior from reward-flag calls. No branches, local
-    changes, reordered stock statements or calls back into observed owners are
-    admitted as a prelude.
-    """
-    expected, actual = stock_tokens(reference), stock_tokens(current)
-    try:
-        start = expected.index("begin") + 1
-    except ValueError:
-        return False
-    if actual[:start] != expected[:start]:
-        return False
-    cursor = start
-    while (cursor + 2 < len(actual) and actual[cursor] == "$"
-           and re.fullmatch(r"[a-z_][a-z0-9_]*", actual[cursor + 1])
-           and actual[cursor + 1] not in STOCK_EVENT_FILES
-           and actual[cursor + 2] == "("):
-        cursor += 3
-        depth = 1
-        while cursor < len(actual) and depth:
-            depth += (actual[cursor] == "(") - (actual[cursor] == ")")
-            if actual[cursor] == ";":
-                return False
-            cursor += 1
-        if depth or actual[cursor:cursor + 1] != (";",):
-            return False
-        cursor += 1
-        if actual[:start] + actual[cursor:] == expected:
-            return True
-    return False
+    def is_call(node, symbol):
+        return node.kind == "statement" and node.head[:2] == ("$" + symbol, "(")
+    reference = editor.stock_body
+    indices = [i for i, node in enumerate(reference) if is_call(node, "deleteinventoryitem")]
+    if (len(indices) != 1 or indices[0] + 1 >= len(reference)
+            or not is_call(reference[indices[0] + 1], "forgetspell")):
+        editor.fail("stock potion must have one adjacent consume/forget pair")
+    pair = reference[indices[0]:indices[0]+2]
+    guard = reference[0]
+    if (guard.head != _tokens('if ($IsDead(ThisAgent))')
+            or guard.body != (_Node("statement", ("return", ";")),) or guard.otherwise
+            or not editor.body):
+        editor.fail("potion dead-caster guard changed")
+    normal = [node for node in editor.body if is_call(node, "deleteinventoryitem")]
+    if len(normal) != 1:
+        editor.fail("potion must have one unconditional consume/forget pair")
+    editor.guard_before('if ($IsDead(ThisAgent))', normal[0])
+    editor.types((*pair[0].head, *pair[1].head))
+    consumed, forgotten = [], []
+    for node, path, siblings, index in editor.actual_entries:
+        if is_call(node, "deleteinventoryitem"):
+            consumed.append(node)
+            if tuple(siblings[index:index+2]) != pair:
+                editor.fail("potion item, recipient or forget-spell pairing changed")
+            if path:
+                if (path[-1][0] != "if" or path[-1][2] != "body"
+                        or any(kind != "if" for kind, _, _ in path)
+                        or siblings != (*pair, _Node("statement", ("return", ";")))
+                        or editor.offset(node) > editor.offset(normal[0])):
+                    editor.fail("additional potion consumption must be a consume-only conditional return")
+                editor.guard_before('if ($IsDead(ThisAgent))', node)
+            forgotten.append(siblings[index+1])
+    tokens = _tokens(editor.current.text)
+    if (tokens.count("$deleteinventoryitem") != len(consumed)
+            or tokens.count("$forgetspell") != len(forgotten)):
+        editor.fail("unpaired or indirect potion consumption")
+    if any(token == "thisagent" and tokens[index+1:index+2] in
+           (("=",), ("+=",), ("-=",), ("*=",), ("/=",))
+           for index, token in enumerate(tokens)):
+        editor.fail("potion callback reassigns its recipient")
+    if any(editor.offset(node) > editor.offset(normal[0]) and editor.destroys_recipient(node)
+           for node, *_ in editor.actual_entries):
+        editor.fail("potion completion destroys its notification recipient")
+    # Normal consumption is observed after the selected remaining application
+    # work, not after a stock-only tail. A return skips the function-end call.
+    positions = [(node, True) for node in forgotten
+                 if editor.offset(node) < editor.offset(normal[0])]
+    positions.extend((node, False) for node, *_ in editor.actual_entries
+                     if node.head == ("return", ";")
+                     and editor.offset(node) > editor.offset(normal[0]))
+    if editor.body[-1].head != ("return", ";"):
+        positions.append((editor.body[-1], True))
+    return tuple(positions)
 
 
 def require_callback(item: SemanticItem, symbol: str, types: Sequence[str],
@@ -206,21 +185,11 @@ def require_callback(item: SemanticItem, symbol: str, types: Sequence[str],
                          + (" is boolean" if boolean else " with no return value"))
 
 
-def _once(text: str, pattern: str, transform) -> str:
-    masked = _mask_non_code(text)
-    matches = [m for m in re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
-               if masked[m.start():m.end()].strip()]
-    if len(matches) != 1:
-        raise ValueError(f"stock event boundary is missing or ambiguous: {pattern}")
-    match = matches[0]
-    return text[:match.start()] + transform(match) + text[match.end():]
-
-
 def add_gameplay_event_observers(
     result: SemanticMergeResult,
     subscribers: Mapping[str, Sequence[str]],
     stock: Mapping[str, SemanticItem],
-    *, potion_aliases=None,
+    *, potion_aliases=None, source_loader=None,
 ) -> SemanticMergeResult:
     """Append every declared observer without replacing stock or another mod."""
     requested = {key: tuple(values) for key, values in subscribers.items() if values}
@@ -241,19 +210,17 @@ def add_gameplay_event_observers(
                 raise ValueError(f"missing package-owned {event} observer {symbol!r}")
             require_callback(callback, symbol, EVENT_SIGNATURES[event])
 
-    def target(name: str) -> SemanticItem:
-        reference = stock.get(name)
-        if reference is None:
-            raise ValueError(f"{name}: installed stock source is required for event composition")
-        current = functions.get(name, reference)
-        if (stock_tokens(current.text) != stock_tokens(reference.text)
-                and not _stock_preserving_prelude(reference.text, current.text)):
-            raise ValueError(f"{name} ({current.source_name}): selected source changes the stock gameplay-event owner; "
-                             "its success/cleanup boundary cannot be safely combined")
-        # Prove the authored input, then continue from any edits already made
-        # by this composition. Two events can share one stock owner; starting
-        # from `current` again would silently discard its earlier observers.
-        return items.get(current.key, current)
+    boundaries = {}
+    def boundary(name):
+        if name not in boundaries:
+            reference = stock.get(name)
+            if reference is None:
+                raise ValueError(f'{name}: installed stock source is required for event composition')
+            boundaries[name] = EventBoundary(functions.get(name, reference), reference)
+        return boundaries[name]
+
+    def save_boundary(editor):
+        save(editor.current, editor.text())
 
     def save(item: SemanticItem, text: str) -> None:
         items[item.key] = replace(item, text=text, span=None,
@@ -270,20 +237,21 @@ def add_gameplay_event_observers(
 
     for event, name, wrapper, argument in (
         ("combat-experience-awarded", "attack_end", "MM_Event_CombatXP",
-         r"exp_given\s*/\s*new_exp_div"),
+         "exp_given / new_exp_div"),
         ("exploration-experience-awarded", "travel_to_exp", "MM_Event_ExploreXP",
-         r"#explore_exp"),
+         "#explore_exp"),
     ):
         if event not in requested:
             continue
-        item = target(name)
+        editor = boundary(name)
+        instruction = f'$give_exp(thisagent, {argument});'
+        award = editor.anchor(instruction)
         # Replace only the audited recipient call, inside its original branch.
         # The argument is evaluated once, before give_exp can change a level.
         # Familiar awards and all unrelated give_exp callers stay unobserved.
-        save(item, _once(item.text,
-            r"\$give_exp\s*\(\s*thisagent\s*,\s*" + argument + r"\s*\)\s*;",
-            lambda m: re.sub(r"\$give_exp\b", "$" + wrapper, m.group(),
-                             count=1, flags=re.IGNORECASE)))
+        editor.edit(award, lambda text: re.sub(r"\$give_exp\b", "$" + wrapper, text,
+                                              count=1, flags=re.IGNORECASE))
+        save_boundary(editor)
         generated(f'''function {wrapper}(agent Recipient, integer Base)
 declare
 begin
@@ -296,85 +264,109 @@ end
 ''')
 
     if "potion-consumed" in requested:
-        # Application and expiry must select precisely the same added classes.
-        # Otherwise the observer could bless a transform with mismatched undo.
-        shape_reference = stock.get("shapeshift_potion_effect")
-        shape_current = functions.get("shapeshift_potion_effect", shape_reference)
-        title_reference = (_additive_title_reference(shape_reference.text, shape_current.text)
-                           if shape_reference is not None else None)
-        if title_reference is not None and title_reference[1]:
-            expiry_reference = stock.get("shapeshift_potion_end")
-            expiry = functions.get("shapeshift_potion_end", expiry_reference)
-            expiry_proof = (_additive_title_reference(expiry_reference.text, expiry.text)
-                            if expiry_reference is not None else None)
-            if (expiry_proof is None or expiry_proof[1] != title_reference[1]
-                    or stock_tokens(expiry_proof[0]) != stock_tokens(expiry.text)):
-                raise ValueError("shapeshift_potion_end: additive title registration must retain matching stock cleanup")
         for name in (*EVENT_FUNCTIONS["potion-consumed"], *(potion_aliases or {})):
             identity = (potion_aliases or {}).get(name, "healing_potion" if name.startswith("heal_self") else name[:-7])
             notify = calls("potion-consumed", f'ThisAgent, "{identity}"')
             if name.startswith("heal_self"):
-                item = target(name)
-                text = _once(item.text,
-                             r"\$AdjustAttribute\s*\(\s*ThisAgent\s*,\s*"
-                             r"#ATTRIB_NumHealingPotions\s*,\s*-1\s*\)\s*;",
-                             lambda m: m.group() + "\n" + notify)
-            else:
-                reference = stock.get(name)
-                if reference is None:
-                    target(name)  # Report the same missing-stock evidence error.
-                item = functions.get(name, reference)
-                reference_text = (title_reference[0] if name == "shapeshift_potion_effect"
-                                  and title_reference is not None else reference.text)
-                extra_returns = _early_consumption_returns(reference_text, item.text)
-                if extra_returns is None:
-                    target(name)  # Preserve fail-closed handling for other rewrites.
-                    extra_returns = ()
-                text = item.text
-                for position in reversed(extra_returns):
-                    text = text[:position] + notify + "\n\t\t" + text[position:]
-                # The early dead-caster return must bypass this normal tail.
-                text = _once(text, r"\bend\s*\Z", lambda m: notify + "\n" + m.group())
-            save(item, text)
+                editor = boundary(name)
+                consumed = editor.anchor('$AdjustAttribute(ThisAgent, #ATTRIB_NumHealingPotions, -1);')
+                editor.insert(consumed, '\n' + notify, after=True)
+                save_boundary(editor)
+                continue
+            editor = boundary(name)
+            for node, after in _potion_consumption_boundaries(editor):
+                editor.insert(node, '\n' + notify + '\n', after=after)
+            save_boundary(editor)
 
-    if "reward-flag-paid" in requested:
-        for name, private in (("dropgoldinradius", "MM_Event_AttackGold"),
-                              ("dropgoldinradius_sameplayer", "MM_Event_ExploreGold")):
-            item = target(name)
-            text = _once(item.text, r"\bfunction\s+" + name + r"\b",
-                         lambda _: "function " + private)
-            text = _once(text, r"\$give_gold\s*\(\s*guy\s*,\s*goldper\s*\)\s*;",
-                         lambda m: "begin\n" + m.group() + "\n"
-                         + calls("reward-flag-paid", "ThisAgent, guy, goldper") + "\nend")
-            generated(text)
+    payout_roots = {}
+    if "reward-flag-paid" in requested or "attack-flag-completed" in requested:
         for name, original, private in (
             ("explore_flag_poll", "dropgoldinradius_sameplayer", "MM_Event_ExploreGold"),
             ("attack_flag_poll", "dropgoldinradius", "MM_Event_AttackGold"),
-            ("attack_flag_death_callback", "dropgoldinradius", "MM_Event_AttackGold"),
+            ("attack_flag_death_callback", "dropgoldinradius", "MM_Event_DeathGold"),
         ):
-            item = target(name)
-            save(item, _once(item.text, r"\$" + original + r"\b", lambda _: "$" + private))
+            if name == 'explore_flag_poll' and 'reward-flag-paid' not in requested:
+                continue
+            editor = boundary(name)
+            payout = editor.anchor(f'${original}(ThisAgent, $GetAttribute(ThisAgent, #ATTRIB_RewardCost));',
+                                   callee_change=True) if 'reward-flag-paid' in requested else None
+            completion = '$playsound(ThisAgent, "completed_reward", "begin");'
+            if 'reward-flag-paid' in requested:
+                callee = payout.head[0][1:]
+                # A tiny private entry captures the FLAG, not a later target
+                # passed by the selected mod's distribution helpers.
+                generated(f'''function {private}(agent Flag, integer Amount)
+declare
+begin
+    ${callee}(Flag, Amount);
+end
+''')
+                payout_roots[private] = callee
+                editor.edit(payout, lambda text, private=private: re.sub(
+                    r'\$[A-Za-z_][A-Za-z0-9_]*', '$' + private, text, count=1))
+            if name != 'explore_flag_poll' and 'attack-flag-completed' in requested:
+                completed = editor.anchor(completion)
+                committed = editor.anchor('ThisAgent\'s "gavereward" = TRUE;')
+                editor.binding('target = $AgentNumber($GetAttribute(ThisAgent, #ATTRIB_TargetID));', completed)
+                editor.ordered(completed, committed)
+                editor.no_exit_between(completed, committed)
+                if name == 'attack_flag_poll':
+                    editor.guard_before('if ($isvalidgamepiece(thisagent) == FALSE)', completed)
+                editor.insert(completed, calls('attack-flag-completed', 'ThisAgent, target') + '\n')
+            save_boundary(editor)
 
-    if "attack-flag-completed" in requested:
-        for name in EVENT_FUNCTIONS["attack-flag-completed"]:
-            item = target(name)
-            save(item, _once(item.text,
-                r'\$playsound\s*\(\s*thisagent\s*,\s*"completed_reward"\s*,\s*"begin"\s*\)\s*;',
-                lambda m: calls("attack-flag-completed", "ThisAgent, target") + "\n" + m.group()))
+    if payout_roots:
+        from .source_context import SourceContextDispatch, compose as carry_source
+        adapter = 'MM_Event_RewardPaid'
+        generated(f'''function {adapter}(agent Flag, agent Recipient, integer Amount)
+declare
+begin
+    $give_gold(Recipient, Amount);
+''' + calls('reward-flag-paid', 'Flag, Recipient, Amount') + '\nend\n')
+        def payout_source(name):
+            # The complete selected function set wins; the loader supplies only
+            # missing proven native helpers. Never substitute stock for a mod.
+            key = (DefinitionKind.FUNCTION, name.casefold())
+            return items.get(key) or (source_loader(name) if source_loader else stock.get(name))
+        routed = carry_source(SemanticMergeResult(tuple(items.values()), ()),
+            (SourceContextDispatch('reward_payment', 'give_gold', ('agent', 'integer'), adapter),),
+            tuple(payout_roots), payout_source, namespace='MM_EG', strict=True)
+        items = {item.key: item for item in routed.items}
 
     if "caravan-delivered" in requested:
-        item = target("caravan_go_trade")
-        save(item, _once(item.text, r"\$henchman_dead\s*\(\s*thisagent\s*,\s*thisagent\s*\)\s*;",
-                         lambda m: calls("caravan-delivered", "ThisAgent, Target, Gold_To_Give")
-                         + "\n" + m.group()))
+        editor = boundary('caravan_go_trade')
+        instruction = '$henchman_dead(ThisAgent, ThisAgent);'
+        delivered = editor.anchor(instruction)
+        transfer = editor.anchor('$Transfer_Gold(ThisAgent, Target, $GetAttribute(ThisAgent, #ATTRIB_Gold));')
+        amount = editor.anchor('$SetAttribute(ThisAgent, #ATTRIB_Gold, Gold_To_Give);')
+        editor.binding('Target = ThisAgent\'s "Target";', delivered)
+        editor.ordered(amount, transfer, delivered)
+        editor.stable('Gold_To_Give', amount, delivered)
+        editor.stable('ThisAgent', transfer, delivered)
+        for node, *_ in editor.actual_entries:
+            if (editor.offset(amount) < editor.offset(node) < editor.offset(transfer)
+                    and node.head[:1] in (('$setattribute',), ('$adjustattribute',))
+                    and editor.call_arguments(node)[:2] == (('thisagent',), ('#attrib_gold',))):
+                editor.fail('notification amount no longer matches the transferred gold')
+        editor.no_exit_between(transfer, delivered)
+        editor.insert(delivered, calls('caravan-delivered', 'ThisAgent, Target, Gold_To_Give') + '\n')
+        save_boundary(editor)
 
     if "tournament-completed" in requested:
-        # Validate Exit_Fair even though we retain it, since it owns payout and
-        # cleanup. Dump_Contestants must keep calling it without notification.
-        target("exit_fair")
-        item = target("enter_tourney")
-        save(item, _once(item.text, r'"ActiveScript"\s*=\s*\$Exit_Fair\s*;',
-                         lambda _: '"ActiveScript" = $MM_Event_FairFinished;'))
+        # Only replace the timed continuation, never Exit_Fair's selected
+        # gameplay. Ejection continues to call Exit_Fair without notification.
+        exit_item = functions.get('exit_fair', stock.get('exit_fair'))
+        if exit_item is None:
+            raise ValueError('Exit_Fair: selected continuation is missing')
+        require_callback(exit_item, 'Exit_Fair', ('agent',))
+        editor = boundary('enter_tourney')
+        continuation = editor.anchor('ThisAgent\'s "ActiveScript" = $Exit_Fair;')
+        participant = editor.anchor('$SetAttribute(ThisAgent, #ATTRIB_ContestantInFair, 1);')
+        timing = editor.anchor('$SetThreadInterval(ThisAgent\'s "ActiveScript", #compete_at_fair_duration);')
+        editor.ordered(participant, timing, continuation)
+        editor.no_exit_between(participant, continuation)
+        editor.edit(continuation, lambda text: re.sub(r'\$Exit_Fair\b', '$MM_Event_FairFinished', text, flags=re.IGNORECASE))
+        save_boundary(editor)
         generated('''function MM_Event_FairFinished(agent ThisAgent)
 declare
     agent Target;

@@ -1,0 +1,13 @@
+expression #UnusedConstant 41
+expression #UsedConstant 42
+prototype AgentTemplate()
+declare
+    integer Health;
+begin
+end
+function Owned(agent Unit) is integer
+declare
+begin
+    $Imported(Unit);
+    return #UsedConstant;
+end

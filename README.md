@@ -25,7 +25,7 @@ needed by custom buildings, panels, and other advanced features.
   combining mods for original-game quests.
 - Reuses unchanged stock data to keep repeated selection checks responsive.
 - Combines independent changes within shared GPL functions and XML Descriptions,
-  and stops with conflict details when edits cannot be reconciled.
+  and asks for one preferred mod per pair when script changes cannot be safely combined.
 - Supports reusable list, research, reward, and recruitment panels, including
   single-panel layouts at lower resolutions.
 - Supports custom ability names, icons, and hover descriptions in hero panels.
@@ -88,6 +88,39 @@ Items that do not change the game, such as modding tools, are identified but
 are not selectable. If a Merge mod is missing required compatibility
 information, the manager displays it in red with an explanation instead of
 building an unsafe package.
+
+### Reviewing Standard mod conflicts
+
+The conflict chooser lets you preview each load-order choice before saving it.
+It shows which mod supplies the shared rules and which other rules remain loaded
+from the other mod. Other selected Standard mods and original/expansion quest
+scope are included; a three-way conflict is not treated as an isolated pair.
+
+Gameplay labels identify affected systems, not a guaranteed description of every
+script's effect. Directly readable numeric settings are shown without guessing
+their meaning. Unresolved choices and unreadable behavior are identified, and
+**Technical details** shows the underlying definitions and load order. Previewing
+does not change your choices until you select **Save this choice**.
+
+### Choosing preferred mods during Prepare
+
+Prepare combines changes safely wherever it can. For remaining script conflicts,
+choose your preferred mod once per pair. That preference applies to every
+unresolved conflict between those two mods, across original and expansion quests.
+The chooser shows affected gameplay categories with short explanations, not code
+diffs. Existing compatibility rules stay resolved. It does not guess
+the meaning of changes it cannot interpret.
+
+The preferred mod wins the conflicting behavior, so the other mod's changes
+there may be replaced. Both mods stay enabled. Independently compatible changes
+are kept, including changes from other selected mods. Preferences involving
+three or more mods must be consistent.
+
+Successful preferences are reused for unchanged inputs. Select **Review mod
+preferences** before Prepare to revisit them. Compilation and normal
+validation still apply; cancelling or a failed build leaves your previous
+completed setup intact. See [choosing preferred mods](docs/script-conflict-review.md)
+for the boundaries and limitations.
 
 ## For mod creators: making a mod compatible
 
@@ -293,6 +326,9 @@ For compatible Merge mods, independent script instructions and Description
 fields can combine against stock content. Competing edits still require an
 explicit resolution or an author update. Validation does not prove that every
 combination of gameplay rules will work together.
+
+For ordered decision checks, compatible priority changes and independent
+additions can be preserved together. Ambiguous ordering still requires a decision.
 
 The Manager runs as your current Windows user. Administrator approval is
 needed only when changing a game-file helper inside a protected installation.

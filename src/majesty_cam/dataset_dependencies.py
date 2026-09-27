@@ -39,6 +39,57 @@ class DatasetSymbols:
     base_function_loader: Optional[Callable[[str], SemanticItem]] = None
 
 
+class DestinationSources:
+    """One captured stock corpus with distinct runtime and ancestry lookups.
+
+    Existing base functions always use their base body. Expansion-only imports
+    require an explicit caller choice. Authored-source ancestry is a separate
+    operation and never changes with the destination quest dataset.
+    """
+    def __init__(self, symbols: DatasetSymbols, dataset: str):
+        if dataset not in ('any', 'majesty', 'majestyexpansion'):
+            raise ValueError(f'unsupported source dataset: {dataset}')
+        self.symbols, self.dataset = symbols, dataset
+        self._loaded = {}
+
+    def _load(self, name, base=False):
+        key = (base, name)
+        if key not in self._loaded:
+            loader = self.symbols.base_function_loader if base else self.symbols.function_loader
+            if loader is None:
+                raise ValueError(f'{self.dataset}: stock source loader is unavailable for {name}')
+            item = loader(name)
+            if not isinstance(item, SemanticItem) or item.kind is not DefinitionKind.FUNCTION or item.normalized_name != name:
+                raise ValueError(f'stock source loader returned a different function for {name}')
+            self._loaded[key] = item
+        return self._loaded[key]
+
+    def function(self, name, *, allow_expansion=False):
+        name = name.casefold()
+        if name not in self.symbols.expansion_functions:
+            return None
+        if self.dataset == 'majestyexpansion':
+            return self._load(name)
+        if name not in self.symbols.base_functions:
+            return self._load(name) if allow_expansion else None
+        base = self._load(name, True)
+        if self.dataset == 'any':
+            from .gpl_function_merge import same_function_instructions
+            if not same_function_instructions(base.text, self._load(name).text):
+                raise ValueError(f'{name}: stock implementations differ between quest datasets; '
+                                 'scoped output is required, not an Any replacement')
+        return base
+
+    def functions(self, names, *, allow_expansion=False):
+        return {item.key: item for name in names
+                for item in (self.function(name, allow_expansion=allow_expansion),) if item is not None}
+
+    def ancestors(self, names):
+        return {item.key: item for name in names
+                if name.casefold() in self.symbols.expansion_functions
+                for item in (self._load(name.casefold()),)}
+
+
 def stock_dependency_paths(game_path: Path) -> tuple[Path, ...]:
     """Explicit project inputs only: no recursive scan or compiler invocation."""
     paths = [_BASE_MANIFEST, _EXPANSION_MANIFEST]

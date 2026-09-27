@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import Enum
 import re
-from typing import Iterable, Mapping, Optional, Sequence, Union
+from typing import Callable, Iterable, Mapping, Optional, Sequence, Union
 
 
 class DefinitionKind(str, Enum):
@@ -525,6 +525,7 @@ def merge_semantic_items(
     *,
     function_ancestors: Optional[Mapping[tuple[DefinitionKind, str], SemanticItem]] = None,
     function_loader=None,
+    function_proof_guard: Optional[Callable[[str, Optional[str]], bool]] = None,
 ) -> SemanticMergeResult:
     """Perform an N-way merge using vanilla as the common ancestor.
 
@@ -570,21 +571,25 @@ def merge_semantic_items(
             return helper_cache[key]
         explicit = normalized_resolutions.get(key)
         if explicit is not None:
-            helper_cache[key] = explicit.text
-            return explicit.text
-        candidates = [side[key] for _, _, side in mods if key in side]
-        base = vanilla_by_key.get(key) or (function_ancestors or {}).get(key)
-        if base is not None:
-            candidates = [item for item in candidates if _tokens(item.text) != _tokens(base.text)]
-        texts = {_tokens(item.text): item.text for item in candidates}
-        if len(texts) > 1:
-            raise FunctionMergeError(f"helper {name} has competing definitions")
-        text = next(iter(texts.values()), base.text if base else None)
-        if text is None and function_loader is not None and name not in _GuardProof._QUERIES | {"debugout"}:
-            loaded = function_loader((name,))
-            for loaded_key, item in loaded.items():
-                helper_cache[loaded_key] = item.text
-            text = helper_cache.get(key)
+            text = explicit.text
+        else:
+            candidates = [side[key] for _, _, side in mods if key in side]
+            base = vanilla_by_key.get(key) or (function_ancestors or {}).get(key)
+            if base is not None:
+                candidates = [item for item in candidates if _tokens(item.text) != _tokens(base.text)]
+            texts = {_tokens(item.text): item.text for item in candidates}
+            if len(texts) > 1:
+                raise FunctionMergeError(f"helper {name} has competing definitions")
+            text = next(iter(texts.values()), base.text if base else None)
+            if text is None and function_loader is not None and name not in _GuardProof._QUERIES | {"debugout"}:
+                loaded = function_loader((name,)).get(key)
+                text = loaded.text if loaded is not None else None
+        # The source used to prove a dispatch must still be the effective
+        # source at the native boundary. This includes explicit resolutions
+        # and builtin query assumptions (None), not just loaded GPL helpers.
+        if function_proof_guard is not None and not function_proof_guard(name, text):
+            raise FunctionMergeError(f"helper {name} differs at the effective Standard boundary; "
+                                     "explicit resolution required")
         helper_cache[key] = text
         return text
 
@@ -690,6 +695,7 @@ def merge_sources(
     *,
     function_ancestors: Optional[Mapping[tuple[DefinitionKind, str], SemanticItem]] = None,
     function_loader=None,
+    function_proof_guard: Optional[Callable[[str, Optional[str]], bool]] = None,
 ) -> SemanticMergeResult:
     """Flatten complete source sets and merge them with duplicate detection."""
 
@@ -702,7 +708,8 @@ def merge_sources(
     }
     return merge_semantic_items(vanilla_items, flattened_mods, resolutions,
                                 function_ancestors=function_ancestors,
-                                function_loader=function_loader)
+                                function_loader=function_loader,
+                                function_proof_guard=function_proof_guard)
 
 
 _INVENTORY_EXPRESSION_RE = re.compile(r"^#[A-Za-z_][A-Za-z0-9_]*$")
@@ -712,40 +719,57 @@ _STOCK_DEATH_DROP_LAST_EXCLUSION_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
-_PURCHASE_EQUIPMENT_FINAL_RE = re.compile(
-    r"(?P<indent>^[ \t]*)If\s*\(\s*Flag\s*\)\s*"
-    r"begin\s*"
-    r"ThisAgent's\s+\"ActiveScript\"\s*=\s*\$Use_Building\s*;\s*"
-    r"return\s+TRUE\s*;\s*"
-    r"end\s*"
-    r"return\s+False\s*;\s*End\s*$",
-    re.IGNORECASE | re.MULTILINE,
-)
+def _purchase_signature(item: SemanticItem, parameter_types: Sequence[str]):
+    """Check the stock ABI, without interpreting a mod's decision body."""
+    parameters = r"\s*,\s*".join(
+        rf"{kind}\s+(?P<arg{index}>[A-Za-z_][A-Za-z0-9_]*)"
+        for index, kind in enumerate(parameter_types)
+    )
+    match = re.match(
+        r"\s*function\s+(?P<name>" + re.escape(item.name)
+        + r")\s*\(\s*" + parameters
+        + r"\s*\)\s+is\s+boolean\s*(?:declare|begin)\b",
+        _mask_non_code(item.text), re.IGNORECASE,
+    )
+    if match is None:
+        raise ValueError(
+            f"{item.name} must retain the stock signature "
+            f"({', '.join(parameter_types)}) is boolean"
+        )
+    names = tuple(match.group(f"arg{index}") for index in range(len(parameter_types)))
+    if len({name.casefold() for name in names}) != len(names):
+        raise ValueError(f"{item.name} has duplicate parameter names")
+    return match.span("name"), names
 
 
-def add_purchase_equipment_tail_callbacks(
+def _add_purchase_tail_callbacks(
     result: SemanticMergeResult,
     callback_symbols: Iterable[str],
     *,
-    stock_purchase_equipment: Optional[SemanticItem] = None,
-    source_name: str = "<Purchase_Equipment tail composition>",
+    name: str,
+    parameter_types: Sequence[str],
+    stock: Optional[SemanticItem],
+    reserved_function_names: Iterable[str],
+    source_name: str,
 ) -> SemanticMergeResult:
-    """Compose boolean callbacks at stock GPLMx Purchase_Equipment's tail.
+    """Continue the stock boolean decision chain after the effective choice.
 
-    The insertion point is after the complete shipped purchase chain, including
-    ``Stat_Boost_Check``, and before the stock final ``Flag`` handoff to
-    ``Use_Building``.  Each later callback is evaluated only when every stock,
-    package-owned, and earlier tail choice declined the hero.
+    FALSE means the choice declined, including a mod's early eligibility return.
+    Keep its body intact; do not follow helpers or require its internal layout.
+    Only a newly accepted callback receives the stock Use_Building handoff.
     """
+    from .gpl_function_merge import _tokens
 
     requested: list[str] = []
     seen: set[str] = set()
     for symbol in callback_symbols:
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", symbol):
-            raise ValueError(f"invalid Purchase_Equipment callback symbol: {symbol!r}")
+            raise ValueError(f"invalid {name} callback symbol: {symbol!r}")
         key = symbol.casefold()
         if key in seen:
-            raise ValueError(f"duplicate Purchase_Equipment callback symbol: {symbol!r}")
+            raise ValueError(f"duplicate {name} callback symbol: {symbol!r}")
+        if key == name.casefold():
+            raise ValueError(f"{name} cannot be its own tail callback")
         seen.add(key)
         requested.append(symbol)
     if not requested:
@@ -753,95 +777,90 @@ def add_purchase_equipment_tail_callbacks(
 
     result.require_clean()
     items = list(result.items)
-    target_key = semantic_key(DefinitionKind.FUNCTION, "Purchase_Equipment")
+    target_key = semantic_key(DefinitionKind.FUNCTION, name)
     targets = [item for item in items if item.key == target_key]
     if not targets:
-        if stock_purchase_equipment is None or stock_purchase_equipment.key != target_key:
+        if stock is None or stock.key != target_key:
             raise ValueError(
-                "Purchase_Equipment tail callbacks require the installed stock "
-                "GPLMx Purchase_Equipment source"
+                f"{name} tail callbacks require the installed stock GPLMx {name} source"
             )
-        target = replace(stock_purchase_equipment, span=None)
+        target = replace(stock, span=None)
         items.append(target)
     elif len(targets) == 1:
         target = targets[0]
-    else:  # pragma: no cover - semantic merge prevents duplicate keys
-        raise ValueError("Purchase_Equipment is defined more than once")
+    else:
+        raise ValueError(f"{name} is defined more than once")
 
-    function_names = {
-        item.normalized_name
-        for item in items
-        if item.kind == DefinitionKind.FUNCTION
-    }
-    missing = [symbol for symbol in requested if symbol.casefold() not in function_names]
-    if missing:
-        raise ValueError(
-            "Purchase_Equipment tail callbacks must name package-owned boolean "
-            f"functions; missing: {', '.join(missing)}"
-        )
-
-    masked = _mask_non_code(target.text)
-    required_calls = (
-        "$BlackSmith_Check",
-        "$WizGuild_Check",
-        "$Poison_Check",
-        "$Potion_Check",
-        "$Ring_Check",
-        "$Market3_Check",
-        "$Stat_Boost_Check",
-    )
-    positions: list[int] = []
-    for call in required_calls:
-        matches = list(re.finditer(re.escape(call), masked, re.IGNORECASE))
-        minimum = 2 if call in {"$BlackSmith_Check", "$WizGuild_Check"} else 1
-        if len(matches) < minimum:
-            raise ValueError(
-                "Purchase_Equipment does not contain the complete recognized "
-                f"stock GPLMx purchase chain ({call})"
-            )
-        positions.append(matches[-1].start())
-    if positions != sorted(positions):
-        raise ValueError(
-            "Purchase_Equipment stock GPLMx purchase checks are not in the "
-            "recognized order"
-        )
-
-    final_matches = list(_PURCHASE_EQUIPMENT_FINAL_RE.finditer(target.text))
-    if len(final_matches) != 1:
-        raise ValueError(
-            "Purchase_Equipment does not contain exactly one recognized stock "
-            "final Flag/Use_Building handoff"
-        )
-    final_match = final_matches[0]
-    if positions[-1] >= final_match.start():
-        raise ValueError(
-            "Purchase_Equipment Stat_Boost_Check is not before the stock final handoff"
-        )
-
-    indent = final_match.group("indent")
-    callback_lines = []
+    name_span, arguments = _purchase_signature(target, parameter_types)
     for symbol in requested:
-        callback_lines.extend(
-            (
-                f"{indent}If (Flag == FALSE)",
-                f"{indent}\tbegin",
-                f"{indent}\t\tIf (${symbol} (ThisAgent))",
-                f"{indent}\t\t\tFlag = TRUE;",
-                f"{indent}\tend",
-                "",
+        callbacks = [item for item in items
+                     if item.key == semantic_key(DefinitionKind.FUNCTION, symbol)]
+        if len(callbacks) != 1:
+            raise ValueError(
+                f"{name} tail callbacks must name exactly one package-owned "
+                f"boolean function: {symbol}"
             )
+        _purchase_signature(callbacks[0], ("agent",))
+
+    # A fixed reserved name makes output deterministic across quest datasets.
+    # Never silently overwrite an authored or native definition.
+    private_name = f"CAM_{name}_BeforeTail"
+    occupied = {item.normalized_name for item in items
+                if item.kind in (DefinitionKind.FUNCTION, DefinitionKind.PROTOTYPE)}
+    occupied.update(symbol.casefold() for symbol in reserved_function_names)
+    if private_name.casefold() in occupied:
+        raise ValueError(f"{name} purchase continuation symbol collides: {private_name}")
+    if "$" + name.casefold() in _tokens(target.text):
+        raise ValueError(
+            f"{name} uses its own function identity; cannot safely privatize "
+            "the purchase decision"
         )
-    newline = "\r\n" if "\r\n" in target.text else "\n"
-    insertion = newline.join(callback_lines)
-    resolved = replace(
-        target,
-        text=target.text[: final_match.start()] + insertion + target.text[final_match.start() :],
-        source_name=source_name,
+
+    original = replace(
+        target, name=private_name,
+        text=target.text[:name_span[0]] + private_name + target.text[name_span[1]:],
         span=None,
     )
-    return SemanticMergeResult(
-        tuple(resolved if item.key == target_key else item for item in items),
-        result.conflicts,
+    signature = ", ".join(f"{kind} {argument}"
+                          for kind, argument in zip(parameter_types, arguments))
+    lines = [
+        f"Function {name} ({signature}) is boolean",
+        "Declare",
+        "Begin",
+        f"    If (${private_name} ({', '.join(arguments)}))",
+        "        return TRUE;",
+    ]
+    for symbol in requested:
+        lines.extend((
+            f"    If (${symbol} ({arguments[0]}))",
+            "        begin",
+            f"            {arguments[0]}'s \"ActiveScript\" = $Use_Building;",
+            "            return TRUE;",
+            "        end",
+        ))
+    lines.extend(("    return FALSE;", "End", ""))
+    newline = "\r\n" if "\r\n" in target.text else "\n"
+    wrapper = replace(target, text=newline.join(lines), source_name=source_name, span=None)
+    # Keep the selected body adjacent to its public entry point.
+    output = []
+    for item in items:
+        output.extend((original, wrapper) if item.key == target_key else (item,))
+    return SemanticMergeResult(tuple(output), result.conflicts)
+
+
+def add_purchase_equipment_tail_callbacks(
+    result: SemanticMergeResult,
+    callback_symbols: Iterable[str],
+    *,
+    stock_purchase_equipment: Optional[SemanticItem] = None,
+    reserved_function_names: Iterable[str] = (),
+    source_name: str = "<Purchase_Equipment tail composition>",
+) -> SemanticMergeResult:
+    """Run callbacks only after the effective equipment choice returns FALSE."""
+    return _add_purchase_tail_callbacks(
+        result, callback_symbols, name="Purchase_Equipment", parameter_types=("agent",),
+        stock=stock_purchase_equipment, reserved_function_names=reserved_function_names,
+        source_name=source_name,
     )
 
 
@@ -850,156 +869,69 @@ def add_purchase_bazaar_tail_callbacks(
     callback_symbols: Iterable[str],
     *,
     stock_purchase_bazaar: Optional[SemanticItem] = None,
+    reserved_function_names: Iterable[str] = (),
     source_name: str = "<Purchase_Bazaar tail composition>",
 ) -> SemanticMergeResult:
-    """Compose boolean callbacks after stock GPLMx Bazaar choices decline."""
-
-    requested: list[str] = []
-    seen: set[str] = set()
-    for symbol in callback_symbols:
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", symbol):
-            raise ValueError(f"invalid Purchase_Bazaar callback symbol: {symbol!r}")
-        key = symbol.casefold()
-        if key in seen:
-            raise ValueError(f"duplicate Purchase_Bazaar callback symbol: {symbol!r}")
-        seen.add(key)
-        requested.append(symbol)
-    if not requested:
-        return result
-
-    result.require_clean()
-    items = list(result.items)
-    target_key = semantic_key(DefinitionKind.FUNCTION, "Purchase_Bazaar")
-    targets = [item for item in items if item.key == target_key]
-    if not targets:
-        if stock_purchase_bazaar is None or stock_purchase_bazaar.key != target_key:
-            raise ValueError(
-                "Purchase_Bazaar tail callbacks require the installed stock "
-                "GPLMx Purchase_Bazaar source"
-            )
-        target = replace(stock_purchase_bazaar, span=None)
-        items.append(target)
-    elif len(targets) == 1:
-        target = targets[0]
-    else:  # pragma: no cover - semantic merge prevents duplicate keys
-        raise ValueError("Purchase_Bazaar is defined more than once")
-
-    function_names = {
-        item.normalized_name
-        for item in items
-        if item.kind == DefinitionKind.FUNCTION
-    }
-    missing = [symbol for symbol in requested if symbol.casefold() not in function_names]
-    if missing:
-        raise ValueError(
-            "Purchase_Bazaar tail callbacks must name package-owned boolean "
-            f"functions; missing: {', '.join(missing)}"
-        )
-
-    masked = _mask_non_code(target.text)
-    required = (
-        "Flag = FALSE",
-        "$RandomNumber",
-        "$listobjects",
-        "#Bazaar_Item_One",
-        "#Bazaar_Item_Two",
-        "#Bazaar_Item_Three",
-        "#Bazaar_Item_Four",
-        "#Bazaar_Item_Five",
-        "#Bazaar_Item_Six",
-        "foreach Item in Item_list",
-        "$Researched_Item",
-        "$Get_Bazaar_Cost",
-        "$Bazaar_Item_Check",
-    )
-    positions = []
-    for token in required:
-        position = masked.casefold().find(token.casefold())
-        if position < 0:
-            raise ValueError(
-                "Purchase_Bazaar does not contain the complete recognized "
-                f"stock GPLMx purchase chain ({token})"
-            )
-        positions.append(position)
-    if positions != sorted(positions):
-        raise ValueError(
-            "Purchase_Bazaar stock GPLMx purchase checks are not in the "
-            "recognized order"
-        )
-
-    final_matches = list(_PURCHASE_EQUIPMENT_FINAL_RE.finditer(target.text))
-    if len(final_matches) != 1:
-        raise ValueError(
-            "Purchase_Bazaar does not contain exactly one recognized stock "
-            "final Flag/Use_Building handoff"
-        )
-    final_match = final_matches[0]
-    if positions[-1] >= final_match.start():
-        raise ValueError(
-            "Purchase_Bazaar item selection is not before the stock final handoff"
-        )
-
-    indent = final_match.group("indent")
-    callback_lines = []
-    for symbol in requested:
-        callback_lines.extend(
-            (
-                f"{indent}If (Flag == FALSE)",
-                f"{indent}\tbegin",
-                f"{indent}\t\tIf (${symbol} (ThisAgent))",
-                f"{indent}\t\t\tFlag = TRUE;",
-                f"{indent}\tend",
-                "",
-            )
-        )
-    newline = "\r\n" if "\r\n" in target.text else "\n"
-    insertion = newline.join(callback_lines)
-    resolved = replace(
-        target,
-        text=target.text[: final_match.start()] + insertion + target.text[final_match.start() :],
+    """Run callbacks only after the effective Bazaar choice returns FALSE."""
+    return _add_purchase_tail_callbacks(
+        result, callback_symbols, name="Purchase_Bazaar", parameter_types=("agent", "integer"),
+        stock=stock_purchase_bazaar, reserved_function_names=reserved_function_names,
         source_name=source_name,
-        span=None,
-    )
-    return SemanticMergeResult(
-        tuple(resolved if item.key == target_key else item for item in items),
-        result.conflicts,
     )
 
 
 def hero_quest_anchor_matches(target: SemanticItem, stock_script: str):
-    """Recognize the two unchanged stock continuation boundaries, not names."""
-    masked = _mask_non_code(target.text)
-    if re.match(r"\s*function\s+" + re.escape(target.name) +
-                r"\s*\(\s*agent\s+thisagent\s*\)\s*(?:declare|begin)\b", masked, re.I) is None:
+    """Locate exact stock false-branch boundaries, independent of formatting.
+
+    Return complete source body spans for resume and consideration. Requiring
+    the same parent/child structure prevents a text match in a sibling, loop or
+    else branch from masquerading as the stock decision continuation.
+    """
+    from .gpl_function_merge import _SourceParser, _tokens
+
+    parser = _SourceParser(target.text)
+    signature, _, body = parser.function()
+    if signature != ("function", target.normalized_name, "(", "agent", "thisagent", ")"):
         raise ValueError(f"{target.name}: quest participant must retain stock (agent ThisAgent) signature")
-    def matches(expression):
-        return list(re.finditer(r"^[ \t]*if\s*\(\s*\$" + expression +
-                               r"\s*==\s*False\s*\)[ \t]*\r?$", masked, re.I | re.M))
-    near = matches(r"check_nearby\s*\(\s*thisagent\s*\)")
-    rewards = matches(r"check_rewards\s*\(\s*thisagent\s*,\s*(?:TRUE|FALSE)\s*\)")
-    if (len(near) != 1 or len(rewards) != 1 or near[0].end() > rewards[0].start()
-            or masked[near[0].end():rewards[0].start()].strip()):
+
+    def walk(nodes, ancestors=()):
+        for node in nodes:
+            yield node, ancestors
+            yield from walk(node.body, (*ancestors, (node, "body")))
+            yield from walk(node.otherwise, (*ancestors, (node, "else")))
+
+    records = tuple(walk(body))
+
+    def matches(*calls):
+        heads = {_tokens(f"if (${call} == FALSE)") for call in calls}
+        return [(node, ancestors) for node, ancestors in records
+                if node.kind == "if" and node.head in heads]
+
+    def follows(record, parent=None):
+        _, ancestors = record
+        return (all(node.kind == "if" and branch == "body" for node, branch in ancestors)
+                and (parent is None or any(node is parent for node, _ in ancestors)))
+
+    near = matches("Check_Nearby(ThisAgent)")
+    rewards = matches("Check_rewards(ThisAgent, TRUE)", "Check_rewards(ThisAgent, FALSE)")
+    if (len(near) != 1 or len(rewards) != 1 or not follows(near[0])
+            or len(near[0][0].body) != 1 or near[0][0].body[0] is not rewards[0][0]):
         raise ValueError(f"{target.name} does not contain exactly one recognized Check_Nearby/Check_rewards resume anchor")
-    pursue = matches(r"pursue_entertainment\s*\(\s*thisagent\s*\)")
-    bazaar = matches(r"purchase_bazaar\s*\(\s*thisagent\s*,\s*70\s*\)")
+
+    pursue = matches("Pursue_Entertainment(ThisAgent)")
+    bazaar = matches("Purchase_Bazaar(ThisAgent, 70)")
     if stock_script in {"mx_healer", "mx_monk"}:
         if not pursue and not bazaar:
-            # Original quests omit Bazaar. Preserve the very same stock gap:
-            # expansion inserts its Bazaar decision between these neighbours.
-            # Require the literal pair, not an arbitrary last if/return.
-            if stock_script == 'mx_healer':
-                before = matches(r'follow_heal_check\s*\(\s*thisagent\s*,\s*,\s*50\s*\)')
-                after = matches(r'seed_resource_check\s*\(\s*thisagent\s*,\s*50\s*\)')
-                expected = 'if ($follow_heal_check(ThisAgent, "tax_collector", 50) == FALSE)'
+            # The original-game continuation is the same audited stock gap.
+            if stock_script == "mx_healer":
+                before = matches('Follow_Heal_Check(ThisAgent, "tax_collector", 50)')
+                after = matches("Seed_Resource_Check(ThisAgent, 50)")
             else:
-                before = matches(r'collect_special_item\s*\(\s*thisagent\s*,\s*70\s*\)')
-                after = matches(r'go_home\s*\(\s*thisagent\s*,\s*60\s*\)')
-                expected = 'if ($collect_special_item(ThisAgent, 70) == FALSE)'
-            from .gpl_function_merge import _tokens
-            if (len(before) != 1 or len(after) != 1 or before[0].end() > after[0].start()
-                    or masked[before[0].end():after[0].start()].strip()
-                    or _tokens(target.text[before[0].start():before[0].end()]) != _tokens(expected)):
-                raise ValueError(f'{target.name} does not retain its original-game stock consideration gap')
+                before = matches("Collect_Special_Item(ThisAgent, 70)")
+                after = matches("Go_Home(ThisAgent, 60)")
+            if (len(before) != 1 or len(after) != 1
+                    or len(before[0][0].body) != 1 or before[0][0].body[0] is not after[0][0]):
+                raise ValueError(f"{target.name} does not retain its original-game stock consideration gap")
             consider = before[0]
         elif pursue or len(bazaar) != 1:
             raise ValueError(f"{target.name} does not contain its recognized stock post-Purchase_Bazaar consideration anchor")
@@ -1009,9 +941,11 @@ def hero_quest_anchor_matches(target: SemanticItem, stock_script: str):
         if len(pursue) != 1:
             raise ValueError(f"{target.name} does not contain exactly one recognized stock post-Pursue_Entertainment consideration anchor")
         consider = pursue[0]
-    if consider.start() <= rewards[0].end():
-        raise ValueError(f"{target.name} reverses the stock quest continuation order")
-    return rewards[0], consider
+    if not follows(consider, rewards[0][0]):
+        raise ValueError(f"{target.name} reverses or separates the stock quest continuation order")
+    if not consider[0].body:
+        raise ValueError(f"{target.name} stock consideration anchor has no continuation")
+    return parser.body_spans[id(near[0][0])], parser.body_spans[id(consider[0])]
 
 
 def add_hero_quest_lifecycle_callbacks(
@@ -1116,36 +1050,27 @@ def add_hero_quest_lifecycle_callbacks(
                 raise ValueError(f"declared private hero decision tree is absent: {script}")
             target = replace(stock, span=None)
             items.append(target)
-        reward_match, consider_match = hero_quest_anchor_matches(target, analogue)
+        resume_span, consider_span = hero_quest_anchor_matches(target, analogue)
         newline = "\r\n" if "\r\n" in target.text else "\n"
-        reward_line = target.text[reward_match.start():reward_match.end()]
-        resume_indent = re.match(r"[ \t]*", reward_line).group(0)
-        resume_insertion = "".join(
-            f"{resume_indent}if (${symbol}(ThisAgent) == False){newline}{newline}"
-            for symbol in resume_callbacks
-        )
-        consider_line = target.text[
-            consider_match.start():consider_match.end()
-        ]
-        consider_indent = re.match(r"[ \t]*", consider_line).group(0)
-        next_code = re.search(r"\S", target.text[consider_match.end():])
-        if next_code is None:
-            raise ValueError(
-                f"{script} stock consideration anchor has no continuation"
-            )
-        consider_insert_at = consider_match.end() + next_code.start()
-        consider_insertion = "".join(
-            f"{consider_indent}if (${symbol}(ThisAgent) == False){newline}{newline}"
-            for symbol in consider_callbacks
-        )
-        updated_text = (
-            target.text[:consider_insert_at] + consider_insertion
-            + target.text[consider_insert_at:]
-        )
-        updated_text = (
-            updated_text[:reward_match.start()] + resume_insertion
-            + updated_text[reward_match.start():]
-        )
+        insertions: dict[int, list[str]] = {}
+        for (start, end), symbols in (
+            (resume_span, resume_callbacks), (consider_span, consider_callbacks),
+        ):
+            line_start = target.text.rfind("\n", 0, start) + 1
+            indent = re.match(r"[ \t]*", target.text[line_start:start]).group(0)
+            # The explicit block preserves ownership of any original else.
+            # Guard the entire continuation, not merely its first statement.
+            opening = "begin" + newline + "".join(
+                f"{indent}\tif (${symbol}(ThisAgent) == False){newline}"
+                for symbol in symbols
+            ) + indent + "\t"
+            closing = newline + indent + "end" + newline
+            insertions.setdefault(start, []).append(opening)
+            insertions.setdefault(end, []).append(closing)
+        updated_text = target.text
+        for position in sorted(insertions, reverse=True):
+            updated_text = (updated_text[:position] + "".join(insertions[position])
+                            + updated_text[position:])
         updated = replace(
             target,
             text=updated_text,
@@ -1167,13 +1092,25 @@ def add_hero_quest_lifecycle_callbacks(
         items.append(item)
         return item
 
+    from .gpl_function_merge import _Parser, _SourceParser, _tokens
+
+    def lifecycle_layout(item):
+        parser = _SourceParser(item.text)
+        signature, _, body = parser.function()
+        if signature != ("function", item.normalized_name, "(", "agent", "thisagent", ")"):
+            raise ValueError(f"{item.name} must retain its stock (agent ThisAgent) signature")
+        return parser, body
+
+    def insert_calls(item, position, symbols):
+        newline = "\r\n" if "\r\n" in item.text else "\n"
+        insertion = "".join(f"\t${symbol}(ThisAgent);{newline}" for symbol in symbols)
+        return replace(item, text=item.text[:position] + insertion + item.text[position:],
+                       source_name=source_name, span=None)
+
     reset_item = materialize("reset_tasks", stock_reset_tasks)
-    reset_anchor = re.compile(
-        r"(?P<begin>\bbegin\s*\r?\n)(?P<body>[\s\S]*?\$StopMoving\s*\(\s*ThisAgent\s*\)\s*;)",
-        re.IGNORECASE,
-    )
-    reset_matches = list(reset_anchor.finditer(reset_item.text))
-    from .gpl_function_merge import _tokens
+    reset_layout, reset_body = lifecycle_layout(reset_item)
+    stop = _tokens("$StopMoving(ThisAgent);")
+    stops = [node for node in reset_body if node.kind == "statement" and node.head == stop]
     base_reset = '''function reset_tasks(agent thisagent)
 declare
 begin
@@ -1182,72 +1119,39 @@ thisagent's "activescript" = thisagent's "basicscript";
 thisagent's "backscript" = thisagent's "basicscript";
 $clearlist(thisagent's "hostiles");
 end'''
-    if not reset_matches and stock_reset_tasks is not None and _tokens(stock_reset_tasks.text) == _tokens(base_reset):
-        reset_matches = list(re.finditer(
-            r'''(?P<begin>\bbegin\s*\r?\n)(?P<body>[\s\S]*?thisagent's\s+"target"\s*=\s*\$Nullagent\s*\(\s*\)\s*;)''',
-            reset_item.text, re.I))
-    if len(reset_matches) != 1:
+    original_reset = (stock_reset_tasks is not None
+                      and _Parser(stock_reset_tasks.text).function() == _Parser(base_reset).function())
+    target_clear = _tokens('thisagent\'s "target" = $Nullagent();')
+    clears = [node for node in reset_body if node.kind == "statement" and node.head == target_clear]
+    if len(stops) != 1 and not (original_reset and not stops and len(clears) == 1):
         raise ValueError("reset_tasks does not contain the recognized stock entry anchor")
-    reset_match = reset_matches[0]
-    newline = "\r\n" if "\r\n" in reset_item.text else "\n"
-    reset_insert = "".join(f"\t${symbol}(ThisAgent);{newline}" for symbol in reset_symbols)
-    updated_reset = replace(
-        reset_item,
-        text=(reset_item.text[:reset_match.end("begin")] + reset_insert
-              + reset_item.text[reset_match.end("begin"):]),
-        source_name=source_name,
-        span=None,
-    )
+    # Reset callbacks always precede the complete original entry sequence.
+    updated_reset = insert_calls(reset_item, reset_layout.node_spans[id(reset_body[0])][0],
+                                 reset_symbols)
     items = [updated_reset if item.key == reset_item.key else item for item in items]
 
     death_item = materialize("Unit_Call_Deathscript", stock_unit_death)
-    death_anchor = re.compile(
-        r"(?P<delete>^[ \t]*\$DeleteAllEffectors\s*\(\s*thisagent\s*\)\s*;\s*$)"
-        r"(?P<gap>\r?\n(?:[ \t]*\r?\n|[ \t]*//[^\r\n]*\r?\n)*)"
-        r"(?P<callback>^[ \t]*if\s*\(\s*\$validfunction\s*\(\s*thisagent's\s+\"IGDeathScript\"\s*\)\s*==\s*TRUE\s*\))",
-        re.IGNORECASE | re.MULTILINE,
-    )
-    death_matches = list(death_anchor.finditer(death_item.text))
+    death_layout, death_body = lifecycle_layout(death_item)
+    cleanup = _tokens("$DeleteAllEffectors(ThisAgent);")
+    dispatch = _tokens('if ($ValidFunction(thisagent\'s "IGDeathScript") == TRUE)')
+    deletes = [index for index, node in enumerate(death_body)
+               if node.kind == "statement" and node.head == cleanup]
+    calls = [index for index, node in enumerate(death_body)
+             if node.kind == "if" and node.head == dispatch]
     base_death = '''function Unit_Call_Deathscript(agent thisagent)
 declare
 begin
 if ($validfunction(thisagent's "IGDeathScript") == TRUE)
 (thisagent's "IGDeathScript")(thisagent);
 end'''
-    if not death_matches:
-        # Native replacements may add work between cleanup and death dispatch.
-        # Prove both stock operations are still top-level and in that order;
-        # then attach at dispatch without moving or dropping the intervening work.
-        from .gpl_function_merge import _Parser
-        body = _Parser(death_item.text).function()[2]
-        cleanup = _tokens('$DeleteAllEffectors(ThisAgent);')
-        dispatch = _tokens('if ($ValidFunction(ThisAgent\'s "IGDeathScript") == TRUE)')
-        deletes = [i for i, node in enumerate(body) if node.kind == 'statement' and node.head == cleanup]
-        calls = [i for i, node in enumerate(body) if node.kind == 'if' and node.head == dispatch]
-        original_stock = (stock_unit_death is not None
-                          and _tokens(stock_unit_death.text) == _tokens(base_death))
-        if len(calls) == 1 and ((original_stock and not deletes)
-                                or (len(deletes) == 1 and deletes[0] < calls[0])):
-            death_matches = list(re.finditer(
-                r'''(?P<callback>^[ \t]*if\s*\(\s*\$validfunction\s*\(\s*thisagent's\s+"IGDeathScript"\s*\)\s*==\s*TRUE\s*\))''',
-                death_item.text, re.I | re.M))
-    if len(death_matches) != 1:
-        raise ValueError(
-            "Unit_Call_Deathscript does not contain the recognized stock cleanup anchor"
-        )
-    death_match = death_matches[0]
-    newline = "\r\n" if "\r\n" in death_item.text else "\n"
-    indent = re.match(r"[ \t]*", death_match.group("callback")).group(0)
-    death_insert = "".join(
-        f"{indent}${symbol}(ThisAgent);{newline}" for symbol in death_symbols
-    ) + newline
-    updated_death = replace(
-        death_item,
-        text=(death_item.text[:death_match.start("callback")] + death_insert
-              + death_item.text[death_match.start("callback"):]),
-        source_name=source_name,
-        span=None,
-    )
+    original_death = (stock_unit_death is not None
+                      and _Parser(stock_unit_death.text).function() == _Parser(base_death).function())
+    if (len(calls) != 1 or not ((original_death and not deletes)
+                               or (len(deletes) == 1 and deletes[0] < calls[0]))):
+        raise ValueError("Unit_Call_Deathscript does not contain the recognized stock cleanup anchor")
+    # Preserve any native work between cleanup and dispatch and all else arms.
+    updated_death = insert_calls(death_item, death_layout.node_spans[id(death_body[calls[0]])][0],
+                                 death_symbols)
     items = [updated_death if item.key == death_item.key else item for item in items]
     return SemanticMergeResult(tuple(items), result.conflicts)
 
@@ -1355,22 +1259,14 @@ def add_controlled_follower_movement_adjustments(
     death = _inject_controlled_follower_cleanup(
         death,
         requested,
-        re.compile(
-            r"(?P<indent>^[ \t]*)\$Monster_Gravestone\s*"
-            r"\(\s*ThisAgent\s*\)\s*;",
-            re.IGNORECASE | re.MULTILINE,
-        ),
+        "$Monster_Gravestone(ThisAgent);",
         "Controlled_Monster_Death stock gravestone handoff",
         source_name,
     )
     leader_dead = _inject_controlled_follower_cleanup(
         leader_dead,
         requested,
-        re.compile(
-            r"(?P<indent>^[ \t]*)\$deleteeffector\s*"
-            r"\(\s*thisagent\s*,\s*\"charm_icon\"\s*\)\s*;",
-            re.IGNORECASE | re.MULTILINE,
-        ),
+        '$deleteeffector(thisagent,"charm_icon");',
         "leader_dead stock charm cleanup",
         source_name,
     )
@@ -1411,29 +1307,44 @@ def _inject_controlled_follower_begin(
     hooks: Sequence[tuple[str, int, tuple[str, str, str, str]]],
     source_name: str,
 ) -> SemanticItem:
-    masked = _mask_non_code(target.text)
-    required = (
-        "$IsDead",
-        "++",
-        "$fake_wander",
-        "$createeffector",
-        "$Controlled_Monster",
-        "$Controlled_Monster_Death",
-        "= ThisAgent",
-    )
-    positions = [masked.casefold().find(token.casefold()) for token in required]
-    if any(position < 0 for position in positions) or positions != sorted(positions):
+    from .gpl_function_merge import _Parser, _SourceParser, _tokens
+
+    parser = _SourceParser(target.text)
+    signature, _, body = parser.function()
+    # These are the stock setup instructions, including their block ownership.
+    # Token parsing accepts the merger's rendered "+ +" and arbitrary layout
+    # without allowing changed arguments, strings, or conditional setup.
+    reference = '''function Control_Monster(agent ThisAgent, agent Target)
+begin
+If ($IsDead(Target)) return;
+(ThisAgent's "Num_Followers") ++;
+Target's "ActiveScript" = $fake_wander;
+$createeffector(target, "Charm_icon", 1, "infinite");
+Target's "BackScript" = $Controlled_Monster;
+Target's "IGDeathScript" = $Controlled_Monster_Death;
+Target's "leader" = ThisAgent;
+end'''
+    stock_signature, _, required = _Parser(reference).function()
+
+    def walk(nodes):
+        for node in nodes:
+            yield node
+            yield from walk(node.body)
+            yield from walk(node.otherwise)
+
+    all_nodes = tuple(walk(body))
+    positions = [next((index for index, node in enumerate(body) if node == expected), -1)
+                 for expected in required]
+    if (signature != stock_signature or any(position < 0 for position in positions)
+            or positions != sorted(positions)
+            or any(all_nodes.count(expected) != 1 for expected in required)):
         raise ValueError(
             "Control_Monster does not contain the complete recognized stock "
             "controlled-follower setup lifecycle"
         )
-    anchor = re.compile(
-        r"(?P<indent>^[ \t]*)\$setunitplayernumber\s*\(\s*target\s*,\s*"
-        r"\$getunitplayernumber\s*\(\s*thisagent\s*\)\s*\)\s*;",
-        re.IGNORECASE | re.MULTILINE,
-    )
-    matches = list(anchor.finditer(masked))
-    if len(matches) != 1 or positions[-1] >= matches[0].start():
+    anchor = _tokens("$setunitplayernumber(target, $getunitplayernumber(thisagent));")
+    matches = [node for node in all_nodes if node.kind == "statement" and node.head == anchor]
+    if len(matches) != 1 or matches[0] not in body or positions[-1] >= body.index(matches[0]):
         raise ValueError(
             "Control_Monster does not contain exactly one recognized stock "
             "player-ownership handoff"
@@ -1444,8 +1355,9 @@ def _inject_controlled_follower_begin(
                 raise ValueError(
                     f"Control_Monster already contains generated marker {marker!r}"
                 )
-    match = matches[0]
-    indent = match.group("indent")
+    start, end = parser.node_spans[id(matches[0])]
+    line_start = target.text.rfind("\n", 0, start) + 1
+    indent = re.match(r"[ \t]*", target.text[line_start:start]).group(0)
     newline = "\r\n" if "\r\n" in target.text else "\n"
     lines: list[str] = []
     for symbol, adjustment, markers in hooks:
@@ -1474,10 +1386,10 @@ def _inject_controlled_follower_begin(
             f"{indent}\t\t\tend",
             f"{indent}\tend",
         ))
-    insertion = newline + newline.join(lines)
+    insertion = newline + newline.join(lines) + newline + indent
     return replace(
         target,
-        text=target.text[:match.end()] + insertion + target.text[match.end():],
+        text=target.text[:end] + insertion + target.text[end:],
         source_name=source_name,
         span=None,
     )
@@ -1486,11 +1398,24 @@ def _inject_controlled_follower_begin(
 def _inject_controlled_follower_cleanup(
     target: SemanticItem,
     hooks: Sequence[tuple[str, int, tuple[str, str, str, str]]],
-    anchor: re.Pattern[str],
+    anchor: str,
     anchor_label: str,
     source_name: str,
 ) -> SemanticItem:
-    matches = list(anchor.finditer(target.text))
+    from .gpl_function_merge import _SourceParser, _tokens
+
+    parser = _SourceParser(target.text)
+    _, _, body = parser.function()
+    expected = _tokens(anchor)
+
+    def walk(nodes):
+        for node in nodes:
+            yield node
+            yield from walk(node.body)
+            yield from walk(node.otherwise)
+
+    matches = [node for node in walk(body)
+               if node.kind == "statement" and node.head == expected]
     if len(matches) != 1:
         raise ValueError(f"{anchor_label} is missing or ambiguous")
     for _symbol, _adjustment, markers in hooks:
@@ -1499,8 +1424,9 @@ def _inject_controlled_follower_cleanup(
                 raise ValueError(
                     f"{target.name} already contains generated marker {marker!r}"
                 )
-    match = matches[0]
-    indent = match.group("indent")
+    start, end = parser.node_spans[id(matches[0])]
+    line_start = target.text.rfind("\n", 0, start) + 1
+    indent = re.match(r"[ \t]*", target.text[line_start:start]).group(0)
     newline = "\r\n" if "\r\n" in target.text else "\n"
     lines: list[str] = []
     for _symbol, adjustment, markers in hooks:
@@ -1514,10 +1440,14 @@ def _inject_controlled_follower_cleanup(
                 f"{indent}\t\t$DeleteEffector ( ThisAgent, \"{marker}\" );",
                 f"{indent}\tend",
             ))
-    insertion = newline.join(lines) + newline
+    # Keep cleanup and the original call in the same statement scope, even if
+    # the call is an unbraced conditional body with an existing else branch.
+    insertion = ("begin" + newline + newline.join(lines) + newline
+                 + indent + target.text[start:end] + newline + indent + "end"
+                 + newline + indent)
     return replace(
         target,
-        text=target.text[:match.start()] + insertion + target.text[match.start():],
+        text=target.text[:start] + insertion + target.text[end:],
         source_name=source_name,
         span=None,
     )

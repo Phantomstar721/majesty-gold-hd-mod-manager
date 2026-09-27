@@ -5,7 +5,7 @@ import json
 import sys
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +22,10 @@ from majesty_cam.manager.catalog import (
 )
 from majesty_cam.manager.compatibility import CompatibilityRegistry
 from majesty_cam.manager.controller import ManagerController
+from majesty_cam.gpl import parse_gpl
+from majesty_cam.script_review import (
+    ScriptCandidate, ScriptConflict, ScriptReviewCancelled, pair_key,
+)
 from majesty_cam.manager.launch import LaunchResult, ManagerLaunchError
 from majesty_cam.manager.paths import ManagerPaths
 from majesty_cam.manager.preflight import PreparedMergeMod
@@ -808,6 +812,126 @@ class ManagerControllerTests(unittest.TestCase):
                 self.assertFalse(controller._required_qol_ready())
                 controller.scan(force_refresh=True, inspect_qol=False)
                 replan.assert_called_once()
+
+
+class ManagerControllerPreferenceRetryTests(unittest.TestCase):
+    def setUp(self):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.paths = _manager_paths(Path(temporary.name))
+        self.controller = ManagerController(
+            paths=self.paths, registry=CompatibilityRegistry(specs={})
+        )
+        self.controller.plan = _merge_plan(self.paths, fingerprint="same-inputs")
+        self.controller.snapshot = Mock(return_value=SimpleNamespace(can_build=True))
+        self.conflict = _preference_conflict()
+        self.choices = {pair_key("first", "second"): "first"}
+
+    def fail_after_review(self, resolver, *, conflicts=None, preferences=None,
+                          review_scripts=False):
+        expected_review = review_scripts or bool(self.controller._script_retry_preferences)
+        def prepare(plan, paths, *, script_conflict_resolver, **kwargs):
+            self.assertEqual(bool(kwargs.get("review_scripts")), expected_review)
+            result = script_conflict_resolver(
+                conflicts or (self.conflict,), preferences=preferences or {}
+            )
+            if result is None:
+                raise ScriptReviewCancelled()
+            raise ManagerBuildError("downstream feature check")
+
+        with patch("majesty_cam.manager.controller.build_merged_package", side_effect=prepare):
+            self.controller.build(script_conflict_resolver=resolver,
+                                  review_scripts=review_scripts)
+
+    def remember_failed_choices(self):
+        chooser = Mock(return_value=self.choices)
+        with self.assertRaisesRegex(ManagerBuildError, "downstream feature check"):
+            self.fail_after_review(chooser)
+        chooser.assert_called_once_with((self.conflict,), preferences={})
+
+    def test_retry_prefills_accepted_choices_but_still_opens_review(self):
+        self.remember_failed_choices()
+        chooser = Mock(return_value=dict(self.choices))
+        with self.assertRaisesRegex(ManagerBuildError, "downstream feature check"):
+            self.fail_after_review(chooser)
+        chooser.assert_called_once_with((self.conflict,), preferences=self.choices)
+        self.assertFalse(self.paths.profile_path.exists())
+        self.assertFalse(self.paths.merged_output_root.exists())
+
+    def test_explicit_review_can_change_previous_accepted_choice(self):
+        self.remember_failed_choices()
+        changed = {pair_key("first", "second"): "second"}
+        chooser = Mock(return_value=changed)
+        with self.assertRaisesRegex(ManagerBuildError, "downstream feature check"):
+            self.fail_after_review(chooser, review_scripts=True)
+        chooser.assert_called_once_with((self.conflict,), preferences=self.choices)
+        self.assertEqual(self.controller._script_retry_preferences, changed)
+
+    def test_cancel_and_invalid_response_do_not_replace_valid_retry_preferences(self):
+        self.remember_failed_choices()
+        with self.assertRaises(ScriptReviewCancelled):
+            self.fail_after_review(Mock(return_value=None))
+        self.assertEqual(self.controller._script_retry_preferences, self.choices)
+        with self.assertRaisesRegex(ValueError, "choose one of the two"):
+            self.fail_after_review(Mock(return_value={pair_key("first", "second"): "unknown"}))
+        self.assertEqual(self.controller._script_retry_preferences, self.choices)
+
+    def test_new_plan_discards_retry_choices_even_if_old_plan_returns_later(self):
+        self.remember_failed_choices()
+        previous = self.controller.plan
+        changed = replace(previous, fingerprint="different-inputs")
+        for plan in (changed, previous):
+            with patch("majesty_cam.manager.controller.create_build_plan", return_value=plan):
+                self.controller._replan()
+        chooser = Mock(return_value=self.choices)
+        with self.assertRaisesRegex(ManagerBuildError, "downstream feature check"):
+            self.fail_after_review(chooser)
+        chooser.assert_called_once_with((self.conflict,), preferences={})
+
+    def test_seed_includes_only_current_conflict_pairs(self):
+        self.remember_failed_choices()
+        unrelated = _preference_conflict(owners=("third", "fourth"))
+        choices = {pair_key("third", "fourth"): "fourth"}
+        chooser = Mock(return_value=choices)
+        with self.assertRaisesRegex(ManagerBuildError, "downstream feature check"):
+            self.fail_after_review(chooser, conflicts=(unrelated,))
+        chooser.assert_called_once_with((unrelated,), preferences={})
+        self.assertEqual(self.controller._script_retry_preferences, choices)
+
+    def test_retry_choice_overrides_older_saved_preference(self):
+        self.remember_failed_choices()
+        older = {pair_key("first", "second"): "second"}
+        chooser = Mock(return_value=self.choices)
+        with self.assertRaisesRegex(ManagerBuildError, "downstream feature check"):
+            self.fail_after_review(chooser, preferences=older)
+        chooser.assert_called_once_with((self.conflict,), preferences=self.choices)
+
+    def test_success_discards_memory_draft_and_preserves_existing_success_path(self):
+        self.remember_failed_choices()
+        result = _managed_build(self.paths, fingerprint=self.controller.plan.fingerprint)
+
+        def prepare(plan, paths, *, script_conflict_resolver, **kwargs):
+            self.assertEqual(script_conflict_resolver((self.conflict,), preferences={}), self.choices)
+            return result
+
+        chooser = Mock(return_value=self.choices)
+        with patch("majesty_cam.manager.controller.build_merged_package", side_effect=prepare), \
+                patch("majesty_cam.manager.controller.StartupCache.load"), \
+                patch("majesty_cam.manager.controller.save_profile") as save:
+            built, _ = self.controller.build(script_conflict_resolver=chooser)
+        self.assertIs(built, result)
+        save.assert_called_once_with(self.paths.profile_path, self.controller.profile)
+        self.assertEqual(self.controller._script_retry_preferences, {})
+        self.assertIsNone(self.controller._script_retry_fingerprint)
+
+
+def _preference_conflict(*, owners=("first", "second")):
+    def item(value):
+        return parse_gpl(f"function Example() is integer\nbegin\nreturn {value};\nend\n").items[0]
+    base = item(0)
+    return ScriptConflict("majesty", base.key, base.name, "Different result", base,
+                          tuple(ScriptCandidate(owner, item(index + 1), owner)
+                                for index, owner in enumerate(owners)))
 
 
 def _manager_paths(root: Path, *, runtime_ready: bool = False) -> ManagerPaths:

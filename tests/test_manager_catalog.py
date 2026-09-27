@@ -18,6 +18,7 @@ from majesty_cam.manager.catalog import (
     MAJESTY_SCRIPT_MERGER_ID,
     TOOL_DELIVERY_ISSUE_CODE,
     _script_digest,
+    _script_fingerprint,
     normalize_content_id,
     scan_catalog,
 )
@@ -996,6 +997,28 @@ END
         second = first.replace("unfinished", "different")
         self.assertEqual(_script_digest(first), _script_digest(first))
         self.assertNotEqual(_script_digest(first), _script_digest(second))
+
+    def test_preview_records_only_literal_settings_and_the_native_first_dataset(self):
+        cases = {"expression #Value 8": "8", "expression #Value -2;": "-2",
+                 "expression #Value 0xA": "0xa", "expression #Value 1.5": "1.5",
+                 "expression #Value 8 + 2": None, "expression #Value #Other": None,
+                 'expression #Value "8"': None, "function value() begin return 8; end": None}
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(_script_fingerprint(text)[1], expected)
+        with TemporaryDirectory() as temp:
+            package = Path(temp) / "Fixture"
+            (package / "GPL").mkdir(parents=True)
+            _write_standard_source_mod(package, STANDARD_ID, "Fixture", "expression #Value 8")
+            manifest = package / "Mod.mmxml"
+            manifest.write_text(manifest.read_text().replace('base="Any"', 'base="MajestyExpansion"')
+                                .replace("</DataConfiguration>", '<Dataset base="Majesty"><Load><GPL>'
+                                         '<Target>Data/ignored.bcd</Target><Source>GPL/ignored.gpl</Source>'
+                                         '</GPL></Load></Dataset></DataConfiguration>'))
+            (package / "GPL/ignored.gpl").write_text("expression #Value 99")
+            found = scan_catalog(local_mods_root=Path(temp)).standard[0]
+            self.assertEqual(found.dataset_base, "majestyexpansion")
+            self.assertEqual(found.content_values, (("expression:#value", "8"),))
 
     def test_precompiled_mod_uses_bundled_gpl_source_as_overlap_evidence(self):
         with TemporaryDirectory() as tmp:

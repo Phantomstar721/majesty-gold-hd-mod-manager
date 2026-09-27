@@ -5,6 +5,10 @@ import xml.etree.ElementTree as ET
 
 from .gpl import DefinitionKind, SemanticMergeResult, parse_gpl, _mask_non_code
 from .gameplay_events import stock_tokens, _TOKENS, require_callback
+from .gpl_function_merge import (
+    FunctionMergeError, _Parser, _SourceParser, _tokens,
+    same_function_instructions,
+)
 
 TYPE = "stock.bazaar-potion-policy.v1"
 # Stock item identities, not private hero identities.
@@ -188,6 +192,37 @@ def _begin(text, code):
     return text[:match.end()] + "\n" + code + "\n" + text[match.end():]
 
 
+def _replace_statements(text, before, replacement):
+    """Edit one exact top-level stock boundary without depending on layout.
+
+    Match complete instructions, including branch bodies and else ownership.
+    Retain the original source inside the wrapper; do not move an anchor out
+    of a branch, relax predicates, or match only part of a rejection guard.
+    """
+    def statements(source):
+        return _Parser('function Boundary() begin\n' + source + '\nend').function()[2]
+
+    try:
+        expected = statements(before)
+        parser = _SourceParser(text)
+        body = parser.function()[2]
+        matches = [i for i in range(len(body) - len(expected) + 1)
+                   if body[i:i + len(expected)] == expected]
+        if not expected or len(matches) != 1:
+            raise FunctionMergeError('missing or ambiguous top-level boundary')
+        index = matches[0]
+        start = parser.node_spans[id(body[index])][0]
+        end = parser.node_spans[id(body[index + len(expected) - 1])][1]
+        original = text[start:end]
+        # Transparent blocks can enclose separate statements. Never splice
+        # across such delimiters unless the captured range is complete too.
+        if statements(original) != expected:
+            raise FunctionMergeError('boundary crosses source blocks')
+    except FunctionMergeError as exc:
+        raise ValueError('potion policy stock boundary is missing or ambiguous: ' + before[:70]) from exc
+    return text[:start] + replacement(original) + text[end:]
+
+
 def _form_block(text, preset):
     """Copy literal stock branch statements, not re-enter an effect callback."""
     target = {"dryad": 'if (thisagent\'s "AttackType" == 2)',
@@ -238,19 +273,24 @@ def compose(result, plan, stock_loader, event_stock, *, native_loader=None):
     restrictions = '''if ((thisagent's "title" == "cultist") && (item == #Bazaar_Item_Six)) return False;
 if (item == #Bazaar_Item_Two)
 if ((thisagent's "title" != "ranger") && (thisagent's "title" != "rogue") && (thisagent's "title" != "elf")) return False;'''
-    text = _replace_tokens(purchase.text, restrictions,
-        'if ($MM_BP_Eligibility(ThisAgent, item) == -1) begin\n' + restrictions + '\nend')
+    text = _replace_statements(purchase.text, restrictions, lambda original:
+        'if ($MM_BP_Eligibility(ThisAgent, item) == -1) begin\n' + original + '\nend')
     put(purchase, _begin(text, 'if ($MM_BP_Eligibility(ThisAgent, item) == 0) return False;'))
     # Private stock shopping clones may choose a different item order/range.
     # Recognize their literal signature and unmodified stock purchase tail;
     # don't infer arbitrary functions from a name suffix or package identity.
     stock_check = stock_loader(("Bazaar_Item_Check",))[(DefinitionKind.FUNCTION, "bazaar_item_check")]
-    tail_marker = stock_tokens('if ($AgentHasInventoryItem(item, ThisAgent))')
+    tail_marker = _tokens('if ($AgentHasInventoryItem(item, ThisAgent))')
     def shopping_tail(source):
-        tokens = stock_tokens(source)
-        matches = [i for i in range(len(tokens)-len(tail_marker)+1) if tokens[i:i+len(tail_marker)] == tail_marker]
-        return tokens[matches[0]:] if len(matches) == 1 else ()
+        try:
+            body = _Parser(source).function()[2]
+        except FunctionMergeError:
+            return ()
+        matches = [i for i, node in enumerate(body) if node.kind == 'if' and node.head == tail_marker]
+        return body[matches[0]:] if len(matches) == 1 else ()
     expected_tail = shopping_tail(stock_check.text)
+    if not expected_tail:
+        raise ValueError('potion policy stock shopping tail is missing or ambiguous')
     signature = r'\s*function\s+\w+\s*\(\s*agent\s+ThisAgent\s*,\s*integer\s+item\s*,\s*list\s+potentials\s*,\s*integer\s+Item_cost\s*\)\s+is\s+boolean\b'
     for candidate in tuple(items.values()):
         if candidate.key == purchase.key or candidate.kind is not DefinitionKind.FUNCTION:
@@ -270,13 +310,14 @@ end'''))
     original_effect = stock_shape[(DefinitionKind.FUNCTION, "shapeshift_potion_effect")]
     original_end = stock_shape[(DefinitionKind.FUNCTION, "shapeshift_potion_end")]
     expiry = fetch("Shapeshift_Potion_End")
-    if stock_tokens(expiry.text) != stock_tokens(original_end.text):
+    if not same_function_instructions(expiry.text, original_end.text):
         from .gameplay_events import _additive_title_reference
         native_effect = (native_loader or stock_loader)(("Shapeshift_Potion_Effect",)).get(original_effect.key, original_effect)
         effect_proof = _additive_title_reference(original_effect.text, native_effect.text)
         end_proof = _additive_title_reference(original_end.text, expiry.text)
         if (effect_proof is None or end_proof is None or effect_proof[1] != end_proof[1]
-                or stock_tokens(end_proof[0]) != stock_tokens(expiry.text)):
+                or not same_function_instructions(effect_proof[0], native_effect.text)
+                or not same_function_instructions(end_proof[0], expiry.text)):
             raise ValueError("Shapeshift_Potion_End must retain matching stock cleanup; migrate custom branches to potion-policy declarations")
     def branches(cleanup):
         rows = []
@@ -303,10 +344,13 @@ end'''))
         # Preserve native/custom instructions through the existing instruction
         # merger. Never treat a modified script as the stock reference itself.
         return merge_function(original, {'selected script': current, 'Manager potion policy': changed})
-    put(expiry, transform(expiry.text, original_end.text,
-                          _replace_tokens(original_end.text, anchor, branches(True) + anchor)))
+    policy_end = _replace_tokens(original_end.text, anchor, branches(True) + anchor)
+    put(expiry, transform(expiry.text, original_end.text, policy_end))
     updated_events = dict(event_stock)
-    updated_events[expiry.normalized_name] = items[expiry.key]
+    # Evidence includes our generated policy on both sides, not the selected
+    # native title additions on just the cleanup side. Observers must still
+    # prove the same added title set in application and expiry independently.
+    updated_events[expiry.normalized_name] = replace(original_end, text=policy_end, span=None)
     used_effects = {}
     for action in plan.actions:
         number = POTIONS[action.potion][0]
@@ -320,20 +364,20 @@ end'''))
             if action.potion == "shapeshift":
                 expected = re.sub(r'\bShapeshift_Potion_Effect\b', action.effect, original_effect.text, count=1, flags=re.I)
                 expected = expected.replace('"Shapeshift_Potion"', '"' + action.name + '"')
-                if stock_tokens(effect.text) != stock_tokens(expected):
+                if not same_function_instructions(effect.text, expected):
                     from .gameplay_events import _additive_title_reference
                     effect_proof = _additive_title_reference(expected, effect.text)
                     end_proof = _additive_title_reference(original_end.text, expiry.text)
                     if (effect_proof is None or end_proof is None or effect_proof[1] != end_proof[1]
-                            or stock_tokens(effect_proof[0]) != stock_tokens(effect.text)
-                            or stock_tokens(end_proof[0]) != stock_tokens(expiry.text)):
+                            or not same_function_instructions(effect_proof[0], effect.text)
+                            or not same_function_instructions(end_proof[0], expiry.text)):
                         raise ValueError(action.effect + ': source must retain matching stock effect/cleanup; '
                                          'migrate custom branches to potion-policy declarations')
                 text = _replace_tokens(expected, anchor, branches(False) + anchor)
             guard = f'if ($MM_BP_Eligibility(ThisAgent, #Bazaar_Item_{number}) == 0) return;'
             # Keep stock dead-caster guard ahead of all added access to the hero.
             dead = 'if ($IsDead(ThisAgent)) return;'
-            text = _replace_tokens(text, dead, dead + '\n' + guard)
+            text = _replace_statements(text, dead, lambda original: original + '\n' + guard)
             if action.potion == "shapeshift":
                 text = transform(effect.text, expected, text)
             put(effect, text)
@@ -349,7 +393,8 @@ end'''))
                 baseline_text = baseline.text
                 if action.potion == "shapeshift":
                     baseline_text = _replace_tokens(baseline_text, anchor, branches(False) + anchor)
-                updated_events[effect.normalized_name] = replace(baseline, text=_replace_tokens(baseline_text, dead, dead + '\n' + guard))
+                updated_events[effect.normalized_name] = replace(baseline, text=_replace_statements(
+                    baseline_text, dead, lambda original: original + '\n' + guard))
         fallback = "1"
         if action.validation:
             validation = fetch(action.validation)

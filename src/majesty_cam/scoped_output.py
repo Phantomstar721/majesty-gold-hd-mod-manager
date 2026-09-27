@@ -74,8 +74,8 @@ def audit_scope_dependencies(result, providers, stock):
     items = source_items(result.source_set)
     own = {i.key for i in items}
     eligible = for_dataset(providers.inputs, providers.dataset)
-    available = {key for p in eligible for key in p.items} | own
-    opposite = {key for p in providers.inputs if p not in eligible for key in p.items} - available
+    available = {key for p in eligible for key in p.compiled_keys} | own
+    opposite = {key for p in providers.inputs if p not in eligible for key in p.compiled_keys} - available
     from .gpl import DefinitionKind
     stock_functions = (stock.base_functions if providers.dataset == 'majesty' else stock.expansion_functions)
     stock_expressions = (stock.base_expressions if providers.dataset == 'majesty' else stock.expansion_expressions)

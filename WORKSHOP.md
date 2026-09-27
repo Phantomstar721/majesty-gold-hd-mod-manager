@@ -6,10 +6,13 @@ support. Install this manager and launch Majesty through it to use them
 individually or together. It automatically finds and organizes your mods and
 quests, remembers your choices, and prepares anything that needs extra support.
 
-The latest update improves compatibility between original-game quests and mods
-that use expansion content, preserves required building artwork and menu icons,
-and speeds up repeated checks of selected mods. It also expands shared support
-for independent building toggles and precisely targeted custom actions.
+The latest update combines compatible script changes and asks you to choose a
+preferred mod for each pair with unresolved conflicts. Your preference applies
+to their conflicting changes while independently compatible changes are kept.
+The chooser explains the affected gameplay systems without requiring you to
+review code. The update also improves original/expansion quest compatibility,
+preserves selected Standard mod scripts, corrects inventory-only actions showing
+in the Spells panel after loading a save, and fixes a runtime startup failure.
 Close Majesty and the Manager before updating. Afterwards, reopen the Manager,
 select Rescan Content, and Prepare Selected Mods (or Prepare Again) before
 launching Majesty.
@@ -27,8 +30,8 @@ First launch:
 7. Choose your mods, prepare them if requested, and select Launch Majesty.
 
 Keep the entire downloaded folder together. The manager supports both the
-default and beta2 Steam versions, plus GOG Gold HD 1.5.2.28. Some advanced mod
-features require Steam beta2; the manager checks compatibility before launch.
+default and beta2 Steam versions, plus GOG Gold HD 1.5.2.28. The manager checks
+compatibility with your selected installation before launch.
 GOG users should use the complete GitHub download linked below. The manager can
 find already-downloaded Workshop content but does not download subscriptions.
 

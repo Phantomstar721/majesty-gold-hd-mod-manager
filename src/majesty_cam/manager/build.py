@@ -58,6 +58,7 @@ from ..runtime_features import (
     derive_feature_runtime_capabilities,
     encode_runtime_feature_registry,
 )
+from ..inventory_spell_display import CAPABILITY as INVENTORY_DISPLAY_CAPABILITY
 from ..stock_controller_features import (
     LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY,
 )
@@ -79,10 +80,11 @@ from .startup_cache import metadata_signature, package_input_metadata_signature
 from .runtime_profiles import runtime_installation_identity, unsupported_runtime_capabilities
 from .qol_service import GOG_BRANCH
 from .. import standard_scripts
+from ..script_review import ScriptReviewSession, ScriptReviewCancelled, validate_preferences
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
-PLAN_SCHEMA_VERSION = 10
+PLAN_SCHEMA_VERSION = 22
 STANDARD_SELECTION_ISSUE_CODES = frozenset(
     {
         "mutually_exclusive_mods",
@@ -204,6 +206,40 @@ def _controller_record_count(registry: ResolvedControllerRegistry) -> int:
 
 class ManagerBuildError(RuntimeError):
     """Raised when a manager build cannot proceed or publish safely."""
+
+
+def _validate_finalized_runtime_registries(
+    planned_features, planned_capabilities, finalized_features,
+    emitted_features, emitted_capabilities,
+) -> None:
+    """Keep planned records exact and prove the sole source-derived addition.
+
+    ``finalized_features`` comes from the in-memory composition result, after
+    source selection and classification. It is independent of the emitted
+    registry being checked; disk metadata cannot authorize its own changes.
+    """
+    if (not isinstance(finalized_features, RuntimeFeatureRegistry)
+            or replace(finalized_features, hidden_inventory_actions=()) != planned_features):
+        raise ManagerBuildError(
+            "Finalized runtime feature registry changed the validated build plan."
+        )
+    if emitted_features != finalized_features:
+        raise ManagerBuildError(
+            "Generated runtime feature registry does not match the finalized source evidence."
+        )
+    expected_capabilities = derive_feature_runtime_capabilities(
+        planned_capabilities, finalized_features)
+    permitted = set(planned_capabilities)
+    if finalized_features.hidden_inventory_actions:
+        permitted.add(INVENTORY_DISPLAY_CAPABILITY)
+    if set(expected_capabilities) != permitted:
+        raise ManagerBuildError(
+            "Finalized runtime capabilities changed the validated build plan."
+        )
+    if emitted_capabilities != expected_capabilities:
+        raise ManagerBuildError(
+            "Generated runtime capability manifest does not match the finalized source evidence."
+        )
 
 
 @dataclass(frozen=True)
@@ -915,6 +951,8 @@ def build_merged_package(
     paths: ManagerPaths,
     *,
     progress: Callable[[str], None] | None = None,
+    script_conflict_resolver=None,
+    review_scripts: bool = False,
 ) -> ManagerBuildResult:
     if not plan.has_merge:
         raise ManagerBuildError("No Merge mods are selected; a build is not required.")
@@ -961,6 +999,17 @@ def build_merged_package(
         runtime_capabilities = set(plan.runtime_capabilities)
         if private_activity_texts:
             runtime_capabilities.add(PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY)
+        script_review = ScriptReviewSession({} if review_scripts else
+                                           _read_mod_preferences(target, plan.fingerprint))
+        def review(conflicts):
+            if progress:
+                progress("Choosing preferred mods")
+            choices = script_conflict_resolver(conflicts, preferences=script_review.applicable_decisions)
+            if choices is not None:
+                _require_current_plan_sources(plan, game_path=paths.game_path, phase="during script review")
+            if progress:
+                progress("Validating mod preferences")
+            return choices
         result = compose_package(
             paths.game_path,
             staging,
@@ -975,6 +1024,8 @@ def build_merged_package(
             prepared_inventories=inventories,
             standard_script_inputs=tuple(standard_scripts.read(e) for e in plan.standard_script_entries),
             max_generated_mods=_remaining_generated_slots(plan),
+            script_review=script_review,
+            script_conflict_resolver=review if script_conflict_resolver is not None else None,
         )
         _require_current_plan_sources(
             plan, game_path=paths.game_path, phase="during composition"
@@ -986,19 +1037,13 @@ def build_merged_package(
         )
         capability_data = capability_path.read_bytes()
         emitted_capabilities = decode_runtime_capability_manifest(capability_data)
-        if emitted_capabilities != tuple(sorted(runtime_capabilities)):
-            raise ManagerBuildError(
-                "Generated runtime capability manifest does not match the "
-                "validated build plan."
-            )
         feature_path = staging / Path(RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH)
         feature_data = feature_path.read_bytes()
         emitted_features = decode_runtime_feature_registry(feature_data)
-        if emitted_features != plan.runtime_feature_registry:
-            raise ManagerBuildError(
-                "Generated runtime feature registry does not match the "
-                "validated build plan."
-            )
+        _validate_finalized_runtime_registries(
+            plan.runtime_feature_registry, tuple(sorted(runtime_capabilities)),
+            getattr(result, 'runtime_feature_registry', None),
+            emitted_features, emitted_capabilities)
         controller_path = staging / CONTROLLER_REGISTRY_RELATIVE_PATH
         controller_data = controller_path.read_bytes()
         emitted_controllers = decode_stock_controller_registry(controller_data)
@@ -1008,8 +1053,9 @@ def build_merged_package(
                 "build plan."
             )
         sentinel = {
-            "schema_version": 5,
+            "schema_version": 7,
             "fingerprint": plan.fingerprint,
+            "mod_preferences": script_review.applicable_decisions,
             "mod_id": normalize_guid(result.mod_id),
             "generated_mod_ids": [normalize_guid(i) for i in (result.generated_mod_ids or (result.mod_id,))],
             "selected_source_ids": list(plan.selected_merge_source_ids),
@@ -1060,6 +1106,8 @@ def build_merged_package(
                 f"; incomplete Manager staging could not be removed from "
                 f"{staging}: {cleanup_error}"
             )
+        if isinstance(exc, ScriptReviewCancelled) and cleanup_error is None:
+            raise
         raise ManagerBuildError(message) from exc
     finally:
         profile_lock.close()
@@ -1075,6 +1123,31 @@ def build_merged_package(
         selected_source_ids=plan.selected_merge_source_ids,
         generated_mod_ids=tuple(normalize_guid(i) for i in (result.generated_mod_ids or (result.mod_id,))),
     )
+
+
+def _read_mod_preferences(target: Path, fingerprint: str) -> dict[str, str]:
+    """Reuse only successful decisions for these exact selected inputs.
+
+    A preference applies to a pair of actual mods, across every conflict and
+    quest scope. Exact plan fingerprints prevent silently reusing choices after
+    inputs change. Older source-text choices are never treated as preferences.
+    """
+    try:
+        marker = target / MANAGER_OUTPUT_SENTINEL
+        if not marker.is_file() or marker.stat().st_size > 8 * 1024 * 1024:
+            return {}
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+        if (not isinstance(payload, dict) or payload.get("schema_version") != 7
+                or payload.get("fingerprint") != fingerprint):
+            return {}
+        decisions = payload.get("mod_preferences", {})
+        if (not isinstance(decisions, dict) or len(decisions) > 4096
+                or any(not isinstance(k, str) or not isinstance(v, str) for k, v in decisions.items())):
+            return {}
+        validate_preferences(decisions)
+        return decisions
+    except (OSError, ValueError, UnicodeError):
+        return {}
 
 
 def read_managed_build(path: Path) -> ManagerBuildResult | None:
@@ -1098,11 +1171,23 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
             "controller_registry",
             "generated_files",
         }
-        if value.get('schema_version') == 5:
+        if value.get('schema_version') in (5, 6, 7):
             expected_keys.add('generated_mod_ids')
+        if value.get('schema_version') == 6:
+            expected_keys.add('script_choices')
+            if not isinstance(value.get('script_choices'), dict) or any(
+                    not isinstance(key, str) or not isinstance(text, str)
+                    for key, text in value['script_choices'].items()):
+                return None
+        if value.get('schema_version') == 7:
+            expected_keys.add('mod_preferences')
+            preferences = value.get('mod_preferences')
+            if not isinstance(preferences, dict):
+                return None
+            validate_preferences(preferences)
         if set(value) != expected_keys:
             return None
-        if value.get("schema_version") not in (4, 5):
+        if value.get("schema_version") not in (4, 5, 6, 7):
             return None
         expected_files = _parse_generated_file_inventory(value["generated_files"])
         actual_files = {
@@ -1224,7 +1309,7 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
         ids = tuple(normalize_guid(p.mod_id) for p in packages)
         if value.get('generated_mod_ids', [mod_id]) != list(ids):
             return None
-        if value['schema_version'] == 5:
+        if value['schema_version'] in (5, 6, 7):
             records = report.get('generated_records')
             if not isinstance(records, list) or [
                 (normalize_guid(r['mod_id']), r['scope']) for r in records

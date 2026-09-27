@@ -479,6 +479,8 @@ def _catalog_entry_to_row(entry: CatalogEntry) -> dict[str, object]:
         "unresolved_overlap_ids": list(entry.unresolved_overlap_ids),
         "unresolved_overlap_names": list(entry.unresolved_overlap_names),
         "content_definitions": [list(item) for item in entry.content_definitions],
+        "dataset_base": entry.dataset_base,
+        "content_values": [list(item) for item in entry.content_values],
     }
 
 
@@ -527,6 +529,15 @@ def _catalog_entry_from_row(raw: object) -> CatalogEntry:
     )
     if len(content_definitions) != len(definitions):
         raise ValueError("catalog content definition row is invalid")
+    values = raw.get("content_values")
+    if not isinstance(values, list):
+        raise ValueError("catalog content values must be a list")
+    content_values = tuple(
+        (_required_string(item[0]), _required_string(item[1]))
+        for item in values if isinstance(item, list) and len(item) == 2
+    )
+    if len(content_values) != len(values):
+        raise ValueError("catalog content value row is invalid")
     issues = raw.get("issues")
     if not isinstance(issues, list):
         raise ValueError("catalog entry issues must be a list")
@@ -563,6 +574,8 @@ def _catalog_entry_from_row(raw: object) -> CatalogEntry:
         collection_size=collection_size,
         variant_label=raw.get("variant_label"),
         content_definitions=content_definitions,
+        dataset_base=_required_string(raw.get("dataset_base")),
+        content_values=content_values,
         **sequences,
     )
 
@@ -825,7 +838,11 @@ def _manager_cache_identity_paths() -> tuple[Path, ...]:
     if getattr(sys, "frozen", False):
         return (Path(sys.executable),)
     module_root = Path(__file__).resolve().parent
-    return (module_root.parent / "gpl.py", module_root.parent / "gpl_function_merge.py") + tuple(
+    return tuple(module_root.parent / name for name in (
+        "gpl.py", "gpl_function_merge.py", "compose.py", "gameplay_events.py",
+        "event_boundaries.py", "potion_policy.py", "source_context.py", "dataset_dependencies.py",
+        "inventory_spell_display.py", "runtime_features.py", "stock_controller_features.py",
+    )) + tuple(
         module_root / name
         for name in (
             "startup_cache.py",

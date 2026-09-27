@@ -108,7 +108,7 @@ from .activity_time import add_activity_service
 from .gameplay_events import event_stock_paths
 from .exploration_events import selected as exploration_selected, CAPABILITY as EXPLORATION_CAPABILITY, require_supported_profile as require_exploration_profile
 from .spell_origin import selected as spell_origin_selected, CAPABILITY as SPELL_ORIGIN_CAPABILITY
-from .gameplay_events import (EVENT_FUNCTIONS, STOCK_EVENT_FILES,
+from .gameplay_events import (EVENT_FUNCTIONS,
                               add_gameplay_event_observers)
 from .intent_text import (
     ActivityTextDiscoveryPackage,
@@ -490,6 +490,14 @@ class GplComposeResult:
     ] = ()
     shared_services: tuple[dict, ...] = ()
     function_instruction_merges: tuple[dict, ...] = ()
+    mod_preference_resolutions: tuple[dict, ...] = ()
+
+
+@dataclass(frozen=True)
+class _PendingGplReview:
+    """An analyzed source snapshot, paused before generated feature transforms."""
+
+    resume: Callable[[], GplComposeResult]
 
 
 @dataclass(frozen=True)
@@ -598,6 +606,7 @@ class ComposePackageResult:
     report: Path
     validation: Mapping[str, object]
     generated_mod_ids: tuple[str, ...] = ()
+    runtime_feature_registry: RuntimeFeatureRegistry = RuntimeFeatureRegistry()
 
 
 _PROFILE_NAMESPACE = uuid.UUID("634a1b44-a04c-5f83-bb0f-8ace03b8900b")
@@ -1463,121 +1472,52 @@ def _load_stock_activity_text_expression_source(
     return _parse_semantic_source_file(path)
 
 
-def _load_stock_purchase_equipment_source(
-    game_path: Path,
-) -> ParsedSemanticSource:
-    path = (
-        game_path
-        / "SDK"
-        / "OriginalQuests"
-        / "GPLMx"
-        / "DecisionTrees"
-        / "Modules"
-        / "mx_Purchase_Equipment.gpl"
-    )
-    if not path.is_file():
-        raise ComposeError(
-            "installed stock GPLMx Purchase_Equipment source is required for "
-            f"purchase-tail composition: {path}"
-        )
-    source = _parse_semantic_source_file(path)
-    require_complete_semantic_coverage(source)
-    source.require(DefinitionKind.FUNCTION, "Purchase_Equipment")
-    return source
+def _feature_stock_functions(game_path, names, *, dataset='majestyexpansion', sources=None):
+    from .dataset_dependencies import DestinationSources, load_dataset_symbols
+    view = sources or DestinationSources(load_dataset_symbols(game_path), dataset)
+    # Requested expansion-only services retain the existing compatibility
+    # import. A function already present in base is never replaced by that import.
+    found = view.functions(names, allow_expansion=True)
+    missing = {name.casefold() for name in names} - {key[1] for key in found}
+    if missing:
+        raise ComposeError(f'{view.dataset}: installed stock feature sources are required: '
+                           + ', '.join(sorted(missing)))
+    return found
 
 
-def _load_stock_purchase_bazaar_source(
-    game_path: Path,
-) -> ParsedSemanticSource:
-    path = (
-        game_path
-        / "SDK"
-        / "OriginalQuests"
-        / "GPLMx"
-        / "TaskModules"
-        / "Buildings"
-        / "Magic_Bazaar.gpl"
-    )
-    if not path.is_file():
-        raise ComposeError(
-            "installed stock GPLMx Purchase_Bazaar source is required for "
-            f"purchase-tail composition: {path}"
-        )
-    source = _parse_semantic_source_file(path)
-    require_complete_semantic_coverage(source)
-    source.require(DefinitionKind.FUNCTION, "Purchase_Bazaar")
-    return source
+def _load_stock_purchase_equipment_source(game_path: Path, *, sources=None) -> ParsedSemanticSource:
+    items = _feature_stock_functions(game_path, ('Purchase_Equipment',), sources=sources)
+    return ParsedSemanticSource('<destination stock equipment purchase>', '', tuple(items.values()))
+
+
+def _load_stock_purchase_bazaar_source(game_path: Path, *, sources=None) -> ParsedSemanticSource:
+    items = _feature_stock_functions(game_path, ('Purchase_Bazaar',), sources=sources)
+    return ParsedSemanticSource('<destination stock Bazaar purchase>', '', tuple(items.values()))
 
 
 def _load_stock_controlled_follower_items(
-    game_path: Path,
+    game_path: Path, *, sources=None,
 ) -> tuple[SemanticItem, SemanticItem, SemanticItem]:
-    root = game_path / "SDK" / "OriginalQuests" / "GPLMx" / "TaskModules"
-    paths = (
-        root / "Subtasks" / "mx_Control_Monster.gpl",
-        root / "Characters" / "Monsters" / "mx_Controlled_Monster.gpl",
-    )
-    parsed: list[ParsedSemanticSource] = []
-    for path in paths:
-        if not path.is_file():
-            raise ComposeError(
-                "installed stock GPLMx controlled-monster source is required "
-                f"for follower movement composition: {path}"
-            )
-        source = _parse_semantic_source_file(path)
-        require_complete_semantic_coverage(source)
-        parsed.append(source)
-    return (
-        parsed[0].require(DefinitionKind.FUNCTION, "Control_Monster"),
-        parsed[1].require(DefinitionKind.FUNCTION, "Controlled_Monster_Death"),
-        parsed[1].require(DefinitionKind.FUNCTION, "leader_dead"),
-    )
+    names = ('control_monster', 'controlled_monster_death', 'leader_dead')
+    items = _feature_stock_functions(game_path, names, sources=sources)
+    return tuple(items[(DefinitionKind.FUNCTION, name)] for name in names)
 
 
 def _load_stock_hero_quest_lifecycle_items(
-    game_path: Path,
+    game_path: Path, *, sources=None,
 ) -> tuple[dict[str, SemanticItem], SemanticItem, SemanticItem]:
-    root = game_path / "SDK" / "OriginalQuests" / "GPLMx"
-    decision_root = root / "DecisionTrees"
     scripts = (
         "mx_adept", "mx_barbarian", "mx_cultist", "mx_discord", "mx_dwarf",
         "mx_elf", "mx_gnome", "mx_healer", "mx_monk", "mx_paladin",
         "mx_priestess", "mx_ranger", "mx_rogue", "mx_solarus",
         "mx_warrior", "mx_wizard",
     )
-    trees: dict[str, SemanticItem] = {}
-    for script in scripts:
-        candidates = list(decision_root.glob(script + ".gpl"))
-        if not candidates:
-            candidates = [
-                path for path in decision_root.glob("*.gpl")
-                if path.stem.casefold() == script
-            ]
-        if len(candidates) != 1:
-            raise ComposeError(
-                f"installed stock hero decision source is missing or ambiguous: {script}"
-            )
-        source = _parse_semantic_source_file(candidates[0])
-        require_complete_semantic_coverage(source)
-        functions = [item for item in source.items if item.kind is DefinitionKind.FUNCTION]
-        if len(functions) != 1:
-            raise ComposeError(
-                f"stock hero decision source must contain exactly one function: {candidates[0]}"
-            )
-        trees[script] = functions[0]
-    reset_path = root / "mx_LowLevel.gpl"
-    death_path = root / "mx_Hero_Deaths.gpl"
-    for path in (reset_path, death_path):
-        if not path.is_file():
-            raise ComposeError(
-                f"installed stock hero lifecycle source is required: {path}"
-            )
-    reset_source = _parse_semantic_source_file(reset_path)
-    death_source = _parse_semantic_source_file(death_path)
+    names = tuple(script[3:] + '_tree' for script in scripts)
+    items = _feature_stock_functions(game_path, (*names, 'reset_tasks', 'unit_call_deathscript'), sources=sources)
     return (
-        trees,
-        reset_source.require(DefinitionKind.FUNCTION, "reset_tasks"),
-        death_source.require(DefinitionKind.FUNCTION, "Unit_Call_Deathscript"),
+        {script: items[(DefinitionKind.FUNCTION, name)] for script, name in zip(scripts, names)},
+        items[(DefinitionKind.FUNCTION, 'reset_tasks')],
+        items[(DefinitionKind.FUNCTION, 'unit_call_deathscript')],
     )
 
 
@@ -1597,9 +1537,9 @@ def _private_hero_bindings(inventories):
         raise ComposeError(str(exc)) from exc
 
 
-def _load_stock_spell_evaluation(game_path):
-    source = _parse_semantic_source_file(game_path / "SDK/OriginalQuests/GPLMx/DecisionTrees/Modules/mx_target_eval.gpl")
-    return source.require(DefinitionKind.FUNCTION, "spell_extra_value")
+def _load_stock_spell_evaluation(game_path, *, sources=None):
+    return _feature_stock_functions(game_path, ('spell_extra_value',), sources=sources)[
+        (DefinitionKind.FUNCTION, 'spell_extra_value')]
 
 
 def _shared_bindings(inventories: Sequence[PackageInventory]):
@@ -1715,21 +1655,14 @@ def _typed_provider_dispatches(inventories):
         raise ComposeError(str(exc)) from exc
 
 
-def _load_stock_gameplay_event_items(game_path: Path, events):
-    root = game_path / "SDK" / "OriginalQuests" / "GPLMx"
+def _load_stock_gameplay_event_items(game_path: Path, events, *, dataset='majestyexpansion', sources=None):
     names = {name for event in events for name in EVENT_FUNCTIONS[event]}
-    if "potion-consumed" in events:
-        names.add("shapeshift_potion_end")
-    sources = {}
-    result = {}
-    for name in sorted(names):
-        relative = STOCK_EVENT_FILES[name]
-        if relative not in sources:
-            source = _parse_semantic_source_file(root / relative)
-            require_complete_semantic_coverage(source)
-            sources[relative] = source
-        result[name] = sources[relative].require(DefinitionKind.FUNCTION, name)
-    return result
+    if "reward-flag-paid" in events:
+        names.add("give_gold")
+    if not names:
+        return {}
+    return {key[1]: item for key, item in _feature_stock_functions(
+        game_path, tuple(sorted(names)), dataset=dataset, sources=sources).items()}
 
 
 def _detach_private_activity_texts(
@@ -4895,6 +4828,7 @@ def merge_gpl_resources(
     stock_integer_expression_sources: Sequence[ParsedSemanticSource] = (),
     stock_semantic_sources: Sequence[ParsedSemanticSource] = (),
     stock_function_loader: Callable[[tuple[str, ...]], Mapping[tuple[DefinitionKind, str], SemanticItem]] | None = None,
+    source_ancestor_loader: Callable[[tuple[str, ...]], Mapping[tuple[DefinitionKind, str], SemanticItem]] | None = None,
     stock_purchase_equipment_source: ParsedSemanticSource | None = None,
     stock_purchase_bazaar_source: ParsedSemanticSource | None = None,
     stock_control_monster: SemanticItem | None = None,
@@ -4912,6 +4846,8 @@ def merge_gpl_resources(
     source_context_root_loader=None,
     potion_plan=PotionPlan(),
     standard_providers=None,
+    script_review=None,
+    script_dataset="any",
 ) -> GplComposeResult:
     parsed_by_owner: dict[str, list[ParsedSemanticSource]] = {}
     for inventory in inventories:
@@ -5169,29 +5105,99 @@ def merge_gpl_resources(
             # non-stock resolution which merely selects one lone Standard
             # change over package-carried stock ancestry remains native.
             required_patch_keys.add(key)
+    # Authored Merge sources retain their common SDK ancestry. The destination
+    # quest's stock functions are a different input: they supply native defaults
+    # and Standard reconciliation, not a new ancestor for existing mod edits.
+    comparison_loader = source_ancestor_loader or stock_function_loader
     function_ancestors = dict(stock_items)
     unresolved_functions = tuple(conflict.name for conflict in initial.conflicts
         if conflict.key[0] is DefinitionKind.FUNCTION
         and conflict.key not in resolutions and conflict.key not in function_ancestors)
-    if unresolved_functions and stock_function_loader is not None:
+    if unresolved_functions and comparison_loader is not None:
         try:
-            function_ancestors.update(stock_function_loader(unresolved_functions))
+            function_ancestors.update(comparison_loader(unresolved_functions))
         except (OSError, StockGplError, ValueError) as exc:
             raise ComposeError(f"Cannot compare conflicting scripts with stock: {exc}") from exc
+    def stable_helper(name, text):
+        # A proof from an authored helper cannot justify dispatch if native
+        # ownership can change that helper later. Decline the proof, not the
+        # native Mod; opaque/unproven helpers remain ordinary explicit choices.
+        from .gpl_function_merge import _tokens
+        try:
+            native = standard_providers.lookup((DefinitionKind.FUNCTION, name.casefold()))
+        except ValueError:
+            return False
+        return native is None or (text is not None and _tokens(native.text) == _tokens(text))
     final = merge_sources([], parsed_by_owner, resolutions or None,
                           function_ancestors=function_ancestors,
-                          function_loader=stock_function_loader)
-    if final.conflicts:
-        labels = {inventory.selected.alias: getattr(
-            getattr(inventory.selected, "package", None), "display_name", inventory.selected.alias)
-            for inventory in inventories}
+                          function_loader=comparison_loader,
+                          function_proof_guard=stable_helper if standard_providers else None)
+    labels = {inventory.selected.alias: getattr(
+        getattr(inventory.selected, "package", None), "display_name", inventory.selected.alias)
+        for inventory in inventories}
+    from .script_review import ScriptCandidate, ScriptConflict
+    owner_ids = {inventory.selected.alias: getattr(
+        getattr(inventory.selected, "package", None), "mod_id", inventory.selected.alias
+        ).strip('{}').casefold() for inventory in inventories}
+    authored_candidates = {}
+    for owner, sources in parsed_by_owner.items():
+        for source in sources:
+            for item in source.items:
+                authored_candidates.setdefault(item.key, []).append(
+                    ScriptCandidate(labels.get(owner, owner), item, owner_ids.get(owner, owner)))
+    resolved_owners = {conflict.key: {variant.side_name for variant in conflict.variants}
+                       for conflict in initial.conflicts if conflict.key in resolutions}
+    compatibility_groups = {}
+    for key, resolved in resolutions.items():
+        # Reconciliation must receive the effective accepted definition, not
+        # reopen the raw edits that an explicit compatibility rule resolved.
+        if key in requested:
+            participants = (requested[key],)
+        else:
+            actual = resolved_owners.get(key, set())
+            participants = tuple(sorted(actual & explicit_scopes[key]
+                                        if key in explicit_scopes else actual))
+        if not participants:
+            raise ComposeError(f'Cannot attribute the accepted compatibility rule for {key[1]}')
+        authored_candidates[key] = [
+            ScriptCandidate(labels.get(owner, owner), resolved, owner_ids.get(owner, owner))
+            for owner in participants]
+        if len(participants) > 1:
+            compatibility_groups[key] = (tuple(owner_ids.get(owner, owner) for owner in participants),)
+    unresolved_keys = {conflict.key for conflict in final.conflicts}
+    if final.conflicts and script_review is None:
         message = str(SemanticMergeConflictError(final.conflicts))
         for owner in sorted(labels, key=len, reverse=True):
             message = message.replace(owner, labels[owner])
         raise ComposeError(message)
+    review_before = {conflict.identity for conflict in script_review.conflicts} if script_review else set()
+    if final.conflicts:
+        selected_items = list(final.items)
+        for conflict in final.conflicts:
+            candidates = tuple(ScriptCandidate(labels.get(v.side_name, v.side_name), v.item,
+                                               owner_ids.get(v.side_name, v.side_name))
+                               for v in conflict.variants)
+            if standard_providers is not None:
+                # Include the proven effective native owner in this same decision.
+                # An unresolved Merge definition must not hide a later Standard
+                # collision or be restored accidentally by a feature fallback.
+                native = standard_providers.native_candidate(conflict.key)
+                if native is not None:
+                    candidates += (native,)
+            ancestor = function_ancestors.get(conflict.key)
+            if ancestor is not None:
+                from .gpl_function_merge import _tokens
+                candidates = tuple(candidate for candidate in candidates
+                                   if _tokens(candidate.item.text) != _tokens(ancestor.text))
+            choice = script_review.resolve(ScriptConflict(
+                script_dataset, conflict.key, conflict.name, conflict.detail,
+                ancestor, candidates))
+            if choice is not None:
+                selected_items.append(choice)
+        final = SemanticMergeResult(tuple(selected_items), ())
     instruction_merges = []
     for conflict in initial.conflicts:
-        if conflict.key not in resolutions:
+        if conflict.key not in resolutions and conflict.key not in unresolved_keys:
             ancestor = function_ancestors[conflict.key]
             instruction_merges.append({
                 "function": conflict.name,
@@ -5208,244 +5214,283 @@ def merge_gpl_resources(
             if source is not None:
                 fallbacks.extend(source.items)
         try:
-            final = standard_providers.reconcile(final, fallbacks)
+            final = standard_providers.reconcile(final, fallbacks,
+                review=script_review, skip_keys=unresolved_keys,
+                merge_candidates=authored_candidates,
+                merge_compatibility_groups=compatibility_groups)
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
         stock_function_loader = standard_providers.functions
-    before_generated_features = {item.key: item.text for item in final.items}
-    final = add_inventory_death_drop_exclusions(
-        final,
-        inventory_death_drop_exclusions,
-        source_name="<CAM Manager stock death-drop composition>",
-    )
-    gpl_callback_evidence = validate_gpl_feature_evidence(inventories)
-    purchase_callbacks = [
-        item for item in gpl_callback_evidence if item.lifecycle == "equipment"
-    ]
-    bazaar_callbacks = [
-        item for item in gpl_callback_evidence if item.lifecycle == "bazaar"
-    ]
-    movement_hooks = [
-        item
-        for item in gpl_callback_evidence
-        if item.lifecycle == "controlled_follower_speed_sync"
-    ]
-    hero_quest_hooks = [
-        item for item in gpl_callback_evidence
-        if item.lifecycle == "hero_quest"
-    ]
-    callback_symbols = [item.callback_symbol for item in purchase_callbacks]
-    if purchase_callbacks:
-        stock_item = None
-        if stock_purchase_equipment_source is not None:
-            stock_item = stock_purchase_equipment_source.get(
-                DefinitionKind.FUNCTION, "Purchase_Equipment"
-            )
-        try:
-            final = add_purchase_equipment_tail_callbacks(
-                final,
-                callback_symbols,
-                stock_purchase_equipment=stock_item,
-                source_name="<CAM Manager stock Purchase_Equipment tail composition>",
-            )
-        except ValueError as exc:
-            raise ComposeError(str(exc)) from exc
-    if bazaar_callbacks:
-        stock_item = None
-        if stock_purchase_bazaar_source is not None:
-            stock_item = stock_purchase_bazaar_source.get(
-                DefinitionKind.FUNCTION, "Purchase_Bazaar"
-            )
-        try:
-            final = add_purchase_bazaar_tail_callbacks(
-                final,
-                [item.callback_symbol for item in bazaar_callbacks],
-                stock_purchase_bazaar=stock_item,
-                source_name="<CAM Manager stock Purchase_Bazaar tail composition>",
-            )
-        except ValueError as exc:
-            raise ComposeError(str(exc)) from exc
-    if movement_hooks:
-        try:
-            final = add_controlled_follower_movement_adjustments(
-                final,
-                (
-                    (
-                        item.callback_symbol,
-                        item.movement_rate_modifier_per_tier,
-                        item.marker_effectors,
-                    )
-                    for item in movement_hooks
-                ),
-                stock_control_monster=stock_control_monster,
-                stock_controlled_monster_death=stock_controlled_monster_death,
-                stock_leader_dead=stock_leader_dead,
-                source_name=(
-                    "<CAM Manager stock controlled-follower movement composition>"
-                ),
-            )
-        except ValueError as exc:
-            raise ComposeError(str(exc)) from exc
-    private_trees, spell_equivalents = _private_hero_bindings(inventories)
-    if hero_quest_hooks:
-        if stock_hero_trees is None:
-            raise ComposeError(
-                "hero-quest lifecycle requires installed stock hero decision sources"
-            )
-        try:
-            final = add_hero_quest_lifecycle_callbacks(
-                final,
-                (
-                    (
-                        item.hero_scripts,
-                        item.resume_callback_symbol,
-                        item.consider_callback_symbol,
-                        item.reset_callback_symbol,
-                        item.death_callback_symbol,
-                    )
-                    for item in hero_quest_hooks
-                ),
-                stock_hero_trees=stock_hero_trees,
-                private_hero_trees=private_trees,
-                stock_reset_tasks=stock_reset_tasks,
-                stock_unit_death=stock_unit_death,
-                source_name="<CAM Manager stock hero-quest lifecycle composition>",
-            )
-        except ValueError as exc:
-            raise ComposeError(str(exc)) from exc
-    if spell_equivalents:
-        try:
-            final = add_spell_evaluation_equivalents(final, spell_equivalents, stock_spell_evaluation)
-        except ValueError as exc:
-            raise ComposeError(str(exc)) from exc
-    shared = _shared_bindings(inventories)
-    try:
-        final, stock_gameplay_event_items = compose_potion_policy(
-            final, potion_plan,
-            standard_providers.stock if standard_providers is not None else stock_function_loader,
-            stock_gameplay_event_items or {}, native_loader=stock_function_loader)
-    except ValueError as exc:
-        raise ComposeError(str(exc)) from exc
-    if shared:
-        try:
-            final = add_gameplay_event_observers(
-                final, event_subscribers(shared), stock_gameplay_event_items or {},
-                potion_aliases={action.effect.casefold(): POTIONS[action.potion][1].casefold()
-                                for action in potion_plan.actions
-                                if action.effect.casefold() != POTIONS[action.potion][1].casefold() + "_effect"})
-            final = add_activity_service(final, shared)
-        except ValueError as exc:
-            raise ComposeError(str(exc)) from exc
-    try:
-        research = kingdom_research_bindings(inventories)
-        if research:
-            from .kingdom_research_gpl import compose_service
-            if stock_function_loader is None:
-                raise ValueError("kingdom research requires the installed stock award sources")
-            ancestors = stock_function_loader(("give_gold", "give_exp"))
-            final = compose_service(final, research,
-                {key[1]: item for key, item in ancestors.items()})
-    except ValueError as exc:
-        raise ComposeError(str(exc)) from exc
-    from .action_callback_bridge import add_bridges
-    from .building_toggle_state import add_state_functions, selected as selected_toggles
-    try:
-        final = add_bridges(final, inventories)
-        final = add_state_functions(final, selected_toggles(inventories))
-    except ValueError as exc:
-        raise ComposeError(str(exc)) from exc
-    dispatches = _typed_provider_dispatches(inventories)
-    if dispatches:
-        final = SemanticMergeResult((*final.items, *dispatches), final.conflicts)
-    from .spell_policy import compose_guards
-    from .spell_discovery import compose_discovered
-    from .spell_origin import compose_service as compose_spell_origin
-    from .source_context import compose as compose_source_context
-    try:
-        policy_bindings = _spell_policy_bindings(inventories)
-        if spell_policy_plan is not None:
-            final = compose_discovered(final, policy_bindings, spell_policy_plan, stock_function_loader)
-        else:
-            final = compose_guards(final, policy_bindings, stock_function_loader)
-        final = compose_spell_origin(final, spell_origin_selected(inventories))
-        context_bindings = _source_context_bindings(inventories)
-        if context_bindings and source_context_loader is None:
-            raise ValueError("source-context dispatch requires installed native callback and GPL evidence")
-        roots = (source_context_root_loader(final) if context_bindings and source_context_root_loader
-                 else source_context_roots)
-        final = compose_source_context(final, context_bindings, roots, source_context_loader)
-    except ValueError as exc:
-        raise ComposeError(str(exc)) from exc
-    if private_activity_texts:
-        try:
-            audit_private_activity_text_resolver_aliases(
-                final.items, private_activity_texts
-            )
-        except IntentTextError as exc:
-            raise ComposeError(str(exc)) from exc
-    after_generated_features = {item.key: item.text for item in final.items}
-    required_patch_keys.update(
-        key
-        for key, text in after_generated_features.items()
-        if before_generated_features.get(key) != text
-    )
-    if passthrough_aliases or stock_semantic_sources:
-        final = SemanticMergeResult(
-            tuple(item for item in final.items if item.key in required_patch_keys),
-            final.conflicts,
+    reviewed = tuple(conflict for conflict in script_review.conflicts
+                     if conflict.identity not in review_before) if script_review else ()
+    required_patch_keys.update(conflict.key for conflict in reviewed)
+    def finish(final):
+        # Resume the exact analyzed snapshot; do not redo artwork, proofs, or merges.
+        nonlocal stock_gameplay_event_items
+        before_generated_features = {item.key: item.text for item in final.items}
+        final = add_inventory_death_drop_exclusions(
+            final,
+            inventory_death_drop_exclusions,
+            source_name="<CAM Manager stock death-drop composition>",
         )
-    if standard_providers is not None:
+        gpl_callback_evidence = validate_gpl_feature_evidence(inventories)
+        purchase_callbacks = [
+            item for item in gpl_callback_evidence if item.lifecycle == "equipment"
+        ]
+        bazaar_callbacks = [
+            item for item in gpl_callback_evidence if item.lifecycle == "bazaar"
+        ]
+        movement_hooks = [
+            item
+            for item in gpl_callback_evidence
+            if item.lifecycle == "controlled_follower_speed_sync"
+        ]
+        hero_quest_hooks = [
+            item for item in gpl_callback_evidence
+            if item.lifecycle == "hero_quest"
+        ]
+        callback_symbols = [item.callback_symbol for item in purchase_callbacks]
+        purchase_reserved_names = {
+            name for provider in getattr(standard_providers, "inputs", ())
+            for kind, name in provider.compiled_keys
+            if kind is DefinitionKind.FUNCTION
+        } if purchase_callbacks or bazaar_callbacks else ()
+        if purchase_callbacks:
+            stock_item = None
+            if stock_purchase_equipment_source is not None:
+                stock_item = stock_purchase_equipment_source.get(
+                    DefinitionKind.FUNCTION, "Purchase_Equipment"
+                )
+            try:
+                final = add_purchase_equipment_tail_callbacks(
+                    final,
+                    callback_symbols,
+                    stock_purchase_equipment=stock_item,
+                    reserved_function_names=purchase_reserved_names,
+                    source_name="<CAM Manager stock Purchase_Equipment tail composition>",
+                )
+            except ValueError as exc:
+                raise ComposeError(str(exc)) from exc
+        if bazaar_callbacks:
+            stock_item = None
+            if stock_purchase_bazaar_source is not None:
+                stock_item = stock_purchase_bazaar_source.get(
+                    DefinitionKind.FUNCTION, "Purchase_Bazaar"
+                )
+            try:
+                final = add_purchase_bazaar_tail_callbacks(
+                    final,
+                    [item.callback_symbol for item in bazaar_callbacks],
+                    stock_purchase_bazaar=stock_item,
+                    reserved_function_names=purchase_reserved_names,
+                    source_name="<CAM Manager stock Purchase_Bazaar tail composition>",
+                )
+            except ValueError as exc:
+                raise ComposeError(str(exc)) from exc
+        if movement_hooks:
+            try:
+                final = add_controlled_follower_movement_adjustments(
+                    final,
+                    (
+                        (
+                            item.callback_symbol,
+                            item.movement_rate_modifier_per_tier,
+                            item.marker_effectors,
+                        )
+                        for item in movement_hooks
+                    ),
+                    stock_control_monster=stock_control_monster,
+                    stock_controlled_monster_death=stock_controlled_monster_death,
+                    stock_leader_dead=stock_leader_dead,
+                    source_name=(
+                        "<CAM Manager stock controlled-follower movement composition>"
+                    ),
+                )
+            except ValueError as exc:
+                raise ComposeError(str(exc)) from exc
+        private_trees, spell_equivalents = _private_hero_bindings(inventories)
+        if hero_quest_hooks:
+            if stock_hero_trees is None:
+                raise ComposeError(
+                    "hero-quest lifecycle requires installed stock hero decision sources"
+                )
+            try:
+                final = add_hero_quest_lifecycle_callbacks(
+                    final,
+                    (
+                        (
+                            item.hero_scripts,
+                            item.resume_callback_symbol,
+                            item.consider_callback_symbol,
+                            item.reset_callback_symbol,
+                            item.death_callback_symbol,
+                        )
+                        for item in hero_quest_hooks
+                    ),
+                    stock_hero_trees=stock_hero_trees,
+                    private_hero_trees=private_trees,
+                    stock_reset_tasks=stock_reset_tasks,
+                    stock_unit_death=stock_unit_death,
+                    source_name="<CAM Manager stock hero-quest lifecycle composition>",
+                )
+            except ValueError as exc:
+                raise ComposeError(str(exc)) from exc
+        if spell_equivalents:
+            try:
+                final = add_spell_evaluation_equivalents(final, spell_equivalents, stock_spell_evaluation)
+            except ValueError as exc:
+                raise ComposeError(str(exc)) from exc
+        shared = _shared_bindings(inventories)
         try:
-            final = standard_providers.prune(final)
+            final, stock_gameplay_event_items = compose_potion_policy(
+                final, potion_plan,
+                standard_providers.stock if standard_providers is not None else stock_function_loader,
+                stock_gameplay_event_items or {}, native_loader=stock_function_loader)
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
-    if dataset_dependency_resolver is not None:
+        if shared:
+            try:
+                final = add_gameplay_event_observers(
+                    final, event_subscribers(shared), stock_gameplay_event_items or {},
+                    source_loader=(lambda name: stock_function_loader((name,)).get(
+                        (DefinitionKind.FUNCTION, name.casefold()))) if stock_function_loader else None,
+                    potion_aliases={action.effect.casefold(): POTIONS[action.potion][1].casefold()
+                                    for action in potion_plan.actions
+                                    if action.effect.casefold() != POTIONS[action.potion][1].casefold() + "_effect"})
+                final = add_activity_service(final, shared)
+            except ValueError as exc:
+                raise ComposeError(str(exc)) from exc
         try:
-            final = dataset_dependency_resolver(final)
+            research = kingdom_research_bindings(inventories)
+            if research:
+                from .kingdom_research_gpl import compose_service
+                if stock_function_loader is None:
+                    raise ValueError("kingdom research requires the installed stock award sources")
+                ancestors = stock_function_loader(("give_gold", "give_exp"))
+                final = compose_service(final, research,
+                    {key[1]: item for key, item in ancestors.items()})
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
-    return GplComposeResult(
-        source_set=final.emit_project_source_set(),
-        conflicts=initial.conflicts,
-        resolution_owners=tuple(used),
-        resolution_sources=tuple(used_sources),
-        inventory_death_drop_exclusions=tuple(inventory_death_drop_exclusions),
-        purchase_equipment_tail_callbacks=tuple(
-            (item.mod_id, item.feature_key, item.callback_symbol)
-            for item in purchase_callbacks
-        ),
-        purchase_bazaar_tail_callbacks=tuple(
-            (item.mod_id, item.feature_key, item.callback_symbol)
-            for item in bazaar_callbacks
-        ),
-        controlled_follower_speed_sync=tuple(
-            (
-                item.mod_id,
-                item.feature_key,
-                item.callback_symbol,
-                item.movement_rate_modifier_per_tier,
-                item.marker_effectors,
+        from .action_callback_bridge import add_bridges
+        from .building_toggle_state import add_state_functions, selected as selected_toggles
+        try:
+            final = add_bridges(final, inventories)
+            final = add_state_functions(final, selected_toggles(inventories))
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+        dispatches = _typed_provider_dispatches(inventories)
+        if dispatches:
+            final = SemanticMergeResult((*final.items, *dispatches), final.conflicts)
+        from .spell_policy import compose_guards
+        from .spell_discovery import compose_discovered
+        from .spell_origin import compose_service as compose_spell_origin
+        from .source_context import compose as compose_source_context
+        try:
+            policy_bindings = _spell_policy_bindings(inventories)
+            if spell_policy_plan is not None:
+                final = compose_discovered(final, policy_bindings, spell_policy_plan, stock_function_loader)
+            else:
+                final = compose_guards(final, policy_bindings, stock_function_loader)
+            final = compose_spell_origin(final, spell_origin_selected(inventories))
+            context_bindings = _source_context_bindings(inventories)
+            if context_bindings and source_context_loader is None:
+                raise ValueError("source-context dispatch requires installed native callback and GPL evidence")
+            roots = (source_context_root_loader(final) if context_bindings and source_context_root_loader
+                     else source_context_roots)
+            final = compose_source_context(final, context_bindings, roots, source_context_loader)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+        if private_activity_texts:
+            try:
+                audit_private_activity_text_resolver_aliases(
+                    final.items, private_activity_texts
+                )
+            except IntentTextError as exc:
+                raise ComposeError(str(exc)) from exc
+        after_generated_features = {item.key: item.text for item in final.items}
+        required_patch_keys.update(
+            key
+            for key, text in after_generated_features.items()
+            if before_generated_features.get(key) != text
+        )
+        if passthrough_aliases or stock_semantic_sources:
+            final = SemanticMergeResult(
+                tuple(item for item in final.items if item.key in required_patch_keys),
+                final.conflicts,
             )
-            for item in movement_hooks
-        ),
-        hero_quest_lifecycles=tuple(
-            (
-                item.mod_id,
-                item.feature_key,
-                item.hero_scripts,
-                item.resume_callback_symbol,
-                item.consider_callback_symbol,
-                item.reset_callback_symbol,
-                item.death_callback_symbol,
-            )
-            for item in hero_quest_hooks
-        ),
-        shared_services=tuple(
-            {"source_mod_id": binding.mod_id, **shared_feature_mapping(binding.feature)}
-            for binding in shared
-        ),
-        function_instruction_merges=tuple(instruction_merges),
-    )
+        if standard_providers is not None:
+            try:
+                final = standard_providers.prune(final)
+            except ValueError as exc:
+                raise ComposeError(str(exc)) from exc
+        if dataset_dependency_resolver is not None:
+            try:
+                final = dataset_dependency_resolver(final)
+            except ValueError as exc:
+                raise ComposeError(str(exc)) from exc
+        return GplComposeResult(
+            source_set=final.emit_project_source_set(),
+            conflicts=initial.conflicts,
+            resolution_owners=tuple(used),
+            resolution_sources=tuple(used_sources),
+            inventory_death_drop_exclusions=tuple(inventory_death_drop_exclusions),
+            purchase_equipment_tail_callbacks=tuple(
+                (item.mod_id, item.feature_key, item.callback_symbol)
+                for item in purchase_callbacks
+            ),
+            purchase_bazaar_tail_callbacks=tuple(
+                (item.mod_id, item.feature_key, item.callback_symbol)
+                for item in bazaar_callbacks
+            ),
+            controlled_follower_speed_sync=tuple(
+                (
+                    item.mod_id,
+                    item.feature_key,
+                    item.callback_symbol,
+                    item.movement_rate_modifier_per_tier,
+                    item.marker_effectors,
+                )
+                for item in movement_hooks
+            ),
+            hero_quest_lifecycles=tuple(
+                (
+                    item.mod_id,
+                    item.feature_key,
+                    item.hero_scripts,
+                    item.resume_callback_symbol,
+                    item.consider_callback_symbol,
+                    item.reset_callback_symbol,
+                    item.death_callback_symbol,
+                )
+                for item in hero_quest_hooks
+            ),
+            shared_services=tuple(
+                {"source_mod_id": binding.mod_id, **shared_feature_mapping(binding.feature)}
+                for binding in shared
+            ),
+            function_instruction_merges=tuple(instruction_merges),
+            mod_preference_resolutions=tuple({
+                "dataset": conflict.dataset, "kind": conflict.key[0].value,
+                "name": conflict.name, "identity": conflict.identity,
+                "contributors": [candidate.label for candidate in conflict.candidates],
+                "retained_mod_ids": list(script_review.selected_owners(conflict)),
+                "compatibility_groups": [list(group) for group in conflict.compatibility_groups],
+                "result_sha256": hashlib.sha256(script_review.resolve(conflict).text.encode("utf-8")).hexdigest(),
+            } for conflict in reviewed),
+        )
+
+    # Saved pair choices may be revised in the one consolidated dialog. Defer
+    # every affected view until choices are final, including preselected views.
+    if reviewed:
+        def resume():
+            replacements = {conflict.key: script_review.resolve(conflict) for conflict in reviewed}
+            if any(item is None for item in replacements.values()):
+                script_review.require_resolved()
+            items = {item.key: item for item in final.items}
+            items.update(replacements)
+            return finish(SemanticMergeResult(tuple(items.values()), ()))
+        return _PendingGplReview(resume)
+    return finish(final)
 
 
 def _require_boolean_agent_callback_signature(
@@ -5500,8 +5545,21 @@ def validate_gpl_feature_evidence(
     inventories: Sequence[PackageInventory],
     *,
     game_path: Path | None = None,
+    script_dataset: str = 'any',
+    dataset_symbols=None,
 ) -> tuple[GplFeatureEvidence, ...]:
     """Validate and deterministically order source-composed GPL callbacks."""
+
+    evidence_views = {}
+    scopes = ('majesty', 'majestyexpansion') if script_dataset == 'any' else (script_dataset,)
+    def evidence_sources(scope):
+        nonlocal dataset_symbols
+        from .dataset_dependencies import DestinationSources, load_dataset_symbols
+        if dataset_symbols is None:
+            dataset_symbols = load_dataset_symbols(game_path)
+        if scope not in evidence_views:
+            evidence_views[scope] = DestinationSources(dataset_symbols, scope)
+        return evidence_views[scope]
 
     _typed_provider_dispatches(inventories)
     try:
@@ -5524,11 +5582,12 @@ def validate_gpl_feature_evidence(
             raise ComposeError(str(exc)) from exc
     private_trees, spell_equivalents = _private_hero_bindings(inventories)
     if spell_equivalents and game_path is not None:
-        try:
-            add_spell_evaluation_equivalents(SemanticMergeResult((), ()), spell_equivalents,
-                                            _load_stock_spell_evaluation(game_path))
-        except ValueError as exc:
-            raise ComposeError(str(exc)) from exc
+        for scope in scopes:
+            try:
+                add_spell_evaluation_equivalents(SemanticMergeResult((), ()), spell_equivalents,
+                    _load_stock_spell_evaluation(game_path, sources=evidence_sources(scope)))
+            except ValueError as exc:
+                raise ComposeError(f'{scope}: {exc}') from exc
     shared = _shared_bindings(inventories)
     events = event_subscribers(shared)
     if shared:
@@ -5546,20 +5605,38 @@ def validate_gpl_feature_evidence(
                     for item in source.items:
                         if item.kind is DefinitionKind.FUNCTION and item.normalized_name in protected_names:
                             raise ComposeError(f"activity service symbol collides with package: {item.name}")
-    if events and game_path is not None:
-        stock_events = _load_stock_gameplay_event_items(game_path, events)
-        protected = set(stock_events) | {
-            symbol.casefold() for symbols in events.values() for symbol in symbols}
-        relevant = {
-            inventory.selected.alias: [replace(source, items=tuple(
-                item for item in source.items if item.kind is DefinitionKind.FUNCTION
-                and item.normalized_name in protected))
-                for source in _parse_inventory_gpl_sources(inventory)]
+    if any(EVENT_FUNCTIONS[event] for event in events) and game_path is not None:
+        source_snapshot = {
+            inventory.selected.alias: tuple(_parse_inventory_gpl_sources(inventory))
             for inventory in inventories}
-        try:
-            add_gameplay_event_observers(merge_sources([], relevant), events, stock_events)
-        except ValueError as exc:
-            raise ComposeError(str(exc)) from exc
+        for scope in scopes:
+            destination = evidence_sources(scope)
+            stock_events = _load_stock_gameplay_event_items(game_path, events, sources=destination)
+            protected = set(stock_events) | {
+                symbol.casefold() for symbols in events.values() for symbol in symbols}
+            relevant = {
+                owner: [replace(source, items=tuple(
+                    item for item in source.items if item.kind is DefinitionKind.FUNCTION
+                    and item.normalized_name in protected)) for source in sources]
+                for owner, sources in source_snapshot.items()}
+            def event_helper(name):
+                # Only reachable package helpers participate in this check;
+                # unrelated unresolved functions remain outside the event proof.
+                name = name.casefold()
+                candidates = {
+                    owner: [replace(source, items=tuple(
+                        item for item in source.items if item.kind is DefinitionKind.FUNCTION
+                        and item.normalized_name == name)) for source in sources]
+                    for owner, sources in source_snapshot.items()}
+                if any(source.items for sources in candidates.values() for source in sources):
+                    selected = merge_sources([], candidates).require_clean()
+                    return next(item for item in selected.items if item.normalized_name == name)
+                return stock_events.get(name) or destination.function(name, allow_expansion=True)
+            try:
+                add_gameplay_event_observers(merge_sources([], relevant), events, stock_events,
+                                            source_loader=event_helper)
+            except ValueError as exc:
+                raise ComposeError(f'{scope}: {exc}') from exc
     callbacks: list[GplFeatureEvidence] = []
     seen_symbols: dict[tuple[str, str], str] = {}
     for inventory in inventories:
@@ -5774,26 +5851,26 @@ def validate_gpl_feature_evidence(
         # here and therefore fail closed below.
         merged = merge_sources([], parsed_by_owner, unrelated_resolutions or None)
         merged.require_clean()
-        control, death, leader_dead = _load_stock_controlled_follower_items(
-            game_path
-        )
-        try:
-            add_controlled_follower_movement_adjustments(
-                merged,
-                (
+        for scope in scopes:
+            control, death, leader_dead = _load_stock_controlled_follower_items(
+                game_path, sources=evidence_sources(scope))
+            try:
+                add_controlled_follower_movement_adjustments(
+                    merged,
                     (
-                        item.callback_symbol,
-                        item.movement_rate_modifier_per_tier,
-                        item.marker_effectors,
-                    )
-                    for item in movement
-                ),
-                stock_control_monster=control,
-                stock_controlled_monster_death=death,
-                stock_leader_dead=leader_dead,
-            )
-        except ValueError as exc:
-            raise ComposeError(str(exc)) from exc
+                        (
+                            item.callback_symbol,
+                            item.movement_rate_modifier_per_tier,
+                            item.marker_effectors,
+                        )
+                        for item in movement
+                    ),
+                    stock_control_monster=control,
+                    stock_controlled_monster_death=death,
+                    stock_leader_dead=leader_dead,
+                )
+            except ValueError as exc:
+                raise ComposeError(f'{scope}: {exc}') from exc
     hero_quest = [item for item in callbacks if item.lifecycle == "hero_quest"]
     if hero_quest and game_path is not None:
         parsed_by_owner = {
@@ -5825,25 +5902,27 @@ def validate_gpl_feature_evidence(
         }
         merged = merge_sources([], parsed_by_owner, unrelated or None)
         merged.require_clean()
-        trees, reset_item, death_item = _load_stock_hero_quest_lifecycle_items(game_path)
-        try:
-            add_hero_quest_lifecycle_callbacks(
-                merged,
-                (
+        for scope in scopes:
+            trees, reset_item, death_item = _load_stock_hero_quest_lifecycle_items(
+                game_path, sources=evidence_sources(scope))
+            try:
+                add_hero_quest_lifecycle_callbacks(
+                    merged,
                     (
-                        item.hero_scripts, item.resume_callback_symbol,
-                        item.consider_callback_symbol,
-                        item.reset_callback_symbol, item.death_callback_symbol,
-                    )
-                    for item in hero_quest
-                ),
-                stock_hero_trees=trees,
-                private_hero_trees=private_trees,
-                stock_reset_tasks=reset_item,
-                stock_unit_death=death_item,
-            )
-        except ValueError as exc:
-            raise ComposeError(str(exc)) from exc
+                        (
+                            item.hero_scripts, item.resume_callback_symbol,
+                            item.consider_callback_symbol,
+                            item.reset_callback_symbol, item.death_callback_symbol,
+                        )
+                        for item in hero_quest
+                    ),
+                    stock_hero_trees=trees,
+                    private_hero_trees=private_trees,
+                    stock_reset_tasks=reset_item,
+                    stock_unit_death=death_item,
+                )
+            except ValueError as exc:
+                raise ComposeError(f'{scope}: {exc}') from exc
     return tuple(callbacks)
 
 
@@ -7364,37 +7443,43 @@ def prepare_final_gpl_resources(
     standard_script_inputs=(),
     script_dataset="any",
     dataset_symbols=None,
+    script_review=None,
 ) -> GplComposeResult:
     """Build the exact final GPL source set used by both Prepare and Build."""
 
-    from .dataset_dependencies import close_dataset_dependencies, load_dataset_symbols
+    from .dataset_dependencies import DestinationSources, close_dataset_dependencies, load_dataset_symbols
+    destination = None
     def stock_symbols():
         nonlocal dataset_symbols
         if dataset_symbols is None:
             dataset_symbols = load_dataset_symbols(game_path)
         return dataset_symbols
 
+    def destination_sources():
+        nonlocal destination
+        if destination is None:
+            destination = DestinationSources(stock_symbols(), script_dataset)
+        return destination
+
     def stock_functions(names):
-        if script_dataset == 'any':
-            return load_stock_function_ancestors(game_path, names)
-        stock = stock_symbols()
-        found = {}
-        for name in names:
-            name = name.casefold()
-            if name in stock.expansion_functions:
-                loader = (stock.base_function_loader if script_dataset == 'majesty'
-                          and name in stock.base_functions else stock.function_loader)
-                # Base-absent extension helpers keep the existing explicit
-                # expansion import; an existing base body is never replaced.
-                found[(DefinitionKind.FUNCTION, name)] = loader(name)
-        return found
+        # The snapshot retains the same shipped project/load order as ancestor
+        # lookup. Reuse it for Any as well, since event helper traversal asks
+        # for individual functions and missing native intrinsic names.
+        return destination_sources().functions(names, allow_expansion=True)
+
+    def source_ancestors(names):
+        # Preserve load_stock_function_ancestors' full SDK project-order
+        # ancestry, reusing the snapshot already loaded for the two views.
+        # This is comparison evidence only, not an expansion fallback import.
+        return destination_sources().ancestors(names)
 
     providers = None
     if standard_script_inputs:
         from .standard_scripts import Providers, for_dataset, participant_inventories
         providers = Providers(standard_script_inputs,
             stock_functions,
-            game_path / 'SDK/Gplbcc.exe', script_dataset)
+            game_path / 'SDK/Gplbcc.exe', script_dataset,
+            source_ancestor_loader=source_ancestors)
         if any(isinstance(feature, StockHeroQuestLifecycle) for inventory in inventories
                for feature in inventory.selected.package.definition.runtime_features):
             if script_dataset == 'any' and any(item.participants and any(base != 'any' for base in item.bases)
@@ -7435,7 +7520,7 @@ def prepare_final_gpl_resources(
         for feature in inventory.selected.package.definition.runtime_features
     )
     controlled_follower_stock_items = (
-        _load_stock_controlled_follower_items(game_path)
+        _load_stock_controlled_follower_items(game_path, sources=destination_sources())
         if has_controlled_follower_movement
         else (None, None, None)
     )
@@ -7445,36 +7530,31 @@ def prepare_final_gpl_resources(
         for feature in inventory.selected.package.definition.runtime_features
     )
     hero_quest_stock_items = (
-        _load_stock_hero_quest_lifecycle_items(game_path)
+        _load_stock_hero_quest_lifecycle_items(game_path, sources=destination_sources())
         if has_hero_quest_lifecycle
         else (None, None, None)
     )
-    if has_hero_quest_lifecycle and script_dataset != 'any':
-        trees, reset, death = hero_quest_stock_items
-        effective = stock_functions(tuple(i.name for i in (*trees.values(), reset, death)))
-        hero_quest_stock_items = (
-            {script: effective.get(item.key, item) for script, item in trees.items()},
-            effective.get(reset.key, reset), effective.get(death.key, death))
     events = event_subscribers(_shared_bindings(inventories))
     context_bindings = _source_context_bindings(inventories)
-    context_stock = stock_symbols() if context_bindings else None
     result = merge_gpl_resources(
         inventories,
         standard_providers=providers,
+        script_review=script_review,
+        script_dataset=script_dataset,
         potion_plan=potion_plan,
         spell_policy_plan=spell_policy_plan,
         source_context_root_loader=(lambda result: _source_context_roots(game_path,inventories,
             descriptions=source_context_descriptions,merged_items=result.items)) if context_bindings else None,
         source_context_loader=(lambda name: (providers.functions((name,)).get((DefinitionKind.FUNCTION, name.casefold()))
-            if providers is not None else context_stock.function_loader(name))
-            if providers is not None or name in context_stock.base_functions or name in context_stock.expansion_functions else None)
-            if context_stock is not None else None,
+            if providers is not None else destination_sources().function(name, allow_expansion=True)))
+            if context_bindings else None,
         resolution_owners=resolution_owners,
         semantic_resolutions=semantic_resolutions,
         inventory_death_drop_exclusions=inventory_death_drop_exclusions,
         private_activity_texts=private_activity_texts,
         stock_semantic_sources=stock_semantic_sources,
         stock_function_loader=stock_functions,
+        source_ancestor_loader=source_ancestors,
         dataset_dependency_resolver=lambda result: close_dataset_dependencies(
             result, stock_symbols(), provided=providers.lookup if providers else None,
             dataset=script_dataset) if result.items else result,
@@ -7484,12 +7564,12 @@ def prepare_final_gpl_resources(
             else ()
         ),
         stock_purchase_equipment_source=(
-            _load_stock_purchase_equipment_source(game_path)
+            _load_stock_purchase_equipment_source(game_path, sources=destination_sources())
             if has_purchase_tail
             else None
         ),
         stock_purchase_bazaar_source=(
-            _load_stock_purchase_bazaar_source(game_path)
+            _load_stock_purchase_bazaar_source(game_path, sources=destination_sources())
             if has_bazaar_tail
             else None
         ),
@@ -7500,31 +7580,116 @@ def prepare_final_gpl_resources(
         stock_reset_tasks=hero_quest_stock_items[1],
         stock_unit_death=hero_quest_stock_items[2],
         stock_gameplay_event_items=(
-            _load_stock_gameplay_event_items(game_path, events) if events else {}),
+            _load_stock_gameplay_event_items(game_path, events, sources=destination_sources())
+            if any(EVENT_FUNCTIONS[event] for event in events) else {}),
         stock_spell_evaluation=(
-            _load_stock_spell_evaluation(game_path)
+            _load_stock_spell_evaluation(game_path, sources=destination_sources())
             if any(isinstance(feature, StockSpellEvaluationEquivalent)
                    for inventory in inventories for feature in inventory.selected.package.definition.runtime_features)
             else None),
     )
-    if providers is not None and script_dataset != 'any':
-        from .scoped_output import audit_scope_dependencies
-        audit_scope_dependencies(result, providers, stock_symbols())
-    return result
+    def audit(result):
+        if providers is not None and script_dataset != 'any':
+            from .scoped_output import audit_scope_dependencies
+            audit_scope_dependencies(result, providers, stock_symbols())
+        return result
+    if isinstance(result, _PendingGplReview):
+        return _PendingGplReview(lambda: audit(result.resume()))
+    return audit(result)
 
 
-def prepare_gpl_bundle(game_path, inventories, *, standard_script_inputs=(), **kwargs):
-    """Compose scoped scripts only; artwork and source proofs are shared."""
+def _uses_destination_stock_features(inventories):
+    """Stock-derived code must be composed in both native quest views.
+
+    Partitioning later shares identical output. Source-only/native UI features
+    do not acquire an SDK dependency merely because they have declarations.
+    """
+    from .kingdom_research import KingdomResearch
+    from .source_context import SourceContextDispatch
+    from .spell_policy import FEATURE_CLASSES as SPELL_FEATURES
+    kinds = (StockGplmxPurchaseEquipmentTail, StockGplmxPurchaseBazaarTail,
+             StockControlledFollowerSpeedSync, StockHeroQuestLifecycle,
+             StockHeroQuestParticipant, StockSpellEvaluationEquivalent,
+             PotionPolicy, KingdomResearch, SourceContextDispatch, *SPELL_FEATURES)
+    for inventory in inventories:
+        definition = getattr(getattr(inventory.selected, 'package', None), 'definition', None)
+        for feature in getattr(definition, 'runtime_features', ()):
+            if isinstance(feature, kinds) or (
+                    isinstance(feature, StockGameplayEventObserver) and EVENT_FUNCTIONS[feature.event]):
+                return True
+    return False
+
+
+def prepare_gpl_bundle(game_path, inventories, *, standard_script_inputs=(),
+                       script_review=None, script_conflict_resolver=None, **kwargs):
+    """Analyze every script view, review once, then resume the captured snapshots.
+
+    Unresolved authored definitions never enter feature transforms. Each review
+    record includes all its authored candidates and the effective Standard
+    owner, so resolving it does not uncover a second hidden collision for the
+    same definition. Artwork, semantic analysis and native proofs are not rerun.
+    """
     from .scoped_output import ScriptBundle, partition
+    from .script_review import ScriptReviewSession, ScriptReviewCancelled
+    review = script_review if script_review is not None else ScriptReviewSession()
     inputs = tuple(item for item in standard_script_inputs if item.loads or item.participants)
-    if not inputs:
-        return ScriptBundle(prepare_final_gpl_resources(game_path, inventories, **kwargs))
-    from .dataset_dependencies import load_dataset_symbols
-    stock = load_dataset_symbols(game_path)
-    views = tuple(prepare_final_gpl_resources(game_path, inventories,
-                  standard_script_inputs=inputs, script_dataset=scope, dataset_symbols=stock, **kwargs)
-                  for scope in ('majesty', 'majestyexpansion'))
-    return partition(*views)
+    scoped = bool(inputs) or _uses_destination_stock_features(inventories) or bool(
+        getattr(kwargs.get('potion_plan'), 'policies', ()))
+    scopes = ('majesty', 'majestyexpansion') if scoped else ('any',)
+    stock = None
+    if scoped:
+        from .dataset_dependencies import load_dataset_symbols
+        stock = load_dataset_symbols(game_path)
+    views, failures = [], []
+    for scope in scopes:
+        try:
+            views.append(prepare_final_gpl_resources(game_path, inventories,
+                standard_script_inputs=inputs, script_dataset=scope,
+                dataset_symbols=stock, script_review=review, **kwargs))
+        except (ComposeError, ValueError) as exc:
+            failures.append(f'{scope}: {exc}')
+    if failures:
+        conflicts = '\n'.join(f'{c.dataset}: {c.key[0].value}:{c.name}: {c.detail}'
+                              for c in review.unresolved)
+        raise ComposeError('Script analysis is blocked:\n' + '\n'.join(failures)
+            + ('\nOther unresolved script changes:\n' + conflicts if conflicts else '')
+            + '\nAffected views have not completed generated-feature or final validation.')
+    if review.unresolved:
+        if script_conflict_resolver is None:
+            review.require_resolved()
+        decisions = script_conflict_resolver(review.conflicts)
+        if decisions is None:
+            raise ScriptReviewCancelled('Mod preferences cancelled; your last completed setup is unchanged.')
+        review.apply(decisions)
+    completed = []
+    for scope, view in zip(scopes, views):
+        try:
+            completed.append(view.resume() if isinstance(view, _PendingGplReview) else view)
+        except (ComposeError, ValueError) as exc:
+            failures.append(f'{scope}: {exc}')
+    if failures:
+        raise ComposeError('The script choices could not pass generated-feature validation:\n'
+                           + '\n'.join(failures))
+    return partition(*completed) if scoped else ScriptBundle(completed[0])
+
+
+def finalize_script_runtime_feature_registry(registry, script_bundle, stock_description_records, descriptions):
+    """Serialize features derived from the final emitted scripts and actions.
+
+    The runtime filter is shared by quest datasets. Classify all output together
+    so a visible or computed use in another output can veto hiding an action.
+    The classifier owns numeric FourCC ordering; never re-sort its IDs as text.
+    This pure handoff is also exercised without writing a merged package.
+    """
+    action_records = dict(stock_description_records)
+    action_records.update((record.key, record) for record in descriptions.document.records)
+    source = '\n'.join(output.source_set.gpl_text or '' for _, output in script_bundle.outputs)
+    try:
+        finalized = replace(registry, hidden_inventory_actions=derive_hidden_action_ids(
+            source, action_records.values()))
+        return finalized, encode_runtime_feature_registry(finalized)
+    except ValueError as exc:
+        raise ComposeError(f'Could not encode Manager-generated runtime features: {exc}') from exc
 
 
 def compose_package(
@@ -7540,6 +7705,8 @@ def compose_package(
         tuple[DefinitionKind | str, str],
         SemanticItem | ScopedSemanticResolution,
     ] | None = None,
+    script_review=None,
+    script_conflict_resolver=None,
     description_resolutions: Mapping[DescriptionKey, DescriptionRecord] | None = None,
     string_resolutions: Mapping[StringKey, StringRecord] | None = None,
     named_cam_resolutions: Mapping[
@@ -7647,26 +7814,10 @@ def compose_package(
         require_exploration_profile(game_path / "MajestyHD.exe")
     if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows or runtime_feature_registry.movement_scales:
         require_supported_runtime(game_path / "MajestyHD.exe")
-    runtime_feature_registry_payload = encode_runtime_feature_registry(
-        runtime_feature_registry
-    )
     if private_activity_texts is None:
         private_activity_texts = discover_private_activity_texts(
             game_path, inventories
         )
-    (
-        canonical_runtime_capabilities,
-        capability_manifest_payload,
-    ) = _derive_runtime_capabilities(
-        runtime_capabilities,
-        has_private_activity_text=bool(
-            private_activity_texts or controller_result.private_texts
-        ),
-        runtime_feature_registry=runtime_feature_registry,
-        controller_registry=controller_result.registry,
-        has_source_exploration=exploration_selected(inventories),
-        has_spell_origin=spell_origin_selected(inventories),
-    )
     text_result = merge_text_resources(
         game_path,
         inventories,
@@ -7781,6 +7932,8 @@ def compose_package(
         source_context_descriptions=descriptions,
         potion_plan=potion_plan,
         standard_script_inputs=standard_script_inputs,
+        script_review=script_review,
+        script_conflict_resolver=script_conflict_resolver,
     )
     gpl = script_bundle.common
     if max_generated_mods is not None and len(script_bundle.outputs) > max_generated_mods:
@@ -7789,18 +7942,25 @@ def compose_package(
                            'Deselect some Standard mods before preparing.')
 
     output_mod_id = _generated_mod_id(selected_mods, profile_slug)
-    # Classify once while preparing, from resolved source and effective actions.
-    # The runtime only filters AP78 rows; it never rewrites learned spell nodes.
-    action_records = dict(stock_description_records)
-    action_records.update({record.key: record for record in descriptions.document.records})
-    hidden_actions = tuple(sorted({action for _, output in script_bundle.outputs
-        for action in derive_hidden_action_ids(output.source_set.gpl_text or "", action_records.values())}))
-    if hidden_actions:
+    runtime_feature_registry, runtime_feature_registry_payload = finalize_script_runtime_feature_registry(
+        runtime_feature_registry, script_bundle, stock_description_records, descriptions)
+    if runtime_feature_registry.hidden_inventory_actions:
         require_supported_runtime(game_path / "MajestyHD.exe")
-        runtime_feature_registry = replace(runtime_feature_registry, hidden_inventory_actions=hidden_actions)
-        runtime_feature_registry_payload = encode_runtime_feature_registry(runtime_feature_registry)
-        canonical_runtime_capabilities = tuple(sorted((*canonical_runtime_capabilities, INVENTORY_DISPLAY_CAPABILITY)))
-        capability_manifest_payload = encode_runtime_capability_manifest(canonical_runtime_capabilities)
+    # Derive the manifest once from the finalized registry, including features
+    # discovered from emitted GPL, instead of appending late capabilities by hand.
+    (
+        canonical_runtime_capabilities,
+        capability_manifest_payload,
+    ) = _derive_runtime_capabilities(
+        runtime_capabilities,
+        has_private_activity_text=bool(
+            private_activity_texts or controller_result.private_texts
+        ),
+        runtime_feature_registry=runtime_feature_registry,
+        controller_registry=controller_result.registry,
+        has_source_exploration=exploration_selected(inventories),
+        has_spell_origin=spell_origin_selected(inventories),
+    )
     actual_display_name = display_name or f"CAM Manager: {profile_slug}"
     actual_internal_name = internal_name or (
         "CAMManager" + "".join(part.title() for part in profile_slug.split("-"))
@@ -7934,6 +8094,9 @@ def compose_package(
                                      if scope == 'Any' or 'any' in item.bases or scope.casefold() in item.bases]}
             for scope, _ in script_bundle.outputs]
         report_payload['generated_records'] = generated_records
+        report_payload['mod_preferences'] = list({
+            row['identity']: row for _, output in script_bundle.outputs
+            for row in output.mod_preference_resolutions}.values())
         (staging / report_name).write_text(
             json.dumps(report_payload, indent=2) + "\n", encoding="utf-8"
         )
@@ -7957,6 +8120,7 @@ def compose_package(
         report=output_root / report_name,
         validation=validation,
         generated_mod_ids=tuple(record['mod_id'] for record in generated_records),
+        runtime_feature_registry=runtime_feature_registry,
     )
 
 

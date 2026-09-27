@@ -40,6 +40,8 @@ int main() {
     RunKingdomResearchVisualTests();
     RunHeroInfoRuntimeTests();
     RunInventorySpellGateTests();
+    RunOccupantBranchWriterTests();
+    RunInventorySpellInstallerTests();
     MovementScaleTest::Run();
     SpellOriginTest::Run();
     g_stockControllerRegistry.occupantActionPanels = {

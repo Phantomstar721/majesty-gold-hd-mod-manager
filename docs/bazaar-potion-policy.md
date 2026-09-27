@@ -66,6 +66,19 @@ no policy-version ledger, and this feature deliberately adds none.
 5. Declared consumption observers compose over the generated boundaries,
    including private action clones; blocked uses do not notify.
 
+Composition verifies complete parsed instructions and their branch ownership.
+Comments, spacing and explicit `begin/end` blocks do not invalidate an unchanged
+purchase restriction, effect-entry guard or private shopping clone. Extra native
+purchase checks and cost calculations remain in their original order. Changed,
+duplicated or differently scoped rejection boundaries are not accepted as
+formatting differences.
+
+Additive title registrations must select the same form in application and
+expiry, with all other stock effect/cleanup instructions intact. Observer
+evidence contains generated policy branches on both sides, while leaving native
+registrations to be independently verified as a pair; it never treats only the
+selected cleanup as its own stock reference.
+
 Private shopping decision routines should call `MM_BP_Eligibility(agent, item)`
 before scheduling: 0 denies, 1 explicitly permits, -1 means undeclared and
 requires existing stock behavior. Their stock purchase callbacks remain guarded

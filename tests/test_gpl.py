@@ -556,18 +556,20 @@ class SemanticMergeTests(unittest.TestCase):
         )
 
         text = result.emit_project_source_set().gpl_text
-        bazaar = text[text.index("Function Purchase_Bazaar"):]
-        self.assertLess(bazaar.index("#Bazaar_Item_Six"), bazaar.index("$Bazaar_Item_Check"))
-        self.assertLess(bazaar.index("$Bazaar_Item_Check"), bazaar.index("$Zoo_Rental_Check"))
+        private = parse_gpl(text).require("function", "CAM_Purchase_Bazaar_BeforeTail")
+        self.assertEqual(private.text.replace("CAM_Purchase_Bazaar_BeforeTail", "Purchase_Bazaar", 1),
+                         stock.require("function", "Purchase_Bazaar").text)
+        bazaar = parse_gpl(text).require("function", "Purchase_Bazaar").text
+        self.assertLess(bazaar.index("$CAM_Purchase_Bazaar_BeforeTail"), bazaar.index("$Zoo_Rental_Check"))
         self.assertLess(bazaar.index("$Zoo_Rental_Check"), bazaar.index('ActiveScript" = $Use_Building'))
 
-    def test_purchase_bazaar_tail_fails_closed_if_item_chain_changes(self):
+    def test_purchase_bazaar_tail_fails_closed_if_signature_changes(self):
         malformed = parse_gpl(
-            _purchase_bazaar().replace("#Bazaar_Item_Six", "#Private_Item"),
+            _purchase_bazaar().replace("integer bazaar_chance", "string bazaar_chance"),
             "malformed-bazaar.gpl",
         )
         callback = parse_gpl(_boolean_callback("Zoo_Rental_Check"), "zoo.gpl")
-        with self.assertRaisesRegex(ValueError, "complete recognized stock"):
+        with self.assertRaisesRegex(ValueError, "stock signature"):
             add_purchase_bazaar_tail_callbacks(
                 merge_sources([], {"zoo": [callback]}),
                 ("Zoo_Rental_Check",),
@@ -589,11 +591,15 @@ class SemanticMergeTests(unittest.TestCase):
             stock_purchase_equipment=stock.require("function", "Purchase_Equipment"),
         )
 
-        emitted = result.emit_project_source_set().gpl_text
-        self.assertLess(emitted.index("$Stat_Boost_Check"), emitted.index("$Another_Mod_Check"))
+        parsed = parse_gpl(result.emit_project_source_set().gpl_text)
+        private = parsed.require("function", "CAM_Purchase_Equipment_BeforeTail")
+        self.assertEqual(private.text.replace("CAM_Purchase_Equipment_BeforeTail", "Purchase_Equipment", 1),
+                         stock.require("function", "Purchase_Equipment").text)
+        emitted = parsed.require("function", "Purchase_Equipment").text
+        self.assertLess(emitted.index("$CAM_Purchase_Equipment_BeforeTail"), emitted.index("$Another_Mod_Check"))
         self.assertLess(emitted.index("$Another_Mod_Check"), emitted.index("$Zoo_Rental_Check"))
-        self.assertLess(emitted.index("$Zoo_Rental_Check"), emitted.index('ThisAgent\'s "ActiveScript" = $Use_Building'))
-        self.assertEqual(emitted.count('ThisAgent\'s "ActiveScript" = $Use_Building'), 1)
+        self.assertLess(emitted.index("$Zoo_Rental_Check"), emitted.rindex('ThisAgent\'s "ActiveScript" = $Use_Building'))
+        self.assertEqual(emitted.count('ThisAgent\'s "ActiveScript" = $Use_Building'), 2)
 
     def test_purchase_equipment_tail_preserves_existing_package_additions(self):
         modified = _purchase_equipment().replace(
@@ -615,15 +621,15 @@ class SemanticMergeTests(unittest.TestCase):
         self.assertLess(emitted.index("$Alchemy_Oil_Check"), emitted.index("$Stat_Boost_Check"))
         self.assertLess(emitted.index("$Stat_Boost_Check"), emitted.index("$Zoo_Rental_Check"))
 
-    def test_purchase_equipment_tail_fails_closed_on_unknown_shape(self):
+    def test_purchase_equipment_tail_fails_closed_on_changed_signature(self):
         callback = parse_gpl(_boolean_callback("Zoo_Rental_Check"), "callback.gpl")
         malformed = parse_gpl(
-            _purchase_equipment().replace("$Stat_Boost_Check", "$Different_Final_Check"),
+            _purchase_equipment().replace("agent ThisAgent", "integer ThisAgent"),
             "malformed.gpl",
         )
         merged = merge_sources([], {"callback": [callback]})
 
-        with self.assertRaisesRegex(ValueError, "complete recognized stock"):
+        with self.assertRaisesRegex(ValueError, "stock signature"):
             add_purchase_equipment_tail_callbacks(
                 merged,
                 ("Zoo_Rental_Check",),
@@ -830,6 +836,104 @@ class SemanticMergeTests(unittest.TestCase):
             merge_sources([], {"one-mod": [first, second]})
 
         self.assertEqual(raised.exception.side_name, "one-mod")
+
+
+class FunctionProofBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def _function(body, name='Shared', returns=''):
+        return f'function {name}(agent unit){returns}\nbegin\n{body}\nend\n'
+
+    def _sources(self, *, query=False, declared=True):
+        base = parse_gpl(self._function('$Finish(unit);'))
+        guard = self._function(
+            ('if ($haswaypoints(unit)) return False;\n' if query else '')
+            + 'if (unit\'s "Title" != "A") return False;\nreturn True;',
+            'Guard', ' is boolean')
+        left = parse_gpl(self._function('if ($Guard(unit)) $First(unit);\n$Finish(unit);')
+                         + (guard if declared else ''))
+        right = parse_gpl(self._function('if (unit\'s "Title" == "B") $Second(unit);\n$Finish(unit);'))
+        return base, left, right, guard
+
+    def test_selected_helper_requires_effective_boundary_approval(self):
+        base, left, right, guard = self._sources()
+        for approved in (False, True):
+            for entry in ('sources', 'items'):
+                calls = []
+                def check(name, text):
+                    calls.append((name, text))
+                    return approved
+                with self.subTest(approved=approved, entry=entry):
+                    if entry == 'sources':
+                        result = merge_sources([base], {'left':[left], 'right':[right]},
+                                               function_proof_guard=check)
+                    else:
+                        result = merge_semantic_items(base.items, {'left':left.items, 'right':right.items},
+                                                      function_proof_guard=check)
+                    self.assertEqual(result.is_clean, approved)
+                    self.assertEqual(calls, [('guard', guard)])
+                    if not approved:
+                        self.assertEqual([c.name for c in result.conflicts], ['Shared'])
+
+    def test_builtin_query_assumption_is_checked_even_without_source(self):
+        base, left, right, guard = self._sources(query=True)
+        for approved in (False, True):
+            calls = []
+            def check(name, text):
+                calls.append((name, text))
+                return approved or name != 'haswaypoints'
+            result = merge_sources([base], {'left':[left], 'right':[right]}, function_proof_guard=check)
+            self.assertEqual(result.is_clean, approved)
+            self.assertEqual(calls, [('guard', guard), ('haswaypoints', None)])
+
+    def test_explicit_helper_resolution_cannot_bypass_boundary_approval(self):
+        base, left, right, guard = self._sources()
+        right = parse_gpl(right.text + guard.replace('"A"', '"Other"'))
+        chosen = parse_gpl(guard).items[0]
+        for approved in (False, True):
+            calls = []
+            def check(name, text):
+                calls.append((name, text))
+                return approved
+            result = merge_sources([base], {'left':[left], 'right':[right]}, {chosen.key:chosen},
+                                   function_proof_guard=check)
+            self.assertEqual(result.is_clean, approved)
+            self.assertEqual(calls, [('guard', guard)])
+
+    def test_loaded_helper_and_additional_loader_results_do_not_bypass_guard(self):
+        base, left, right, guard = self._sources(query=True, declared=False)
+        helper = parse_gpl(guard).items[0]
+        extra = parse_gpl(self._function('return False;', 'haswaypoints', ' is boolean')).items[0]
+        calls = []
+        def check(name, text):
+            calls.append((name, text))
+            return name != 'haswaypoints'
+        result = merge_sources([base], {'left':[left], 'right':[right]},
+            function_loader=lambda names: {helper.key:helper, extra.key:extra},
+            function_proof_guard=check)
+        self.assertFalse(result.is_clean)
+        self.assertEqual(calls, [('guard', guard), ('haswaypoints', None)])
+
+    def test_only_consulted_proof_helpers_require_boundary_work(self):
+        base, left, right, guard = self._sources()
+        left = parse_gpl(left.text.replace('$Guard(unit)', 'unit\'s "Title" == "A"'))
+        def check(name, text):
+            self.fail(f'unneeded proof lookup: {name}')
+        result = merge_sources([base], {'left':[left], 'right':[right]}, function_proof_guard=check)
+        self.assertTrue(result.is_clean)
+
+    def test_verified_helper_is_cached_across_independent_callers(self):
+        base, left, right, guard = self._sources()
+        base = parse_gpl(base.text + base.text.replace('Shared(', 'Another('))
+        left_call = next(item.text for item in left.items if item.name == 'Shared')
+        left = parse_gpl(left.text + left_call.replace('Shared(', 'Another('))
+        right = parse_gpl(right.text + right.text.replace('Shared(', 'Another('))
+        calls = []
+        def check(name, text):
+            calls.append((name, text))
+            return True
+        result = merge_sources([base], {'left':[left], 'right':[right]}, function_proof_guard=check)
+        self.assertTrue(result.is_clean)
+        self.assertEqual(calls, [('guard', guard)])
 
 
 def _purchase_equipment() -> str:

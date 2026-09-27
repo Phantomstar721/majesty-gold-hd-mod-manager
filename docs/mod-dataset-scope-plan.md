@@ -66,8 +66,14 @@ gameplay or replace base/expansion transition and save/load playtests.
 1. Preserve each selected input's native scope and load order. Treat `Any` as
    eligible in both views; do not infer scope from folder names or mod identity.
 2. Reuse one parsed/input-proof snapshot. Evaluate only the affected script
-   composition for the original-game and expansion views, using each view's
-   actual stock baseline and eligible Standard definitions. Do not rerun CAM,
+   composition for the original-game and expansion views. Native fallbacks use
+   each view's actual stock and eligible Standard definitions. Comparisons of
+   authored Merge edits, including reconciliation with source-backed Standards,
+   retain the existing full-SDK common source ancestry (including helper proofs);
+   a destination dataset is not their source ancestor. Changing that ancestor
+   falsely treats shared expansion ancestry as
+   competing mod insertions. Comparison ancestors are not emitted as defaults.
+   Both loaders reuse the same stock snapshot. Do not rerun CAM,
    artwork allocation, whole-package inventory or compiler proof for each view.
 3. Run the same callback/discovery/validation pipeline for both script results.
    Already-native, unchanged definitions remain in their original mod.

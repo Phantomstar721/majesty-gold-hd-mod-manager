@@ -19,20 +19,155 @@ __declspec(naked) void InventoryTestHidden() {
         ret
     }
 }
-int InventoryTestGate(void* node) {
+int InventoryTestGate(void* node, void* entry = reinterpret_cast<void*>(&InventorySpellGate)) {
     int visible = -1;
     __asm {
         push ebx
         xor ebx, ebx
         mov ecx, 12345678h
         mov eax, node
-        call InventorySpellGate
+        call entry
         mov visible, eax
         pop ebx
     }
     assert(inventoryGateNode == reinterpret_cast<unsigned>(node));
     assert(inventoryGateEcx == 0x12345678 && inventoryGateEbx == 0);
     return visible;
+}
+void InventoryTestRelative(unsigned char* site, const void* target) {
+    site[0] = 0xE9;
+    const auto displacement = static_cast<std::int32_t>(
+        reinterpret_cast<std::uintptr_t>(target)-reinterpret_cast<std::uintptr_t>(site)-5);
+    std::memcpy(site+1, &displacement, sizeof(displacement));
+}
+void InventoryTestProtection(const void* address) {
+    MEMORY_BASIC_INFORMATION memory = {};
+    assert(VirtualQuery(address, &memory, sizeof(memory)) == sizeof(memory));
+    assert(memory.Protect == PAGE_EXECUTE_READ);
+}
+void RunOccupantBranchWriterTests() {
+    constexpr std::size_t pageSize = 4096;
+    auto* code = static_cast<unsigned char*>(VirtualAlloc(
+        nullptr, pageSize, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE));
+    assert(code);
+    auto* site = code+64;
+    auto* target = code+256;
+    const unsigned char returnValue[] = {0xB8,0x78,0x56,0x34,0x12,0xC3};
+    for (unsigned char opcode : {static_cast<unsigned char>(0xE8), static_cast<unsigned char>(0xE9)}) {
+        // Exercise every currently used span and the writer's upper boundary.
+        // A larger zero-initialized buffer must not replace padding with ADDs.
+        for (std::size_t span : {5u, 6u, 7u, 8u, 9u, 16u}) {
+            DWORD previous = 0;
+            assert(VirtualProtect(code, pageSize, PAGE_READWRITE, &previous));
+            std::memset(code, 0xCC, pageSize);
+            std::memcpy(target, returnValue, sizeof(returnValue));
+            site[span] = 0xC3; // Return after an E8 and its NOP padding.
+            std::vector<unsigned char> expected(code, code+pageSize);
+            expected[64] = opcode;
+            const auto displacement = static_cast<std::int32_t>(target-site-5);
+            std::memcpy(expected.data()+65, &displacement, sizeof(displacement));
+            std::fill(expected.begin()+69, expected.begin()+64+span, static_cast<unsigned char>(0x90));
+            assert(VirtualProtect(code, pageSize, PAGE_EXECUTE_READ, &previous));
+            FlushInstructionCache(GetCurrentProcess(), code, pageSize);
+            assert(WriteOccupantBranch(reinterpret_cast<std::uintptr_t>(site), target, opcode, span));
+            assert(std::equal(expected.begin(), expected.end(), code));
+            InventoryTestProtection(site);
+            assert(reinterpret_cast<unsigned (__cdecl*)()>(site)() == 0x12345678);
+        }
+    }
+    const std::vector<unsigned char> before(code, code+pageSize);
+    for (std::size_t span : {std::size_t(0), std::size_t(4), std::size_t(17), std::size_t(-1)}) {
+        assert(!WriteOccupantBranch(reinterpret_cast<std::uintptr_t>(site), target, 0xE9, span));
+        assert(std::equal(before.begin(), before.end(), code));
+        InventoryTestProtection(site);
+    }
+    assert(VirtualFree(code, 0, MEM_RELEASE));
+}
+void RunInventorySpellInstallerTests() {
+    const auto savedBase = g_imageBase;
+    const auto* savedProfile = g_buildProfile;
+    const auto savedContinue = g_inventorySpellContinue;
+    const auto savedSkip = g_inventorySpellSkip;
+    const auto savedActions = g_runtimeFeatureRegistry.hiddenInventoryActions;
+    const unsigned char stockGate[] = {0x38,0x58,0x14,0x0F,0x84,0xB0,0x01,0,0};
+    for (const auto* profile : {&kBeta2BuildProfile, &kPublicBuildProfile, &kGogBuildProfile}) {
+        g_buildProfile = profile;
+        const auto bodyRva = ParityRva(ParitySite::HeroLearned);
+        assert(bodyRva != 0);
+        const std::size_t imageSize = bodyRva+0x1000;
+        auto* image = static_cast<unsigned char*>(VirtualAlloc(
+            nullptr, imageSize, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE));
+        assert(image);
+        g_imageBase = reinterpret_cast<std::uintptr_t>(image);
+        auto* body = image+bodyRva;
+        auto* site = body+0xD9;
+        std::memset(image, 0xCC, imageSize);
+        std::memcpy(site, stockGate, sizeof(stockGate));
+        InventoryTestRelative(body+0xE2, reinterpret_cast<void*>(&InventoryTestVisible));
+        InventoryTestRelative(body+0x292, reinterpret_cast<void*>(&InventoryTestHidden));
+        DWORD previous = 0;
+        assert(VirtualProtect(image, imageSize, PAGE_EXECUTE_READ, &previous));
+        FlushInstructionCache(GetCurrentProcess(), image, imageSize);
+        unsigned node[6] = {11,22,0x30323041,12345,67890,1};
+        const std::vector<unsigned> nodeBefore(node, node+6);
+        g_runtimeFeatureRegistry.hiddenInventoryActions = {node[2]};
+        // Stock ignores the inventory registry and checks only its visible flag.
+        assert(InventoryTestGate(node, site) == 1);
+        node[5] = 0;
+        assert(InventoryTestGate(node, site) == 0);
+        node[5] = 1;
+
+        // Test every guarded byte, including the long JE displacement. Reject
+        // before changing code or publishing continuation pointers.
+        g_inventorySpellContinue = 0x1234;
+        g_inventorySpellSkip = 0x5678;
+        for (std::size_t index = 0; index < sizeof(stockGate); ++index) {
+            assert(VirtualProtect(image, imageSize, PAGE_READWRITE, &previous));
+            site[index] ^= 1;
+            const std::vector<unsigned char> rejected(image, image+imageSize);
+            assert(VirtualProtect(image, imageSize, PAGE_EXECUTE_READ, &previous));
+            assert(!InstallInventorySpellDisplay());
+            assert(std::equal(rejected.begin(), rejected.end(), image));
+            assert(g_inventorySpellContinue == 0x1234 && g_inventorySpellSkip == 0x5678);
+            InventoryTestProtection(site);
+            assert(VirtualProtect(image, imageSize, PAGE_READWRITE, &previous));
+            site[index] ^= 1;
+            assert(VirtualProtect(image, imageSize, PAGE_EXECUTE_READ, &previous));
+        }
+
+        std::vector<unsigned char> expected(image, image+imageSize);
+        auto* expectedSite = expected.data()+bodyRva+0xD9;
+        expectedSite[0] = 0xE9;
+        const auto displacement = static_cast<std::int32_t>(
+            reinterpret_cast<std::uintptr_t>(&InventorySpellGate)-reinterpret_cast<std::uintptr_t>(site)-5);
+        std::memcpy(expectedSite+1, &displacement, sizeof(displacement));
+        std::fill(expectedSite+5, expectedSite+sizeof(stockGate), static_cast<unsigned char>(0x90));
+        // This is the production installer, not just a direct naked-adapter call.
+        assert(InstallInventorySpellDisplay());
+        assert(std::equal(expected.begin(), expected.end(), image));
+        assert(g_inventorySpellContinue == reinterpret_cast<std::uintptr_t>(body+0xE2));
+        assert(g_inventorySpellSkip == reinterpret_cast<std::uintptr_t>(body+0x292));
+        InventoryTestProtection(site);
+        assert(InventoryTestGate(node, site) == 0);
+        assert(std::equal(nodeBefore.begin(), nodeBefore.end(), node));
+        node[2] = 0x39393939;
+        assert(InventoryTestGate(node, site) == 1);
+        node[5] = 0;
+        assert(InventoryTestGate(node, site) == 0);
+        g_runtimeFeatureRegistry.hiddenInventoryActions.clear();
+        node[5] = 1;
+        assert(InventoryTestGate(node, site) == 1);
+        // A second installation cannot overwrite the existing detour.
+        assert(!InstallInventorySpellDisplay());
+        assert(std::equal(expected.begin(), expected.end(), image));
+        InventoryTestProtection(site);
+        assert(VirtualFree(image, 0, MEM_RELEASE));
+    }
+    g_runtimeFeatureRegistry.hiddenInventoryActions = savedActions;
+    g_inventorySpellContinue = savedContinue;
+    g_inventorySpellSkip = savedSkip;
+    g_imageBase = savedBase;
+    g_buildProfile = savedProfile;
 }
 void RunInventorySpellGateTests() {
     const auto saved = g_runtimeFeatureRegistry.hiddenInventoryActions;

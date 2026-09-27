@@ -11,6 +11,7 @@ from ..runtime_capabilities import (
     write_runtime_capability_manifest,
 )
 from ..runtime_features import write_runtime_feature_registry
+from ..script_review import ScriptReviewSession, group_conflicts
 from ..stock_controller_registry import (
     resolve_stock_controller_registry,
     write_stock_controller_registry,
@@ -114,6 +115,8 @@ class ManagerController:
             registry=self.registry,
             game_path=self.paths.game_path,
         )
+        self._script_retry_fingerprint: str | None = None
+        self._script_retry_preferences: dict[str, str] = {}
         self.qol_status: tuple[QolPatchStatus, ...] = ()
         self.qol_catalog: QolCatalogSnapshot | None = None
         self.qol_service = QolService(
@@ -438,7 +441,9 @@ class ManagerController:
         self._save_selection_state()
         return self.snapshot()
 
-    def build(self, *, progress=None) -> tuple[ManagerBuildResult, ControllerSnapshot]:
+    def build(self, *, progress=None, script_conflict_resolver=None,
+              review_scripts=False) -> tuple[ManagerBuildResult, ControllerSnapshot]:
+        self._discard_stale_script_preferences()
         snapshot = self.snapshot()
         if not snapshot.can_build:
             if not self._required_qol_ready():
@@ -447,7 +452,52 @@ class ManagerController:
             raise ManagerBuildError(
                 details or "Select at least one supported Merge mod before preparing mods."
             )
-        result = build_merged_package(self.plan, self.paths, progress=progress)
+        review = {}
+        if script_conflict_resolver is not None:
+            fingerprint = self.plan.fingerprint
+
+            def resolve(conflicts, *, preferences):
+                conflicts = tuple(conflicts)
+                known = {pair.identity for pair in group_conflicts(conflicts)}
+                current = {key: value for key, value in preferences.items() if key in known}
+                retry = {key: value for key, value in self._script_retry_preferences.items()
+                         if key in known and self._script_retry_fingerprint == fingerprint}
+
+                def observed_session(choices):
+                    session = ScriptReviewSession(choices)
+                    for conflict in conflicts:
+                        session.resolve(conflict)
+                    return session
+
+                try:
+                    session = observed_session({**current, **retry})
+                except ValueError:
+                    # Never let a stale draft obstruct review of the current
+                    # candidates or weaken their normal validation.
+                    session = observed_session(current)
+                choices = script_conflict_resolver(
+                    conflicts, preferences=session.applicable_decisions
+                )
+                if choices is None:
+                    return None
+                session.apply(choices)
+                accepted = session.applicable_decisions
+                # A failed downstream feature check must not make the user
+                # repeat the dialog. This draft is memory-only and still goes
+                # through the dialog and all build/source checks on retry.
+                self._script_retry_fingerprint = fingerprint
+                self._script_retry_preferences = dict(accepted)
+                return accepted
+
+            review["script_conflict_resolver"] = resolve
+        # A successful package may hold older choices for the same inputs.
+        # Do not let those suppress the dialog containing the retry draft.
+        if review_scripts or (script_conflict_resolver is not None
+                              and self._script_retry_preferences):
+            review["review_scripts"] = True
+        result = build_merged_package(self.plan, self.paths, progress=progress, **review)
+        self._script_retry_fingerprint = None
+        self._script_retry_preferences = {}
         self._managed_build_cache = result
         self._managed_build_cache_loaded = True
         cache = StartupCache.load(self.paths.startup_cache_path)
@@ -464,6 +514,11 @@ class ManagerController:
         )
         save_profile(self.paths.profile_path, self.profile)
         return result, self.snapshot()
+
+    def _discard_stale_script_preferences(self) -> None:
+        if self._script_retry_fingerprint != self.plan.fingerprint:
+            self._script_retry_fingerprint = None
+            self._script_retry_preferences = {}
 
     def launch(self) -> tuple[LaunchResult, ControllerSnapshot]:
         profile_lock = None
@@ -776,6 +831,7 @@ class ManagerController:
             standard_conflict_winners=self.standard_conflict_winners,
             prepared_cache=self._prepared_merge_cache,
         )
+        self._discard_stale_script_preferences()
         self._prepared_merge_cache.update(
             (item.content_id, item) for item in self.plan.selected_merge
         )
@@ -818,6 +874,7 @@ class ManagerController:
             ),
         )
         self.plan = refresh_standard_script_inputs(self.plan, selected)
+        self._discard_stale_script_preferences()
 
     def _enforce_catalog_exclusivity(self) -> None:
         """Make stale/default choices deterministic when variants conflict."""

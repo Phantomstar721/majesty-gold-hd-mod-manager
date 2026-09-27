@@ -12,6 +12,29 @@ callbacks. All subscribers run in deterministic mod-ID/feature-key order;
 observers must return promptly and must not delete, retask, or recursively
 invoke the observed stock owner. GPL callbacks are not a sandbox.
 
+Validation checks only what the Manager notification needs: an unambiguous
+insertion point in the correct conditional branch, typed callback arguments,
+their required bindings, and notification order/cardinality. It does not require
+whole sibling blocks or function bodies to match stock. Reward formulas, quest
+scoring, potion effects and unrelated instructions remain selected-mod source.
+Missing, moved or duplicated anchors identify the notification that cannot be
+inserted; they are not reported as a conflict between mods. Source-span edits
+preserve existing instructions and conditional ownership. These checks run
+during preparation, not in the game.
+
+Potion consumption proves the item/spell removal pair, not transformation or
+expiry gameplay. It notifies after the selected remaining application work,
+including consuming early returns. Transformation policy has separate checks
+only when that feature actually modifies transformation. Tournament notification
+replaces the timed continuation and retains the selected exit implementation.
+
+Scan and Prepare share one stock-source snapshot. Reference bodies and fallback
+functions use the destination quest dataset; authored merge ancestry is a
+separate lookup. Base-game functions are never compared to an expansion body
+merely because an event is enabled. Stock-derived output is composed separately
+for base and expansion even without Standard mods, then identical definitions
+are shared. This adds no runtime polling or per-unit state.
+
 The activity ledger is the user-approved extension where no exact stock
 mechanism exists: one shared stock-scheduled callback checks registered
 activities once per simulation second. Conditions are consumer-owned, read-only,
@@ -45,8 +68,12 @@ the existing positive-inventory branch. Non-potion healing is unchanged.
 
 `GPLMx/TaskModules/Subtasks/mx_Spells.gpl`: the six Bazaar effect functions
 reject dead casters, apply their stock effects, delete the appropriate carried
-item and forget its spell. Observe after the complete effect function; its
-dead-caster return bypasses the observer. Effector duration and end callbacks
+item and forget its spell. Observe after the consumption pair and remaining
+selected application work; its dead-caster return bypasses the observer. Additional
+conditional consume-only returns notify after their own matched pair. A blocked
+use that does not consume an item does not notify. Item identity, recipient,
+spell removal, entry guard, and consuming return paths are checked independently
+of author-owned effect changes. Effector duration and end callbacks
 continue to own restoration. Stable identities are `healing_potion`,
 `speed_tonic`, `strength_potion`, `shapeshift_potion`, `regeneration_elixer`,
 `invisibility_brew` and `fire_balm`. The stock spelling `elixer` is intentional.
@@ -60,10 +87,24 @@ notifications by themselves; Attack's target-death callback also contains a
 guarded success branch. Preserve Attack's `gavereward` guard and assignment order.
 `GPLMx/mx_Monster_Deaths.gpl` owns the actual stock distribution routines,
 including Ranger range, same-player Explore policy, and invisible/camouflaged
-recipients. Privately clone those distribution functions for the three flag
-success calls and observe their actual recipients after `give_gold`; never
-replace ordinary monster loot. Notification reports the stock per-recipient
-share, including a zero share after integer division, not a recomputed reward.
+recipients. For the three flag success calls, preserve the selected payout
+implementation, including synchronous helper-based implementations. Its payout
+anchor retains the flag, reward-cost arguments and success scope; the selected
+callee and surrounding bookkeeping remain author-owned. Completion notification
+separately checks its target binding and once-only completion guard.
+
+Private payment entry points reuse source-context transport to carry the original
+flag through private copies of only the helpers leading to `give_gold`. This
+retains the flag even when a helper uses a defeated target as its location source.
+Public distribution functions and ordinary monster loot remain unchanged. The
+adapter invokes public `give_gold` once, then observers with the same evaluated
+recipient and share, including zero. It never recomputes rewards or recipient
+filters. Event copies use an isolated `MM_EG` namespace.
+
+Every entry must reach a verifiable award through synchronous GPL calls. Explicit
+dynamic, function-valued and deferred dispatch is rejected rather than silently
+losing attribution. This is a source-call contract, not inference about hidden
+effects of unknown native calls. No global context, saved state or timer is added.
 The flag is borrowed context and may disappear immediately after dispatch.
 
 ### Attack-flag completion before payout
@@ -105,6 +146,8 @@ With no subscribers, no completion call or extra stock source input is added.
 resolution compute `exp_given`, then the hero branch applies
 `max(1, ExperienceLevel / combat_exp_div)` before calling `give_exp`.
 The familiar-to-leader award in the same function remains untouched.
+Independent added award branches likewise remain untouched, even when they use
+the same award expression. Only the proved hero branch receives this observer.
 
 `exploration-experience-awarded` observes only
 `GPLMx/TaskModules/Characters/mx_Travel_to.gpl:travel_to_exp`, inside its existing
@@ -140,9 +183,10 @@ events: there is no broad interceptor. Songs, quests, training, tournaments,
 item collection, familiar awards and direct XP writes remain outside them.
 Observers must not call `attack_end` or `travel_to_exp` recursively.
 
-The implementation changes only the two proved call identities. Their complete
-stock bodies, predicates, payment/division order and callbacks remain intact;
-an incompatible rewrite fails with the owning function named. There is no new
+The implementation changes only the two proved call identities. Their
+predicates and recipients remain intact; selected award calculations are retained
+and the wrapper observes the actual evaluated amount. An incompatible insertion
+point fails with the owning function named. There is no new
 timer, saved state, native hook, per-frame query or cleanup lifecycle. With no
 subscribers there are no generated wrappers or additional stock source inputs.
 
@@ -160,8 +204,8 @@ alone are not delivery. Callback consumers must copy needed context now.
 `GPLMx/TaskModules/Buildings/mx_Fairgrounds.gpl:Enter_Tourney` sets
 `ContestantInFair`, schedules the existing `ActiveScript` interval and selects
 `Exit_Fair`. That timed continuation is the completion boundary. A private
-continuation snapshots the event, rank and participant counter, runs stock
-`Exit_Fair` literally, and then notifies eligible finishers. `Dump_Contestants`
+continuation snapshots the event, rank and participant counter, calls selected
+`Exit_Fair` unchanged, and then notifies eligible finishers. `Dump_Contestants`
 still calls the original exit directly; cancellation and stat boosting are
 not completion. Exclude a timed continuation while the grounds are cleaning
 up or its contest has changed. Do not infer success merely from XP or exit.
@@ -290,19 +334,27 @@ above. The reserved `MM_` GPL function/attribute namespace belongs to the Manage
 
 ### Composition and validation boundaries
 
-Observers at one event are additive and deterministic. The Manager preserves
-straight-line callback preludes when the entire following stock body is
-unchanged. Bazaar potion handlers may also retain conditional consume/forget/
-return branches between the unchanged dead-caster guard and normal effects;
-those branches receive the same consumption notification before returning.
-The consumed item and forgotten spell must match the stock pair exactly.
-These rules depend on code structure, not a mod ID or creature title. Other
-changes to a protected success/cleanup boundary are rejected with its function
-and source name, rather than silently replacing that mod's behavior.
-Formatting/comments may differ; stock strings and statements may not.
-Only requested stock owner files
-are read and included in prepared-input fingerprints. Shared declarations also
-appear under `shared_services` in the composition report.
+Observers at one event are additive and deterministic. Each contract protects
+its insertion point and captured inputs, leaving selected gameplay unchanged.
+Reward distribution uses the selected synchronous helper graph,
+not a stock replacement. Bazaar consume-only returns receive their notification
+before returning; the consumed item and forgotten spell must match the stock
+pair exactly. These rules depend on code structure, not a mod ID or creature
+title. Changes to a protected boundary are rejected with its function and source
+name, rather than silently replacing that mod's behavior. Formatting/comments
+may differ; protected strings, ordering and scope may not.
+Only requested stock owner files are read and included in prepared-input
+fingerprints. Shared declarations also appear under `shared_services` in the
+composition report.
+
+The integration fixtures exercise the production source-selection path as well
+as installed selected-source candidates, both quest datasets, original and
+merge-rendered instructions, and successive feature transforms. They cover
+stock-derived output without Standard inputs. Independent stage checks continue when an earlier stage fails, so
+one boundary failure does not hide the remaining audit. SDK source checks cover
+the Steam and GOG inputs used by the supported profiles; these source-only
+changes add no executable-specific hook or address. The fixtures do not prepare
+or overwrite an installed profile and do not establish in-game acceptance.
 
 The source-level sampler harness exercises emitted registration, qualification,
 pause/resume, cancellation, death cleanup, capacity and reentrant callbacks.

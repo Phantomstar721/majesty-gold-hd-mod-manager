@@ -11,8 +11,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from majesty_cam.activity_time import activity_source, add_activity_service, MAX_ACTIVITIES, RECORD_WIDTH
 from majesty_cam.compose import compile_gpl, _load_stock_gameplay_event_items
-from majesty_cam.gameplay_events import (add_gameplay_event_observers, event_stock_paths, stock_tokens,
-                                        _early_consumption_returns, _stock_preserving_prelude)
+from majesty_cam.gameplay_events import add_gameplay_event_observers, event_stock_paths, stock_tokens
 from majesty_cam.gpl import (DefinitionKind, SemanticMergeResult, find_foreach_return_violations,
                             merge_sources, parse_gpl, require_complete_semantic_coverage)
 from majesty_cam.package import parse_mod_definition, mod_definition_mapping
@@ -111,11 +110,14 @@ end
                                       [before[i:i+4] for i in range(len(before)-3)])
                         # Remove ONLY our addition and restore the known payout
                         # call identity: every original stock token must survive.
-                        restored = text.replace(notify, "").replace("$MM_Event_AttackGold", "$dropgoldinradius")
+                        private = 'MM_Event_AttackGold' if name == 'attack_flag_poll' else 'MM_Event_DeathGold'
+                        restored = text.replace(notify, "").replace('$' + private, "$dropgoldinradius")
                         self.assertEqual(stock_tokens(restored), stock_tokens(stock[name].text))
-                        self.assertEqual(text.count("$MM_Event_AttackGold"), int(paid))
+                        self.assertEqual(text.count('$' + private), int(paid))
                     if paid:
-                        self.assertEqual(functions["mm_event_attackgold"].count("$Example_Paid("), 1)
+                        adapter = functions['mm_event_rewardpaid']
+                        self.assertEqual(adapter.count("$Example_Paid("), 1)
+                        self.assertLess(adapter.index('$give_gold('), adapter.index('$Example_Paid('))
                         self.assertNotIn("Example_Completed", functions["explore_flag_poll"])
                     else:
                         self.assertEqual(set(functions), {"example_completed", "other_completed", "example_paid", *owners})
@@ -136,7 +138,7 @@ end
         self.assertEqual(text.count("$MM_Event_AttackGold"), 1)
         for name in ("attack_flag_poll", "attack_flag_death_callback"):
             changed = replace(stock[name], text=stock[name].text.replace('"gavereward" != TRUE', '"gavereward" == TRUE'))
-            with self.assertRaisesRegex(ValueError, "stock gameplay-event owner"):
+            with self.assertRaisesRegex(ValueError, "Manager cannot place its notification"):
                 add_gameplay_event_observers(SemanticMergeResult((*callbacks.items, changed), ()), subscribers, stock)
 
 
@@ -216,11 +218,11 @@ end
         callbacks = parse_gpl(self.callbacks).items
         for name in stock:
             changed = replace(stock[name], text=stock[name].text.replace("$give_exp", "$CustomXP"))
-            with self.assertRaisesRegex(ValueError, "stock gameplay-event owner"):
+            with self.assertRaisesRegex(ValueError, "Manager cannot place its notification"):
                 add_gameplay_event_observers(
                     SemanticMergeResult((*callbacks, changed), ()), self.subscribers, stock)
         final = add_gameplay_event_observers(SemanticMergeResult(callbacks, ()), self.subscribers, stock)
-        with self.assertRaisesRegex(ValueError, "stock gameplay-event owner"):
+        with self.assertRaisesRegex(ValueError, "Manager cannot place its notification"):
             add_gameplay_event_observers(final, self.subscribers, stock)
 
 
@@ -407,36 +409,6 @@ class SharedServiceTests(unittest.TestCase):
         self.assertEqual(stock_tokens('A = "item"; // x'), stock_tokens(' a="item";'))
         self.assertNotEqual(stock_tokens('A = "item";'), stock_tokens('A = "Item";'))
 
-    def test_consume_only_branch_proof_is_generic_and_keeps_stock_guard_and_effects(self):
-        pair = '$DeleteInventoryItem(#AnItem, ThisAgent); $ForgetSpell(ThisAgent, "AnItem");'
-        baseline = ('function Sample(agent ThisAgent)\ndeclare\nbegin\n'
-                    'if ($IsDead(ThisAgent)) return;\n'
-                    '$CreateEffector(ThisAgent, "Effect", 0);\n' + pair + '\nend\n')
-        branch = 'if (ThisAgent\'s "Title" == "AnyPrivateType") begin ' + pair + ' return; end\n'
-        modified = baseline.replace('$CreateEffector', branch + '$CreateEffector')
-        offsets = _early_consumption_returns(baseline, modified)
-        self.assertEqual(len(offsets), 1)
-        self.assertTrue(modified[offsets[0]:].startswith('return; end'))
-        self.assertEqual(len(_early_consumption_returns(
-            baseline, baseline.replace('$CreateEffector', branch + branch + '$CreateEffector'))), 2)
-        for bad in (modified.replace('"Effect"', '"DifferentEffect"'),
-                    modified.replace('if ($IsDead(ThisAgent)) return;', ''),
-                    modified.replace('#AnItem', '#OtherItem', 1),
-                    modified.replace('return; end', '$ExtraEffect(ThisAgent); return; end'),
-                    baseline.replace('if ($IsDead', branch + 'if ($IsDead')):
-            self.assertIsNone(_early_consumption_returns(baseline, bad))
-
-    def test_private_callback_prelude_proof_preserves_the_entire_stock_body(self):
-        baseline = 'function Award(agent Actor)\ndeclare\nbegin\n$StockPay(Actor, 4);\nend\n'
-        wrapped = baseline.replace('begin\n', 'begin\n$PrivateAward(Actor);\n')
-        self.assertTrue(_stock_preserving_prelude(baseline, wrapped))
-        self.assertTrue(_stock_preserving_prelude(baseline, wrapped.replace(
-            '$PrivateAward(Actor);', '$First(Actor); $Second(Actor, "Value");')))
-        self.assertFalse(_stock_preserving_prelude(baseline, wrapped.replace('Actor, 4', 'Actor, 5')))
-        self.assertFalse(_stock_preserving_prelude(baseline, wrapped.replace(
-            '$PrivateAward(Actor);', 'if (True) return;')))
-        self.assertFalse(_stock_preserving_prelude(baseline, wrapped.replace(
-            '$PrivateAward(Actor);', '$dropgoldinradius(Actor, 4);')))
 
     @unittest.skipUnless((GAME / "SDK/Gplbcc.exe").is_file(), "requires installed stock SDK")
     def test_observers_preserve_existing_consumption_branch_and_reward_prelude(self):
@@ -462,7 +434,11 @@ end
         final = add_gameplay_event_observers(initial, subscribers, stock)
         functions = {item.normalized_name: item.text for item in final.items}
         self.assertEqual(functions['dropgoldinradius'], gold.text)
-        self.assertEqual(functions['mm_event_attackgold'].count('$PrivateReagentAward('), 1)
+        copies = [text for name, text in functions.items() if name.startswith('mm_eg_')
+                  and '$PrivateReagentAward(' in text]
+        self.assertEqual(len(copies), 1)
+        self.assertEqual(copies[0].count('$PrivateReagentAward('), 1)
+        self.assertIn('$MM_Event_RewardPaid(MM_SourceContext,', copies[0])
         self.assertEqual(functions['regeneration_elixer_effect'].count('$Example_Event0('), 2)
         self.assertNotIn('Phantom', functions['regeneration_elixer_effect'])
         with TemporaryDirectory(prefix="manager-event-wrapper-compiler-") as tmp:

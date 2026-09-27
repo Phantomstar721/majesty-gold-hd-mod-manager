@@ -12,6 +12,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from majesty_cam.stock_controller_features import (
     LiveAgentListRowVariant,
     StockMx05LiveAgentListPanel,
+    StockMx05DataRecordListPanel,
     StockAp41Fl00HostileMonsterFlag,
     StockMx09Ap41RewardPanel,
     StockMx22BuildingOpenToggle,
@@ -33,6 +34,65 @@ from majesty_cam.stock_controller_registry import (
 
 
 class StockControllerRegistryTests(unittest.TestCase):
+    def test_mixed_live_and_data_lists_share_key_order_and_command_allocation(self) -> None:
+        def options(prefix):
+            return dict(
+                row_count_callback_symbol=prefix + "Count",
+                row_agent_id_callback_symbol=prefix + "Identity",
+                revision_callback_symbol=prefix + "Revision",
+                row_title_text="Title",
+                row_text=None,
+                row_value_callback_symbol=None,
+                row_value_suffix_text=None,
+                action_cost_callback_symbol=prefix + "Cost",
+                action_callback_symbol=prefix + "Action",
+            )
+
+        fourcc = lambda value: int.from_bytes(value.encode("ascii"), "little")
+        # The native reader expects one ascending panel-key sequence, not a
+        # separate sequence for each authored kind of list.
+        for live_key, data_key in (("z_live", "a_data"), ("a_live", "z_data")):
+            live = StockMx05LiveAgentListPanel(
+                live_key, "live-building", "LV01", 0x7201, **options("Live"))
+            data = StockMx05DataRecordListPanel(
+                data_key, "data-building", "DT01", 0x7202, **options("Data"))
+            dialogs = {
+                live_key: (fourcc("LV00"), fourcc("LV01")),
+                data_key: (fourcc("DT00"), fourcc("DT01")),
+            }
+            text_ids = {
+                live_key: LiveAgentListTextIds(0x68000001, 0, 0),
+                data_key: LiveAgentListTextIds(0x68000002, 0, 0),
+            }
+            canonical_payload = None
+            for selected in ((live, data), (data, live), (data, live, data)):
+                with self.subTest(live=live_key, data=data_key, selected=selected):
+                    registry = resolve_stock_controller_registry(
+                        selected, dialogs, list_text_ids=text_ids)
+                    rows = registry.live_agent_lists
+                    self.assertEqual(tuple(row.panel_key for row in rows),
+                                     tuple(sorted((live_key, data_key))))
+                    self.assertEqual(tuple(row.action_command_id for row in rows),
+                                     (0x20000, 0x20001))
+                    self.assertEqual(len({row.action_command_id for row in rows}), 2)
+                    for row in rows:
+                        self.assertEqual(row.data_record_rows, row.panel_key == data_key)
+                        self.assertEqual(row.action_uses_parent, row.panel_key == data_key)
+                        self.assertEqual(row.focus_selected_row_on_click, row.panel_key == live_key)
+                    payload = encode_stock_controller_registry(registry)
+                    self.assertEqual(struct.unpack_from("<I", payload, 4)[0], 16)
+                    self.assertEqual(decode_stock_controller_registry(payload), registry)
+                    if canonical_payload is None:
+                        canonical_payload = payload
+                    self.assertEqual(payload, canonical_payload)
+
+            with self.assertRaises(ControllerRegistryError):
+                resolve_stock_controller_registry(
+                    (live, replace(data, panel_key=live_key)),
+                    {live_key: dialogs[live_key]},
+                    list_text_ids={live_key: text_ids[live_key]},
+                )
+
     def test_live_agent_list_round_trips_in_v14_with_optional_text_ids(self) -> None:
         feature = StockMx05LiveAgentListPanel(
             panel_key="offers",

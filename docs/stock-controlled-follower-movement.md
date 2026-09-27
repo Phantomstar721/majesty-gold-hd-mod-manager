@@ -50,3 +50,9 @@ resources. Independent declarations use independent markers, so their
 adjustments may stack without one feature removing another's value. The composer requires the complete recognized stock
 setup, ownership-transfer, gravestone, and Charm-cleanup anchors. It refuses a
 changed lifecycle rather than guessing where to insert code.
+
+Setup checks use parsed instructions and source spans, so merger-added blocks,
+comments and spacing around operators do not hide unchanged stock boundaries.
+The required setup sequence and ownership transfer remain unique, ordered and
+top-level. Cleanup wraps its original call at that call's existing scope;
+unbraced conditionals and their `else` branches keep the same ownership.
