@@ -78,10 +78,11 @@ from .profile_lock import ProfileLockError, acquire_merged_profile_lock
 from .startup_cache import metadata_signature, package_input_metadata_signature
 from .runtime_profiles import runtime_installation_identity, unsupported_runtime_capabilities
 from .qol_service import GOG_BRANCH
+from .. import standard_scripts
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
-PLAN_SCHEMA_VERSION = 8
+PLAN_SCHEMA_VERSION = 9
 STANDARD_SELECTION_ISSUE_CODES = frozenset(
     {
         "mutually_exclusive_mods",
@@ -230,6 +231,9 @@ class BuildPlan:
     source_metadata_signature: str = ""
     runtime_feature_registry: RuntimeFeatureRegistry = RuntimeFeatureRegistry()
     controller_registry: ResolvedControllerRegistry = _EMPTY_CONTROLLER_REGISTRY
+    standard_script_entries: tuple[CatalogEntry, ...] = ()
+    standard_script_signature: str = ""
+    merge_fingerprint: str = ""
 
     @property
     def stock_activity_text_inputs(self) -> tuple[tuple[str, str], ...]:
@@ -650,6 +654,7 @@ def create_build_plan(
         sorted(compatibility_file_hashes.items(), key=lambda item: item[0].casefold())
     )
 
+    standard_order = _order_standard_ids(standards, order_index, standard_conflict_winners)
     fingerprint = _plan_fingerprint(
         prepared,
         runtime_identity=runtime_identity,
@@ -668,12 +673,8 @@ def create_build_plan(
         stock_compose_inputs=stock_compose_inputs,
         compatibility_file_inputs=compatibility_file_inputs,
     )
-    standard_order = _order_standard_ids(
-        standards,
-        order_index,
-        standard_conflict_winners,
-    )
-    return BuildPlan(
+    plan = BuildPlan(
+        merge_fingerprint=fingerprint,
         selected_standard_ids=tuple(standard_order),
         selected_merge=tuple(prepared),
         resolution_owners=owner_resolutions,
@@ -688,6 +689,28 @@ def create_build_plan(
         fingerprint=fingerprint,
         issues=tuple(issues),
     )
+    return refresh_standard_script_inputs(plan, standards)
+
+
+def _with_standard_fingerprint(merge_fingerprint: str, signature: str) -> str:
+    if not signature:
+        return merge_fingerprint
+    return hashlib.sha256(json.dumps((merge_fingerprint, signature)).encode()).hexdigest()
+
+
+def refresh_standard_script_inputs(plan: BuildPlan, entries: Sequence[CatalogEntry]) -> BuildPlan:
+    """Refresh selected source identity without repeating Merge preflight."""
+    by_id = {entry.content_id: entry for entry in entries}
+    selected = tuple(by_id[key] for key in plan.selected_standard_ids) if plan.has_merge else ()
+    issues = tuple(issue for issue in plan.issues if issue.code != "standard_script_inputs")
+    signature = ""
+    try:
+        signature = standard_scripts.fingerprint(selected)
+    except (OSError, ValueError) as exc:
+        issues += (BuildIssue("standard_script_inputs", str(exc)),)
+    base = plan.merge_fingerprint or plan.fingerprint
+    return replace(plan, standard_script_entries=selected, standard_script_signature=signature,
+                   merge_fingerprint=base, fingerprint=_with_standard_fingerprint(base, signature), issues=issues)
 
 
 def standard_selection_issues(
@@ -940,6 +963,7 @@ def build_merged_package(
             runtime_capabilities=tuple(sorted(runtime_capabilities)),
             private_activity_texts=private_activity_texts,
             prepared_inventories=inventories,
+            standard_script_inputs=tuple(standard_scripts.read(e) for e in plan.standard_script_entries),
         )
         _require_current_plan_sources(
             plan, game_path=paths.game_path, phase="during composition"
@@ -1290,6 +1314,7 @@ def _plan_fingerprint(
     private_activity_texts: Sequence[PrivateActivityTextBinding],
     stock_compose_inputs: Sequence[tuple[str, str]],
     compatibility_file_inputs: Sequence[tuple[str, str]],
+    standard_signature: str = "",
 ) -> str:
     packages = []
     for item in prepared:
@@ -1372,7 +1397,7 @@ def _plan_fingerprint(
         ],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return _with_standard_fingerprint(hashlib.sha256(encoded).hexdigest(), standard_signature)
 
 
 def _canonical_mod_definition(definition: ModDefinition | None) -> dict | None:
@@ -1384,6 +1409,12 @@ def _canonical_mod_definition(definition: ModDefinition | None) -> dict | None:
 def _require_current_plan_sources(
     plan: BuildPlan, *, game_path: Path, phase: str
 ) -> None:
+    if plan.has_merge and tuple(e.content_id for e in plan.standard_script_entries) != plan.selected_standard_ids:
+        raise ManagerBuildError("Standard script inputs do not match the active Mod selection. Prepare again.")
+    try:
+        standard_signature = standard_scripts.fingerprint(plan.standard_script_entries)
+    except (OSError, ValueError) as exc:
+        raise ManagerBuildError(f"Standard script inputs changed {phase}: {exc}") from exc
     if (
         plan.source_metadata_signature
         and _plan_source_metadata_signature(
@@ -1394,7 +1425,10 @@ def _require_current_plan_sources(
         )
         == plan.source_metadata_signature
     ):
-        return
+        # The Standard providers are separately cached and hashed; include them
+        # before trusting the Merge-only metadata fast path.
+        if standard_signature == plan.standard_script_signature:
+            return
     try:
         stock_compose_inputs = _fingerprint_stock_compose_inputs(game_path, plan.selected_merge)
         # A metadata change invalidates preflight's cached package hashes too.
@@ -1406,6 +1440,7 @@ def _require_current_plan_sources(
         )
         current = _plan_fingerprint(
             current_prepared,
+            standard_signature=standard_signature,
             runtime_identity=runtime_installation_identity(game_path),
             owner_resolutions=plan.resolution_owners,
             semantic_resolutions=plan.semantic_resolutions,

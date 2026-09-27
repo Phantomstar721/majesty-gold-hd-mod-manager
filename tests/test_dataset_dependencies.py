@@ -23,6 +23,15 @@ def catalog(expressions='', base=(), functions=(), base_functions=(), helpers=''
 
 
 class DatasetDependenciesTests(unittest.TestCase):
+    def test_selected_native_helpers_are_not_reimported_from_stock(self):
+        native = result('expression #Native 70\nfunction Helper()\nbegin\nreturn;\nend\n')
+        native_items = {i.key: i for i in native.items}
+        original = result('function Caller()\nbegin\n$Helper();\nX = #Native;\nend\n')
+        merged = close_dataset_dependencies(original,
+            catalog('expression #Native 99\n', helpers='function Helper()\nbegin\nX = 90;\nend\n'),
+            provided=native_items.get)
+        self.assertEqual(merged, original)
+
     def test_original_quest_item_comparison_gets_exact_stock_binding(self):
         original = result('function Item()\nbegin\nif (15 == #Bazaar_Item_One)\n'
                           'begin\nreturn;\nend\nend\n')

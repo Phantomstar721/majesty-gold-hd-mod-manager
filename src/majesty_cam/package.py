@@ -288,6 +288,7 @@ def load_standard_component(
     *,
     manifest_path: Union[str, Path],
     mod_id: str,
+    recover_project_sources: bool = True,
 ) -> ModPackage:
     """Load one exact ordinary Mod component for semantic reconciliation.
 
@@ -311,8 +312,9 @@ def load_standard_component(
         selected_mod_id=mod_id,
         allow_strings=True,
         allow_direct_gpl_target=True,
-        recover_project_sources=True,
+        recover_project_sources=recover_project_sources,
         allow_opaque_native_loads=True,
+        first_dataset_only=True,
     )
     definition = ModDefinition(
         schema_version=3,
@@ -789,6 +791,7 @@ def _parse_manifest(
     allow_direct_gpl_target: bool = False,
     recover_project_sources: bool = False,
     allow_opaque_native_loads: bool = False,
+    first_dataset_only: bool = False,
 ) -> ModMetadata:
     try:
         xml_bytes = manifest.read_bytes()
@@ -853,6 +856,8 @@ def _parse_manifest(
     ]
     if not dataset_nodes:
         raise PackageFormatError("manifest Mod must contain at least one Dataset")
+    if first_dataset_only:
+        dataset_nodes = dataset_nodes[:1]
 
     for dataset_index, dataset_node in enumerate(dataset_nodes):
         base = _clean_optional_string(dataset_node.get("base")) or "Any"

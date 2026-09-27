@@ -74,6 +74,13 @@ class PotionPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'migrate'):
             compose(SemanticMergeResult((modified,),()),Plan((parse_feature(POLICY),),self.actions),self.loader,{})
 
+    def test_native_effect_change_cannot_bypass_paired_cleanup_check(self):
+        item = self.stock[(DefinitionKind.FUNCTION, 'shapeshift_potion_effect')]
+        modified = replace(item, text=item.text.replace('#ATTRIB_MaxHP, 30', '#ATTRIB_MaxHP, 99'))
+        self.assertNotEqual(modified.text, item.text)
+        with self.assertRaisesRegex(ValueError, 'matching stock effect/cleanup'):
+            compose(SemanticMergeResult((modified,), ()), Plan((parse_feature(POLICY),), self.actions), self.loader, {})
+
     def test_action_validators_and_private_consumption_observer(self):
         stock = {key:value[0] for key,value in _load_effective_stock_descriptions(GAME).items()}
         result, plan = prepare_descriptions(merge_descriptions(b'<Descriptions/>',()),stock,(parse_feature(POLICY),))

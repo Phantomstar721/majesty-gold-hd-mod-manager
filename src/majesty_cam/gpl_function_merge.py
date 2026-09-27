@@ -431,6 +431,23 @@ def _merge_node(base, variants, path, proof):
         return _pick(base, variants, path)
     if base.kind == "statement" or any(node.kind != base.kind for _, node in changed):
         return _pick(base, variants, path)
+    # One provider may prepend dispatch cases while retaining the entire old
+    # branch as its literal else fall-through. Changes inside that retained
+    # branch belong there, not in the new dispatch condition. Two competing
+    # wrappers have no proven precedence and remain a conflict.
+    def prefix(node):
+        chain = []
+        while node != base and node.kind == 'if' and len(node.otherwise) == 1:
+            chain.append(node)
+            node = node.otherwise[0]
+        return chain if chain and node == base else None
+    wrappers = [(owner, prefix(node)) for owner, node in changed if prefix(node)]
+    if len(wrappers) == 1:
+        owner, chain = wrappers[0]
+        merged = _merge_node(base, [(o, base if o == owner else n) for o, n in variants], path, proof)
+        for node in reversed(chain):
+            merged = _Node(node.kind, node.head, node.body, (merged,))
+        return merged
     head = _pick(base.head, [(o, n.head) for o, n in variants], path + " condition")
     body = _merge_sequence(base.body, [(o, n.body) for o, n in variants], path + " body", proof)
     otherwise = _merge_sequence(base.otherwise, [(o, n.otherwise) for o, n in variants], path + " else", proof)

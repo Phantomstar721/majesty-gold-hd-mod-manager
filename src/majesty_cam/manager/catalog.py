@@ -21,7 +21,6 @@ from typing import Callable, Mapping, Optional, Sequence, Tuple, Union
 import uuid
 import xml.etree.ElementTree as ET
 
-from majesty_cam.gpl import parse_dat, parse_gpl
 from majesty_cam.package import (
     DEFINITION_FILE_NAME,
     PackageFormatError,
@@ -879,9 +878,9 @@ def _content_definition_fingerprints(
 ) -> Tuple[Tuple[str, str], ...]:
     """Inventory behavior-defining content without compiling or mutating it.
 
-    Ordinary Majesty Mods are loaded independently, so the manager cannot
-    semantically merge them.  It can still identify when two selected Mods
-    replace the same GPL/DAT definition or XML description.  The inventory is
+    Ordinary Majesty Mods remain loaded independently. This inventory identifies
+    when selected Mods replace the same GPL/DAT definition or XML description,
+    and shares parsed source with generated script reconciliation. The inventory is
     created during the explicit content scan and then reused by checkbox
     changes; no package files are reread on selection.
     """
@@ -969,17 +968,13 @@ def _semantic_file_definitions_cached(
     _size: int,
 ) -> Tuple[Tuple[str, str], ...]:
     path = Path(path_text)
-    text = _read_analysis_text(path)
-    if text is None:
+    payload = _read_analysis_bytes(path)
+    if payload is None:
         return ()
     try:
-        parsed = (
-            parse_dat(text, str(path))
-            if path.suffix.casefold() == ".dat"
-            else parse_gpl(text, str(path))
-            if path.suffix.casefold() == ".gpl"
-            else None
-        )
+        # Reuse the same content-keyed parse when Prepare needs this source.
+        from ..compose import _parse_semantic_source_file_cached
+        parsed = _parse_semantic_source_file_cached(str(path), payload)
     except ValueError:
         parsed = None
     if parsed is None:

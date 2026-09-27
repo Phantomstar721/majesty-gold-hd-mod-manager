@@ -112,7 +112,7 @@ def _load_dataset_symbols(root: Path) -> DatasetSymbols:
                           function_loader)
 
 
-def close_dataset_dependencies(result: SemanticMergeResult, stock: DatasetSymbols) -> SemanticMergeResult:
+def close_dataset_dependencies(result: SemanticMergeResult, stock: DatasetSymbols, *, provided=None) -> SemanticMergeResult:
     """Link absent stock helpers transitively without changing their lifecycle.
 
     Loading a GPL function defines it; it does not execute its body. Existing
@@ -131,6 +131,8 @@ def close_dataset_dependencies(result: SemanticMergeResult, stock: DatasetSymbol
         if item is None:
             # Native VM and quest-defined bindings are not declared in these
             # six projects. This audit proves only stock dataset dependencies.
+            return
+        if provided is not None and provided((DefinitionKind.EXPRESSION, name)) is not None:
             return
         if name in visiting:
             errors.add(f'{chain}: cyclic stock expression dependency {name}')
@@ -164,6 +166,8 @@ def close_dataset_dependencies(result: SemanticMergeResult, stock: DatasetSymbol
                   and name[1:] not in stock.base_functions
                   and name[1:] not in owned_funcs
                   and name[1:] not in added_functions):
+                if provided is not None and provided((DefinitionKind.FUNCTION, name[1:])) is not None:
+                    continue
                 if stock.function_loader is None:
                     errors.add(f'{item.source_name}: {item.name}: stock source for expansion-only function '
                                f'{ref} is unavailable')

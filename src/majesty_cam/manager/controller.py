@@ -28,6 +28,7 @@ from .build import (
     _order_standard_ids,
     read_managed_build,
     _require_current_plan_sources,
+    refresh_standard_script_inputs,
 )
 from .catalog import Catalog, CatalogKind, scan_catalog
 from .compatibility import CompatibilityRegistry, load_compatibility_registry
@@ -808,6 +809,7 @@ class ManagerController:
                 self.standard_conflict_winners,
             ),
         )
+        self.plan = refresh_standard_script_inputs(self.plan, selected)
 
     def _enforce_catalog_exclusivity(self) -> None:
         """Make stale/default choices deterministic when variants conflict."""

@@ -4910,6 +4910,7 @@ def merge_gpl_resources(
     source_context_loader=None,
     source_context_root_loader=None,
     potion_plan=PotionPlan(),
+    standard_providers=None,
 ) -> GplComposeResult:
     parsed_by_owner: dict[str, list[ParsedSemanticSource]] = {}
     for inventory in inventories:
@@ -5197,6 +5198,19 @@ def merge_gpl_resources(
                 "stock_source": ancestor.source_name,
                 "stock_function_sha256": hashlib.sha256(ancestor.text.encode("utf-8")).hexdigest(),
             })
+    if standard_providers is not None:
+        fallbacks = [stock_control_monster, stock_controlled_monster_death, stock_leader_dead,
+                     stock_reset_tasks, stock_unit_death, stock_spell_evaluation]
+        fallbacks.extend((stock_hero_trees or {}).values())
+        fallbacks.extend((stock_gameplay_event_items or {}).values())
+        for source in (stock_purchase_equipment_source, stock_purchase_bazaar_source):
+            if source is not None:
+                fallbacks.extend(source.items)
+        try:
+            final = standard_providers.reconcile(final, fallbacks)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+        stock_function_loader = standard_providers.functions
     before_generated_features = {item.key: item.text for item in final.items}
     final = add_inventory_death_drop_exclusions(
         final,
@@ -5306,7 +5320,9 @@ def merge_gpl_resources(
     shared = _shared_bindings(inventories)
     try:
         final, stock_gameplay_event_items = compose_potion_policy(
-            final, potion_plan, stock_function_loader, stock_gameplay_event_items or {})
+            final, potion_plan,
+            standard_providers.stock if standard_providers is not None else stock_function_loader,
+            stock_gameplay_event_items or {}, native_loader=stock_function_loader)
     except ValueError as exc:
         raise ComposeError(str(exc)) from exc
     if shared:
@@ -5377,6 +5393,11 @@ def merge_gpl_resources(
             tuple(item for item in final.items if item.key in required_patch_keys),
             final.conflicts,
         )
+    if standard_providers is not None:
+        try:
+            final = standard_providers.prune(final)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
     if dataset_dependency_resolver is not None:
         try:
             final = dataset_dependency_resolver(final)
@@ -7324,9 +7345,23 @@ def prepare_final_gpl_resources(
     spell_policy_plan=None,
     source_context_descriptions=None,
     potion_plan=None,
+    standard_script_inputs=(),
+    script_dataset="any",
 ) -> GplComposeResult:
     """Build the exact final GPL source set used by both Prepare and Build."""
 
+    providers = None
+    if standard_script_inputs:
+        from .standard_scripts import Providers, for_dataset, participant_inventories
+        providers = Providers(standard_script_inputs,
+            lambda names: load_stock_function_ancestors(game_path, names),
+            game_path / 'SDK/Gplbcc.exe', script_dataset)
+        if any(isinstance(feature, StockHeroQuestLifecycle) for inventory in inventories
+               for feature in inventory.selected.package.definition.runtime_features):
+            if script_dataset == 'any' and any(item.participants and any(base != 'any' for base in item.bases)
+                                               for item in standard_script_inputs):
+                raise ComposeError('dataset-scoped hero participants require scoped output, not an Any profile')
+            inventories = (*inventories, *participant_inventories(for_dataset(standard_script_inputs, script_dataset)))
     if potion_plan is None:
         policies = potion_policies(inventories)
         potion_plan = PotionPlan()
@@ -7336,7 +7371,7 @@ def prepare_final_gpl_resources(
             _, potion_plan = prepare_potion_descriptions(descriptions, stock_records, policies)
 
     stock_semantic_sources: Sequence[ParsedSemanticSource] = ()
-    if any(inventory.selected.semantic_passthrough for inventory in inventories):
+    if any(inventory.selected.semantic_passthrough and inventory.gpl_loads for inventory in inventories):
         try:
             stock_semantic_sources = load_verified_stock_semantic_sources(game_path)[0]
         except (OSError, StockGplError, ValueError) as exc:
@@ -7379,14 +7414,16 @@ def prepare_final_gpl_resources(
     from .dataset_dependencies import close_dataset_dependencies, load_dataset_symbols
     context_bindings = _source_context_bindings(inventories)
     context_stock = load_dataset_symbols(game_path) if context_bindings else None
-    return merge_gpl_resources(
+    result = merge_gpl_resources(
         inventories,
+        standard_providers=providers,
         potion_plan=potion_plan,
         spell_policy_plan=spell_policy_plan,
         source_context_root_loader=(lambda result: _source_context_roots(game_path,inventories,
             descriptions=source_context_descriptions,merged_items=result.items)) if context_bindings else None,
-        source_context_loader=(lambda name: context_stock.function_loader(name)
-            if name in context_stock.base_functions or name in context_stock.expansion_functions else None)
+        source_context_loader=(lambda name: (providers.functions((name,)).get((DefinitionKind.FUNCTION, name.casefold()))
+            if providers is not None else context_stock.function_loader(name))
+            if providers is not None or name in context_stock.base_functions or name in context_stock.expansion_functions else None)
             if context_stock is not None else None,
         resolution_owners=resolution_owners,
         semantic_resolutions=semantic_resolutions,
@@ -7395,7 +7432,7 @@ def prepare_final_gpl_resources(
         stock_semantic_sources=stock_semantic_sources,
         stock_function_loader=lambda names: load_stock_function_ancestors(game_path, names),
         dataset_dependency_resolver=lambda result: close_dataset_dependencies(
-            result, load_dataset_symbols(game_path)) if result.items else result,
+            result, load_dataset_symbols(game_path), provided=providers.lookup if providers else None) if result.items else result,
         stock_integer_expression_sources=(
             (_load_stock_activity_text_expression_source(game_path),)
             if private_activity_texts
@@ -7425,6 +7462,7 @@ def prepare_final_gpl_resources(
                    for inventory in inventories for feature in inventory.selected.package.definition.runtime_features)
             else None),
     )
+    return result
 
 
 def compose_package(
@@ -7459,6 +7497,7 @@ def compose_package(
     runtime_capabilities: Sequence[str] = (),
     private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
     prepared_inventories: Sequence[PackageInventory] | None = None,
+    standard_script_inputs=(),
 ) -> ComposePackageResult:
     """Generate one atomic, self-contained local profile from any N packages.
 
@@ -7678,6 +7717,7 @@ def compose_package(
         spell_policy_plan=spell_policy_plan,
         source_context_descriptions=descriptions,
         potion_plan=potion_plan,
+        standard_script_inputs=standard_script_inputs,
     )
 
     output_mod_id = _generated_mod_id(selected_mods, profile_slug)

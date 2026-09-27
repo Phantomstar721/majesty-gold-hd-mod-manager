@@ -208,14 +208,14 @@ def _form_block(text, preset):
     return text[matches[start].end():matches[end].start()]
 
 
-def compose(result, plan, stock_loader, event_stock):
+def compose(result, plan, stock_loader, event_stock, *, native_loader=None):
     if not plan.policies:
         return result, event_stock
     items = {i.key: i for i in result.items}
     def fetch(name):
         key = (DefinitionKind.FUNCTION, name.casefold())
         if key not in items:
-            items.update(stock_loader((name,)))
+            items.update((native_loader or stock_loader)((name,)))
         if key not in items:
             raise ValueError("potion policy needs callback source: " + name)
         return items[key]
@@ -271,7 +271,13 @@ end'''))
     original_end = stock_shape[(DefinitionKind.FUNCTION, "shapeshift_potion_end")]
     expiry = fetch("Shapeshift_Potion_End")
     if stock_tokens(expiry.text) != stock_tokens(original_end.text):
-        raise ValueError("Shapeshift_Potion_End must migrate custom branches to potion-policy declarations")
+        from .gameplay_events import _additive_title_reference
+        native_effect = (native_loader or stock_loader)(("Shapeshift_Potion_Effect",)).get(original_effect.key, original_effect)
+        effect_proof = _additive_title_reference(original_effect.text, native_effect.text)
+        end_proof = _additive_title_reference(original_end.text, expiry.text)
+        if (effect_proof is None or end_proof is None or effect_proof[1] != end_proof[1]
+                or stock_tokens(end_proof[0]) != stock_tokens(expiry.text)):
+            raise ValueError("Shapeshift_Potion_End must retain matching stock cleanup; migrate custom branches to potion-policy declarations")
     def branches(cleanup):
         rows = []
         for policy in plan.policies:
@@ -292,7 +298,13 @@ end'''))
             rows.append(f'if (title == "{policy.hero_title}") begin\n{code}\nend else ')
         return "\n".join(rows)
     anchor = 'if (thisagent\'s "AttackType" == 2)'
-    put(expiry, _replace_tokens(expiry.text, anchor, branches(True) + anchor))
+    from .gpl_function_merge import merge_function
+    def transform(current, original, changed):
+        # Preserve native/custom instructions through the existing instruction
+        # merger. Never treat a modified script as the stock reference itself.
+        return merge_function(original, {'selected script': current, 'Manager potion policy': changed})
+    put(expiry, transform(expiry.text, original_end.text,
+                          _replace_tokens(original_end.text, anchor, branches(True) + anchor)))
     updated_events = dict(event_stock)
     updated_events[expiry.normalized_name] = items[expiry.key]
     used_effects = {}
@@ -308,13 +320,22 @@ end'''))
             if action.potion == "shapeshift":
                 expected = re.sub(r'\bShapeshift_Potion_Effect\b', action.effect, original_effect.text, count=1, flags=re.I)
                 expected = expected.replace('"Shapeshift_Potion"', '"' + action.name + '"')
-                if stock_tokens(text) != stock_tokens(expected):
-                    raise ValueError(action.effect + ": migrate custom form branches to potion policy; retain literal stock lifecycle")
-                text = _replace_tokens(text, anchor, branches(False) + anchor)
+                if stock_tokens(effect.text) != stock_tokens(expected):
+                    from .gameplay_events import _additive_title_reference
+                    effect_proof = _additive_title_reference(expected, effect.text)
+                    end_proof = _additive_title_reference(original_end.text, expiry.text)
+                    if (effect_proof is None or end_proof is None or effect_proof[1] != end_proof[1]
+                            or stock_tokens(effect_proof[0]) != stock_tokens(effect.text)
+                            or stock_tokens(end_proof[0]) != stock_tokens(expiry.text)):
+                        raise ValueError(action.effect + ': source must retain matching stock effect/cleanup; '
+                                         'migrate custom branches to potion-policy declarations')
+                text = _replace_tokens(expected, anchor, branches(False) + anchor)
             guard = f'if ($MM_BP_Eligibility(ThisAgent, #Bazaar_Item_{number}) == 0) return;'
             # Keep stock dead-caster guard ahead of all added access to the hero.
             dead = 'if ($IsDead(ThisAgent)) return;'
             text = _replace_tokens(text, dead, dead + '\n' + guard)
+            if action.potion == "shapeshift":
+                text = transform(effect.text, expected, text)
             put(effect, text)
             used_effects[action.effect.casefold()] = (action.potion, action.name.casefold())
             if effect.normalized_name not in updated_events and action.name.casefold() != POTIONS[action.potion][1].casefold():
