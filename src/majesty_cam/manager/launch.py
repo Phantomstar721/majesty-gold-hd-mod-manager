@@ -1,5 +1,7 @@
 from __future__ import annotations
-from ..equipment import require_beta2
+from .runtime_profiles import require_supported_runtime
+from ..exploration_events import CAPABILITY as EXPLORATION_CAPABILITY, require_supported_profile as require_exploration_profile
+from ..spell_origin import CAPABILITY as SPELL_ORIGIN_CAPABILITY
 
 from dataclasses import dataclass
 import os
@@ -150,8 +152,10 @@ def launch_majesty(
         if not feature_path.is_file():
             raise OSError("runtime feature registry path is not a file")
         prepared_features = decode_runtime_feature_registry(feature_path.read_bytes())
+        if {EXPLORATION_CAPABILITY, SPELL_ORIGIN_CAPABILITY} & set(prepared_capabilities):
+            require_exploration_profile(paths.game_executable)
         if prepared_features.equipment or prepared_features.kingdom_research or prepared_features.hero_info_rows or prepared_features.movement_scales:
-            require_beta2(paths.game_executable)
+            require_supported_runtime(paths.game_executable)
     except (OSError, ValueError) as exc:
         raise ManagerLaunchError(
             f"The prepared runtime feature registry is missing or invalid: {exc}"

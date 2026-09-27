@@ -352,7 +352,7 @@ class ManagerCatalogTests(unittest.TestCase):
             compatibility=None,
             issues=(),
         )
-        inventory = SimpleNamespace()
+        inventory = SimpleNamespace(selected=prepared.selected_mod)
         toggle = SimpleNamespace(qualified_toggle_key="toggle-fixture::toggle::rentals")
         controller = SimpleNamespace(
             registry=SimpleNamespace(),

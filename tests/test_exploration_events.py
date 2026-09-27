@@ -13,6 +13,23 @@ from gpl_sampler_harness import Agent, SamplerHarness
 
 
 class ExplorationEventsTests(unittest.TestCase):
+    def test_supported_profiles_fail_closed_on_unknown_images(self):
+        from majesty_cam.exploration_events import require_supported_profile
+        from majesty_cam.manager.qol_service import PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH
+        from majesty_cam.manager.runtime_profiles import unsupported_runtime_capabilities
+        from test_manager_qol_service import _write_synthetic_exe
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "MajestyHD.exe"
+            for branch in (PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH):
+                _write_synthetic_exe(path, branch, appended_section=True)
+                require_supported_profile(path)
+                self.assertEqual(unsupported_runtime_capabilities(branch, (CAPABILITY,)), ())
+                _write_synthetic_exe(path, branch, alter_first_section=True)
+                with self.assertRaises(ValueError):
+                    require_supported_profile(path)
+            with self.assertRaises(ValueError):
+                require_supported_profile(None)
+
     def test_source_only_native_package_is_merge_without_dummy_cam(self):
         from majesty_cam.manager.catalog import scan_catalog, CatalogKind
         from majesty_cam.manager.preflight import prepare_merge_package
@@ -43,6 +60,15 @@ class ExplorationEventsTests(unittest.TestCase):
                 source_root=package, registry=CompatibilityRegistry({}))
             self.assertEqual(prepared.issues, ())
             self.assertEqual(prepared.inventory.cams, ())
+            definition["runtime_features"] = [dict(type="stock.spell-origin.v1", feature_key="source")]
+            path.write_text(json.dumps(definition), encoding="utf-8")
+            self.assertEqual(scan_catalog(local_mods_root=Path(tmp)).entries[0].kind, CatalogKind.MERGE)
+            origin = prepare_merge_package(content_id=mod_id, display_name="Fixture",
+                source_root=package, registry=CompatibilityRegistry({}))
+            self.assertEqual(origin.issues, ())
+            self.assertEqual(origin.inventory.cams, ())
+            definition["runtime_features"] = [dict(type="stock.gameplay-event-observer.v1",
+                feature_key="tiles", event=EVENT, callback_symbol="Consumer")]
             definition["runtime_features"][0]["callback_symbol"] = "MM_Bad"
             path.write_text(json.dumps(definition), encoding="utf-8")
             entry = scan_catalog(local_mods_root=Path(tmp)).entries[0]

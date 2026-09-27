@@ -1,5 +1,10 @@
 # Mod Manager runtime registries
 
+MMCR v21 adds an owned recruitment-child DialogID to independent saved-toggle
+records. Only explicitly child-bound pairs use this version; primary-only
+toggles retain their existing format. See
+[independent saved toggles](independent-building-toggles.md).
+
 MMCR v18 adds optional child DialogID/opener fields to private recruitment
 records; inline-only recruitment stays v17. The child retains AP52's native
 17-slot class and uses stock secondary-container layout and Back ownership.
@@ -62,15 +67,19 @@ DLL therefore cannot silently run a package that needs a newer hook.
 | `freestyle-cam-rebind.v1` | Installs only the generic Freestyle CAM lifecycle repair. |
 | `private-activity-text-registry.v1` | Requires a valid, non-empty MMTX file and installs only the shared stock activity-text resolver extension. |
 | `generic-visitor-lists.v1` | Accepted marker for the external CAM data patch; installs no executable hook. |
+| `manager.spell-origin.v1` | Derived from `stock.spell-origin.v1`; requires the literal generated caster-reference GPL service. Records a stock saved agent reference before spell-unit birth on all three executable profiles. No MMFR record or polling. See [shared spell policies](shared-spell-policy.md). |
 | `stock.name-generator.v1` | Requires at least one validated MMFR name-generator record and installs the shared stock registry-completion extension. |
 | `stock.ap78-enchantment-row.v1` | Requires at least one validated MMFR AP78 row and installs the shared scoped AP78 presenter extension. |
 | `stock.controller-recipes.v1` | Requires at least one resolved MMCR recipe and installs only the stock-controller hook groups selected by those records. |
 | `stock.map-fog-query.v1` | Requires the MMFR map-query flag and registers read-only, bounded native GPL map queries. |
 | `stock.movement-query.v1` | Requires the MMFR movement-query flag and registers read-only native unit/description locomotion queries. |
-| `manager.overlay-movement-scale.v1` | Beta2-only: requires MMFR v8 overlay percentages; scales one native linear-order step while the overlay is attached, preserving stock timing and lifecycle. |
+| `manager.overlay-movement-scale.v1` | Requires MMFR v8 overlay percentages; scales one native linear-order step while the overlay is attached, preserving stock timing and lifecycle. |
 | `stock.native-timing.v1` | Requires MMFR v3 timing selection and registers the stock clock, read-only movement/action base periods, declared effector-time queries and learned-spell cooldown commits. |
-| `stock.equipment.v1` | Local beta2-only trial: requires MMFR v4 equipment records and extends stock enum/name/icon tables. No purchase, combat, save, or timer hooks. |
-| `manager.kingdom-research.v1` | Local beta2-only trial: requires MMFR v5/v6 research records, saved GPL owner state, and a private AP52 parent. Uses the stock queued purchase/order/completion lifecycle and declared earned-reward boundaries; optionally reconciles private active effects at native lifecycle events. |
+| `stock.equipment.v1` | Requires MMFR v4 equipment records and extends stock enum/name/icon tables. No purchase, combat, save, or timer hooks. |
+| `manager.kingdom-research.v1` | Requires MMFR v5/v6 research records, saved GPL owner state, and a private AP52 parent. Uses the stock queued purchase/order/completion lifecycle and declared earned-reward boundaries; optionally reconciles private active effects at native lifecycle events. |
+
+These shared features have explicit default Steam, Steam beta2 and GOG profiles.
+See [per-build evidence and gameplay qualification](runtime-feature-parity.md).
 
 The manager derives these data-driven capability names from the generated
 registries. A package cannot enable one merely by copying the capability string

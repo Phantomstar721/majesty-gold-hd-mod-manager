@@ -14,7 +14,8 @@ from majesty_cam.art import parse_stock_imag_tile_references, rewrite_stock_imag
 from majesty_cam.cam import CamArchive, CamEntry, CamSection, pad_name
 from majesty_cam.compose import (ArtDomainComposeResult, CamResource, SelectedMod, _parse_description_file,
                                 _split_imag_sets, inventory_package, resolve_runtime_feature_registry)
-from majesty_cam.equipment import registration, require_beta2
+from majesty_cam.equipment import registration
+from majesty_cam.manager.runtime_profiles import require_supported_runtime
 from majesty_cam.equipment_compose import (bind_equipment_art, declarations,
                                          transform_equipment_description, validate_art)
 from majesty_cam.package import load_package
@@ -29,7 +30,7 @@ class EquipmentSourceIntegrationTests(unittest.TestCase):
         if not package_path or not executable_path:
             self.skipTest("equipment source package and beta2 executable were not supplied")
         root, executable = Path(package_path), Path(executable_path)
-        require_beta2(executable)
+        require_supported_runtime(executable)
         paths = tuple(path for path in root.rglob("*") if path.is_file())
         original_hashes = {path: hashlib.sha256(path.read_bytes()).digest() for path in paths}
         package = load_package(root)

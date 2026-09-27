@@ -664,6 +664,38 @@ int main() {
                 independent.data(), size, &registry, &error)) return 92;
     }
 
+    auto childToggle = Header(0, 0, 0, 0, 0, 0, 0);
+    childToggle[4] = 21;
+    AppendU32(&childToggle, 0);
+    AppendU32(&childToggle, 1);
+    AppendU32(&childToggle, 0);
+    AppendU32(&childToggle, 1);
+    AppendString(&childToggle, "hiring");
+    AppendU32(&childToggle, FourCC("Z001"));
+    AppendU32(&childToggle, 0x7340);
+    AppendU32(&childToggle, 0x7341);
+    AppendU32(&childToggle, FourCC("AP52"));
+    AppendU32(&childToggle, 1);
+    AppendString(&childToggle, "HiringClosed");
+    AppendString(&childToggle, "Hiring_Closed");
+    const auto childBindingOffset = childToggle.size();
+    AppendU32(&childToggle, FourCC("RCRT"));
+    AppendString(&childToggle, "recruitment");
+    AppendU32(&childToggle, FourCC("Z001"));
+    AppendU32(&childToggle, 0x7301);
+    AppendU32(&childToggle, FourCC("RCRT"));
+    AppendU32(&childToggle, 0x7302);
+    if (!MajestyStockControllers::ParseRegistry(childToggle.data(), childToggle.size(), &registry, &error) ||
+        registry.FindBuildingOpenToggleByParent(FourCC("Z001")) != nullptr ||
+        registry.buildingOpenToggles[0].panelDialogId != FourCC("RCRT")) {
+        std::fprintf(stderr, "Child toggle MMCR rejected: %s\n", error.c_str());
+        return 96;
+    }
+    for (std::size_t size = 0; size < childToggle.size(); ++size)
+        if (MajestyStockControllers::ParseRegistry(childToggle.data(), size, &registry, &error)) return 97;
+    childToggle[childBindingOffset] = 'X';
+    if (MajestyStockControllers::ParseRegistry(childToggle.data(), childToggle.size(), &registry, &error)) return 98;
+
     auto sourceTarget = Header(1, 1, 0, 0, 0, 0, 1);
     sourceTarget[4] = 20;
     for (int i = 0; i < 4; ++i) AppendU32(&sourceTarget, 0);

@@ -10,9 +10,11 @@ from __future__ import annotations
 from ..runtime_capabilities import PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY
 from ..equipment import EQUIPMENT_FEATURE_TYPE
 from ..hero_info import HERO_INFO_TYPE
+from ..inventory_spell_display import CAPABILITY as INVENTORY_DISPLAY_CAPABILITY
 from ..movement_scale import MOVEMENT_SCALE_TYPE
 from ..kingdom_research import KINGDOM_RESEARCH_TYPE
 from ..exploration_events import CAPABILITY as EXPLORATION_CAPABILITY
+from ..spell_origin import CAPABILITY as SPELL_ORIGIN_CAPABILITY
 from ..runtime_features import (
     ENCHANTMENT_ROW_RUNTIME_CAPABILITY,
     NAME_GENERATOR_RUNTIME_CAPABILITY,
@@ -38,9 +40,11 @@ DERIVED_RUNTIME_CAPABILITIES = frozenset(
         NATIVE_TIMING_RUNTIME_CAPABILITY,
         EQUIPMENT_FEATURE_TYPE,
         HERO_INFO_TYPE,
+        INVENTORY_DISPLAY_CAPABILITY,
         MOVEMENT_SCALE_TYPE,
         KINGDOM_RESEARCH_TYPE,
         EXPLORATION_CAPABILITY,
+        SPELL_ORIGIN_CAPABILITY,
         STOCK_CONTROLLER_RUNTIME_CAPABILITY,
     )
 )

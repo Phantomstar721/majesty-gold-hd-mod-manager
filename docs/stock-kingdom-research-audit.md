@@ -1,6 +1,8 @@
 # Kingdom research and conditional earned rewards: stock boundary audit
 
-Status: **implemented for local beta2 testing; in-game acceptance still required**.
+Status: **implemented for default Steam, Steam beta2 and GOG; in-game acceptance still required**.
+The original trace below uses beta2 VAs. See [cross-build evidence](runtime-feature-parity.md)
+for the other executable profiles and shared ownership boundaries.
 The [test-build author contract](kingdom-research-contract.md) describes the
 declaration and literal panel resources. This audit
 identifies why the existing building-research recipe cannot safely promise a

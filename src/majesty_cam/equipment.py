@@ -1,4 +1,4 @@
-"""Private identities in Majesty's existing equipment tables (beta2 only).
+"""Private identities in Majesty's existing equipment tables.
 
 No per-unit state, shopping rules, rank conversion, or combat callbacks live
 here. The stock lifecycle is traced in docs/stock-custom-equipment-audit.md.
@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import re
-import struct
 import uuid
 
 
@@ -91,20 +90,3 @@ def validate_registration(record: EquipmentRegistration) -> None:
     if type(record.slot) is not int or record.slot not in (0, 1):
         raise ValueError("equipment slot must be 0 or 1")
     fourcc(record.name_table, "name_table")
-
-
-def require_beta2(executable) -> None:
-    """Cheap profile check; native installation separately verifies code bytes."""
-    with executable.open("rb") as stream:
-        header = stream.read(64)
-        if len(header) != 64 or header[:2] != b"MZ":
-            raise ValueError("Selected runtime features require the audited Steam beta2 executable")
-        offset = struct.unpack_from("<I", header, 60)[0]
-        if offset > 0x100000:
-            raise ValueError("Invalid executable PE header")
-        stream.seek(offset)
-        pe = stream.read(12)
-    if (len(pe) != 12 or pe[:4] != b"PE\0\0" or
-            struct.unpack_from("<H", pe, 4)[0] != 0x14C or
-            struct.unpack_from("<I", pe, 8)[0] != 0x5A8A11D5):
-        raise ValueError("Selected runtime features are supported only on audited Steam beta2 (1.5.2.28); public/unverified executables are not supported")

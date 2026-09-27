@@ -2,6 +2,10 @@
 
 ## Scope
 
+For opt-in whole-impact projectile blocking and special-spell validation/cast
+guards, see [shared spell policies](shared-spell-policy.md). These are source
+composition contracts, not global damage interception or native runtime hooks.
+
 This contract applies only to packages shown in **Merge**. Standard `.mmxml`
 mods remain independent Active Mod selections; `.mqxml` quests are chosen
 through Majesty's stock quest browser rather than the Active Mods list. Source
@@ -203,7 +207,8 @@ coalesce, while cross-package ownership or conflicting declarations fail.
 For owned custom icons, per-row mouseover help, or level-gated read-only passive
 rows, use [`stock.ap78-info-row.v1`](stock-ap78-info-rows.md). It reuses AP78's
 stock list and tooltip lifecycle; it does not grant abilities or make passive
-entries castable. This extension is currently audited for Steam beta2 only.
+entries castable. Profiles cover default Steam, Steam beta2 and GOG; see
+[cross-build evidence and live qualification](runtime-feature-parity.md).
 
 #### Stock controller recipes
 

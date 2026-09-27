@@ -207,7 +207,12 @@ These features are package-declared, not tied to particular mod names or UUIDs:
 - **Movement effects:** opt-in percentage distance scaling while a private
   overlay is attached, preserving stock timing, pathfinding and effect expiry.
   See [overlay movement scaling](docs/stock-overlay-movement-scale.md) for the
-  beta2-only contract and additive stacking rules.
+  supported profiles and additive stacking rules.
+- Source-attributed terrain-reveal callbacks use the stock visibility update
+  without scanning the map. Explicit runtime profiles cover default Steam,
+  Steam beta2 and GOG; consumers own eligibility and rewards. See the
+  [source-observation contract](docs/source-exploration-events.md) for saved
+  accounting rules and current playtest qualification.
 
 Each recipe has a bounded stock lifecycle and resource-ownership contract.
 Private controls and resources must match what the package ships; fields named
@@ -269,8 +274,10 @@ The manager supports these game versions:
 - `beta2` Steam Multiplayer Support `1.5.2.28`
 - GOG Gold HD `1.5.2.28`
 
-Some advanced mod features currently require Steam beta2. The Manager checks
-the selected installation and explains when a mod needs a different version.
+Shared runtime features have profiles for all three supported versions. The
+Manager verifies the selected executable and each feature's stock boundaries.
+See [feature parity and qualification](docs/runtime-feature-parity.md) for the
+current verification and gameplay-acceptance status.
 See [GOG support and limitations](docs/gog-support.md) before using GOG.
 
 The detected version and installation folder are shown at the top of the app.

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from ..equipment import require_beta2
+from .runtime_profiles import require_supported_runtime
 
 from dataclasses import dataclass, replace
 import hashlib
@@ -25,7 +25,8 @@ from ..compose import (
     validate_composed_package,
 )
 from ..gameplay_events import event_stock_paths
-from ..exploration_events import selected as exploration_selected, CAPABILITY as EXPLORATION_CAPABILITY
+from ..exploration_events import selected as exploration_selected, CAPABILITY as EXPLORATION_CAPABILITY, require_supported_profile as require_exploration_profile
+from ..spell_origin import selected as spell_origin_selected, CAPABILITY as SPELL_ORIGIN_CAPABILITY
 from ..gpl import (
     DefinitionKind,
     SemanticItem,
@@ -565,10 +566,12 @@ def create_build_plan(
                 inventories,
                 tuple(sorted(capabilities)),
             )
-            if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows or runtime_feature_registry.movement_scales or exploration_selected(inventories):
+            if exploration_selected(inventories) or spell_origin_selected(inventories):
+                require_exploration_profile(game_path / "MajestyHD.exe" if game_path else None)
+            if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows or runtime_feature_registry.movement_scales:
                 if game_path is None:
-                    raise ValueError("Selected runtime features require an audited beta2 game installation")
-                require_beta2(game_path / "MajestyHD.exe")
+                    raise ValueError("Selected runtime features require an audited game installation")
+                require_supported_runtime(game_path / "MajestyHD.exe")
             building_dialogs = resolve_building_dialogs(inventories)
             controller_result = resolve_controller_registry(
                 inventories,
@@ -594,6 +597,9 @@ def create_build_plan(
             capabilities.discard(EXPLORATION_CAPABILITY)
             if exploration_selected(inventories):
                 capabilities.add(EXPLORATION_CAPABILITY)
+            capabilities.discard(SPELL_ORIGIN_CAPABILITY)
+            if spell_origin_selected(inventories):
+                capabilities.add(SPELL_ORIGIN_CAPABILITY)
             capabilities.discard(STOCK_CONTROLLER_RUNTIME_CAPABILITY)
             if _controller_record_count(controller_registry):
                 capabilities.add(STOCK_CONTROLLER_RUNTIME_CAPABILITY)

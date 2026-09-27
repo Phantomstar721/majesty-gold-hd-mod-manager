@@ -1,8 +1,10 @@
 # Source-attributed terrain reveal
 
-Development contract: implemented for Steam beta2; live-game qualification is
-pending. Public Steam and GOG are not supported for this event. Manager owns
-observation and delivery, not eligibility or rewards.
+Implemented profiles: default Steam 1.5.2.24, Steam beta2 1.5.2.28, and GOG
+1.5.2.28. Each has separately verified native addresses and fail-closed hook
+validation. Default Steam and GOG still need live acceptance runs, including
+native save/load; static executable verification is not a gameplay certification.
+Manager owns observation and delivery, not eligibility or rewards.
 
 Example version-3 `mod-definition.json` (replace the UUID):
 

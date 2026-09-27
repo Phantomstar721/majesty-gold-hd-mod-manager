@@ -333,6 +333,17 @@ int main() {
     mixed.insert(mixed.end(), info.begin()+20, info.end());
     if (!MajestyRuntimeFeatures::ParseRegistry(mixed.data(), mixed.size(), &registry, &error) ||
         registry.kingdomResearch.size() != 1 || registry.heroInfoRows.size() != 1) return 43;
+    auto hidden = Header(9, 0, 0);
+    AppendU32(&hidden, 128); AppendU32(&hidden, 2);
+    AppendU32(&hidden, FourCC("A020")); AppendU32(&hidden, FourCC("A021"));
+    if (!MajestyRuntimeFeatures::ParseRegistry(hidden.data(), hidden.size(), &registry, &error) ||
+        registry.hiddenInventoryActions != std::vector<std::uint32_t>{FourCC("A020"), FourCC("A021")}) return 44;
+    for (std::size_t size = 0; size < hidden.size(); ++size)
+        if (MajestyRuntimeFeatures::ParseRegistry(hidden.data(), size, &registry, &error) ||
+            !registry.hiddenInventoryActions.empty()) return 45;
+    auto duplicate = hidden;
+    duplicate[31] = duplicate[27];
+    if (MajestyRuntimeFeatures::ParseRegistry(duplicate.data(), duplicate.size(), &registry, &error)) return 46;
     std::puts("Runtime feature registry parser tests passed.");
     return 0;
 }

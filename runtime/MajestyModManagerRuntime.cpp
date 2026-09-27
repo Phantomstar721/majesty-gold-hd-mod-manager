@@ -16,6 +16,9 @@
 #include "CrashDumpDiagnostic.h"
 #endif
 #include "MajestyBuildId.h"
+#include "ExplorationProfiles.h"
+#include "SpellOriginProfiles.h"
+#include "FeatureParityProfiles.h"
 #include "GogAuditedRanges.h"
 #include "GogControllerAudit.h"
 #include "GogRecipeAudit.h"
@@ -385,6 +388,10 @@ constexpr MajestyBuildProfile MakeGogBuildProfile() {
 constexpr MajestyBuildProfile kGogBuildProfile = MakeGogBuildProfile();
 
 const MajestyBuildProfile* g_buildProfile = nullptr;
+using ParitySite = MajestyFeatureParity::Site;
+std::uintptr_t ParityRva(ParitySite site) {
+    return g_buildProfile ? MajestyFeatureParity::Rva(g_buildProfile->buildId,site) : 0;
+}
 using OccupantPanel = MajestyStockControllers::OccupantActionPanelRecord;
 using QuestBoard = MajestyStockControllers::LiveAgentListRecord;
 // The internal QuestBoard names below identify the reverse-engineered MX05
@@ -1684,13 +1691,20 @@ bool ValidateMajestyBuildProfile() {
                 capability != MajestyRuntimeCapabilities::kMapFogQuery &&
                 capability != MajestyRuntimeCapabilities::kMovementQuery &&
                 capability != MajestyRuntimeCapabilities::kNativeTiming &&
+                capability != MajestyRuntimeCapabilities::kSourceExploration &&
+                capability != MajestyRuntimeCapabilities::kSpellOrigin &&
+                capability != MajestyRuntimeCapabilities::kEquipment &&
+                capability != MajestyRuntimeCapabilities::kHeroInfo &&
+                capability != MajestyRuntimeCapabilities::kInventorySpellDisplay &&
+                capability != MajestyRuntimeCapabilities::kMovementScale &&
+                capability != MajestyRuntimeCapabilities::kKingdomResearch &&
                 capability != MajestyRuntimeCapabilities::kPrivateActivityText) {
                 WriteLog("GOG runtime capability has not completed its stock lifecycle audit.");
                 return false;
             }
         }
     }
-    if (!g_runtimeFeatureRegistry.heroInfoRows.empty() && !ValidateHeroInfoProfile()) return false;
+    if ((!g_runtimeFeatureRegistry.heroInfoRows.empty() || !g_runtimeFeatureRegistry.hiddenInventoryActions.empty()) && !ValidateHeroInfoProfile()) return false;
     if (!g_runtimeFeatureRegistry.movementScales.empty() && !ValidateMovementScaleProfile()) return false;
     if (!g_runtimeFeatureRegistry.kingdomResearch.empty() && !ValidateKingdomResearchProfile()) return false;
     if (!g_stockControllerRegistry.occupantActionPanels.empty() ||
@@ -1956,50 +1970,69 @@ void WritePackedAttributeValue(
 
 constexpr std::uint32_t kEmbassyActiveFlagAttributeId = 0x044D4541u;
 bool EvaluateIndependentToggle(const char*, void*, int, std::uint32_t*);
-std::map<std::string, std::uint32_t> g_privateToggleStates;
-std::uint32_t g_privateToggleController = 0;
-std::uint32_t g_privateToggleParentHandle = 0;
+struct PrivateToggleCache {
+    std::map<std::string, std::uint32_t> states;
+    std::uint32_t controller = 0;
+    std::uint32_t parentHandle = 0;
+};
+PrivateToggleCache g_parentToggleCache, g_childToggleCache;
 
 void ResetPrivateToggleStates() {
-    g_privateToggleStates.clear();
-    g_privateToggleController = g_privateToggleParentHandle = 0;
+    g_parentToggleCache = {};
+    g_childToggleCache = {};
 }
 
 template<class Function>
-void ForEachParentToggle(Function function) {
+void ForEachPanelToggle(std::uint32_t controller, Function function) {
+    if (controller == static_cast<std::uint32_t>(g_childController)) {
+        if (g_activeRecruitment == nullptr) return;
+        for (const auto& item : g_stockControllerRegistry.buildingOpenToggles)
+            if (item.panelDialogId == g_activeRecruitment->childDialogId &&
+                item.parentDialogId == g_activeRecruitment->parentDialogId) function(item);
+        return;
+    }
     const auto* anchor = g_parentOpenToggleRecord;
     if (anchor == nullptr) return;
     function(*anchor);
     for (const auto& item : g_stockControllerRegistry.buildingOpenToggles) {
-        if (item.parentDialogId == anchor->parentDialogId && item.toggleKey != anchor->toggleKey)
+        if (item.panelDialogId == 0 && item.parentDialogId == anchor->parentDialogId && item.toggleKey != anchor->toggleKey)
             function(item);
     }
 }
 
+PrivateToggleCache& PanelToggleCache(std::uint32_t controller, std::uint32_t handle) {
+    auto& cache = controller == static_cast<std::uint32_t>(g_childController)
+        ? g_childToggleCache : g_parentToggleCache;
+    if (cache.controller != controller || cache.parentHandle != handle) {
+        cache = {};
+        cache.controller = controller;
+        cache.parentHandle = handle;
+    }
+    return cache;
+}
+
 void RefreshBuildingOpenToggle(std::uint32_t controller) {
-    if (g_parentOpenToggleRecord == nullptr) return;
+    bool present = false;
+    ForEachPanelToggle(controller, [&](const MajestyStockControllers::BuildingOpenToggleRecord&) { present = true; });
+    if (!present) return;
     auto* context = NativePanelContext(controller);
     if (context == nullptr) return;
     const auto handle = *reinterpret_cast<const std::uint32_t*>(context + 0x70);
-    if (g_privateToggleController != controller || g_privateToggleParentHandle != handle) {
-        ResetPrivateToggleStates();
-        g_privateToggleController = controller;
-        g_privateToggleParentHandle = handle;
-    }
-    ForEachParentToggle([&](const MajestyStockControllers::BuildingOpenToggleRecord& record) {
+    auto& states = PanelToggleCache(controller, handle).states;
+    ForEachPanelToggle(controller, [&](const MajestyStockControllers::BuildingOpenToggleRecord& record) {
     const auto* toggle = &record;
     bool open = false;
     if (toggle->stateAttribute.empty()) {
         open = ReadPackedAttributeValue(context, kEmbassyActiveFlagAttributeId, 0) != 0;
     } else {
-        auto cached = g_privateToggleStates.find(toggle->toggleKey);
-        if (cached == g_privateToggleStates.end()) {
+        auto cached = states.find(toggle->toggleKey);
+        if (cached == states.end()) {
             std::uint32_t value = 0;
             if (!EvaluateIndependentToggle(toggle->stateAccessorSymbol.c_str(), context, -1, &value)) {
                 WriteLog("Independent building toggle state could not be read.");
                 value = 2; // Cache failure until the stock panel context changes.
             }
-            cached = g_privateToggleStates.emplace(toggle->toggleKey, value).first;
+            cached = states.emplace(toggle->toggleKey, value).first;
         }
         if (cached->second > 1) {
             SetControllerControlVisible(controller, toggle->openCommandId, false);
@@ -2024,7 +2057,7 @@ void RefreshBuildingOpenToggle(std::uint32_t controller) {
 bool HandleBuildingOpenToggle(
     void* controller, std::uint32_t command, int* result) {
     const MajestyStockControllers::BuildingOpenToggleRecord* toggle = nullptr;
-    ForEachParentToggle([&](const MajestyStockControllers::BuildingOpenToggleRecord& item) {
+    ForEachPanelToggle(reinterpret_cast<std::uint32_t>(controller), [&](const MajestyStockControllers::BuildingOpenToggleRecord& item) {
         if (command == item.openCommandId || command == item.closeCommandId) toggle = &item;
     });
     if (toggle == nullptr) return false;
@@ -2044,7 +2077,8 @@ bool HandleBuildingOpenToggle(
             *result = 0;
             return true;
         }
-        g_privateToggleStates[toggle->toggleKey] = value;
+        PanelToggleCache(reinterpret_cast<std::uint32_t>(controller),
+            *reinterpret_cast<const std::uint32_t*>(context + 0x70)).states[toggle->toggleKey] = value;
     } else WritePackedAttributeValue(
         context,
         kEmbassyActiveFlagAttributeId,
@@ -4041,6 +4075,7 @@ void __fastcall SecondaryPanelControllerEvent(
 }
 
 void ClearSecondaryPanelControllerOwnedState() {
+    g_childToggleCache = {};
     g_activeRecruitment = nullptr;
     g_renderedDataRecordRevision = -1;
     g_activeOccupantPanel = nullptr;
@@ -4258,7 +4293,7 @@ void __cdecl ParentPanelControllerDestroyed(void*, void*) {
     g_parentPanelRecord = nullptr;
     g_parentRewardPanelRecord = nullptr;
     g_parentOpenToggleRecord = nullptr;
-    ResetPrivateToggleStates();
+    g_parentToggleCache = {};
     g_parentRecruitment = nullptr;
     WriteLog(
         "Invalidated manager-owned parent-controller state at Majesty's stock teardown boundary.");
@@ -6358,6 +6393,7 @@ bool InstallQuestBoardChildVtable(std::uint32_t controller) {
 
 #include "KingdomResearchRuntime.inl"
 #include "ExplorationObservationRuntime.inl"
+#include "SpellOriginRuntime.inl"
 
 struct OccupantParentClass {
     void* table[kAp10VtableEntries];
@@ -6386,8 +6422,7 @@ void __fastcall OccupantParentSetup(void* controller, void*) {
     if (entry->recruitmentMode == 2)
         *reinterpret_cast<std::uint32_t*>(static_cast<unsigned char*>(controller) + 0x30) = 1;
     reinterpret_cast<ControllerSetup>(entry->thirdPrice ? entry->recruitment.setup : entry->stock[1])(controller);
-    if (entry->recruitmentMode != 2)
-        RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
     RefreshKingdomResearch(reinterpret_cast<std::uint32_t>(controller), entry->recruitmentMode == 2);
 }
 int __fastcall OccupantParentControl(void* controller, void*, std::uint32_t command) {
@@ -6398,6 +6433,8 @@ int __fastcall OccupantParentControl(void* controller, void*, std::uint32_t comm
         if (command == 0x1F4Du && g_activeRecruitment != nullptr &&
             reinterpret_cast<std::uint32_t>(controller) == static_cast<std::uint32_t>(g_childController))
             return ReturnToPrivateParent(controller, g_activeRecruitment->parentDialogId);
+        int toggleResult = 0;
+        if (HandleBuildingOpenToggle(controller, command, &toggleResult)) return toggleResult;
         // Hidden utilities/upgrades never acquire input ownership in the child.
         // In particular, 0x1F5B toggles the repair route; it is not recruit cancel.
         // Recruitment progress/cancellation belongs to native order notifications.
@@ -6439,8 +6476,7 @@ void __fastcall OccupantParentEvent(
         controller, a1, a2, a3, a4);
     if (entry->thirdPrice)
         MajestyPrivateRecruitment::RefreshCapacityChange(controller, a3);
-    if (entry->recruitmentMode != 2)
-        RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
     RefreshKingdomResearch(reinterpret_cast<std::uint32_t>(controller), entry->recruitmentMode == 2);
 }
 void __fastcall PrivateRecruitmentRefresh(void* controller, void*) {
@@ -7695,6 +7731,7 @@ DWORD WINAPI InitializeRuntime(void*) {
         HasRuntimeCapability(MajestyRuntimeCapabilities::kEquipment) != !g_runtimeFeatureRegistry.equipment.empty() ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kKingdomResearch) != kingdomResearch ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kHeroInfo) != !g_runtimeFeatureRegistry.heroInfoRows.empty() ||
+        HasRuntimeCapability(MajestyRuntimeCapabilities::kInventorySpellDisplay) != !g_runtimeFeatureRegistry.hiddenInventoryActions.empty() ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kMovementScale) != !g_runtimeFeatureRegistry.movementScales.empty() ||
         requestedEnchantmentRowHook != privateEnchantmentRows ||
         requestedStockControllerRecipes != stockControllerRecipes) {
@@ -7719,7 +7756,7 @@ DWORD WINAPI InitializeRuntime(void*) {
     }
     if (!g_runtimeFeatureRegistry.equipment.empty()) {
         RequireManagerRuntimeInstall(
-            InstallEquipmentRuntime(g_imageBase, g_buildProfile == &kBeta2BuildProfile,
+            InstallEquipmentRuntime(g_imageBase, g_buildProfile->buildId,
                 g_runtimeFeatureRegistry, &StopUnsafeManagerRuntimeLaunch),
             managerLaunch, "Private equipment requires the audited beta2 registration boundaries.");
     }
@@ -7811,7 +7848,11 @@ DWORD WINAPI InitializeRuntime(void*) {
     }
     if (HasRuntimeCapability(MajestyRuntimeCapabilities::kSourceExploration)) {
         RequireManagerRuntimeInstall(ExplorationObservation::Install(), managerLaunch,
-            "Source exploration requires the audited Steam beta2 observation profile.");
+            "Source exploration could not verify this executable's observation profile.");
+    }
+    if (HasRuntimeCapability(MajestyRuntimeCapabilities::kSpellOrigin)) {
+        RequireManagerRuntimeInstall(SpellOrigin::Install(), managerLaunch,
+            "Spell origin could not verify this executable's creation boundary.");
     }
     if (ap10Ap69ControllerRecipes) {
         RequireManagerRuntimeInstall(
@@ -7864,6 +7905,10 @@ DWORD WINAPI InitializeRuntime(void*) {
     if (!g_runtimeFeatureRegistry.heroInfoRows.empty()) {
         RequireManagerRuntimeInstall(InstallHeroInfo(), managerLaunch,
             "Hero information rows require the audited stock AP78 presentation boundaries.");
+    }
+    if (!g_runtimeFeatureRegistry.hiddenInventoryActions.empty()) {
+        RequireManagerRuntimeInstall(InstallInventorySpellDisplay(), managerLaunch,
+            "inventory-only spell row filter");
     }
     if (privateEnchantmentRows) {
         RequireManagerRuntimeInstall(

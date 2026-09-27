@@ -4,7 +4,8 @@ from tempfile import TemporaryDirectory
 import struct
 import unittest
 from majesty_cam.stock_controller_features import (StockMx22BuildingOpenToggle,
-    StockMx22IndependentToggle, parse_controller_feature, controller_feature_mapping,
+    StockMx22IndependentToggle, StockMx22PanelToggle, StockAp52RecruitmentPanel,
+    parse_controller_feature, controller_feature_mapping,
     normalize_controller_features, ControllerFeatureError)
 from majesty_cam.stock_controller_registry import (resolve_stock_controller_registry,
     encode_stock_controller_registry, decode_stock_controller_registry)
@@ -14,6 +15,28 @@ from majesty_cam.compose import compile_gpl
 
 
 class IndependentToggleTests(unittest.TestCase):
+    def test_recruitment_child_binding_roundtrip_and_scope(self):
+        panel = StockAp52RecruitmentPanel('recruit', 'library', 0x7301,
+            source_dialog_id='RCRT', open_command_id=0x7302)
+        toggle = StockMx22PanelToggle('hiring', 'library', 0x7340, 0x7341,
+            state_attribute='HiringClosed', state_callback_symbol='Hiring_Closed',
+            panel_key='recruit')
+        self.assertEqual(parse_controller_feature(controller_feature_mapping(toggle)), toggle)
+        parent, child = (int.from_bytes(x, 'little') for x in (b'PRNT', b'RCRT'))
+        registry = resolve_stock_controller_registry((panel, toggle), {'recruit': (parent, child)},
+            recruitment_parents={'recruit': parent}, toggle_parents={'hiring': (parent, 'AP52')})
+        payload = encode_stock_controller_registry(registry)
+        self.assertEqual(struct.unpack_from('<I', payload, 4)[0], 21)
+        self.assertEqual(registry.building_open_toggles[0].panel_dialog_id, child)
+        self.assertEqual(decode_stock_controller_registry(payload), registry)
+        for bad in (replace(toggle, panel_key='missing'), replace(toggle, parent_building='foreign'),
+                    replace(toggle, open_command_id=0x1F48), replace(toggle, close_command_id=0x7301)):
+            with self.assertRaises(ControllerFeatureError):
+                normalize_controller_features((panel, bad))
+        for end in range(len(payload)):
+            with self.assertRaises(ValueError):
+                decode_stock_controller_registry(payload[:end])
+
     def setUp(self):
         self.legacy = StockMx22BuildingOpenToggle('z-open', 'library', 29000, 29001)
         self.private = StockMx22IndependentToggle('a-auto', 'library', 29002, 29003,

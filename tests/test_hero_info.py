@@ -172,14 +172,7 @@ class HeroInfoTests(unittest.TestCase):
         if not path:
             self.skipTest("stock executable not provided")
         image = PeImage(path)
-        source = (Path(__file__).resolve().parents[1]/"runtime/HeroInfoRuntime.inl").read_text()
-        hashes = re.findall(r'hash\((0x[0-9A-F]+), (0x[0-9A-F]+)\) == (0x[0-9A-F]+)u', source)
-        self.assertEqual(len(hashes), 13)
-        for rva, size, expected in hashes:
-            actual = 2166136261
-            for byte in image.read(int(rva, 16), int(size, 16)):
-                actual = ((actual ^ byte)*16777619) & 0xffffffff
-            self.assertEqual(actual, int(expected, 16), rva)
+        # Cross-build body hashes are checked in test_feature_parity_profiles.
         for rva, target in ((0xa3e16, 0x272410), (0xa3e4b, 0x287f30), (0xa3e8d, 0x287770),
                             (0xa48ff, 0x287f30), (0xa4942, 0x287770)):
             self.assertEqual(image.target(rva), target)

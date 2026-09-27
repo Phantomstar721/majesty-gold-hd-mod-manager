@@ -2,8 +2,10 @@
 
 Use the canonical development Manager at
 `dist/Majesty Mod Manager/Majesty Mod Manager.exe`. Its matching launcher and
-DLL are under `_internal/payload/runtime`. This is Steam beta2-only support,
-not a Workshop release. Do not substitute an older Manager or runtime DLL.
+DLL are under `_internal/payload/runtime`. Repeat this acceptance run separately
+on default Steam 1.5.2.24, Steam beta2 1.5.2.28, and GOG 1.5.2.28. Their native
+profiles are statically verified; this checklist qualifies live behavior, not
+just executable identity. Do not substitute an older Manager or runtime DLL.
 
 The Manager does not prepare a profile automatically. The user chooses and
 prepares the test configuration, then launches it through the Manager.
@@ -25,7 +27,7 @@ Keep production saves separate: use a new disposable quest and test save slot.
    The Manager inherits the flag and passes it to its game child. Removing
    the shell variable does not disable that running Manager's trace. No
    administrator prompt is required. A normally opened Manager has tracing off.
-3. Select the beta2 installation. Rescan, select the source-observation
+3. Select the installation under test. Rescan, select the source-observation
    consumer in Merge, and use **Prepare** and **Launch Majesty** yourself.
    For initial isolation, omit unrelated optional mods. Do not enable a second
    standalone copy of the consumer in Majesty's mod selector.

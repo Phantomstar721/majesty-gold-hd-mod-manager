@@ -1415,14 +1415,15 @@ def _declares_native_source_event(package_root: Path) -> bool:
     """
     from ..exploration_events import EVENT
     from ..shared_features import EVENT_TYPE
+    from ..spell_origin import FEATURE_TYPE as SPELL_ORIGIN_TYPE
     try:
         value = json.loads((package_root / DEFINITION_FILE_NAME).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return False
     features = value.get("runtime_features", ()) if isinstance(value, dict) else ()
     return isinstance(features, list) and any(
-        isinstance(feature, dict) and feature.get("type") == EVENT_TYPE
-        and feature.get("event") == EVENT for feature in features)
+        isinstance(feature, dict) and (feature.get("type") == SPELL_ORIGIN_TYPE or
+        feature.get("type") == EVENT_TYPE and feature.get("event") == EVENT) for feature in features)
 
 
 def _merge_readiness(

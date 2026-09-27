@@ -90,6 +90,7 @@ void Run() {
     const auto savedBase = g_imageBase;
     const auto savedRegistry = g_runtimeFeatureRegistry;
     const auto savedLookup = g_movementEffectorLookup;
+    const auto savedEngine = g_linearMovementEngine;
     auto* code = static_cast<unsigned char*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE));
     assert(code);
     auto* multiply = code+512;
@@ -125,6 +126,7 @@ void Run() {
     g_movementCompareResume = reinterpret_cast<std::uintptr_t>(code+0xB8);
     g_movementDestinationResume = reinterpret_cast<std::uintptr_t>(code+0x12A);
     g_imageBase = 0;
+    g_linearMovementEngine = 0x364310;
     unsigned char unit[0xA8] = {}, descriptor[0x18] = {}, engine[0x18] = {};
     Put(unit, 0x54, reinterpret_cast<std::uintptr_t>(descriptor));
     Put(unit, 0xA4, 1);
@@ -221,6 +223,7 @@ void Run() {
     assert(InstallMovementScale()); // No profile access or patches when unused.
     g_imageBase = savedBase; g_runtimeFeatureRegistry = savedRegistry;
     g_movementEffectorLookup = savedLookup;
+    g_linearMovementEngine = savedEngine;
     g_movementCompareResume = g_movementDestinationResume = 0;
     assert(VirtualFree(code, 0, MEM_RELEASE));
 }

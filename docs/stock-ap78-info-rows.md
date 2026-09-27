@@ -2,6 +2,9 @@
 
 Implementation audit for the opt-in AP78 extension. This is presentation only:
 it must not teach a spell, add a cast command, apply an effect or change hero AI.
+Profiles cover default Steam, Steam beta2 and GOG. The trace below uses beta2
+addresses; [cross-build evidence and acceptance](runtime-feature-parity.md)
+records the other profiles and remaining live checks.
 
 ## Stock lifecycle (Steam beta2 1.5.2.28)
 
@@ -85,7 +88,7 @@ Private rows cannot claim stock spells, overlays, heroes or interface atlases.
 Unselected features add no hooks or queries. Live row/hover acceptance remains
 required before calling this support release-ready.
 
-## Author contract (Steam beta2 test build)
+## Author contract
 
 Declare `stock.ap78-info-row.v1` under `runtime_features`:
 

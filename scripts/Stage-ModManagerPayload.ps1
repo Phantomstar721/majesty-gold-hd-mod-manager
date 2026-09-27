@@ -134,6 +134,12 @@ try {
     $modsTarget = Join-Path $stage "mods\CustomGuildPhantomsHauntExpanded"
     New-Item -ItemType Directory -Path (Split-Path -Parent $modsTarget) | Out-Null
     Copy-Item -LiteralPath $hauntSource -Destination $modsTarget -Recurse
+    $previousPythonPath = $env:PYTHONPATH
+    try {
+        $env:PYTHONPATH = Join-Path $repoRoot "src"
+        & (Join-Path $repoRoot ".venv\Scripts\python.exe") -m majesty_cam.private_phantom_policy $modsTarget
+        if ($LASTEXITCODE -ne 0) { throw "Manager private Phantom policy staging failed." }
+    } finally { $env:PYTHONPATH = $previousPythonPath }
 
     if (Test-Path -LiteralPath $target) {
         if (-not (Test-Path -LiteralPath (Join-Path $target ".majesty-mod-manager-payload") -PathType Leaf)) {

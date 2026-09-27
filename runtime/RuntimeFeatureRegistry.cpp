@@ -130,6 +130,7 @@ bool ParseRegistry(
     registry->kingdomResearch.clear();
     registry->heroInfoRows.clear();
     registry->movementScales.clear();
+    registry->hiddenInventoryActions.clear();
     if (error != nullptr) {
         error->clear();
     }
@@ -152,16 +153,16 @@ bool ParseRegistry(
         SetError(error, "runtime feature registry header is truncated");
         return false;
     }
-    if (version < kRegistryVersion || version > 8) {
+    if (version < kRegistryVersion || version > 9) {
         SetError(error, "runtime feature registry schema version is unsupported");
         return false;
     }
     std::uint32_t flags = 0;
     if (version >= 2 && (!ReadU32(bytes, size, &cursor, &flags) ||
-        (flags & ~(version == 8 ? 127u : version == 7 ? 63u : version >= 5 ? 31u : version == 4 ? 15u : version == 3 ? 7u : 3u)) != 0 ||
+        (flags & ~(version == 9 ? 255u : version == 8 ? 127u : version == 7 ? 63u : version >= 5 ? 31u : version == 4 ? 15u : version == 3 ? 7u : 3u)) != 0 ||
         (version == 3 && !(flags & 4u)) || (version == 4 && !(flags & 8u)) ||
         ((version == 5 || version == 6) && !(flags & 16u)) || (version == 7 && !(flags & 32u)) ||
-        (version == 8 && !(flags & 64u)))) {
+        (version == 8 && !(flags & 64u)) || (version == 9 && !(flags & 128u)))) {
         SetError(error, "runtime feature registry flags are invalid or truncated");
         return false;
     }
@@ -468,6 +469,21 @@ bool ParseRegistry(
             scales.push_back(record);
         }
     }
+    std::vector<std::uint32_t> hidden;
+    if (flags & 128u) {
+        std::uint32_t count = 0, previous = 0;
+        if (!ReadU32(bytes, size, &cursor, &count) || !count || count > 1024 || count > (size-cursor)/4) {
+            SetError(error, "hidden inventory actions are invalid or truncated"); return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint32_t key = 0;
+            if (!ReadU32(bytes, size, &cursor, &key) || !IsPrintableFourCC(key) || key <= previous) {
+                SetError(error, "hidden inventory actions must be sorted unique FourCCs"); return false;
+            }
+            hidden.push_back(key);
+            previous = key;
+        }
+    }
     if (cursor != size) {
         SetError(error, "runtime feature registry contains trailing bytes");
         return false;
@@ -483,6 +499,7 @@ bool ParseRegistry(
     registry->kingdomResearch = std::move(research);
     registry->heroInfoRows = std::move(info);
     registry->movementScales = std::move(scales);
+    registry->hiddenInventoryActions = std::move(hidden);
     return true;
 }
 

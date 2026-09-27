@@ -14,7 +14,20 @@ GOG_RUNTIME_CAPABILITIES = frozenset((
     "stock.movement-query.v1",
     "stock.native-timing.v1",
     "stock.controller-recipes.v1",
+    "manager.source-exploration.v1",
+    "manager.spell-origin.v1",
+    "stock.equipment.v1",
+    "manager.kingdom-research.v1",
+    "stock.ap78-info-row.v1",
+    "manager.inventory-spell-display.v1",
+    "manager.overlay-movement-scale.v1",
 ))
+
+
+def require_supported_runtime(executable: Path | None) -> None:
+    """Cheap PE identity gate; native installers separately verify their sites."""
+    if executable is None or detect_majesty_branch(executable) is None:
+        raise ValueError("Selected runtime features require an audited default Steam, Steam beta2, or GOG executable")
 
 def unsupported_runtime_capabilities(branch, capabilities):
     if branch == GOG_BRANCH:

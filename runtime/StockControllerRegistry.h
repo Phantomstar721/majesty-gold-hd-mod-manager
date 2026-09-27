@@ -7,7 +7,7 @@
 
 namespace MajestyStockControllers {
 
-constexpr std::uint32_t kRegistryVersion = 20;
+constexpr std::uint32_t kRegistryVersion = 21;
 constexpr std::uint32_t kMaximumRecordCount = 256;
 constexpr std::uint32_t kMaximumPanelCount = 32;
 constexpr std::uint32_t kMaximumLiveAgentListVariants = 64;
@@ -155,6 +155,7 @@ struct BuildingOpenToggleRecord {
     std::string stateAttribute;
     std::string stateCallbackSymbol;
     std::string stateAccessorSymbol; // Derived once, never supplied by the package.
+    std::uint32_t panelDialogId = 0; // Zero retains the primary-building presenter.
 };
 
 struct LiveAgentListRowVariant {

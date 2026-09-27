@@ -38,7 +38,7 @@ class MovementScaleTests(unittest.TestCase):
                          (MOVEMENT_SCALE_TYPE,))
         self.assertEqual(derive_feature_runtime_capabilities([MOVEMENT_SCALE_TYPE], normalize_runtime_features()), ())
         self.assertIn(MOVEMENT_SCALE_TYPE, DERIVED_RUNTIME_CAPABILITIES)
-        self.assertEqual(unsupported_runtime_capabilities(GOG_BRANCH, [MOVEMENT_SCALE_TYPE]), (MOVEMENT_SCALE_TYPE,))
+        self.assertEqual(unsupported_runtime_capabilities(GOG_BRANCH, [MOVEMENT_SCALE_TYPE]), ())
 
     def test_reject_bad_schema_and_wire(self):
         value = movement_scale_mapping(SCALE)
@@ -101,14 +101,7 @@ class MovementScaleTests(unittest.TestCase):
             self.skipTest('MAJESTY_BETA2_EXE not configured')
         image = PeImage(path)
         root = Path(__file__).resolve().parents[1]
-        source = (root/'runtime/MovementScaleRuntime.inl').read_text()
-        audits = re.findall(r'hash\((0x[0-9A-F]+), (0x[0-9A-F]+)\) == (0x[0-9A-F]+)u', source)
-        self.assertEqual(len(audits), 7)
-        for rva, count, expected in audits:
-            value = 2166136261
-            for byte in image.read(int(rva, 16), int(count, 16)):
-                value = ((value ^ byte)*16777619) & 0xFFFFFFFF
-            self.assertEqual(value, int(expected, 16), rva)
+        # Cross-build body hashes are checked in test_feature_parity_profiles.
         self.assertEqual(image.read(0x1E31D2, 6), bytes.fromhex('8b 03 85 c0 7e 72'))
         self.assertEqual(image.read(0x1E3286, 6), bytes.fromhex('8b 1b 85 db 7e 1e'))
         self.assertEqual(image.target(0x1E31EA), 0x1E2910)

@@ -121,12 +121,15 @@ class KingdomResearchTests(unittest.TestCase):
         if not game: self.skipTest('stock executable fixture not supplied')
         from test_occupant_runtime_profiles import PeImage
         image = PeImage(game)
-        source = (Path(__file__).resolve().parents[1]/'runtime/KingdomResearchRuntime.inl').read_text()
-        hashes = re.findall(r'hash\((0x[0-9A-F]+)u, (0x[0-9A-F]+|\d+)\) == (0x[0-9A-F]+)u', source)
+        source = (Path(__file__).resolve().parents[1]/'runtime/FeatureParityProfiles.h').read_text()
+        sites = {name:int(rva,16) for rva,_,_,name in re.findall(
+            r'\{(0x[0-9A-F]+), (0x[0-9A-F]+), (0x[0-9A-F]+)\}, // (\w+)',source)}
+        hashes = re.findall(r'\{Feature::Research(?:Visual)?, Site::(\w+), (0x[0-9A-F]+), \{(0x[0-9A-F]+),',source)
         self.assertEqual(len(hashes), 8)
-        for rva, size, expected in hashes:
+        for site, size, expected in hashes:
+            rva = sites[site]
             value = 2166136261
-            for byte in image.read(int(rva, 16), int(size, 0)): value = ((value ^ byte)*16777619)&0xffffffff
+            for byte in image.read(rva, int(size, 0)): value = ((value ^ byte)*16777619)&0xffffffff
             self.assertEqual(value, int(expected, 16), rva)
 
     def test_small_awards_retain_exact_fraction(self):

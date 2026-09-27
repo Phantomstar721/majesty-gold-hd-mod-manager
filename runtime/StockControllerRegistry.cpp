@@ -550,6 +550,13 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
         parentBases[item.parentDialogId] = item.parentControllerBase;
     }
     for (const auto& item : registry.buildingOpenToggles) {
+        if (item.panelDialogId != 0) {
+            const auto* panel = registry.FindPrivateRecruitmentByChild(item.panelDialogId);
+            if (item.stateAttribute.empty() || panel == nullptr || panel->parentDialogId != item.parentDialogId ||
+                item.openCommandId <= 0x22CEu || item.closeCommandId <= 0x22CEu ||
+                item.openCommandId == panel->thirdPriceControlId || item.closeCommandId == panel->thirdPriceControlId)
+                return Fail(error, "MMCR toggle requires a matching recruitment child and private controls");
+        }
         const auto prior = parentBases.find(item.parentDialogId);
         if (!toggleKeys.insert(item.toggleKey).second ||
             (item.stateAttribute.empty() && !toggleParents.insert(item.parentDialogId).second) ||
@@ -850,7 +857,7 @@ const LiveAgentListRecord* Registry::FindLiveAgentListByCommand(std::uint32_t id
 const BuildingOpenToggleRecord* Registry::FindBuildingOpenToggleByParent(
     std::uint32_t id) const {
     for (const auto& item : buildingOpenToggles) {
-        if (item.parentDialogId == id) return &item;
+        if (item.parentDialogId == id && item.panelDialogId == 0) return &item;
     }
     return nullptr;
 }
@@ -1244,6 +1251,8 @@ bool ParseRegistry(
                 item.stateAccessorSymbol = "MM_Toggle_" + item.stateCallbackSymbol;
             }
         }
+        if (version >= 21 && !reader.ReadU32(&item.panelDialogId))
+            return Fail(error, "MMCR toggle panel binding is truncated");
         parsed.buildingOpenToggles.push_back(std::move(item));
     }
     for (std::uint32_t index = 0; index < counts[11]; ++index) {
@@ -1341,6 +1350,9 @@ bool ParseRegistry(
             return Fail(error, "MMCR private recruitment record is invalid or noncanonical");
         parsed.privateRecruitments.push_back(std::move(item));
     }
+    if (version == 21 && std::none_of(parsed.buildingOpenToggles.begin(), parsed.buildingOpenToggles.end(),
+            [](const BuildingOpenToggleRecord& item) { return item.panelDialogId != 0; }))
+        return Fail(error, "MMCR v21 requires a recruitment-child toggle");
     if (version == 20 && std::none_of(parsed.sovereignTargetActions.begin(), parsed.sovereignTargetActions.end(),
             [](const SovereignTargetActionRecord& item) { return !item.sourceTargetCallback.empty(); }))
         return Fail(error, "MMCR v20 requires a source-target callback");

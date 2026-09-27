@@ -8,7 +8,7 @@ only: no code, addresses, patch bytes, or package-owned paths.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import struct
 import tempfile
@@ -19,6 +19,7 @@ from .kingdom_research import (KingdomResearchRegistration, KINGDOM_RESEARCH_TYP
 from .hero_info import HeroInfoRow, HERO_INFO_TYPE, HERO_INFO_KINDS, MAX_HERO_INFO_ROWS, hero_info_mapping
 from .movement_scale import (OverlayMovementScale, MOVEMENT_SCALE_TYPE,
                              MAX_MOVEMENT_SCALES, movement_scale_mapping)
+from .inventory_spell_display import CAPABILITY as INVENTORY_DISPLAY_CAPABILITY
 
 
 RUNTIME_FEATURE_REGISTRY_RELATIVE_PATH = (
@@ -102,6 +103,7 @@ class RuntimeFeatureRegistry:
     kingdom_research: tuple[KingdomResearchRegistration, ...] = ()
     hero_info_rows: tuple[HeroInfoRow, ...] = ()
     movement_scales: tuple[OverlayMovementScale, ...] = ()
+    hidden_inventory_actions: tuple[str, ...] = ()
 
     @property
     def features(self) -> tuple[RuntimeFeature, ...]:
@@ -399,6 +401,9 @@ def derive_feature_runtime_capabilities(
     effective.discard(KINGDOM_RESEARCH_TYPE)
     effective.discard(HERO_INFO_TYPE)
     effective.discard(MOVEMENT_SCALE_TYPE)
+    effective.discard(INVENTORY_DISPLAY_CAPABILITY)
+    if registry.hidden_inventory_actions:
+        effective.add(INVENTORY_DISPLAY_CAPABILITY)
     if registry.movement_scales:
         effective.add(MOVEMENT_SCALE_TYPE)
     if registry.hero_info_rows:
@@ -434,24 +439,30 @@ def encode_runtime_feature_registry(
             features, legacy_capabilities=legacy_capabilities
         )
     )
+    if isinstance(features, RuntimeFeatureRegistry):
+        keys = tuple(_fourcc_u32(value) for value in features.hidden_inventory_actions)
+        if len(keys) > 1024 or keys != tuple(sorted(set(keys))):
+            raise ValueError("hidden inventory actions must be sorted, unique and bounded")
+        registry = replace(registry, hidden_inventory_actions=features.hidden_inventory_actions)
     visual_research = any(item.active_effector for item in registry.kingdom_research)
     chunks = [
         _HEADER.pack(
             _MAGIC,
-            8 if registry.movement_scales else 7 if registry.hero_info_rows else 6 if visual_research else 5 if registry.kingdom_research else 4 if registry.equipment else 3 if registry.native_timing is not None else
+            9 if registry.hidden_inventory_actions else 8 if registry.movement_scales else 7 if registry.hero_info_rows else 6 if visual_research else 5 if registry.kingdom_research else 4 if registry.equipment else 3 if registry.native_timing is not None else
             2 if registry.map_fog_query or registry.movement_query else _VERSION,
             len(registry.name_generators),
             len(registry.enchantment_rows),
         )
     ]
-    if registry.movement_scales or registry.hero_info_rows or registry.kingdom_research or registry.equipment or registry.map_fog_query or registry.movement_query or registry.native_timing is not None:
+    if registry.hidden_inventory_actions or registry.movement_scales or registry.hero_info_rows or registry.kingdom_research or registry.equipment or registry.map_fog_query or registry.movement_query or registry.native_timing is not None:
         chunks.append(struct.pack("<I", int(registry.map_fog_query) |
                                   (int(registry.movement_query) << 1) |
                                   (int(registry.native_timing is not None) << 2) |
                                   (int(bool(registry.equipment)) << 3) |
                                   (int(bool(registry.kingdom_research)) << 4) |
                                   (int(bool(registry.hero_info_rows)) << 5) |
-                                  (int(bool(registry.movement_scales)) << 6)))
+                                  (int(bool(registry.movement_scales)) << 6) |
+                                  (int(bool(registry.hidden_inventory_actions)) << 7)))
     for feature in registry.name_generators:
         chunks.append(
             _NAME_GENERATOR.pack(
@@ -490,7 +501,7 @@ def encode_runtime_feature_registry(
                 item.gold_bonus_percent, item.experience_bonus_percent,
                 item.progress_control_id, item.active_display_control_id, len(text)))
             chunks.append(text)
-            if visual_research or registry.hero_info_rows or registry.movement_scales:
+            if visual_research or registry.hero_info_rows or registry.movement_scales or registry.hidden_inventory_actions:
                 effector = item.active_effector.encode("ascii")
                 chunks.extend((struct.pack("<I", len(effector)), effector))
     if registry.hero_info_rows:
@@ -505,6 +516,9 @@ def encode_runtime_feature_registry(
         chunks.append(struct.pack("<I", len(registry.movement_scales)))
         chunks.extend(struct.pack("<II", _fourcc_u32(item.overlay_id), item.percent)
                       for item in registry.movement_scales)
+    if registry.hidden_inventory_actions:
+        chunks.append(struct.pack("<I", len(registry.hidden_inventory_actions)))
+        chunks.extend(struct.pack("<I", _fourcc_u32(value)) for value in registry.hidden_inventory_actions)
     payload = b"".join(chunks)
     if len(payload) > _MAX_REGISTRY_BYTES:
         raise ValueError(
@@ -525,7 +539,7 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
     magic, version, name_count, row_count = _HEADER.unpack_from(payload)
     if magic != _MAGIC:
         raise ValueError("runtime feature registry magic is invalid")
-    if version not in (1, 2, 3, 4, 5, 6, 7, 8):
+    if version not in (1, 2, 3, 4, 5, 6, 7, 8, 9):
         raise ValueError(f"unsupported runtime feature registry version: {version}")
     if name_count > _MAX_NAME_GENERATORS:
         raise ValueError(
@@ -542,10 +556,10 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
     if len(payload) < header_size:
         raise ValueError("runtime feature registry flags are truncated")
     flags = struct.unpack_from("<I", payload, _HEADER.size)[0] if version >= 2 else 0
-    if (flags & ~(127 if version == 8 else 63 if version == 7 else 31 if version >= 5 else 15 if version == 4 else 7 if version == 3 else 3)
+    if (flags & ~(255 if version == 9 else 127 if version == 8 else 63 if version == 7 else 31 if version >= 5 else 15 if version == 4 else 7 if version == 3 else 3)
             or (version == 3 and not flags & 4) or (version == 4 and not flags & 8)
             or (version in (5, 6) and not flags & 16) or (version == 7 and not flags & 32)
-            or (version == 8 and not flags & 64)):
+            or (version == 8 and not flags & 64) or (version == 9 and not flags & 128)):
         raise ValueError("runtime feature registry has unsupported flags")
     minimum_size = (
         header_size
@@ -722,11 +736,24 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
                 raise ValueError("movement scales must be strictly sorted and unique")
             scales.append(OverlayMovementScale(_u32_fourcc(overlay), percent))
             previous = overlay
+    hidden = ()
+    if flags & 128:
+        if offset + 4 > len(payload):
+            raise ValueError("hidden inventory action count is truncated")
+        count = struct.unpack_from("<I", payload, offset)[0]
+        offset += 4
+        if not 1 <= count <= 1024 or offset + 4 * count > len(payload):
+            raise ValueError("hidden inventory actions are invalid or truncated")
+        keys = struct.unpack_from(f"<{count}I", payload, offset)
+        offset += 4 * count
+        if keys != tuple(sorted(set(keys))):
+            raise ValueError("hidden inventory actions must be sorted and unique")
+        hidden = tuple(_u32_fourcc(key) for key in keys)
     if offset != len(payload):
         raise ValueError("runtime feature registry has trailing bytes")
-    return normalize_runtime_features((*names, *rows, *equipment, *research, *info, *scales,
+    return replace(normalize_runtime_features((*names, *rows, *equipment, *research, *info, *scales,
         *((MapFogQueryFeature(),) if flags & 1 else ()),
-        *((MovementQueryFeature(),) if flags & 2 else ()), *timing_features))
+        *((MovementQueryFeature(),) if flags & 2 else ()), *timing_features)), hidden_inventory_actions=hidden)
 
 
 def write_runtime_feature_registry(

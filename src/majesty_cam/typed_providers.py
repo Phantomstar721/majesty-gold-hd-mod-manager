@@ -81,7 +81,10 @@ def _installed_bindings(tokens, active):
                 end = i+1
                 while end < len(tokens) and tokens[end] == ")":
                     end += 1
-                if end < len(tokens) and tokens[end] == "=":
+                # stock_tokens splits == into two tokens. A comparison of the
+                # attribute (or validfunction(attribute)) installs no binding.
+                if (end < len(tokens) and tokens[end] == "="
+                        and tokens[end+1:end+2] != ("=",)):
                     target = (tokens[end+2] if end+3 < len(tokens)
                               and tokens[end+1] == "$" and tokens[end+3] == ";" else None)
                     yield attr, target

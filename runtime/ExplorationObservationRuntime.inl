@@ -1,6 +1,7 @@
-// Opt-in beta2 source attribution. No XP policy, map scan or timer lives here.
+// Opt-in source attribution for audited builds. No XP policy, map scan or timer.
 // Included after the stock GPL evaluator and kingdom-research adapter.
 namespace ExplorationObservation {
+const MajestyExplorationProfiles::Profile* profile = nullptr;
 bool enabled = false;
 bool pending = false; // Hint only: the authoritative queue is saved GPL state.
 thread_local unsigned readDepth = 0;
@@ -32,11 +33,12 @@ template<class T> T Field(const void* p, std::size_t offset) {
     return result;
 }
 void* CurrentWorld() {
-    const auto root = *reinterpret_cast<void**>(g_imageBase+0x3E3FD4u);
+    const auto root = *reinterpret_cast<void**>(g_imageBase+profile->worldRoot);
     return root ? Field<void*>(root,0x10) : nullptr;
 }
 bool LiveStep() {
-    const auto game = *reinterpret_cast<void**>(g_imageBase+0x3DF574u);
+    if (!enabled) return false;
+    const auto game = *reinterpret_cast<void**>(g_imageBase+profile->gameState);
     return enabled && !readDepth && stepWorld && stepWorld == CurrentWorld() &&
         game && Field<int>(game,0) == 3;
 }
@@ -133,7 +135,7 @@ void __fastcall Reveal(void* map, void* unit, const void* point, int mask, int r
                 batch = previous;
             }
         } context(local);
-        reinterpret_cast<Stock>(g_imageBase+0x1D9ED0u)(map,point,mask,radius);
+        reinterpret_cast<Stock>(g_imageBase+profile->reveal.rva)(map,point,mask,radius);
     }
     // No GPL executes inside the native fog loop. Manager code only enqueues;
     // consumers run after the complete stock simulation step and hero birth.
@@ -170,20 +172,21 @@ __declspec(naked) void RevealBridge() {
 int __fastcall ReadChunk(void* reader, void*) {
     struct Guard { Guard() { ++readDepth; } ~Guard() { --readDepth; } } guard;
     using Stock = int (__thiscall*)(void*);
-    return reinterpret_cast<Stock>(g_imageBase+0x1EC5D0u)(reader);
+    return reinterpret_cast<Stock>(g_imageBase+profile->read.rva)(reader);
 }
 int __fastcall WriteWorld(void* writer, void*, void* stream, void* world) {
     // Save serialization also converts references back to pointers; it must
     // not synthesize exploration or invalidate the restored ownership epoch.
     struct Guard { Guard() { ++readDepth; } ~Guard() { --readDepth; } } guard;
     using Stock = int (__thiscall*)(void*, void*, void*);
-    return reinterpret_cast<Stock>(g_imageBase+0x1EBF70u)(writer,stream,world);
+    return reinterpret_cast<Stock>(g_imageBase+profile->write.rva)(writer,stream,world);
 }
 void Invalidate(void* unit) {
     // The dispatcher routes states 3/7/8 through the existing-world update
     // handler. Transfers must invalidate even outside our simulation frame;
     // otherwise an away-and-back transfer can revive a consumer's remainder.
-    const auto game = *reinterpret_cast<void**>(g_imageBase+0x3DF574u);
+    if (!enabled) return;
+    const auto game = *reinterpret_cast<void**>(g_imageBase+profile->gameState);
     const int state = game ? Field<int>(game,0) : 0;
     if (enabled && !readDepth && (state == 3 || state == 7 || state == 8) && SourceReady(unit)) {
         if (!Evaluate("MM_EO_Invalidate",unit))
@@ -201,62 +204,66 @@ void __fastcall OwnerChanged(void* unit, void*, int owner) {
     // Cancel before stock notifications can reveal under the new owner.
     if (previous != owner) Invalidate(unit);
     using Stock = void (__thiscall*)(void*, int);
-    reinterpret_cast<Stock>(g_imageBase+0x1CF320u)(unit,owner);
+    reinterpret_cast<Stock>(g_imageBase+profile->owner.rva)(unit,owner);
 }
 
 bool Install() {
-    if (g_buildProfile != &kBeta2BuildProfile) return false;
+    profile = g_buildProfile ? MajestyExplorationProfiles::Find(g_buildProfile->buildId) : nullptr;
+    if (!profile) return false;
+    const auto& e = *profile;
     const auto hash = [](std::uintptr_t rva, unsigned size) {
         std::uint32_t value = 2166136261u;
         const auto* bytes = reinterpret_cast<const unsigned char*>(g_imageBase+rva);
         for (unsigned i=0; i<size; ++i) value = (value ^ bytes[i])*16777619u;
         return value;
     };
-    if (hash(0x470E0u,0xCD) != 0xC8A7EB00u ||
-        hash(0x1D9ED0u,0x1AA) != 0x1AD223F1u ||
-        hash(0x1EC5D0u,0x74) != 0x2D6F7DA8u ||
-        hash(0x1EBF70u,0x62) != 0x0D5AB5C9u ||
-        hash(0x1CF320u,0x25) != 0xBA1A13F1u ||
-        hash(0x15D410u,0x124) != 0x1B6F2A2Bu) return false;
+    for (const auto& body : {e.source,e.reveal,e.read,e.write,e.owner,e.bind,e.gameGetter})
+        if (hash(body.rva,body.size) != body.hash) return false;
+    // Bind the two globals to the audited stock getter/initialization code.
+    const auto absolute = [](std::uintptr_t rva) {
+        return *reinterpret_cast<const std::uint32_t*>(g_imageBase+rva);
+    };
+    if (*reinterpret_cast<const unsigned char*>(g_imageBase+e.worldRootLoad) != 0xA1 ||
+        absolute(e.worldRootLoad+1) != g_imageBase+e.worldRoot ||
+        absolute(e.gameGetter.rva+0x22) != g_imageBase+e.gameState) return false;
     const unsigned char tile[] = {0x8B,0x0F,0x8B,0xC1,0x0B,0x44,0x24,0x44,0x3B,0xC1,0x74,0x4C,0x89,0x07};
     const auto& p = QuestBoardProfile();
-    if (!MatchesProfileBytes(0x1D9FFDu,tile,sizeof(tile),"exploration tile write") ||
-        !OccupantCallMatches(0x471A0u,0x1D9ED0u) ||
-        !OccupantCallMatches(0x1EC655u,0x1EC5D0u) ||
-        !OccupantCallMatches(0x1C113Bu,0x1EC5D0u) ||
-        !OccupantCallMatches(0x1C1285u,0x1EC5D0u) ||
+    if (!MatchesProfileBytes(e.reveal.rva+0x12D,tile,sizeof(tile),"exploration tile write") ||
+        !OccupantCallMatches(e.source.rva+0xC0,e.reveal.rva) ||
         !OccupantCallMatches(p.evaluatorHelper+0x2D,OccupantProfile().stringConstructor) ||
         !OccupantCallMatches(p.evaluatorHelper+0x43,p.evaluatorConstructor) ||
+        !OccupantCallMatches(p.evaluatorHelper+0x51,p.stringDestructor) ||
         !OccupantCallMatches(p.evaluatorHelper+0x5F,p.addAgent) ||
         !OccupantCallMatches(p.evaluatorHelper+0x68,p.execute) ||
         !OccupantCallMatches(p.evaluatorHelper+0x71,p.scalarResult) ||
         !OccupantCallMatches(p.scalarResult+5,p.resultAt) ||
         !OccupantCallMatches(p.evaluatorHelper+0x84,p.evaluatorDestructor)) return false;
+    for (auto rva : e.readers)
+        if (!OccupantCallMatches(rva,e.read.rva)) return false;
     // Cover native owner virtuals without replacing the building adapter.
-    constexpr std::uintptr_t owners[] = {0x3530E4u,0x3533BCu,0x35361Cu,
-        0x353A04u,0x353C5Cu,0x353F04u,0x35416Cu,0x361684u,0x362764u};
-    for (auto rva : owners) {
+    for (auto rva : e.owners) {
         const auto target = *reinterpret_cast<std::uintptr_t*>(g_imageBase+rva);
-        if (target != g_imageBase+0x1CF320u &&
-            !(rva == 0x3530E4u && target == reinterpret_cast<std::uintptr_t>(&ResearchBuildingOwnerChanged))) return false;
+        if (target != g_imageBase+e.owner.rva &&
+            !(rva == ParityRva(ParitySite::BuildingOwnerSlot) &&
+              target == reinterpret_cast<std::uintptr_t>(&ResearchBuildingOwnerChanged))) return false;
     }
-    for (auto rva : {0x354434u,0x362EFCu})
-        if (*reinterpret_cast<std::uintptr_t*>(g_imageBase+rva) != g_imageBase+0x1EBF70u) return false;
+    for (auto rva : e.writers)
+        if (*reinterpret_cast<std::uintptr_t*>(g_imageBase+rva) != g_imageBase+e.write.rva) return false;
     if (!InstallGameUpdateRefreshBridge() || !InstallSharedWorldReadyHook()) return false;
-    tileResume = g_imageBase+0x1DA005u;
-    if (!WriteOccupantBranch(g_imageBase+0x1D9FFDu,reinterpret_cast<void*>(&TileWrite),0xE9,8) ||
-        !WriteOccupantBranch(g_imageBase+0x471A0u,reinterpret_cast<void*>(&RevealBridge),0xE8)) return false;
-    for (auto rva : {0x1EC655u,0x1C113Bu,0x1C1285u})
+    tileResume = g_imageBase+e.reveal.rva+0x135;
+    if (!WriteOccupantBranch(g_imageBase+e.reveal.rva+0x12D,reinterpret_cast<void*>(&TileWrite),0xE9,8) ||
+        !WriteOccupantBranch(g_imageBase+e.source.rva+0xC0,reinterpret_cast<void*>(&RevealBridge),0xE8)) return false;
+    for (auto rva : e.readers)
         if (!WriteOccupantBranch(g_imageBase+rva,reinterpret_cast<void*>(&ReadChunk),0xE8)) return false;
-    for (auto rva : owners) {
+    for (auto rva : e.owners) {
         auto* slot = reinterpret_cast<std::uintptr_t*>(g_imageBase+rva);
-        if (*slot != g_imageBase+0x1CF320u) continue;
+        if (*slot != g_imageBase+e.owner.rva) continue;
         DWORD old = 0, ignored = 0;
         if (!VirtualProtect(slot,4,PAGE_READWRITE,&old)) return false;
         *slot = reinterpret_cast<std::uintptr_t>(&OwnerChanged);
         if (!VirtualProtect(slot,4,old,&ignored)) return false;
     }
-    for (auto rva : {0x354434u,0x362EFCu}) {
+    for (auto rva : e.writers) {
         auto* slot = reinterpret_cast<std::uintptr_t*>(g_imageBase+rva);
         DWORD old = 0, ignored = 0;
         if (!VirtualProtect(slot,4,PAGE_READWRITE,&old)) return false;

@@ -1,5 +1,58 @@
 // Run actual x86 AP78 adapters with stock-shaped list/hero memory.
 namespace {
+unsigned inventoryGateNode = 0, inventoryGateEcx = 0, inventoryGateEbx = 0;
+__declspec(naked) void InventoryTestVisible() {
+    __asm {
+        mov inventoryGateNode, eax
+        mov inventoryGateEcx, ecx
+        mov inventoryGateEbx, ebx
+        mov eax, 1
+        ret
+    }
+}
+__declspec(naked) void InventoryTestHidden() {
+    __asm {
+        mov inventoryGateNode, eax
+        mov inventoryGateEcx, ecx
+        mov inventoryGateEbx, ebx
+        xor eax, eax
+        ret
+    }
+}
+int InventoryTestGate(void* node) {
+    int visible = -1;
+    __asm {
+        push ebx
+        xor ebx, ebx
+        mov ecx, 12345678h
+        mov eax, node
+        call InventorySpellGate
+        mov visible, eax
+        pop ebx
+    }
+    assert(inventoryGateNode == reinterpret_cast<unsigned>(node));
+    assert(inventoryGateEcx == 0x12345678 && inventoryGateEbx == 0);
+    return visible;
+}
+void RunInventorySpellGateTests() {
+    const auto saved = g_runtimeFeatureRegistry.hiddenInventoryActions;
+    g_inventorySpellContinue = reinterpret_cast<std::uintptr_t>(&InventoryTestVisible);
+    g_inventorySpellSkip = reinterpret_cast<std::uintptr_t>(&InventoryTestHidden);
+    g_runtimeFeatureRegistry.hiddenInventoryActions = {0x30323041};
+    unsigned node[6] = {11,22,0x30323041,12345,67890,1};
+    const auto before = std::vector<unsigned>(node,node+6);
+    assert(InventoryTestGate(node) == 0); // Visible restored flag, inventory action.
+    assert(std::equal(before.begin(),before.end(),node));
+    node[2] = 0x39393939;
+    assert(InventoryTestGate(node) == 1); // Genuine spell stays visible.
+    node[5] = 0;
+    assert(InventoryTestGate(node) == 0); // Stock hidden flag still wins.
+    g_runtimeFeatureRegistry.hiddenInventoryActions.clear();
+    node[5] = 1;
+    assert(InventoryTestGate(node) == 1);
+    g_runtimeFeatureRegistry.hiddenInventoryActions = saved;
+    g_inventorySpellContinue = g_inventorySpellSkip = 0;
+}
 std::vector<std::string> heroLabels, heroTips;
 std::vector<unsigned> heroImages, heroSets;
 unsigned heroConstructed = 0, heroDestroyed = 0;

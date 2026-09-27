@@ -8,6 +8,7 @@ from typing import Mapping, Optional, Sequence, Tuple, Union
 import xml.etree.ElementTree as ET
 
 from .runtime_capabilities import is_runtime_capability_name
+from .potion_policy import PotionPolicy, TYPE as POTION_POLICY_TYPE, parse_feature as parse_potion_policy, feature_mapping as potion_policy_mapping
 from .equipment import StockEquipment, EQUIPMENT_FEATURE_TYPE, parse_equipment, equipment_mapping
 from .hero_info import HeroInfoRow, HERO_INFO_TYPE, parse_hero_info, hero_info_mapping
 from .movement_scale import (OverlayMovementScale, MOVEMENT_SCALE_TYPE,
@@ -21,6 +22,13 @@ from .shared_features import (
 from .typed_providers import (TypedBooleanProvider, TypedBooleanDispatch,
     FEATURE_TYPES as TYPED_PROVIDER_TYPES, FEATURE_CLASSES as TYPED_PROVIDER_CLASSES,
     parse_feature as parse_typed_provider, feature_mapping as typed_provider_mapping)
+from .spell_policy import (SpellPolicyProvider, DirectProjectileImpact, SpecialSpell, SpellPolicyDiscovery,
+    FEATURE_TYPES as SPELL_POLICY_TYPES, FEATURE_CLASSES as SPELL_POLICY_CLASSES,
+    parse_feature as parse_spell_policy, feature_mapping as spell_policy_mapping)
+from .spell_origin import (SpellOrigin, FEATURE_TYPE as SPELL_ORIGIN_TYPE,
+    parse_feature as parse_spell_origin, feature_mapping as spell_origin_mapping)
+from .source_context import (SourceContextDispatch, FEATURE_TYPE as SOURCE_CONTEXT_TYPE,
+    parse_feature as parse_source_context, feature_mapping as source_context_mapping)
 from .gpl_features import (
     GplFeature,
     GplFeatureError,
@@ -203,7 +211,7 @@ class CustomBuildingDefinition:
 # Backward-compatible descriptive alias for the schema's AP78-specific record
 # name; the runtime module intentionally uses the reusable shorter class name.
 Ap78EnchantmentRowFeature = EnchantmentRowFeature
-PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature, GplFeature, SharedFeature, StockEquipment, KingdomResearch, TypedBooleanProvider, TypedBooleanDispatch]
+PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature, GplFeature, SharedFeature, StockEquipment, KingdomResearch, TypedBooleanProvider, TypedBooleanDispatch, SpellPolicyProvider, DirectProjectileImpact, SpecialSpell, SpellPolicyDiscovery, SpellOrigin, SourceContextDispatch, PotionPolicy]
 
 
 @dataclass(frozen=True)
@@ -391,6 +399,10 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         expected = common_fields
     elif schema_version == 2:
         expected = common_fields | {"runtime_capabilities"}
+        # Source-only policy extension retains legacy explicit building IDs.
+        # Converting an established v2 input to v3 would reallocate its panels.
+        if "runtime_features" in value:
+            expected.add("runtime_features")
     else:
         expected = common_fields | {"runtime_features"}
     _require_exact_fields(value, expected, "mod definition")
@@ -572,12 +584,36 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             except ValueError as exc:
                 raise PackageFormatError(f"{context}: {exc}") from exc
             feature_key = (feature_type, feature.feature_key)
+        elif feature_type == POTION_POLICY_TYPE:
+            try:
+                feature = parse_potion_policy(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context}: {exc}") from exc
+            feature_key = (feature_type, feature.hero_title.casefold())
         elif feature_type == EQUIPMENT_FEATURE_TYPE:
             try:
                 feature = parse_equipment(raw_feature)
             except ValueError as exc:
                 raise PackageFormatError(f"{context}: {exc}") from exc
             feature_key = (feature_type, feature.feature_key)
+        elif feature_type == SOURCE_CONTEXT_TYPE:
+            try:
+                feature = parse_source_context(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context} is invalid: {exc}") from exc
+            feature_key = (feature_type, feature.feature_key.casefold())
+        elif feature_type == SPELL_ORIGIN_TYPE:
+            try:
+                feature = parse_spell_origin(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context} is invalid: {exc}") from exc
+            feature_key = (feature_type, feature.feature_key.casefold())
+        elif feature_type in SPELL_POLICY_TYPES:
+            try:
+                feature = parse_spell_policy(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context} is invalid: {exc}") from exc
+            feature_key = (feature_type, feature.feature_key.casefold())
         elif feature_type in TYPED_PROVIDER_TYPES:
             try:
                 feature = parse_typed_provider(raw_feature)
@@ -646,7 +682,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 "stock.ap52-recruitment-panel.v1",
             }:
                 local_identity = str(mapping["parent_building"])
-            elif feature_type in ("stock.mx22-building-open-toggle.v1", "stock.mx22-building-open-toggle.v2"):
+            elif feature_type in ("stock.mx22-building-open-toggle.v1", "stock.mx22-building-open-toggle.v2", "stock.mx22-building-open-toggle.v3"):
                 feature_key = (
                     feature_type,
                     str(mapping["toggle_key"]).casefold(),
@@ -655,7 +691,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 local_identity = ""
             else:  # pragma: no cover - the typed parser owns this closed union
                 local_identity = ""
-            if feature_type not in ("stock.mx22-building-open-toggle.v1", "stock.mx22-building-open-toggle.v2"):
+            if feature_type not in ("stock.mx22-building-open-toggle.v1", "stock.mx22-building-open-toggle.v2", "stock.mx22-building-open-toggle.v3"):
                 feature_key = (
                     feature_type,
                     str(mapping["panel_key"]).casefold(),
@@ -666,6 +702,8 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 f"duplicate runtime feature identity: {feature_key[1]!r}"
             )
         seen_feature_keys.add(feature_key)
+        if schema_version == 2 and not isinstance(feature, PotionPolicy):
+            raise PackageFormatError("legacy v2 runtime_features only accepts source-only potion policies")
         if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature, HeroInfoRow, OverlayMovementScale)):
             try:
                 normalize_runtime_features((feature,))
@@ -1134,6 +1172,8 @@ def mod_definition_mapping(definition: ModDefinition) -> dict:
     }
     if definition.schema_version == 2:
         value["runtime_capabilities"] = list(definition.runtime_capabilities)
+        if definition.runtime_features:
+            value["runtime_features"] = [_runtime_feature_mapping(feature) for feature in definition.runtime_features]
     elif definition.schema_version == 3:
         value["runtime_features"] = [
             _runtime_feature_mapping(feature)
@@ -1172,8 +1212,16 @@ def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
         }
     if isinstance(feature, (StockGameplayEventObserver, StockActivityDuration)):
         return shared_feature_mapping(feature)
+    if isinstance(feature, PotionPolicy):
+        return potion_policy_mapping(feature)
     if isinstance(feature, TYPED_PROVIDER_CLASSES):
         return typed_provider_mapping(feature)
+    if isinstance(feature, SPELL_POLICY_CLASSES):
+        return spell_policy_mapping(feature)
+    if isinstance(feature, SpellOrigin):
+        return spell_origin_mapping(feature)
+    if isinstance(feature, SourceContextDispatch):
+        return source_context_mapping(feature)
     if isinstance(
         feature,
         (

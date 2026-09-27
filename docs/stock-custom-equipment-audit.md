@@ -1,6 +1,6 @@
 # Stock equipment extension audit
 
-Status: **beta2-only stock-value implementation; live lifecycle validation pending**.
+Status: **three-build stock-value implementation; live lifecycle validation pending**.
 Recorded 2026-09-18. See [the authoring contract](stock-equipment-contract.md).
 
 The intended extension is generic registration of private weapon and armor
@@ -13,7 +13,8 @@ automatic spell-damage scaling is implied.
 The native observations below are from the installed Steam beta2 executable,
 PE timestamp `0x5A8A11D5`, preferred image base `0x00400000`. Addresses in this
 document are preferred virtual addresses, not runtime pointers. These are
-not yet an audited profile for the other supported executable.
+not addresses to use on another executable. See [cross-build evidence](runtime-feature-parity.md)
+for the default Steam and GOG profiles added on 2026-09-25.
 
 GPL references are relative to `SDK/OriginalQuests/GPLMx`. Presentation assets
 are the installed stock CAMs, not assets inherited from a mod package.
@@ -235,11 +236,9 @@ No new native function or runtime polling is needed for that query. The mod
 owns any explicitly approved damage consumer; the Manager must not globally
 inject this expression into spells or add coating callbacks.
 
-The initial `stock.equipment.v1` implementation is restricted to beta2. The
-public 1.5.2.24 reference remains unavailable and that executable is rejected
-for this feature, not guessed from beta2 address differences. Other supported
-features are unchanged. Installation verifies each new native registration
-boundary before redirecting either call.
+The initial beta2-only restriction was superseded by verified default Steam
+and GOG profiles on 2026-09-25. Installation verifies the selected build's
+native registration and cleanup boundaries before redirecting either call.
 
 The extension registers strings/indices immediately after stock enum
 initialization and presentation entries immediately after each stock presenter
@@ -279,7 +278,7 @@ Description substitutions, forces icon relocation to different indices in an
 in-memory fixture, binds both stock images, and checks preservation of original
 stock sets and source files. It neither prepares nor writes a merged profile.
 
-Remaining beta2 activation check: user-prepared fresh game, both equipment
+Remaining per-build activation check: user-prepared fresh game, both equipment
 slots, native purchase/enchantment refresh, above-shop ranks, save/reload with
 the unchanged profile, return to menu and start/load again. Static checks and
 synthetic tests do not substitute for that controlled in-game lifecycle check.

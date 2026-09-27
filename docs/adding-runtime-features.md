@@ -11,6 +11,11 @@ that behavior to the Mod Manager through a GitHub pull request. Once accepted,
 it becomes a reusable feature that any compatible mod can declare. It must not
 be tied to one Workshop item, mod UUID, building, or author.
 
+Version parity is part of that contribution: trace and implement the feature
+for default Steam, Steam beta2 and GOG, with per-build guards and regression
+coverage. Document native evidence separately from live acceptance; ask before
+accepting a version-limited exception. Never remove guards to claim compatibility.
+
 ## Use supported data-only recipes first
 
 Schema-v3 packages place supported declarations in the top-level
@@ -19,7 +24,7 @@ Schema-v3 packages place supported declarations in the top-level
 - `stock.name-generator.v1`;
 - `stock.ap78-enchantment-row.v1`;
 - `stock.ap78-info-row.v1` ([hero-information rows](stock-ap78-info-rows.md));
-- `manager.overlay-movement-scale.v1` ([attached-overlay percentages](stock-overlay-movement-scale.md), beta2 only);
+- `manager.overlay-movement-scale.v1` ([attached-overlay percentages](stock-overlay-movement-scale.md));
 - `stock.ap10-ap69-secondary-panel.v1`;
 - `stock.mx09-ap41-reward-panel.v1`;
 - `stock.mx04-mx05-occupant-action-panel.v1`;
@@ -168,7 +173,7 @@ Include tests covering:
 - multiple unrelated mods using the feature at the same time;
 - duplicate IDs, resource collisions, incompatible declarations, and malformed
   data;
-- both the public and `beta2` executable profiles;
+- default Steam, Steam `beta2`, and GOG executable profiles;
 - repeated Build, Launch, save/load, return-to-menu, and reload lifecycles;
 - cancellation, cleanup, and UI refresh paths from the stock analogue; and
 - launches and merged profiles that do not request the feature.

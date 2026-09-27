@@ -28,9 +28,11 @@ GOG support includes:
 - Stock controller recipes, including private recruitment, occupant and live-agent
   lists, reward panels, secondary panels, and their existing research actions.
 
-Equipment, saved kingdom-research integration, and private hero-info rows do not
-yet have audited GOG profiles. Their newer Steam implementations remain available
-on Steam beta2 after integration with the GOG branch.
+Equipment, saved kingdom-research integration, private hero-info rows,
+overlay movement percentages and source-exploration observation now have
+explicit default-Steam, beta2 and GOG profiles. The newly ported features have
+static native verification; default-Steam/GOG live acceptance remains pending.
+See [shared feature parity](runtime-feature-parity.md).
 Manager preflight identifies unsupported capabilities, and native preflight
 rejects them before installing any hook.
 The Steam public and beta2 profiles retain their prior capabilities.

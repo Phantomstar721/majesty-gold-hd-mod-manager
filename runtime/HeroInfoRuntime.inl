@@ -23,28 +23,46 @@ bool HeroEffectRowsSelected() {
         g_runtimeFeatureRegistry.heroInfoRows.end(), [](const HeroInfoRecord& r) { return r.kind == 2; });
 }
 bool ValidateHeroInfoProfile() {
-    if (g_buildProfile != &kBeta2BuildProfile) return false;
-    const auto hash = [](std::uintptr_t rva, std::size_t size) {
-        std::uint32_t value = 2166136261u;
-        const auto* bytes = reinterpret_cast<const unsigned char*>(g_imageBase+rva);
-        for (std::size_t i = 0; i < size; ++i) value = (value ^ bytes[i])*16777619u;
-        return value;
-    };
-    return hash(0xA3C00, 0x510) == 0x436F242Bu &&
-        hash(0xA4110, 0x910) == 0xE1D159B5u &&
-        hash(0x272410, 0x80) == 0x5EA93191u &&
-        hash(0x288030, 0x240) == 0xE4111E50u &&
-        // Message 0x60/channel 4: native-string row text, distinct from the
-        // raw-char channel 0. Also pin parsing, string copy and row cleanup.
-        hash(0x273A72, 0x49) == 0xC7F425DEu &&
-        hash(0x2D0660, 0x9F) == 0x822927BFu &&
-        hash(0x2CD7E0, 0x80) == 0x793158B2u &&
-        hash(0x285050, 0xC6) == 0x2AE088E8u &&
-        hash(0x284A40, 0xA0) == 0x5C06EA1Bu &&
-        hash(0x23AAF0, 0x80) == 0x18E7D978u &&
-        hash(0x2CE250, 0xE0) == 0xCF9EA6EFu &&
-        hash(0x2CE0C0, 0x90) == 0xBC344AF3u &&
-        hash(0xB4C00, 0x100) == 0xD541CFCFu;
+    return g_buildProfile && MajestyFeatureParity::Validate(
+        g_imageBase,g_buildProfile->buildId,MajestyFeatureParity::Feature::HeroInfo);
+}
+std::uintptr_t g_inventorySpellContinue = 0, g_inventorySpellSkip = 0;
+bool __stdcall HideInventorySpell(unsigned actionId) {
+    const auto& ids = g_runtimeFeatureRegistry.hiddenInventoryActions;
+    return std::binary_search(ids.begin(), ids.end(), actionId);
+}
+// Stock gate: cmp byte ptr [eax+14h], bl; je next-node. EAX is the
+// borrowed learned-spell node. Preserve it and all stock loop registers.
+// No writes to the node, inventory, cooldown, or saved data.
+__declspec(naked) void InventorySpellGate() {
+    __asm {
+        pushfd
+        pushad
+        push dword ptr [eax+8]
+        call HideInventorySpell
+        test al, al
+        jnz filtered
+        popad
+        popfd
+        cmp byte ptr [eax+14h], bl
+        je skip
+        jmp dword ptr [g_inventorySpellContinue]
+    filtered:
+        popad
+        popfd
+    skip:
+        jmp dword ptr [g_inventorySpellSkip]
+    }
+}
+bool InstallInventorySpellDisplay() {
+    const auto body = ParityRva(ParitySite::HeroLearned);
+    const unsigned char gate[] = {0x38,0x58,0x14,0x0F,0x84,0xB0,0x01,0,0};
+    // The complete body was validated before any presentation hooks installed.
+    if (!MatchesProfileBytes(body+0xD9,gate,sizeof(gate),"inventory spell display gate")) return false;
+    g_inventorySpellContinue = g_imageBase+body+0xE2;
+    g_inventorySpellSkip = g_imageBase+body+0x292;
+    return WriteOccupantBranch(g_imageBase+body+0xD9,
+        reinterpret_cast<void*>(&InventorySpellGate),0xE9,sizeof(gate));
 }
 MajestyStringView HeroInfoString(const std::string& text) {
     return {text.c_str(), static_cast<std::uint32_t>(text.size()), static_cast<std::uint32_t>(text.size())};
@@ -162,21 +180,21 @@ __declspec(naked) void HeroPassivesHook() {
 bool InstallHeroInfo() {
     // Run before the legacy enchantment adapter changes the audited switch.
     if (!ValidateHeroInfoProfile()) return false;
-    g_heroAppend = reinterpret_cast<HeroAppend>(g_imageBase+0x272410);
-    g_heroImageCtor = reinterpret_cast<HeroImageLife>(g_imageBase+0x287E50);
-    g_heroImageDtor = reinterpret_cast<HeroImageLife>(g_imageBase+0x287770);
-    g_heroImageType = reinterpret_cast<HeroImageOp>(g_imageBase+0x2877A0);
-    g_heroImageId = reinterpret_cast<HeroImageOp>(g_imageBase+0x2877F0);
-    g_heroImageSet = reinterpret_cast<HeroImageOp>(g_imageBase+0x287F30);
-    g_heroImageFrame = reinterpret_cast<HeroImageOp>(g_imageBase+0x2873A0);
-    g_heroImageFlags = reinterpret_cast<HeroImageOp>(g_imageBase+0x287600);
-    g_heroSelected = reinterpret_cast<HeroSelected>(g_imageBase+0x68780);
-    g_heroPassiveResume = g_imageBase+0xA4083;
+    g_heroAppend = reinterpret_cast<HeroAppend>(g_imageBase+ParityRva(ParitySite::HeroAppend));
+    g_heroImageCtor = reinterpret_cast<HeroImageLife>(g_imageBase+ParityRva(ParitySite::ImageCtor));
+    g_heroImageDtor = reinterpret_cast<HeroImageLife>(g_imageBase+ParityRva(ParitySite::ImageDtor));
+    g_heroImageType = reinterpret_cast<HeroImageOp>(g_imageBase+ParityRva(ParitySite::ImageType));
+    g_heroImageId = reinterpret_cast<HeroImageOp>(g_imageBase+ParityRva(ParitySite::ImageId));
+    g_heroImageSet = reinterpret_cast<HeroImageOp>(g_imageBase+ParityRva(ParitySite::ImageSet));
+    g_heroImageFrame = reinterpret_cast<HeroImageOp>(g_imageBase+ParityRva(ParitySite::ImageFrame));
+    g_heroImageFlags = reinterpret_cast<HeroImageOp>(g_imageBase+ParityRva(ParitySite::ImageFlags));
+    g_heroSelected = reinterpret_cast<HeroSelected>(g_imageBase+ParityRva(ParitySite::HeroSelected));
+    g_heroPassiveResume = g_imageBase+ParityRva(ParitySite::HeroLearned)+0x483;
     // A failed install stops before Majesty resumes; never continue partially.
-    return WriteOccupantBranch(g_imageBase+0xA3E16, reinterpret_cast<void*>(&HeroSpellAppendHook), 0xE8) &&
-        WriteOccupantBranch(g_imageBase+0xA3E4B, reinterpret_cast<void*>(&HeroSpellImage), 0xE8) &&
-        WriteOccupantBranch(g_imageBase+0xA3E8D, reinterpret_cast<void*>(&HeroSpellFinishHook), 0xE8) &&
-        WriteOccupantBranch(g_imageBase+0xA407C, reinterpret_cast<void*>(&HeroPassivesHook), 0xE9, 7) &&
-        WriteOccupantBranch(g_imageBase+0xA48FF, reinterpret_cast<void*>(&HeroEffectImage), 0xE8) &&
-        WriteOccupantBranch(g_imageBase+0xA4942, reinterpret_cast<void*>(&HeroEffectFinishHook), 0xE8);
+    return WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x216, reinterpret_cast<void*>(&HeroSpellAppendHook), 0xE8) &&
+        WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x24B, reinterpret_cast<void*>(&HeroSpellImage), 0xE8) &&
+        WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x28D, reinterpret_cast<void*>(&HeroSpellFinishHook), 0xE8) &&
+        WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x47C, reinterpret_cast<void*>(&HeroPassivesHook), 0xE9, 7) &&
+        WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroEffects)+0x7EF, reinterpret_cast<void*>(&HeroEffectImage), 0xE8) &&
+        WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroEffects)+0x832, reinterpret_cast<void*>(&HeroEffectFinishHook), 0xE8);
 }

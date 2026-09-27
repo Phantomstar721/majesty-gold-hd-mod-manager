@@ -12,6 +12,17 @@ CAPABILITY = "manager.source-exploration.v1"
 MAX_EXPRESSION_INTEGER = 2097151
 
 
+def require_supported_profile(executable) -> None:
+    """Cheap identity check; the native installer also validates every hook."""
+    from .manager.qol_service import (
+        detect_majesty_branch, PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH,
+    )
+    if executable is None or detect_majesty_branch(executable) not in (
+        PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH,
+    ):
+        raise ValueError("Source exploration requires an audited default Steam, Steam beta2, or GOG executable")
+
+
 def requires_native_observation(definition) -> bool:
     from .shared_features import StockGameplayEventObserver
     return any(isinstance(feature, StockGameplayEventObserver) and feature.event == EVENT

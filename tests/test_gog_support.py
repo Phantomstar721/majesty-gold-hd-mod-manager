@@ -42,16 +42,17 @@ class GogSupportTests(unittest.TestCase):
 
     def test_unknown_gog_capability_is_not_routed_to_beta2(self):
         self.assertEqual(unsupported_runtime_capabilities(GOG_BRANCH, (
-            "stock.name-generator.v1", "stock.controller-recipes.v1", "stock.equipment.v1",
-        )), ("stock.equipment.v1",))
+            "stock.name-generator.v1", "stock.controller-recipes.v1", "unknown.feature.v1",
+        )), ("unknown.feature.v1",))
         self.assertEqual(unsupported_runtime_capabilities(BETA2_BRANCH, (
             "stock.controller-recipes.v1",
         )), ())
 
-    def test_newer_local_features_remain_guarded_until_gog_is_audited(self):
-        capabilities = ("stock.equipment.v1", "manager.kingdom-research.v1", "stock.ap78-info-row.v1")
+    def test_all_shared_features_have_gog_profiles(self):
+        from majesty_cam.manager.capabilities import DERIVED_RUNTIME_CAPABILITIES
+        capabilities = DERIVED_RUNTIME_CAPABILITIES
         self.assertEqual(unsupported_runtime_capabilities(GOG_BRANCH, capabilities),
-                         tuple(sorted(capabilities)))
+                         ())
         self.assertEqual(unsupported_runtime_capabilities(BETA2_BRANCH, capabilities), ())
 
     def test_optional_utilities_use_their_guarded_gog_installers(self):

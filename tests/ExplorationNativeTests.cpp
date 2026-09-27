@@ -41,6 +41,11 @@ bool Check(bool value, const char* message) {
 
 int main() {
     using namespace ExplorationObservation;
+    if (!Check(MajestyExplorationProfiles::Find(static_cast<MajestyBuildId>(255)) == nullptr,
+               "unknown build fails closed")) return 1;
+    for (auto id : {MajestyBuildId::SteamPublic, MajestyBuildId::SteamBeta2, MajestyBuildId::Gog}) {
+        if (!Check(MajestyExplorationProfiles::Find(id) != nullptr, "explicit build profile")) return 1;
+    }
     tileResume = reinterpret_cast<std::uintptr_t>(&ResumeTile);
     bool okay = true;
     Batch observed{4, 0};

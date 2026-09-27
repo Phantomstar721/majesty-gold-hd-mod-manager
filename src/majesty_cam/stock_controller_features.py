@@ -230,6 +230,14 @@ class StockMx22IndependentToggle(StockMx22BuildingOpenToggle):
 
 
 @dataclass(frozen=True)
+class StockMx22PanelToggle(StockMx22IndependentToggle):
+    """Independent state presented on an explicitly owned recruitment child."""
+
+    panel_key: str = ""
+    type: str = "stock.mx22-building-open-toggle.v3"
+
+
+@dataclass(frozen=True)
 class StockAp41Fl00HostileMonsterFlag:
     """AP41/Fl00 reward placement restricted to hostile stock monsters."""
 
@@ -366,6 +374,7 @@ ControllerFeature = Union[
     StockAp52PrivateRecruitment,
     StockMx22BuildingOpenToggle,
     StockMx22IndependentToggle,
+    StockMx22PanelToggle,
     StockMx04Mx05OccupantActionPanel,
     StockMx05LiveAgentListPanel,
     StockAp10Ap69SecondaryPanel,
@@ -386,6 +395,7 @@ _FEATURE_TYPES = {
     "stock.ap52-recruitment-panel.v1": StockAp52RecruitmentPanel,
     "stock.mx22-building-open-toggle.v1": StockMx22BuildingOpenToggle,
     "stock.mx22-building-open-toggle.v2": StockMx22IndependentToggle,
+    "stock.mx22-building-open-toggle.v3": StockMx22PanelToggle,
     "stock.mx04-mx05-occupant-action-panel.v1": StockMx04Mx05OccupantActionPanel,
     "stock.mx05-live-agent-list-panel.v1": StockMx05LiveAgentListPanel,
     "stock.mx05-data-record-list-panel.v1": StockMx05DataRecordListPanel,
@@ -753,6 +763,8 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
         _logical(feature.toggle_key, "toggle_key")
         _logical(feature.parent_building, "parent_building")
         if isinstance(feature, StockMx22IndependentToggle):
+            if isinstance(feature, StockMx22PanelToggle):
+                _logical(feature.panel_key, "panel_key")
             for value, label in ((feature.state_attribute, "state_attribute"),
                                  (feature.state_callback_symbol, "state_callback_symbol")):
                 if not isinstance(value, str) or not _GPL_SYMBOL.fullmatch(value) or value.casefold().startswith("mm_"):
@@ -1177,6 +1189,13 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
             raise ControllerFeatureError(f"independent toggle {field} is duplicated")
     toggle_commands = set()
     for toggle in toggles:
+        if isinstance(toggle, StockMx22PanelToggle):
+            panel = panels.get(toggle.panel_key)
+            if not isinstance(panel, StockAp52RecruitmentPanel) or panel.parent_building != toggle.parent_building:
+                raise ControllerFeatureError("panel toggle requires an owned AP52 recruitment child with the same parent")
+            if any(c <= 0x22CE or c == panel.third_price_control_id
+                   for c in (toggle.open_command_id,toggle.close_command_id)):
+                raise ControllerFeatureError("panel toggle commands collide with stock recruitment controls")
         for command in (toggle.open_command_id, toggle.close_command_id):
             if command in toggle_commands:
                 raise ControllerFeatureError("building toggle command IDs collide")
@@ -1608,6 +1627,7 @@ __all__ = [
     "StockAp99ResearchRow",
     "StockMx22BuildingOpenToggle",
     "StockMx22IndependentToggle",
+    "StockMx22PanelToggle",
     "StockAp52PrivateRecruitment",
     "StockAp52RecruitmentPanel",
     "StockMx04Mx05OccupantActionPanel",

@@ -29,6 +29,75 @@ from majesty_cam.art import analyze_art_archive
 
 
 class StockArtTests(unittest.TestCase):
+    def test_required_base_atlas_retains_source_tiles_without_clobbering_private_art(self):
+        from dataclasses import replace
+        from majesty_cam.compose import _required_stock_art_domain, _restore_required_stock_art
+        from majesty_cam.stock_art import _art_overlay
+        from majesty_cam.art import parse_stock_imag_tile_references, parse_tile_palette_reference
+        base = _archive((_image(b"BASE",1001,0),),(_tile(0,marker=7),),palette=b"PALT")
+        expansion = _archive((_image(b"EXPN",1002,0),),(_tile(0,marker=99),),palette=b"PALT")
+        expansion = CamArchive(tuple(replace(s,entries=tuple(replace(e,data=b'new') for e in s.entries))
+            if s.extension == b'PALT' else s for s in expansion.sections))
+        stock = _art_overlay(base,(expansion,))
+        result = _required_stock_art_domain('interface',stock,(b'BASE',b'EXPN'))
+        private = _image(b'PRIV',2001,0)
+        result = replace(result,archive=CamArchive(tuple(replace(s,entries=(*s.entries,private))
+            if s.extension == b'IMAG' else s for s in result.archive.sections)))
+        result = _restore_required_stock_art(result,stock,(base,expansion),(b'BASE',b'EXPN'))
+        tiles = _section(result.archive,b'TILE').entries
+        palettes = _section(result.archive,b'PALT').entries
+        for key,marker,payload in ((b'BASE',7,b'\x01'),(b'EXPN',99,b'new'),(b'PRIV',99,b'new')):
+            entry = _entry_for(result.archive,b'IMAG',key)
+            ref = parse_stock_imag_tile_references(entry.data,tile_count=len(tiles)).references[0]
+            tile = tiles[ref.tile_index].data
+            self.assertEqual(tile[26],marker)
+            self.assertEqual(palettes[parse_tile_palette_reference(tile,tile_index=ref.tile_index).palette_index].data,payload)
+        self.assertEqual(_entry_for(result.archive,b'IMAG',b'PRIV'),private)
+        self.assertEqual(result.report.tile_allocation.final_count,len(tiles))
+
+    def test_installed_stock_interface_atlases_keep_all_frame_payloads(self):
+        from majesty_cam.compose import merge_art_resource_domains
+        from majesty_cam.art import parse_stock_imag_tile_references, parse_tile_palette_reference, parse_imag_tile_references, ArtFormatError
+        def references(image,count):
+            try: return parse_stock_imag_tile_references(image.data,tile_count=count).references
+            except ArtFormatError: return parse_imag_tile_references(image.data,tile_count=count).references
+        game = Path('C:/Program Files (x86)/Steam/steamapps/common/Majesty HD')
+        if not (game/'Data/interfacedata.cam').is_file():
+            self.skipTest('installed stock art unavailable')
+        lineage = next(l for l in load_stock_art_lineages(game) if l.domain == 'interface')
+        expected = {e.name[:4]:(a,e) for a in lineage.ancestors for e in _section(a,b'IMAG').entries}
+        # Font atlases use a separate glyph-table format, not animation frames.
+        expected = {key:value for key,value in expected.items() if not key.startswith(b'fn')}
+        results = merge_art_resource_domains(game,(),required_stock_imag_ids=tuple(sorted(expected)))
+        result = next(r for r in results if r.domain == 'interface')
+        tiles = _section(result.archive,b'TILE').entries
+        palette = _section(result.archive,b'PALT').entries
+        for key,(archive,image) in expected.items():
+            index = lineage.ancestors.index(archive)
+            original_tiles = list(_section(lineage.ancestors[0],b'TILE').entries)
+            for ancestor in lineage.ancestors[1:index+1]:
+                for number,entry in enumerate(_section(ancestor,b'TILE').entries):
+                    if number == len(original_tiles): original_tiles.append(entry)
+                    elif entry.data: original_tiles[number] = entry
+            original_refs = references(image,len(original_tiles))
+            actual = _entry_for(result.archive,b'IMAG',key)
+            refs = references(actual,len(tiles))
+            self.assertEqual(len(refs),len(original_refs))
+            for old,new in zip(original_refs,refs):
+                with self.subTest(image=key,frame=old.tile_index):
+                    before,after = original_tiles[old.tile_index].data,tiles[new.tile_index].data
+                    self.assertEqual(before[:22]+before[26:],after[:22]+after[26:])
+                    bp = parse_tile_palette_reference(before,tile_index=old.tile_index)
+                    ap = parse_tile_palette_reference(after,tile_index=new.tile_index)
+                    if bp is None:
+                        self.assertEqual(before,after)
+                    else:
+                        inherited_palette = next(s.entries[bp.palette_index].data
+                            for a in reversed(lineage.ancestors[:index+1]) for s in a.sections
+                            if s.extension == b'PALT' and bp.palette_index < len(s.entries)
+                            and s.entries[bp.palette_index].data)
+                        self.assertEqual(inherited_palette,palette[ap.palette_index].data)
+
     def test_expansion_only_stock_image_survives_sparse_and_final_composition(self):
         from types import SimpleNamespace
         from majesty_cam.compose import _compose_art_domain

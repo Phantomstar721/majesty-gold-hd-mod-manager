@@ -6,7 +6,9 @@ from pathlib import Path
 import re
 
 from ..cam import read_cam
-from ..equipment import require_beta2
+from .runtime_profiles import require_supported_runtime
+from ..exploration_events import selected as exploration_selected, require_supported_profile as require_exploration_profile
+from ..spell_origin import selected as spell_origin_selected
 from ..gpl import find_foreach_return_violations
 from ..compose import (
     ComposeError,
@@ -350,8 +352,10 @@ def prepared_catalog_merge_preflight(
             (inventory,),
             prepared.runtime_capabilities,
         )
+        if exploration_selected((inventory,)) or spell_origin_selected((inventory,)):
+            require_exploration_profile(game_path / "MajestyHD.exe")
         if runtime_features.equipment or runtime_features.kingdom_research or runtime_features.hero_info_rows or runtime_features.movement_scales:
-            require_beta2(game_path / "MajestyHD.exe")
+            require_supported_runtime(game_path / "MajestyHD.exe")
         dialogs = resolve_building_dialogs((inventory,))
         controller = resolve_controller_registry(
             (inventory,),

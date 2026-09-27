@@ -485,7 +485,8 @@ std::map<void*, std::uint32_t> toggleSavedValues;
 int toggleStateCalls = 0;
 bool ToggleScalar(const char* symbol, void* owner, bool hasInteger, int operation,
                   std::uint32_t* result, bool) {
-    assert(std::strcmp(symbol, "MM_Toggle_Example_Enabled") == 0 && hasInteger);
+    assert((std::strcmp(symbol, "MM_Toggle_Example_Enabled") == 0 ||
+            std::strcmp(symbol, "MM_Toggle_Hiring_Closed") == 0) && hasInteger);
     ++toggleStateCalls;
     if (operation == 0 || operation == 1) toggleSavedValues[owner] = operation;
     *result = toggleSavedValues[owner];
@@ -567,6 +568,24 @@ void RecruitmentChildLifecycle() {
     for (auto cmd : {0x1F47u,0x1F49u,0x22CEu,0x1F44u,0x1F58u,0x1F59u,0x1F5Au,0x1F5Bu})
         assert(OccupantParentControl(&child, nullptr, cmd) == 0);
     assert(fallbackCount == beforeHidden);
+    // An owned child pair is the only extra command route. Primary controls
+    // never leak into this whitelist; a single-panel teardown keeps child state.
+    const auto toggleCount = g_stockControllerRegistry.buildingOpenToggles.size();
+    g_stockControllerRegistry.buildingOpenToggles.push_back({"child-hiring",
+        record->parentDialogId, 0x7340, 0x7341, 0x32355041u,
+        "HiringClosed", "Hiring_Closed", "MM_Toggle_Hiring_Closed", record->childDialogId});
+    g_questBoardScalarEvaluator = &ToggleScalar;
+    toggleSavedValues.clear(); toggleStateCalls = 0;
+    ResetPrivateToggleStates();
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(&child));
+    assert(toggleStateCalls == 1 && lastMessageControl == 0x7340);
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(&child));
+    assert(toggleStateCalls == 1);
+    assert(OccupantParentControl(&child, nullptr, 0x7340) == 0);
+    assert(toggleSavedValues[contextA] == 1 && lastMessageControl == 0x7341);
+    int ignored = 0;
+    assert(!HandleBuildingOpenToggle(&parent, 0x7340, &ignored));
+    assert(!HandleBuildingOpenToggle(&child, 0x5D01, &ignored));
     // Input filtering must not suppress native duration/tick refresh events.
     for (auto* object : {&parent, &child}) {
         for (auto notification : {0x0D425041u, 0x09435358u})
@@ -578,6 +597,11 @@ void RecruitmentChildLifecycle() {
     Destroy(parent);
     assert(g_parentController == 0 && g_parentRecruitment == nullptr);
     assert(g_childController == reinterpret_cast<LONG>(&child) && g_activeRecruitment == record);
+    const int readsBefore = toggleStateCalls;
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(&child));
+    assert(toggleStateCalls == readsBefore && lastMessageControl == 0x7341);
+    assert(OccupantParentControl(&child, nullptr, 0x7341) == 0);
+    assert(toggleSavedValues[contextA] == 0);
     child.context = contextB;
     assert(OccupantParentControl(&child, nullptr, 0x1F4Du) == 1);
     assert(seenContext == contextB && seenDialog == record->parentDialogId);
@@ -588,6 +612,8 @@ void RecruitmentChildLifecycle() {
     assert(g_activeRecruitment == record);
     Destroy(replacementChild);
     assert(g_childController == 0 && g_activeRecruitment == nullptr);
+    assert(g_childToggleCache.states.empty());
+    g_stockControllerRegistry.buildingOpenToggles.resize(toggleCount);
     for (auto& fn : childClass.recruitment.recruit) fn = nullptr;
     childClass.recruitment.setup = nullptr; // these test doubles are not allocated code
     mainClass.recruitment.event = childClass.recruitment.event = nullptr;

@@ -1,8 +1,9 @@
 # Persistent exploration attribution: native audit
 
-2026-09-23. Conditionally approved instrumentation is implemented in source;
-live-game qualification remains outstanding. Addresses are Steam beta2 VAs.
-Other executables fail closed for this feature.
+2026-09-23 audit, extended 2026-09-25. Conditionally approved instrumentation
+is implemented for default Steam, Steam beta2 and GOG. The original trace below
+uses beta2 VAs; the cross-build section records the independently mapped RVAs.
+Unknown or modified hook bodies fail closed. Live acceptance is a separate step.
 
 ## Stock reveal and attribution
 
@@ -99,7 +100,8 @@ This excludes GPL and stock work; it is not an in-game performance guarantee.
 
 Live acceptance remains: fresh recruitment, teleport/revisits/shared vision,
 reward-triggered sight expansion, repeated native save/load, ownership round
-trips and active-game overhead. Source support is beta2 only.
+trips and active-game overhead. Repeat these checks for each supported build;
+the default Steam/GOG port has not yet received an in-game acceptance run.
 
 The discarded Begin/Count/End proposal is not exported. See the implemented
 [event and package contract](source-exploration-events.md).
@@ -122,3 +124,69 @@ rejects oversized numeric literals in the generated service. The ordinary
 Python GPL harness alone did not catch this because it uses Python arithmetic.
 Users must regenerate their prepared GPL package with the corrected Manager;
 replacing only the runtime DLL cannot change the faulty generated expression.
+
+## Default Steam and GOG port (2026-09-25)
+
+`runtime/ExplorationProfiles.h` is the canonical per-build evidence table.
+All addresses in this table are RVAs, relative to image base `00400000`.
+
+| Boundary | Default Steam | Steam beta2 | GOG |
+| --- | --- | --- | --- |
+| PE timestamp | `5897B72F` | `5A8A11D5` | `5BBB8DB8` |
+| Source callback | `461D0` | `470E0` | `47000` |
+| Native circle reveal | `1C4CF0` | `1D9ED0` | `1D9220` |
+| Central reader | `1D72D0` | `1EC5D0` | `1EB920` |
+| Stream writer | `1D6D90` | `1EBF70` | `1EB2C0` |
+| Owner setter | `1BA380` | `1CF320` | `1CE670` |
+| Agent binding | `148B10` | `15D410` | `15C710` |
+| Game singleton getter | `25D00` | `26CD0` | `25F60` |
+| Game singleton pointer | `3C0ABC` | `3DF574` | `3DF814` |
+| World-root pointer | `3C544C` | `3E3FD4` | `3E426C` |
+| State-2 call / initializer | `25264` / `28C20` | `26234` / `2AAB0` | `254C4` / `29CF0` |
+
+Source callback, circle reveal, central reader, owner setter, and agent-binding
+bodies match instruction-for-instruction after masking address operands. EDI
+still holds the source, the reveal call remains at callback+`C0`, and the
+14-byte tile write boundary at reveal+`12D` is identical. The displaced eight
+bytes resume at +`135`; stack arguments, source fields and owner bit semantics
+do not vary. No per-tile profile search is introduced.
+
+RTTI identifies `GS_MapIOManager` and `GE_MapIOManager` writer virtuals at +8
+in each build. GOG's writer matches beta2 structurally. Default Steam's writer
+is 0x64 bytes rather than 0x62: its stream virtual is +20 rather than +24,
+and the null-stream branch has its own epilogue. Both branches return an
+integer and `ret 8`; the same chunk loop and two caller arguments are retained.
+The wrapper calls the complete build-specific writer once; it does not copy
+the differing internal virtual dispatch. This preserves pointer conversion,
+early exits, errors, and depth cleanup. All three direct central-reader calls
+and all nine owner-setter virtual slots were enumerated per executable.
+
+The main-loop getter returns the singleton passed in ECX to each state
+dispatcher. State lives at +0; dispatcher states 3/7/8 use existing-world
+updates. Each state-2 initializer uses root+10 for the world, finalizes both
+world containers through their native virtuals, clears +54 and requests state3
+before returning. Default Steam has a larger initialization body (including
+its multiplayer wait), so it is not treated as a relocated beta2 function.
+The hook stays at the dispatcher call and runs only after the entire stock
+initializer returns. Kingdom-research visual traversal never runs solely because
+exploration is selected. Its [subsequent parity port](runtime-feature-parity.md)
+preserves this shared hook on all three builds.
+
+Installation checks exact FNV body hashes for all six observation routines
+and the singleton getter, global-load operands, tile bytes, the source/read
+calls, evaluator lifecycle calls, and original owner/writer virtual targets.
+The shared world-ready adapter checks its per-build call target before patching.
+The existing profiled update hook owns delivery timing. Python preflight,
+composition and launch accept only identified supported PE profiles; unrelated
+feature-specific guards remain independent of exploration selection.
+
+Reproduce read-only evidence validation with
+`tests/test_exploration_profiles.py`, setting
+`MAJESTY_EXPLORATION_PUBLIC_EXE`, `MAJESTY_EXPLORATION_BETA2_EXE`, and
+`MAJESTY_EXPLORATION_GOG_EXE` to the three executables. It checks the production
+profile constants against actual PE bytes without loading or editing the game.
+The local public support-test executable includes existing QOL patches and a
+private Documents-folder literal; the verified observation bodies are not
+those patched sites. Native trampoline fixtures and saved-GPL accounting
+fixtures are also retained. Neither fixture substitutes for the native
+save/load, ownership, teleport and recruitment acceptance run.

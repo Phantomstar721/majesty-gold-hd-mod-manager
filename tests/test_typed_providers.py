@@ -84,6 +84,22 @@ class TypedProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "undeclared"):
             compose_dispatches((("provider", (), (parse_gpl(BODY), dat)), self.packages()[1]))
 
+    def test_read_only_comparisons_do_not_install_provider_bindings(self):
+        for expression in (
+            '$validfunction(A\'s "ExampleEligible") == True',
+            '((A\'s "ExampleEligible")) == $Other_Eligible',
+            'A\'s "ExampleEligible" != $Other_Eligible',
+        ):
+            source = parse_gpl('function Check(agent A) is boolean\ndeclare\nbegin\n'
+                               f'if ({expression}) return True;\nreturn False;\nend\n')
+            compose_dispatches((("consumer", (C,), (source,)),))
+        # A nearby comparison must not hide a subsequent computed assignment.
+        source = parse_gpl('function Check(agent A)\ndeclare\nbegin\n'
+            'if ($validfunction(A\'s "ExampleEligible") == True)\n'
+            'A\'s "ExampleEligible" = A\'s "Other";\nend\n')
+        with self.assertRaisesRegex(ValueError, "computed"):
+            compose_dispatches((("consumer", (C,), (source,)),))
+
 
 if __name__ == "__main__":
     unittest.main()

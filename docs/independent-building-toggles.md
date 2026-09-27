@@ -33,6 +33,23 @@ A failed read hides the pair until the context changes, without repeated calls.
 
 ## Stock persistence reference
 
+### Recruitment subpanels
+
+Use `stock.mx22-building-open-toggle.v3` with the same saved-state fields and
+an additional `panel_key` to bind a pair to an owned
+`stock.ap52-recruitment-panel.v1` child. The referenced panel must be declared
+in the same package and use the same `parent_building`. Place the literal
+audited control pair in that child's SMNU, not the primary panel. Commands must
+be private and cannot collide with recruitment controls. This uses MMCR v21;
+v2 continues to address the primary panel.
+
+The true-setting command remains `open_command_id`, and the false-setting
+command remains `close_command_id`; captions describe the author's chosen
+policy. Missing state is false. Primary and child presentation caches have
+separate stock teardown lifetimes, including single-panel layouts where
+opening the child destroys the primary controller. Unrelated child commands
+remain blocked. The extension adds no timer or polling service.
+
 Beta2 agent writer `0x577E30` passes the agent's property container to `0x577180`
 at `0x577E91`. `0x577180` writes its entry count (`0x5771D3..0x5771D9`) and
 iterates every map entry through the serializer virtual method

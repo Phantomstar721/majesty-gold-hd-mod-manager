@@ -10,7 +10,8 @@ from majesty_cam.cam import CamArchive, CamEntry, CamSection, pad_name
 from majesty_cam.compose import (CamResource, _join_imag_sets, _split_imag_sets,
                                 resolve_runtime_feature_registry)
 from majesty_cam.equipment import (StockEquipment, EquipmentRegistration, parse_equipment,
-    equipment_mapping, registration, require_beta2, EQUIPMENT_FEATURE_TYPE)
+    equipment_mapping, registration, EQUIPMENT_FEATURE_TYPE)
+from majesty_cam.manager.runtime_profiles import require_supported_runtime
 from majesty_cam.equipment_compose import (resolve_equipment, validate_art,
     transform_equipment_description, bind_equipment_art, validate_generated_equipment)
 from majesty_cam.runtime_features import (NativeTimingFeature, MapFogQueryFeature,
@@ -143,21 +144,16 @@ class EquipmentTests(unittest.TestCase):
                 bind_equipment_art((output,), (inv,))
 
     def test_profile_gate(self):
+        from majesty_cam.manager.qol_service import PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH
+        from test_manager_qol_service import _write_synthetic_exe
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "game.exe"
-            header = bytearray(128)
-            header[:2] = b"MZ"
-            struct.pack_into("<I", header, 60, 64)
-            header[64:68] = b"PE\0\0"
-            struct.pack_into("<H", header, 68, 0x14C)
-            for stamp in (0x5A8A11D5, 0x5897B72F, 0):
-                struct.pack_into("<I", header, 72, stamp)
-                path.write_bytes(header)
-                if stamp == 0x5A8A11D5:
-                    require_beta2(path)
-                else:
-                    with self.assertRaisesRegex(ValueError, "beta2"):
-                        require_beta2(path)
+            for branch in (PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH):
+                _write_synthetic_exe(path,branch,appended_section=True)
+                require_supported_runtime(path)
+                _write_synthetic_exe(path,branch,alter_first_section=True)
+                with self.assertRaises(ValueError):
+                    require_supported_runtime(path)
 
     def test_art_binding_clones_destination_version_for_both_slots(self):
         from majesty_cam.compose import ArtDomainComposeResult

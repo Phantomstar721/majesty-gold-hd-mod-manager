@@ -17,7 +17,11 @@ import xml.etree.ElementTree as ET
 
 from ._subprocess import no_console_window_options
 from .stock_input_cache import StockInputCache
-from .equipment import EquipmentRegistration, EQUIPMENT_FEATURE_TYPE, require_beta2
+from .equipment import EquipmentRegistration, EQUIPMENT_FEATURE_TYPE
+from .manager.runtime_profiles import require_supported_runtime
+from .potion_policy import (POTIONS, PotionPolicy, Plan as PotionPlan, selected as potion_policies,
+    prepare_descriptions as prepare_potion_descriptions, compose as compose_potion_policy)
+from .inventory_spell_display import CAPABILITY as INVENTORY_DISPLAY_CAPABILITY, derive_hidden_action_ids
 from .movement_scale import (OverlayMovementScale, MOVEMENT_SCALE_TYPE,
                              validate_movement_scale_evidence)
 from .hero_info import (HeroInfoRow, HERO_INFO_TYPE, validate_hero_info_evidence,
@@ -102,7 +106,8 @@ from .shared_composition import validate_shared_bindings, event_subscribers
 from .shared_features import shared_feature_mapping
 from .activity_time import add_activity_service
 from .gameplay_events import event_stock_paths
-from .exploration_events import selected as exploration_selected, CAPABILITY as EXPLORATION_CAPABILITY
+from .exploration_events import selected as exploration_selected, CAPABILITY as EXPLORATION_CAPABILITY, require_supported_profile as require_exploration_profile
+from .spell_origin import selected as spell_origin_selected, CAPABILITY as SPELL_ORIGIN_CAPABILITY
 from .gameplay_events import (EVENT_FUNCTIONS, STOCK_EVENT_FILES,
                               add_gameplay_event_observers)
 from .intent_text import (
@@ -794,8 +799,10 @@ def inventory_package(selected: SelectedMod) -> PackageInventory:
                     )
 
     from .exploration_events import requires_native_observation
+    from .spell_origin import SpellOrigin
     source_runtime_package = (getattr(selected.package.definition, "schema_version", None) == 3 and
-                              requires_native_observation(selected.package.definition))
+                              (requires_native_observation(selected.package.definition) or
+                               any(isinstance(f, SpellOrigin) for f in getattr(selected.package.definition, "runtime_features", ()))))
     if not cam_paths and not selected.semantic_passthrough and not source_runtime_package:
         raise ComposeError(f"{selected.alias}: package has no CAM resources")
     if not gpl_loads and not selected.semantic_passthrough:
@@ -1612,6 +1619,80 @@ def _shared_bindings(inventories: Sequence[PackageInventory]):
         raise ComposeError(str(exc)) from exc
 
 
+def _source_context_bindings(inventories):
+    from .source_context import SourceContextDispatch, validate_bindings
+    if not any(isinstance(f, SourceContextDispatch) for inventory in inventories
+               for f in getattr(getattr(getattr(inventory.selected, "package", None),
+                                       "definition", None), "runtime_features", ())):
+        return ()
+    packages = []
+    for inventory in inventories:
+        package = inventory.selected.package
+        packages.append((_normalized_mod_uuid(package.mod_id),
+                         tuple(f for f in package.definition.runtime_features if isinstance(f,SourceContextDispatch)),
+                         _parse_inventory_gpl_sources(inventory)))
+    try:
+        return validate_bindings(packages)
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
+
+
+def _source_context_roots(game_path, inventories, *, descriptions=None, merged_items=None):
+    """Native script bindings only; no arbitrary first-agent function inference."""
+    data = {}
+    for relative in ("GPL/Spell_Data.dat", "GPLMx/mx_Spell_Data.dat"):
+        path = game_path / "SDK/OriginalQuests" / relative
+        if path.is_file():
+            data.update({i.key:i for i in _parse_semantic_source_file(path).items})
+    if merged_items is not None:
+        data.update({i.key:i for i in merged_items if i.kind is DefinitionKind.DAT_BLOCK})
+    else:
+        for inventory in inventories:
+            for source in _parse_inventory_gpl_sources(inventory):
+                data.update({i.key:i for i in source.items if i.kind is DefinitionKind.DAT_BLOCK})
+    spell_names, roots = set(), set()
+    for item in data.values():
+        if re.search(r"\{\s*Spell\b",item.text,re.I):
+            spell_names.add(item.normalized_name)
+            roots.update(re.findall(r"\(\s*activeScript\s+(\w+)\s*\)",item.text,re.I))
+    effective = {key:value[0] for key,value in _load_effective_stock_descriptions(game_path).items()}
+    if descriptions is not None:
+        effective.update(descriptions.document.index)
+    else:
+        for inventory in inventories:
+            for path in inventory.descriptions:
+                effective.update(_parse_description_file(path).index)
+    for record in effective.values():
+        e = record.to_element()
+        if (e.get("type") == "Action" or e.get("subType") == "Projectile" or
+                e.get("type") == "Unit" and e.get("Name", "").casefold() in spell_names):
+            roots.update(s.get("GPLFunction") for s in e.findall("./Engine/Script")
+                         if s.get("type") == "0" and s.get("cProc") == "0" and s.get("GPLFunction"))
+    return tuple(sorted(roots,key=str.casefold))
+
+
+def _spell_policy_bindings(inventories):
+    from .spell_policy import FEATURE_CLASSES, validate_bindings
+    if not any(isinstance(f, FEATURE_CLASSES) for inventory in inventories
+               for f in getattr(getattr(getattr(inventory.selected, "package", None),
+                                       "definition", None), "runtime_features", ())):
+        return ()
+    packages = []
+    for inventory in inventories:
+        package = inventory.selected.package
+        effective = {}
+        for path in inventory.descriptions:
+            effective.update(parse_descriptions(path.read_bytes(), source=str(path)).index)
+        packages.append((_normalized_mod_uuid(package.mod_id),
+                         tuple(f for f in package.definition.runtime_features if isinstance(f, FEATURE_CLASSES)),
+                         _parse_inventory_gpl_sources(inventory),
+                         tuple(record.to_element() for record in effective.values())))
+    try:
+        return validate_bindings(packages)
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
+
+
 def _typed_provider_dispatches(inventories):
     from .typed_providers import FEATURE_CLASSES, compose_dispatches
     packages = []
@@ -1636,6 +1717,8 @@ def _typed_provider_dispatches(inventories):
 def _load_stock_gameplay_event_items(game_path: Path, events):
     root = game_path / "SDK" / "OriginalQuests" / "GPLMx"
     names = {name for event in events for name in EVENT_FUNCTIONS[event]}
+    if "potion-consumed" in events:
+        names.add("shapeshift_potion_end")
     sources = {}
     result = {}
     for name in sorted(names):
@@ -1964,7 +2047,9 @@ def merge_art_resource_domains(
         )
         if not providers:
             results.append(
-                _required_stock_art_domain(lineage.domain, lineage.effective, required)
+                _restore_required_stock_art(
+                    _required_stock_art_domain(lineage.domain, lineage.effective, required),
+                    lineage.effective, lineage.ancestors, required)
             )
             continue
         prepared_providers: list[tuple[PackageInventory, Path, CamArchive]] = []
@@ -1995,7 +2080,7 @@ def merge_art_resource_domains(
             required_stock_imag_ids=required,
             art_resolutions=art_resolutions,
         )
-        results.append(result)
+        results.append(_restore_required_stock_art(result, lineage.effective, lineage.ancestors, required))
     emitted_imag: dict[bytes, str] = {}
     for result in results:
         for section in result.archive.sections:
@@ -2039,6 +2124,83 @@ def _required_stock_art_domain(
         CamSection(b"TILE", tuple(tiles), padding=stock_tiles.padding),
     ]
     return replace(result, archive=CamArchive(tuple(sections)))
+
+
+def _restore_required_stock_art(result, stock, ancestors, required_ids):
+    """Preserve archive-local TILE/palette provenance for copied stock atlases.
+
+    The effective ancestry table is positional allocation evidence, not proof
+    that a base-only IMAG belongs to the expansion TILE table. Never overwrite
+    existing custom slots to repair a required stock presenter.
+    """
+    if not required_ids:
+        return result
+    tiles = list(_require_section(result.archive, b"TILE").entries)
+    images = list(_require_section(result.archive, b"IMAG").entries)
+    palette_stock = next((s for s in stock.sections if s.extension in (b"SPLT", b"PALT")), None)
+    palette_output = next((s for s in result.archive.sections if s.extension in (b"SPLT", b"PALT")), None)
+    palettes = list(palette_output.entries if palette_output else palette_stock.entries if palette_stock else ())
+    original_palette_count = len(palettes)
+    copied_tiles, copied_palettes, reports = {}, {}, []
+    def dependency(source_index, extension, index):
+        for archive in reversed(ancestors[:source_index+1]):
+            section = next((s for s in archive.sections if s.extension == extension), None)
+            if section and index < len(section.entries) and section.entries[index].data:
+                return section.entries[index]
+        raise ComposeError(f"required stock atlas has missing {extension!r} dependency {index}")
+    def place(entries, source, old, cache, maximum):
+        if old < len(entries) and entries[old].data == source.data:
+            return old
+        if source.data in cache:
+            return cache[source.data]
+        destination = len(entries)
+        if destination > maximum:
+            raise ComposeError("required stock atlas exceeds positional art capacity")
+        entries.append(CamEntry(struct.pack("<I", destination) + source.name[4:], source.data))
+        cache[source.data] = destination
+        return destination
+    for required in dict.fromkeys(required_ids):
+        candidates = [(i,e) for i,a in enumerate(ancestors)
+                      for e in _require_section(a,b"IMAG").entries if e.name[:4] == required]
+        if not candidates:
+            raise ComposeError(f"required stock atlas {required!r} has no source archive")
+        source_index, image = candidates[-1]
+        count = max(len(_require_section(a,b"TILE").entries) for a in ancestors[:source_index+1])
+        try:
+            parsed = parse_stock_imag_tile_references(image.data,tile_count=count,entry_name=image.name)
+        except ArtFormatError:
+            parsed = parse_imag_tile_references(image.data,tile_count=count,entry_name=image.name)
+        refs = parsed.references
+        mapping = {}
+        for old in sorted({r.tile_index for r in refs}):
+            tile = dependency(source_index,b"TILE",old)
+            palette = parse_tile_palette_reference(tile.data,tile_index=old)
+            if palette is not None:
+                if palette_stock is None:
+                    raise ComposeError("required stock atlas has an external palette but no palette table")
+                entry = dependency(source_index,palette_stock.extension,palette.palette_index)
+                destination = place(palettes,entry,palette.palette_index,copied_palettes,0xFFFFFFFF)
+                if destination != palette.palette_index:
+                    tile = rewrite_tile_palette_indices((tile,),{palette.palette_index:destination}).entries[0]
+            mapping[old] = place(tiles,tile,old,copied_tiles,0xFFFE)
+        rewritten = rewrite_parsed_imag_entries((image,),mapping,(parsed,))
+        position = next(i for i,e in enumerate(images) if e.name[:4] == required)
+        images[position] = rewritten.entries[0]
+        reports.append(("stock:" + required.decode("ascii"),rewritten.report))
+    sections = [replace(s,entries=tuple(images)) if s.extension == b"IMAG" else
+                replace(s,entries=tuple(tiles)) if s.extension == b"TILE" else s
+                for s in result.archive.sections if s.extension not in (b"SPLT",b"PALT")]
+    palette_report = result.report.palette_allocation
+    if palette_stock is not None:
+        _materialize_effective_stock_prefix(palettes,palette_stock)
+        section = CamSection(palette_stock.extension,tuple(palettes),padding=palette_stock.padding)
+        validate_external_palette_closure(next(s for s in sections if s.extension == b"TILE"),section)
+        sections.append(section)
+        palette_report = (replace(palette_report,final_count=len(palettes)) if palette_report else
+            PositionalAllocationReport(palette_stock.extension,original_palette_count,len(palettes),()))
+    return replace(result,archive=CamArchive(tuple(sections)),report=replace(result.report,
+        tile_allocation=replace(result.report.tile_allocation,final_count=len(tiles)),
+        palette_allocation=palette_report,imag_reports=(*result.report.imag_reports,*reports)))
 
 
 def _effective_stock_art_ancestor(game_path: Path, domain: str) -> CamArchive:
@@ -3436,6 +3598,16 @@ def merge_description_resources(
         resolve=resolve if requested_resolutions else None,
         field_merge_stock=stock_records,
     )
+    from .spell_policy import SpecialSpell, validate_action
+    declared_spells = [feature for definition in definitions.values() if definition is not None
+                       for feature in getattr(definition, "runtime_features", ()) if isinstance(feature, SpecialSpell)]
+    if declared_spells:
+        final_actions = tuple(record.to_element() for record in result.document.records)
+        try:
+            for feature in declared_spells:
+                validate_action(feature, final_actions)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
     unused = set(requested_resolutions) - used_resolutions
     if unused:
         labels = ", ".join(repr(key) for key in sorted(unused))
@@ -4265,9 +4437,21 @@ def _validate_authored_building_toggle_controls(
         )
     for toggle in controller_toggles:
         inventory = inventory_by_owner[toggle.owner]
-        sources = _description_dialog_sources(
-            inventory, toggle.raw_parent_building
-        )
+        if resolved_by_key[toggle.qualified_toggle_key].panel_dialog_id:
+            features = inventory.selected.package.definition.runtime_features
+            declaration = next(
+                f for f in features
+                if isinstance(f, StockMx22BuildingOpenToggle)
+                and f.toggle_key == toggle.raw_toggle_key
+            )
+            panel = next(
+                f for f in features
+                if isinstance(f, StockAp52RecruitmentPanel)
+                and f.panel_key == declaration.panel_key
+            )
+            sources = {panel.source_dialog_id}
+        else:
+            sources = _description_dialog_sources(inventory, toggle.raw_parent_building)
         if len(sources) != 1:
             raise ComposeError(
                 f"{toggle.owner}: building toggle {toggle.raw_toggle_key!r} "
@@ -4721,6 +4905,11 @@ def merge_gpl_resources(
     stock_gameplay_event_items: Mapping[str, SemanticItem] | None = None,
     stock_spell_evaluation: SemanticItem | None = None,
     dataset_dependency_resolver: Callable[[SemanticMergeResult], SemanticMergeResult] | None = None,
+    spell_policy_plan=None,
+    source_context_roots=(),
+    source_context_loader=None,
+    source_context_root_loader=None,
+    potion_plan=PotionPlan(),
 ) -> GplComposeResult:
     parsed_by_owner: dict[str, list[ParsedSemanticSource]] = {}
     for inventory in inventories:
@@ -5115,10 +5304,18 @@ def merge_gpl_resources(
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
     shared = _shared_bindings(inventories)
+    try:
+        final, stock_gameplay_event_items = compose_potion_policy(
+            final, potion_plan, stock_function_loader, stock_gameplay_event_items or {})
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
     if shared:
         try:
             final = add_gameplay_event_observers(
-                final, event_subscribers(shared), stock_gameplay_event_items or {})
+                final, event_subscribers(shared), stock_gameplay_event_items or {},
+                potion_aliases={action.effect.casefold(): POTIONS[action.potion][1].casefold()
+                                for action in potion_plan.actions
+                                if action.effect.casefold() != POTIONS[action.potion][1].casefold() + "_effect"})
             final = add_activity_service(final, shared)
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
@@ -5143,6 +5340,25 @@ def merge_gpl_resources(
     dispatches = _typed_provider_dispatches(inventories)
     if dispatches:
         final = SemanticMergeResult((*final.items, *dispatches), final.conflicts)
+    from .spell_policy import compose_guards
+    from .spell_discovery import compose_discovered
+    from .spell_origin import compose_service as compose_spell_origin
+    from .source_context import compose as compose_source_context
+    try:
+        policy_bindings = _spell_policy_bindings(inventories)
+        if spell_policy_plan is not None:
+            final = compose_discovered(final, policy_bindings, spell_policy_plan, stock_function_loader)
+        else:
+            final = compose_guards(final, policy_bindings, stock_function_loader)
+        final = compose_spell_origin(final, spell_origin_selected(inventories))
+        context_bindings = _source_context_bindings(inventories)
+        if context_bindings and source_context_loader is None:
+            raise ValueError("source-context dispatch requires installed native callback and GPL evidence")
+        roots = (source_context_root_loader(final) if context_bindings and source_context_root_loader
+                 else source_context_roots)
+        final = compose_source_context(final, context_bindings, roots, source_context_loader)
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
     if private_activity_texts:
         try:
             audit_private_activity_text_resolver_aliases(
@@ -5266,6 +5482,12 @@ def validate_gpl_feature_evidence(
     """Validate and deterministically order source-composed GPL callbacks."""
 
     _typed_provider_dispatches(inventories)
+    try:
+        potion_policies(inventories)
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
+    _spell_policy_bindings(inventories)
+    _source_context_bindings(inventories)
     from .building_toggle_state import selected as selected_toggles, validate_declarations
     if selected_toggles(inventories):
         try:
@@ -6610,6 +6832,7 @@ def _qualify_controller_feature(feature: ControllerFeature, qualify) -> Controll
             feature,
             toggle_key=qualify("toggle", feature.toggle_key),
             parent_building=qualify("parent_building", feature.parent_building),
+            **({"panel_key":qualify("panel",feature.panel_key)} if getattr(feature,"panel_key","") else {}),
         )
     panel = qualify("panel", feature.panel_key)
     if isinstance(feature, (StockAp10Ap69SecondaryPanel, StockAp52PrivateRecruitment)):
@@ -7098,8 +7321,19 @@ def prepare_final_gpl_resources(
     ] | None = None,
     inventory_death_drop_exclusions: Sequence[str] = (),
     private_activity_texts: Sequence[PrivateActivityTextBinding] = (),
+    spell_policy_plan=None,
+    source_context_descriptions=None,
+    potion_plan=None,
 ) -> GplComposeResult:
     """Build the exact final GPL source set used by both Prepare and Build."""
+
+    if potion_plan is None:
+        policies = potion_policies(inventories)
+        potion_plan = PotionPlan()
+        if policies:
+            stock_records = {key: value[0] for key, value in _load_effective_stock_descriptions(game_path).items()}
+            descriptions = source_context_descriptions or merge_description_resources(inventories, stock_records=stock_records)
+            _, potion_plan = prepare_potion_descriptions(descriptions, stock_records, policies)
 
     stock_semantic_sources: Sequence[ParsedSemanticSource] = ()
     if any(inventory.selected.semantic_passthrough for inventory in inventories):
@@ -7143,8 +7377,17 @@ def prepare_final_gpl_resources(
     )
     events = event_subscribers(_shared_bindings(inventories))
     from .dataset_dependencies import close_dataset_dependencies, load_dataset_symbols
+    context_bindings = _source_context_bindings(inventories)
+    context_stock = load_dataset_symbols(game_path) if context_bindings else None
     return merge_gpl_resources(
         inventories,
+        potion_plan=potion_plan,
+        spell_policy_plan=spell_policy_plan,
+        source_context_root_loader=(lambda result: _source_context_roots(game_path,inventories,
+            descriptions=source_context_descriptions,merged_items=result.items)) if context_bindings else None,
+        source_context_loader=(lambda name: context_stock.function_loader(name)
+            if name in context_stock.base_functions or name in context_stock.expansion_functions else None)
+            if context_stock is not None else None,
         resolution_owners=resolution_owners,
         semantic_resolutions=semantic_resolutions,
         inventory_death_drop_exclusions=inventory_death_drop_exclusions,
@@ -7298,8 +7541,10 @@ def compose_package(
     runtime_feature_registry = resolve_runtime_feature_registry(
         inventories, runtime_capabilities
     )
-    if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows or runtime_feature_registry.movement_scales or exploration_selected(inventories):
-        require_beta2(game_path / "MajestyHD.exe")
+    if exploration_selected(inventories) or spell_origin_selected(inventories):
+        require_exploration_profile(game_path / "MajestyHD.exe")
+    if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows or runtime_feature_registry.movement_scales:
+        require_supported_runtime(game_path / "MajestyHD.exe")
     runtime_feature_registry_payload = encode_runtime_feature_registry(
         runtime_feature_registry
     )
@@ -7318,6 +7563,7 @@ def compose_package(
         runtime_feature_registry=runtime_feature_registry,
         controller_registry=controller_result.registry,
         has_source_exploration=exploration_selected(inventories),
+        has_spell_origin=spell_origin_selected(inventories),
     )
     text_result = merge_text_resources(
         game_path,
@@ -7413,6 +7659,15 @@ def compose_package(
         runtime_feature_registry=runtime_feature_registry,
         description_stock_deltas=description_stock_deltas,
     )
+    from .spell_discovery import discover, transform_descriptions
+    try:
+        descriptions, potion_plan = prepare_potion_descriptions(
+            descriptions, stock_description_records, potion_policies(inventories))
+        spell_policy_plan = discover(_spell_policy_bindings(inventories),
+            tuple(record.to_element() for record in descriptions.document.records))
+        descriptions = transform_descriptions(descriptions, spell_policy_plan)
+    except ValueError as exc:
+        raise ComposeError(str(exc)) from exc
     gpl = prepare_final_gpl_resources(
         game_path,
         inventories,
@@ -7420,9 +7675,23 @@ def compose_package(
         semantic_resolutions=semantic_resolutions,
         inventory_death_drop_exclusions=inventory_death_drop_exclusions,
         private_activity_texts=private_activity_texts,
+        spell_policy_plan=spell_policy_plan,
+        source_context_descriptions=descriptions,
+        potion_plan=potion_plan,
     )
 
     output_mod_id = _generated_mod_id(selected_mods, profile_slug)
+    # Classify once while preparing, from resolved source and effective actions.
+    # The runtime only filters AP78 rows; it never rewrites learned spell nodes.
+    action_records = dict(stock_description_records)
+    action_records.update({record.key: record for record in descriptions.document.records})
+    hidden_actions = derive_hidden_action_ids(gpl.source_set.gpl_text or "", action_records.values())
+    if hidden_actions:
+        require_supported_runtime(game_path / "MajestyHD.exe")
+        runtime_feature_registry = replace(runtime_feature_registry, hidden_inventory_actions=hidden_actions)
+        runtime_feature_registry_payload = encode_runtime_feature_registry(runtime_feature_registry)
+        canonical_runtime_capabilities = tuple(sorted((*canonical_runtime_capabilities, INVENTORY_DISPLAY_CAPABILITY)))
+        capability_manifest_payload = encode_runtime_capability_manifest(canonical_runtime_capabilities)
     actual_display_name = display_name or f"CAM Manager: {profile_slug}"
     actual_internal_name = internal_name or (
         "CAMManager" + "".join(part.title() for part in profile_slug.split("-"))
@@ -7596,6 +7865,7 @@ def _derive_runtime_capabilities(
     runtime_feature_registry: RuntimeFeatureRegistry = RuntimeFeatureRegistry(),
     controller_registry: ResolvedControllerRegistry | None = None,
     has_source_exploration: bool = False,
+    has_spell_origin: bool = False,
 ) -> tuple[tuple[str, ...], bytes]:
     """Validate caller capabilities and derive evidence-owned hook groups.
 
@@ -7612,6 +7882,9 @@ def _derive_runtime_capabilities(
         effective.discard(EXPLORATION_CAPABILITY)
         if has_source_exploration:
             effective.add(EXPLORATION_CAPABILITY)
+        effective.discard(SPELL_ORIGIN_CAPABILITY)
+        if has_spell_origin:
+            effective.add(SPELL_ORIGIN_CAPABILITY)
         effective.discard(PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY)
         effective.discard(STOCK_CONTROLLER_RUNTIME_CAPABILITY)
         if has_private_activity_text:
@@ -7920,6 +8193,8 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
         raise ComposeError("generated kingdom research registry and MMCP hook selection disagree")
     if bool(runtime_features.hero_info_rows) != (HERO_INFO_TYPE in runtime_capabilities):
         raise ComposeError("generated hero information registry and MMCP hook selection disagree")
+    if bool(runtime_features.hidden_inventory_actions) != (INVENTORY_DISPLAY_CAPABILITY in runtime_capabilities):
+        raise ComposeError("generated inventory display registry and MMCP hook selection disagree")
     if bool(runtime_features.movement_scales) != (MOVEMENT_SCALE_TYPE in runtime_capabilities):
         raise ComposeError("generated movement scale registry and MMCP hook selection disagree")
     controller_path = root / CONTROLLER_REGISTRY_RELATIVE_PATH
@@ -8131,6 +8406,10 @@ def _validate_generated_runtime_evidence(
         validate_service(gpl_function_texts,
                          EXPLORATION_CAPABILITY in definition.runtime_capabilities,
                          gpl_functions)
+        from .spell_origin import validate_service as validate_spell_origin
+        validate_spell_origin(gpl_function_texts,
+                              SPELL_ORIGIN_CAPABILITY in definition.runtime_capabilities,
+                              gpl_functions)
     except ValueError as exc:
         raise ComposeError(str(exc)) from exc
 
@@ -8286,7 +8565,7 @@ def _validate_generated_runtime_evidence(
                 "owned by a generated building declaration"
             )
         _validate_mx22_toggle_controls(
-            _owned_smnu_payload(inventory, parent, "generated toggle parent"),
+            _owned_smnu_payload(inventory, (toggle.panel_dialog_id or toggle.parent_dialog_id).to_bytes(4,"little"), "generated toggle panel"),
             toggle,
             owner="generated",
             panel_label=_display_key(parent),

@@ -12,6 +12,7 @@ from .gpl import (DefinitionKind, SemanticItem, SemanticMergeResult,
 from .shared_features import EVENT_SIGNATURES, StockGameplayEventObserver
 
 STOCK_EVENT_FILES = {
+    "shapeshift_potion_end": "TaskModules/Subtasks/mx_Spells.gpl",
     "heal_self": "TaskModules/Subtasks/mx_heal_self.gpl",
     "heal_self_fleeing": "TaskModules/Subtasks/mx_heal_self.gpl",
     **{name + "_effect": "TaskModules/Subtasks/mx_Spells.gpl" for name in (
@@ -46,11 +47,16 @@ EVENT_FUNCTIONS = {
 
 def event_stock_paths(features) -> tuple[Path, ...]:
     """Only selected event owners add stock source inputs to a build plan."""
-    return tuple(Path("SDK/OriginalQuests/GPLMx") / relative for relative in sorted({
+    features = tuple(features)
+    paths = {
         STOCK_EVENT_FILES[name]
         for feature in features if isinstance(feature, StockGameplayEventObserver)
-        for name in EVENT_FUNCTIONS[feature.event]
-    }))
+        for name in (*EVENT_FUNCTIONS[feature.event],
+                     *(("shapeshift_potion_end",) if feature.event == "potion-consumed" else ()))
+    }
+    if any(getattr(feature, "type", "") == "stock.bazaar-potion-policy.v1" for feature in features):
+        paths.update(("TaskModules/Buildings/Magic_Bazaar.gpl", "TaskModules/Subtasks/mx_Spells.gpl"))
+    return tuple(Path("SDK/OriginalQuests/GPLMx") / relative for relative in sorted(paths))
 
 # Strings must remain literal: masking them would admit a changed item identity
 # or attribute while claiming it is stock. Only comments/spacing/case of code
@@ -63,6 +69,45 @@ def stock_tokens(text: str) -> tuple[str, ...]:
     return tuple(token if token.startswith('"') else token.casefold()
                  for token in _TOKENS.findall(text)
                  if not token.startswith(("//", "/*")))
+
+
+def _additive_title_reference(reference: str, current: str):
+    """Expand only literal title-disjunction tails; callers prove all other code.
+
+    No new predicate, reordered/removed stock title, duplicate title or call is
+    accepted. Return the expanded stock source and its registration signature.
+    The same signature must be proved on the stock expiry owner.
+    """
+    def conditions(text):
+        matches = [m for m in _TOKENS.finditer(text)
+                   if not m.group().startswith(("//", "/*"))]
+        tokens = stock_tokens(text)
+        found = []
+        for i in range(len(tokens) - 2):
+            if tokens[i:i+2] != ("if", "("):
+                continue
+            j, titles = i + 2, []
+            while (tokens[j:j+3] == ("title", "=", "=")
+                   and j + 3 < len(tokens) and tokens[j+3].startswith('"')):
+                titles.append(tokens[j+3])
+                j += 4
+                if tokens[j:j+2] != ("|", "|"):
+                    break
+                j += 2
+            if len(titles) >= 2 and tokens[j:j+1] == (")",):
+                found.append((tuple(titles), matches[i+2].start(), matches[j].start()))
+        return found
+    before, after = conditions(reference), conditions(current)
+    if not before or len(before) != len(after):
+        return None
+    changes, expanded = [], reference
+    for (old, start, end), (new, _, _) in reversed(list(zip(before, after))):
+        if new[:len(old)] != old or len(set(new)) != len(new):
+            return None
+        if new != old:
+            changes.append((old, new))
+            expanded = expanded[:start] + " || ".join("title == " + title for title in new) + " " + expanded[end:]
+    return expanded, tuple(reversed(changes))
 
 
 def _early_consumption_returns(reference: str, current: str) -> tuple[int, ...] | None:
@@ -175,6 +220,7 @@ def add_gameplay_event_observers(
     result: SemanticMergeResult,
     subscribers: Mapping[str, Sequence[str]],
     stock: Mapping[str, SemanticItem],
+    *, potion_aliases=None,
 ) -> SemanticMergeResult:
     """Append every declared observer without replacing stock or another mod."""
     requested = {key: tuple(values) for key, values in subscribers.items() if values}
@@ -250,8 +296,22 @@ end
 ''')
 
     if "potion-consumed" in requested:
-        for name in EVENT_FUNCTIONS["potion-consumed"]:
-            identity = "healing_potion" if name.startswith("heal_self") else name[:-7]
+        # Application and expiry must select precisely the same added classes.
+        # Otherwise the observer could bless a transform with mismatched undo.
+        shape_reference = stock.get("shapeshift_potion_effect")
+        shape_current = functions.get("shapeshift_potion_effect", shape_reference)
+        title_reference = (_additive_title_reference(shape_reference.text, shape_current.text)
+                           if shape_reference is not None else None)
+        if title_reference is not None and title_reference[1]:
+            expiry_reference = stock.get("shapeshift_potion_end")
+            expiry = functions.get("shapeshift_potion_end", expiry_reference)
+            expiry_proof = (_additive_title_reference(expiry_reference.text, expiry.text)
+                            if expiry_reference is not None else None)
+            if (expiry_proof is None or expiry_proof[1] != title_reference[1]
+                    or stock_tokens(expiry_proof[0]) != stock_tokens(expiry.text)):
+                raise ValueError("shapeshift_potion_end: additive title registration must retain matching stock cleanup")
+        for name in (*EVENT_FUNCTIONS["potion-consumed"], *(potion_aliases or {})):
+            identity = (potion_aliases or {}).get(name, "healing_potion" if name.startswith("heal_self") else name[:-7])
             notify = calls("potion-consumed", f'ThisAgent, "{identity}"')
             if name.startswith("heal_self"):
                 item = target(name)
@@ -264,7 +324,9 @@ end
                 if reference is None:
                     target(name)  # Report the same missing-stock evidence error.
                 item = functions.get(name, reference)
-                extra_returns = _early_consumption_returns(reference.text, item.text)
+                reference_text = (title_reference[0] if name == "shapeshift_potion_effect"
+                                  and title_reference is not None else reference.text)
+                extra_returns = _early_consumption_returns(reference_text, item.text)
                 if extra_returns is None:
                     target(name)  # Preserve fail-closed handling for other rewrites.
                     extra_returns = ()

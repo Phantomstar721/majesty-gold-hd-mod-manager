@@ -2,8 +2,8 @@
 
 This opt-in extension is for percentages smaller than Majesty's movement-clock
 rounding can represent. It is approved as a distance adapter, not a replacement
-clock, pathfinder, order controller or effect lifecycle. Initially it supports
-only the audited Steam beta2 1.5.2.28 executable.
+clock, pathfinder, order controller or effect lifecycle. Profiles cover default
+Steam, Steam beta2 and GOG; see [cross-build evidence and live qualification](runtime-feature-parity.md).
 
 Declare a private overlay in schema-3 `runtime_features`:
 

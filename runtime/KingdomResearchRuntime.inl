@@ -10,32 +10,23 @@ bool KingdomResearchVisualsSelected() {
 }
 
 bool ValidateKingdomResearchProfile() {
-    if (g_buildProfile != &kBeta2BuildProfile) return false;
-    // Entire audited executor/completion bodies, including payment, callback
-    // reasons and cleanup. Validate before installing the shared name adapter.
-    const auto hash = [](std::uintptr_t rva, std::size_t size) {
-        std::uint32_t value = 2166136261u;
-        auto* bytes = reinterpret_cast<const unsigned char*>(g_imageBase+rva);
-        for (std::size_t i = 0; i < size; ++i) value = (value ^ bytes[i]) * 16777619u;
-        return value;
-    };
+    if (!g_buildProfile || !MajestyFeatureParity::Validate(
+        g_imageBase,g_buildProfile->buildId,MajestyFeatureParity::Feature::Research)) return false;
+    const auto* world = MajestyExplorationProfiles::Find(g_buildProfile->buildId);
     const auto& p = QuestBoardProfile();
     const unsigned char addInteger[] = {0x83,0xC1,0x08,0xE9};
-    // A one-time state-2 -> play boundary, not the state-3 update loop. Readiness
-    // and owner setters are wrapped after stock, and only on BuildingRec.
+    if (!world) return false;
     if (KingdomResearchVisualsSelected() &&
-        !(hash(0x49950u, 0x259) == 0x79A54DEEu &&
-          hash(0x1CF320u, 0x25) == 0xBA1A13F1u &&
-          hash(0x2AC32u, 0xB6) == 0x723478B1u &&
-          hash(0x1B9030u, 0x68) == 0xA33A9A12u &&
-          OccupantCallMatches(0x26234u, 0x2AAB0u) &&
-          *reinterpret_cast<const std::uintptr_t*>(g_imageBase+0x262C8u) == g_imageBase+0x26232u &&
-          *reinterpret_cast<const std::uintptr_t*>(g_imageBase+0x3531E8u) == g_imageBase+0x49950u &&
-          *reinterpret_cast<const std::uintptr_t*>(g_imageBase+0x3530E4u) == g_imageBase+0x1CF320u)) return false;
-    return hash(0x0E02F0u, 0x131) == 0x1ED81331u &&
-        hash(0x0E0430u, 0x24C) == 0x21D00DDFu &&
-        hash(0x1DF010u, 0x1B) == 0x43D252E8u &&
-        hash(0x1DE410u, 8) == 0x7F4FC095u &&
+        !(MajestyFeatureParity::Validate(g_imageBase,g_buildProfile->buildId,
+              MajestyFeatureParity::Feature::ResearchVisual) &&
+          OccupantCallMatches(world->worldReadyCall,world->worldReady) &&
+          *reinterpret_cast<const std::uintptr_t*>(g_imageBase+world->worldReadyCall+0x94) ==
+              g_imageBase+world->worldReadyCall-2 &&
+          *reinterpret_cast<const std::uintptr_t*>(g_imageBase+ParityRva(ParitySite::BuildingSetSlot)) ==
+              g_imageBase+ParityRva(ParitySite::BuildingSet) &&
+          *reinterpret_cast<const std::uintptr_t*>(g_imageBase+ParityRva(ParitySite::BuildingOwnerSlot)) ==
+              g_imageBase+ParityRva(ParitySite::BuildingOwner))) return false;
+    return
         OccupantCallMatches(p.evaluatorHelper+0x2D, OccupantProfile().stringConstructor) &&
         OccupantCallMatches(p.evaluatorHelper+0x43, p.evaluatorConstructor) &&
         OccupantCallMatches(p.evaluatorHelper+0x51, p.stringDestructor) &&
@@ -120,20 +111,22 @@ void __fastcall ResearchWorldReadyAfterStock(void* game, void*) {
     if (!KingdomResearchVisualsSelected()) return;
     // Called once on initial entry/reload, after native objects, GPL state and
     // saved container links are available; never during serialization itself.
-    void* root = *reinterpret_cast<void**>(g_imageBase+0x3E3FD4u);
+    void* root = *reinterpret_cast<void**>(g_imageBase+ParityRva(ParitySite::WorldRoot));
     void* world = root ? *reinterpret_cast<void**>(static_cast<unsigned char*>(root)+4) : nullptr;
     if (!world) return;
     void* catalog = *reinterpret_cast<void**>(static_cast<unsigned char*>(world)+0x8C);
     using Collection = void* (__thiscall*)(void*, int, int);
-    SyncKingdomResearchBuildingList(reinterpret_cast<Collection>(g_imageBase+0x1B9030u)(catalog, 0, 0));
+    SyncKingdomResearchBuildingList(reinterpret_cast<Collection>(g_imageBase+ParityRva(ParitySite::BuildingList))(catalog, 0, 0));
 }
 
 bool InstallSharedWorldReadyHook() {
     if (g_researchWorldReady) return true;
-    if (!OccupantCallMatches(0x26234u,0x2AAB0u)) return false;
-    g_researchWorldReady = reinterpret_cast<ResearchWorldReady>(g_imageBase+0x2AAB0u);
-    return WriteOccupantBranch(g_imageBase+0x26234u,
-        reinterpret_cast<void*>(&ResearchWorldReadyAfterStock),0xE8);
+    const auto* p = g_buildProfile ? MajestyExplorationProfiles::Find(g_buildProfile->buildId) : nullptr;
+    if (!p || !OccupantCallMatches(p->worldReadyCall,p->worldReady)) return false;
+    if (!WriteOccupantBranch(g_imageBase+p->worldReadyCall,
+        reinterpret_cast<void*>(&ResearchWorldReadyAfterStock),0xE8)) return false;
+    g_researchWorldReady = reinterpret_cast<ResearchWorldReady>(g_imageBase+p->worldReady);
+    return true;
 }
 
 // This is only a reentrant call-stack guard, never purchase persistence. Stock
@@ -156,7 +149,7 @@ struct KingdomResearchFlight {
 bool KingdomResearchHasStockOrder(void* unit, std::uint32_t command) {
     if (!unit || ReadPackedAttributeValue(unit, kCurrentResearchAttributeId) != static_cast<int>(command)) return false;
     auto** table = *static_cast<void***>(unit);
-    if (reinterpret_cast<std::uintptr_t>(table[0x180/4]) != g_imageBase+0x1DF010u)
+    if (reinterpret_cast<std::uintptr_t>(table[0x180/4]) != g_imageBase+ParityRva(ParitySite::OrderGetter))
         StopUnsafeManagerRuntimeLaunch("Kingdom research encountered an unknown stock order accessor.");
     using Order = void* (__thiscall*)(void*, int, int);
     return reinterpret_cast<Order>(table[0x180/4])(unit, 1, 0x4005) != nullptr;
@@ -176,7 +169,7 @@ std::uint32_t KingdomResearchStatus(const KingdomResearchRecord& record, void* u
 
 bool __fastcall ExecuteKingdomResearch(void* processor, void*, void* unit, std::uint32_t command) {
     using Execute = bool (__thiscall*)(void*, void*, std::uint32_t);
-    const auto original = reinterpret_cast<Execute>(g_imageBase+0x0E02F0u);
+    const auto original = reinterpret_cast<Execute>(g_imageBase+ParityRva(ParitySite::ResearchExecute));
     const auto* record = FindKingdomResearch(command);
     if (!record) return original(processor, unit, command);
     if (!KingdomResearchMatches(unit, *record) ||
@@ -248,7 +241,7 @@ void RefreshKingdomResearch(std::uint32_t controller, bool child) {
         // Use the ordinary raw map setter to avoid recursively notifying this
         // same row. The saved GPL owner ledger is authoritative at execution.
         using Set = void (__thiscall*)(void*, std::uint32_t, int);
-        reinterpret_cast<Set>(g_imageBase+0x1DE410u)(unit, record.completionAttribute, status == 1 ? 1 : 0);
+        reinterpret_cast<Set>(g_imageBase+ParityRva(ParitySite::RawSetter))(unit, record.completionAttribute, status == 1 ? 1 : 0);
         using Refresh = void (__cdecl*)(void*, void*, std::uint32_t);
         reinterpret_cast<Refresh>(g_imageBase+g_buildProfile->refreshSingleResearchRowRva)(
             *reinterpret_cast<void**>(controller+0x24), unit, record.actionControlId);
@@ -289,13 +282,13 @@ bool HandleKingdomResearch(void* controller, std::uint32_t command) {
 
 bool InstallKingdomResearchGate() {
     if (g_runtimeFeatureRegistry.kingdomResearch.empty()) return true;
-    if (g_buildProfile != &kBeta2BuildProfile) return false;
-    auto* slot = reinterpret_cast<std::uintptr_t*>(g_imageBase+0x358E1Cu);
+    if (!g_buildProfile || MajestyFeatureParity::Index(g_buildProfile->buildId) < 0) return false;
+    auto* slot = reinterpret_cast<std::uintptr_t*>(g_imageBase+ParityRva(ParitySite::ResearchSlot));
     const unsigned char orderGetter[] = {0x8B,0x01,0x8B,0x54,0x24,0x04,0x8B,0x80,0x6C,0x01,0,0};
     // Complete stock/evaluator bodies were validated before any hook install.
-    if (*slot != g_imageBase+0x0E02F0u ||
-        !MatchesProfileBytes(0x1DE410u, reinterpret_cast<const unsigned char*>("\x83\xc1\x04\xe9"),4,"native saved attribute setter") ||
-        !MatchesProfileBytes(0x1DF010u, orderGetter, sizeof(orderGetter), "native research order lookup")) return false;
+    if (*slot != g_imageBase+ParityRva(ParitySite::ResearchExecute) ||
+        !MatchesProfileBytes(ParityRva(ParitySite::RawSetter), reinterpret_cast<const unsigned char*>("\x83\xc1\x04\xe9"),4,"native saved attribute setter") ||
+        !MatchesProfileBytes(ParityRva(ParitySite::OrderGetter), orderGetter, sizeof(orderGetter), "native research order lookup")) return false;
     DWORD old = 0;
     if (!VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &old)) return false;
     *slot = reinterpret_cast<std::uintptr_t>(&ExecuteKingdomResearch);
@@ -309,9 +302,9 @@ bool InstallKingdomResearchGate() {
         *entry = reinterpret_cast<std::uintptr_t>(function);
         return VirtualProtect(entry, sizeof(*entry), protection, &restored) != 0;
     };
-    g_researchBuildingSet = reinterpret_cast<ResearchBuildingSetFunction>(g_imageBase+0x49950u);
-    g_researchBuildingOwner = reinterpret_cast<ResearchBuildingOwner>(g_imageBase+0x1CF320u);
-    return replace(0x3531E8u, reinterpret_cast<const void*>(&ResearchBuildingSet)) &&
-        replace(0x3530E4u, reinterpret_cast<const void*>(&ResearchBuildingOwnerChanged)) &&
+    g_researchBuildingSet = reinterpret_cast<ResearchBuildingSetFunction>(g_imageBase+ParityRva(ParitySite::BuildingSet));
+    g_researchBuildingOwner = reinterpret_cast<ResearchBuildingOwner>(g_imageBase+ParityRva(ParitySite::BuildingOwner));
+    return replace(ParityRva(ParitySite::BuildingSetSlot), reinterpret_cast<const void*>(&ResearchBuildingSet)) &&
+        replace(ParityRva(ParitySite::BuildingOwnerSlot), reinterpret_cast<const void*>(&ResearchBuildingOwnerChanged)) &&
         InstallSharedWorldReadyHook();
 }
