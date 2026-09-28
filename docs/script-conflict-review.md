@@ -6,9 +6,13 @@ pair. That mod wins every unresolved conflict between the pair, including those
 shared across original and expansion quests. There is no code editor or
 line-by-line review.
 
-The chooser groups overlaps into gameplay categories, such as attack decisions,
-potion use, and hero deaths, with short explanations of known stock behavior.
-These identify affected areas, not a promise that
+Each card shows the two mod choices and a **Conflicts** summary, such as attack
+decisions, potion use, or hero deaths. Click a mod to select it; the selected
+button stays highlighted. Expand **Details** for gameplay explanations, affected
+quest types, and any existing compatibility notes. Details start collapsed and
+opening or closing them does not change your preference.
+
+The categories and explanations identify affected areas, not a promise that
 the Manager understands every mod's exact gameplay effects. Unknown behavior
 is identified as **Other gameplay changes**, without guessing what it does.
 
@@ -21,7 +25,7 @@ is identified as **Other gameplay changes**, without guessing what it does.
 - A third mod's independently mergeable changes are retained; appearing in the
   same gameplay area does not automatically make it another conflicting pair.
 - Existing authored compatibility rules stay resolved. If their combined behavior
-  overlaps another mod, the chooser explains which mods the rule keeps together;
+  overlaps another mod, **Details** explains which mods the rule keeps together;
   it does not reopen a choice between those already-compatible mods. Preferences
   against the outside mod must keep or replace the shared behavior consistently.
 - One preference covers all conflicts between the same pair. More than two

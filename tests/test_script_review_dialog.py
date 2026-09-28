@@ -59,7 +59,7 @@ class ScriptReviewDialogTests(unittest.TestCase):
         self.assertEqual(dialog.result(), review_ui.QDialog.DialogCode.Rejected)
         key, owner = self.choose(dialog)
         self.assertTrue(dialog.continue_button.isEnabled())
-        self.assertEqual(dialog.progress.text(), "1 of 1 mod preferences chosen")
+        self.assertEqual(dialog.progress.text(), "1 of 1 chosen")
         self.assertEqual(dialog.decisions, {})
         dialog.continue_button.click()
         self.assertEqual(dialog.result(), review_ui.QDialog.DialogCode.Accepted)
@@ -73,15 +73,16 @@ class ScriptReviewDialogTests(unittest.TestCase):
         self.assertIn("Attack damage", summary)
         self.assertIn("Potion use", summary)
         self.assertIn("Other gameplay changes", summary)
-        self.assertIn("Original and expansion quests", summary)
+        self.assertNotIn("quests", summary)
+        self.assertEqual(dialog.pair_scopes[dialog.pairs[0].identity].text(), "Original and expansion quests")
         self.assertFalse(dialog.findChildren(QPlainTextEdit))
         self.assertFalse(dialog.findChildren(QTextEdit))
         visible_text = "\n".join(label.text() for label in dialog.findChildren(QLabel))
         for unwanted in ("Potion_Check", "Uninterpreted_Mod_Function", "<literal>",
                          "value=", "Competing instructions"):
             self.assertNotIn(unwanted, visible_text)
-        self.assertIn("conflicting behavior", dialog.warning.text())
-        self.assertIn("may be replaced", dialog.warning.text())
+        self.assertIn("Both stay enabled", dialog.introduction.text())
+        self.assertLess(len(dialog.introduction.text().split()), 30)
 
     def test_gameplay_descriptions_explain_known_roles_once_across_scopes(self):
         from PySide6.QtWidgets import QLabel
@@ -102,7 +103,7 @@ class ScriptReviewDialogTests(unittest.TestCase):
         visible_text = "\n".join(label.text() for label in dialog.findChildren(QLabel))
         for name in ("Random_Hero_Type", "Spell_Extra_Value", "Guild_Title"):
             self.assertNotIn(name, visible_text)
-        self.assertIn("not the exact changes each mod makes", dialog.warning.text())
+        self.assertTrue(dialog.pair_details[pair.identity].isHidden())
 
     def test_existing_compatibility_is_explained_without_an_internal_pair_or_code(self):
         from PySide6.QtWidgets import QLabel
@@ -131,6 +132,43 @@ class ScriptReviewDialogTests(unittest.TestCase):
         self.assertFalse(dialog.continue_button.isEnabled())
         self.choose(dialog, 1)
         self.assertTrue(dialog.continue_button.isEnabled())
+
+    def test_details_expand_independently_without_selecting_or_resetting_preferences(self):
+        dialog = self.dialog(conflict(name="Damage"), conflict(name="Potion_Check", owners=("first", "third")))
+        first, second = dialog.pairs
+        for pair in dialog.pairs:
+            self.assertTrue(dialog.pair_details[pair.identity].isHidden())
+            self.assertFalse(dialog.details_buttons[pair.identity].isChecked())
+        toggle = dialog.details_buttons[first.identity]
+        toggle.click()
+        self.assertFalse(dialog.pair_details[first.identity].isHidden())
+        self.assertEqual(toggle.text(), "Hide details")
+        self.assertTrue(dialog.pair_details[second.identity].isHidden())
+        self.assertEqual(dialog._choices, {})
+        self.assertFalse(dialog.continue_button.isEnabled())
+        chosen = dict(self.choose(dialog, index) for index in range(len(dialog.pairs)))
+        toggle.click()
+        self.assertTrue(dialog.pair_details[first.identity].isHidden())
+        self.assertEqual(toggle.text(), "Details")
+        self.assertEqual(dialog._choices, chosen)
+        dialog.accept()
+        self.assertEqual(dialog.decisions, chosen)
+
+    def test_collapsed_cards_do_not_repeat_mod_names_or_explanations(self):
+        from PySide6.QtWidgets import QLabel, QPushButton
+        dialog = self.dialog(conflict(name="Damage"), conflict(name="Potion_Check"))
+        pair = dialog.pairs[0]
+        # isVisibleTo checks hidden ancestors even before the dialog is shown.
+        texts = [widget.text() for widget in dialog.findChildren(QLabel)
+                 if widget.isVisibleTo(dialog)]
+        self.assertEqual(texts, [dialog.introduction.text(), dialog.progress.text(),
+                                dialog.pair_summaries[pair.identity].text(), ""])
+        for candidate in (pair.left, pair.right):
+            self.assertEqual(sum(button.text() == candidate.label for button in
+                                 dialog.findChildren(QPushButton)), 1)
+        self.choose(dialog)
+        self.assertNotIn("preferred for all conflicts", "\n".join(
+            label.text() for label in dialog.findChildren(QLabel)))
 
     def test_preferences_use_stable_ids_and_only_known_winners_are_preselected(self):
         current = conflict(labels=("A & B", "Second <literal>"))
@@ -195,7 +233,8 @@ class ScriptReviewDialogTests(unittest.TestCase):
         dialog = self.dialog(conflict("majestyexpansion", labels=("<b>One</b>", "Two & Three")))
         pair = dialog.pairs[0]
         summary = dialog.pair_summaries[pair.identity]
-        self.assertIn("Expansion quests", summary.text())
+        self.assertNotIn("Expansion quests", summary.text())
+        self.assertEqual(dialog.pair_scopes[pair.identity].text(), "Expansion quests")
         self.assertEqual(summary.textFormat(), review_ui.Qt.TextFormat.PlainText)
 
     def test_light_and_dark_system_palettes_keep_readable_text(self):

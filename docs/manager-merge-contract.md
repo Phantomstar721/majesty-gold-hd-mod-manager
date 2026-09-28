@@ -145,6 +145,12 @@ Source-only recipes `stock.hero-quest-participant.v1` and
 task providers and renamed stock spell evaluation. They introduce no native
 hook; see [private hero integration](private-hero-integration.md).
 
+Standard mods can also declare `stock.hero-quest-participant.v1` without becoming
+Merge mods. A shared Standard definition may replace `mod_id` with an explicit
+`mod_ids` list covering multiple native components; see
+[shared Standard declarations](standard-script-providers.md#shared-declarations-for-standard-variants).
+That alternative is source-only and does not change the single-ID Merge contract.
+
 `stock.native-timing.v1` exposes the stock simulation clock, read-only movement
 and named-action base periods, remaining duration for declared effects, and
 completion-time commit of a declared learned spell's native cooldown.

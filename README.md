@@ -72,8 +72,10 @@ downloading any updated mods, reopen the Manager, select **Rescan Content**,
 then **Prepare Selected Mods** (or **Prepare Again**) to refresh your generated
 package before launching.
 
-The [0.3.8 update notes](release/v0.3.8.md) cover GOG support, hero-panel fixes,
-research effects, and percentage-based movement effects.
+See the [September 28 update notes](release/2026-09-28-update.md) for the latest
+source and staged Workshop changes. The [0.3.8 release notes](release/v0.3.8.md)
+describe the earlier downloadable release; a source update does not replace
+the GitHub release ZIP.
 
 ## Content tabs
 
@@ -107,8 +109,9 @@ does not change your choices until you select **Save this choice**.
 Prepare combines changes safely wherever it can. For remaining script conflicts,
 choose your preferred mod once per pair. That preference applies to every
 unresolved conflict between those two mods, across original and expansion quests.
-The chooser shows affected gameplay categories with short explanations, not code
-diffs. Existing compatibility rules stay resolved. It does not guess
+The chooser lists the mod choices and affected gameplay. Expand **Details** for
+explanations, affected quest types, and compatibility notes, not code diffs.
+Existing compatibility rules stay resolved. It does not guess
 the meaning of changes it cannot interpret.
 
 The preferred mod wins the conflicting behavior, so the other mod's changes
@@ -229,7 +232,9 @@ These features are package-declared, not tied to particular mod names or UUIDs:
   bounded stock font options. See [private recruitment](docs/stock-ap52-private-recruitment.md).
 - **Hero integration:** stock-task callbacks, opt-in private hero participation
   in selected task providers, and evaluation of renamed stock spells. See
-  [private hero integration](docs/private-hero-integration.md).
+  [private hero integration](docs/private-hero-integration.md). Standard mod
+  variants can share hero declarations through an explicit
+  [list of component IDs](docs/standard-script-providers.md#shared-declarations-for-standard-variants).
 - **Events and timing:** shared gameplay notifications, activity duration,
   stock simulation-time queries, effect duration, and declared spell cooldown
   completion. See [shared events and activity timers](docs/stock-events-and-activity-time.md)

@@ -81,8 +81,10 @@ QDialog#scriptReviewDialog QFrame[conflictCard="true"] QLabel {
 }
 QDialog#scriptReviewDialog QPushButton {
     color: #eee8d9; background-color: #241e15;
-    border: 1px solid #806735; border-radius: 3px; padding: 8px 12px;
+    border: 1px solid #806735; border-radius: 3px; padding: 8px 12px; min-height: 0;
 }
+QDialog#scriptReviewDialog QPushButton#scriptConflictDetails { padding: 4px 8px; }
+QDialog#scriptReviewDialog QWidget#scriptConflictDetailsBody { background-color: transparent; }
 QDialog#scriptReviewDialog QPushButton:checked {
     color: #fff9e9; background-color: #614c20; border: 2px solid #e4c36c;
 }
@@ -108,22 +110,17 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.pair_summaries = {}
             self.pair_descriptions = {}
             self.pair_compatibility_notes = {}
-            self.pair_outcomes = {}
+            self.pair_details = {}
+            self.details_buttons = {}
+            self.pair_scopes = {}
             self.setObjectName("scriptReviewDialog")
             self.setWindowTitle("Majesty Mod Manager — Choose preferred mods")
             self.setStyleSheet(_DIALOG_STYLE)
             layout = QVBoxLayout(self)
             self.introduction = self._label(
-                "The Manager has combined the changes it can safely merge. For the remaining "
-                "overlaps, choose your preferred mod in each pair. That preference applies "
-                "to every unresolved conflict between those two mods.")
+                "Choose a preferred mod in each pair. Both stay enabled; your choice wins "
+                "any changes that can't be combined.")
             layout.addWidget(self.introduction)
-            self.warning = self._label(
-                "Both mods stay enabled. Your preferred mod wins their conflicting behavior; "
-                "the other mod's changes there may be replaced. Independently compatible "
-                "changes are kept. The descriptions below explain what the shared behavior "
-                "controls, not the exact changes each mod makes.")
-            layout.addWidget(self.warning)
             self.progress = self._label("")
             self.progress.setAccessibleName("Mod preference progress")
             layout.addWidget(self.progress)
@@ -137,26 +134,6 @@ if _PYSIDE_IMPORT_ERROR is None:
                 card = QFrame()
                 card.setProperty("conflictCard", True)
                 card_layout = QVBoxLayout(card)
-                heading = self._label(f"{pair.left.label} / {pair.right.label}")
-                heading_font = heading.font()
-                heading_font.setBold(True)
-                heading.setFont(heading_font)
-                card_layout.addWidget(heading)
-                categories = sorted({_gameplay_label(conflict) for conflict in pair.conflicts})
-                summary = self._label(
-                    "Affected: " + ", ".join(categories) + "\n" + _scope_label(pair.conflicts))
-                self.pair_summaries[pair.identity] = summary
-                card_layout.addWidget(summary)
-                description = _gameplay_descriptions(pair.conflicts)
-                if description:
-                    explanation = self._label(description)
-                    self.pair_descriptions[pair.identity] = explanation
-                    card_layout.addWidget(explanation)
-                compatibility = _compatibility_notes(pair)
-                if compatibility:
-                    note = self._label(compatibility)
-                    self.pair_compatibility_notes[pair.identity] = note
-                    card_layout.addWidget(note)
                 group = QButtonGroup(self)
                 group.setExclusive(True)
                 self._groups.append(group)
@@ -172,9 +149,44 @@ if _PYSIDE_IMPORT_ERROR is None:
                     buttons[candidate.owner] = button
                     card_layout.addWidget(button)
                 self.choice_buttons[pair.identity] = buttons
-                outcome = self._label("Choose your preferred mod.")
-                self.pair_outcomes[pair.identity] = outcome
-                card_layout.addWidget(outcome)
+
+                summary_row = QHBoxLayout()
+                categories = sorted({_gameplay_label(conflict) for conflict in pair.conflicts})
+                summary = self._label("Conflicts: " + ", ".join(categories))
+                self.pair_summaries[pair.identity] = summary
+                summary_row.addWidget(summary, 1)
+                toggle = self._button("Details")
+                toggle.setObjectName("scriptConflictDetails")
+                toggle.setCheckable(True)
+                toggle.setAccessibleName(f"Conflict details for {pair.left.label} and {pair.right.label}")
+                self.details_buttons[pair.identity] = toggle
+                summary_row.addWidget(toggle)
+                card_layout.addLayout(summary_row)
+
+                details = QWidget()
+                details.setObjectName("scriptConflictDetailsBody")
+                detail_layout = QVBoxLayout(details)
+                detail_layout.setContentsMargins(0, 0, 0, 0)
+                scope = self._label(_scope_label(pair.conflicts))
+                self.pair_scopes[pair.identity] = scope
+                detail_layout.addWidget(scope)
+                description = _gameplay_descriptions(pair.conflicts)
+                if description:
+                    explanation = self._label(description)
+                    self.pair_descriptions[pair.identity] = explanation
+                    detail_layout.addWidget(explanation)
+                detail_layout.addWidget(self._label(
+                    "These are the affected parts of gameplay, not a full description of each "
+                    "mod's changes. Changes that can be combined are kept from both mods."))
+                compatibility = _compatibility_notes(pair)
+                if compatibility:
+                    note = self._label(compatibility)
+                    self.pair_compatibility_notes[pair.identity] = note
+                    detail_layout.addWidget(note)
+                self.pair_details[pair.identity] = details
+                details.setVisible(False)
+                toggle.toggled.connect(lambda visible, key=pair.identity: self._toggle_details(key, visible))
+                card_layout.addWidget(details)
                 cards.addWidget(card)
             cards.addStretch(1)
             scroll.setWidget(content)
@@ -200,7 +212,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                     self._choose(pair, candidate)
             self._update_progress()
             available = self.screen().availableGeometry()
-            preferred_height = min(740, 240 + 190 * len(self.pairs))
+            preferred_height = min(740, 170 + 150 * len(self.pairs))
             self.resize(min(760, available.width() - 50), min(preferred_height, available.height() - 60))
 
         @staticmethod
@@ -218,14 +230,16 @@ if _PYSIDE_IMPORT_ERROR is None:
 
         def _choose(self, pair, candidate):
             self._choices[pair.identity] = candidate.owner
-            self.pair_outcomes[pair.identity].setText(
-                f"{candidate.label} is preferred for all conflicts between these two mods.")
             self.error.clear()
             self._update_progress()
 
+        def _toggle_details(self, identity, visible):
+            self.pair_details[identity].setVisible(visible)
+            self.details_buttons[identity].setText("Hide details" if visible else "Details")
+
         def _update_progress(self):
             count = len(self._choices)
-            self.progress.setText(f"{count} of {len(self.pairs)} mod preferences chosen")
+            self.progress.setText(f"{count} of {len(self.pairs)} chosen")
             self.continue_button.setEnabled(count == len(self.pairs))
 
         def accept(self):

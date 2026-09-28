@@ -6,13 +6,11 @@ support. Install this manager and launch Majesty through it to use them
 individually or together. It automatically finds and organizes your mods and
 quests, remembers your choices, and prepares anything that needs extra support.
 
-The latest update combines compatible script changes and asks you to choose a
-preferred mod for each pair with unresolved conflicts. Your preference applies
-to their conflicting changes while independently compatible changes are kept.
-The chooser explains the affected gameplay systems without requiring you to
-review code. The update also improves original/expansion quest compatibility,
-preserves selected Standard mod scripts, corrects inventory-only actions showing
-in the Spells panel after loading a save, and fixes a runtime startup failure.
+The latest update simplifies conflict choices: see the mods and affected
+gameplay at a glance, with more information under Details. Choose a preferred
+mod for each pair; both stay enabled, and changes that can be combined are kept.
+It also improves compatibility with custom healing-potion behavior and lets mod
+authors share hero quest-participation declarations across Standard mod variants.
 Close Majesty and the Manager before updating. Afterwards, reopen the Manager,
 select Rescan Content, and Prepare Selected Mods (or Prepare Again) before
 launching Majesty.

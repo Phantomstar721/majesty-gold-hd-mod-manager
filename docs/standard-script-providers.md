@@ -1,10 +1,10 @@
-# Standard script providers — pre-release implementation
+# Standard script providers
 
-This work requires in-game acceptance before release. The defects in the
-[initial review](standard-script-provider-review.md) have been corrected in source
-as described in its follow-up. Generated output now uses common `Any` content
-plus optional native original/expansion script patches. See the
-[scoped-output design](mod-dataset-scope-plan.md) for implementation and acceptance details.
+Selected Standard mods keep their native load order and provide their own
+scripts when the Manager integrates shared features. Generated output uses
+common `Any` content plus optional native original/expansion script patches.
+See the [scoped-output design](mod-dataset-scope-plan.md) for scope and
+validation details. Individual mod combinations still need in-game testing.
 
 ## Generic source registration
 
