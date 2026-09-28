@@ -9,7 +9,7 @@ from typing import Mapping, Sequence
 
 from .gpl import (DefinitionKind, SemanticItem, SemanticMergeResult,
                   _mask_non_code, parse_gpl)
-from .gpl_function_merge import _Node, _tokens
+from .gpl_function_merge import _Node, _SourceParser, _tokens, _unparen
 from .shared_features import EVENT_SIGNATURES, StockGameplayEventObserver
 from .event_boundaries import EventBoundary
 
@@ -185,6 +185,71 @@ def require_callback(item: SemanticItem, symbol: str, types: Sequence[str],
                          + (" is boolean" if boolean else " with no return value"))
 
 
+def _healing_consumption_boundary(editor, source):
+    """Accept an inline debit or its literal extraction into one void helper.
+
+    The helper must be the sole statement in the original consumption branch,
+    take the same agent, and finish straight-line work with exactly that debit.
+    Returning from it is then the same notification boundary. Never rewrite a
+    shared helper, observe its unrelated callers, or infer arbitrary call graphs.
+    """
+    instruction = '$AdjustAttribute(ThisAgent, #ATTRIB_NumHealingPotions, -1);'
+    head = _tokens(instruction)
+    references = [entry for entry in editor.stock_entries if entry[0].head == head]
+    if len(references) != 1:
+        editor.fail('stock healing consumption boundary is missing or ambiguous')
+    reference = references[0]
+    direct = [entry for entry in editor.actual_entries
+              if entry[0].head == head and entry[1] == reference[1]]
+    if direct:
+        return editor.anchor(instruction)
+    candidates = [node for node, path, siblings, _ in editor.actual_entries
+                  if path == reference[1] and len(siblings) == 1
+                  and editor.call_arguments(node) == (('thisagent',),)]
+    if len(candidates) != 1:
+        editor.fail('healing consumption requires the original debit or one direct helper '
+                    'in the original potion branch')
+    call = candidates[0]
+    name = call.head[0][1:]
+    if name in editor.locals:
+        editor.fail(f'healing helper {name} is a local binding, not a direct source call')
+    helper = source(name)
+    if helper is None:
+        editor.fail(f'healing helper {name} has no verifiable selected source')
+    parser = _SourceParser(helper.text)
+    signature, locals_, body = parser.function()
+    if (len(signature) != 6 or signature[:4] != ('function', name, '(', 'agent')
+            or signature[-1] != ')' or signature[4] in locals_):
+        editor.fail(f'healing helper {name} must take one agent and return no value')
+    actor = signature[4]
+    if body and body[-1].head == ('return', ';'):
+        body = body[:-1]
+    debit = _tokens(f'$AdjustAttribute({actor}, #ATTRIB_NumHealingPotions, -1);')
+    if (not body or body[-1].head != debit
+            or any(node.kind != 'statement' or node.head[:1] == ('return',) for node in body)):
+        editor.fail(f'healing helper {name} must finish straight-line work with the potion debit')
+    # Refuse a second explicit debit, even with a different amount/recipient.
+    adjustments = [node for node in body if node.head[:1] == ('$adjustattribute',)
+                   and editor.call_arguments(node)[1:2] == (('#attrib_numhealingpotions',),)]
+    if len(adjustments) != 1:
+        editor.fail(f'healing helper {name} has ambiguous potion consumption')
+    for node in body:
+        tokens = node.head
+        for index, token in enumerate(tokens):
+            if token.startswith('$') and tokens[index+1:index+2] != ('(',):
+                editor.fail(f'healing helper {name} contains indirect function dispatch')
+            if token.startswith('$') and (token[1:] == name or token[1:] in locals_):
+                editor.fail(f'healing helper {name} contains recursive or locally bound dispatch')
+            if token in ('=', '+=', '-=', '*=', '/=', '++', '--'):
+                lhs = tokens[:index] if index else tokens[index+1:-1]
+                if _unparen(lhs) == (actor,):
+                    editor.fail(f'healing helper {name} reassigns its recipient')
+        if node.head[:1] in (('$deletegamepiece',), ('$henchman_dead',)):
+            if editor.call_arguments(node)[:1] == ((actor,),):
+                editor.fail(f'healing helper {name} destroys its recipient')
+    return call
+
+
 def add_gameplay_event_observers(
     result: SemanticMergeResult,
     subscribers: Mapping[str, Sequence[str]],
@@ -264,12 +329,16 @@ end
 ''')
 
     if "potion-consumed" in requested:
+        def healing_source(name):
+            # Authored/resolved functions win; missing helpers come through the
+            # same verified, dataset-scoped native loader as other observers.
+            return functions.get(name) or (source_loader(name) if source_loader else stock.get(name))
         for name in (*EVENT_FUNCTIONS["potion-consumed"], *(potion_aliases or {})):
             identity = (potion_aliases or {}).get(name, "healing_potion" if name.startswith("heal_self") else name[:-7])
             notify = calls("potion-consumed", f'ThisAgent, "{identity}"')
             if name.startswith("heal_self"):
                 editor = boundary(name)
-                consumed = editor.anchor('$AdjustAttribute(ThisAgent, #ATTRIB_NumHealingPotions, -1);')
+                consumed = _healing_consumption_boundary(editor, healing_source)
                 editor.insert(consumed, '\n' + notify, after=True)
                 save_boundary(editor)
                 continue

@@ -38,6 +38,51 @@ An optional matching `mod-definition.json` can declare
 trees need no participant declaration. Other Standard-side runtime declarations
 are not silently accepted by this source-only integration.
 
+### Shared declarations for Standard variants
+
+When one package ships multiple Standard Mod components with the same private
+hero trees, its schema-v3 `mod-definition.json` may use `mod_ids` **instead of**
+`mod_id`:
+
+```json
+{
+  "schema_version": 3,
+  "mod_ids": [
+    "{11111111-1111-1111-1111-111111111111}",
+    "{22222222-2222-2222-2222-222222222222}"
+  ],
+  "internal_name": "SharedHeroDeclarations",
+  "display_name": "Shared hero declarations",
+  "custom_buildings": [],
+  "runtime_features": [
+    {
+      "type": "stock.hero-quest-participant.v1",
+      "feature_key": "support-hero-quests",
+      "hero_script": "Private_Support_Tree",
+      "stock_hero_script": "mx_healer"
+    }
+  ]
+}
+```
+
+Replace the example IDs with each covered component's manifest Mod ID. List each
+UUID once; letter case and surrounding braces do not distinguish IDs. Add one
+feature record per private hero tree. All listed variants share those records.
+
+Only the selected component's native sources and compiled target are used. The
+list does not enable other variants, borrow their trees, or change load order.
+Each selected component must itself supply the declared trees and retain the
+verified stock decision points. A selected ID missing from the list produces an
+explicit error rather than silently losing quest participation.
+
+This shared form is limited to Standard schema-v3 hero-participant declarations
+with empty `custom_buildings`. It does not apply to Merge definitions. Existing
+single-`mod_id` definitions remain supported. No automatic tree discovery or
+additional in-game processing is introduced. The same source-only behavior
+applies to all supported Steam and GOG executable profiles.
+
+## Native script ownership
+
 The selected Standard order determines the effective native definition. Only
 definitions touched by the generated profile participate in reconciliation:
 

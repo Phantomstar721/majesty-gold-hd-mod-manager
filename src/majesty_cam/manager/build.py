@@ -84,7 +84,7 @@ from ..script_review import ScriptReviewSession, ScriptReviewCancelled, validate
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
-PLAN_SCHEMA_VERSION = 22
+PLAN_SCHEMA_VERSION = 24
 STANDARD_SELECTION_ISSUE_CODES = frozenset(
     {
         "mutually_exclusive_mods",

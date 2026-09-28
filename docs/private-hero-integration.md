@@ -7,6 +7,10 @@ add no DLL hooks, runtime registry, polling, timers or replacement AI.
 
 Use one declaration per private tree:
 
+Standard packages with multiple components can share these declarations through
+an explicit `mod_ids` list in their definition file. See the
+[shared Standard declaration example](standard-script-providers.md#shared-declarations-for-standard-variants).
+
 ```json
 {
   "type": "stock.hero-quest-participant.v1",

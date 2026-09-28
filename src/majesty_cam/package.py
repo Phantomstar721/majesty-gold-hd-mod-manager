@@ -341,6 +341,51 @@ def load_standard_component(
 def load_mod_definition(path: Union[str, Path]) -> ModDefinition:
     """Load a versioned mod definition, rejecting duplicate JSON keys."""
 
+    return parse_mod_definition(_read_mod_definition(path))
+
+
+def load_standard_definition(path: Union[str, Path], mod_id: str) -> ModDefinition:
+    """Bind shared source-only declarations to one selected native component.
+
+    ``mod_ids`` is an alternative to ``mod_id`` only for Standard v3
+    definitions. The selected component retains its own identity and sources;
+    listing siblings never imports their scripts or enables those components.
+    """
+    value = _read_mod_definition(path)
+    if "mod_ids" in value:
+        if "mod_id" in value or value.get("schema_version") != 3:
+            raise PackageFormatError("Standard mod_ids requires schema_version 3 and replaces mod_id")
+        raw_ids = value["mod_ids"]
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise PackageFormatError("Standard mod_ids must be a nonempty array of Mod UUIDs")
+        ids = set()
+        for index, raw_id in enumerate(raw_ids):
+            text = _required_string(raw_id, f"mod_ids[{index}]")
+            try:
+                normalized = _uuid_text(text)
+            except PackageFormatError as exc:
+                raise PackageFormatError(f"mod_ids[{index}] is not a valid Mod UUID: {text!r}") from exc
+            if normalized in ids:
+                raise PackageFormatError(f"duplicate Standard mod_ids entry: {text!r}")
+            ids.add(normalized)
+        if _uuid_text(mod_id) not in ids:
+            raise PackageFormatError(f"Standard script definition mod_ids does not include selected Mod ID {mod_id}")
+        value = {key: item for key, item in value.items() if key != "mod_ids"}
+        value["mod_id"] = mod_id
+        if value.get("custom_buildings") != []:
+            raise PackageFormatError("shared Standard definitions require empty custom_buildings")
+    definition = parse_mod_definition(value)
+    if not _same_mod_id(definition.mod_id, mod_id):
+        raise PackageFormatError("Standard script definition has a different Mod ID")
+    unsupported = [f.type for f in definition.runtime_features
+                   if not isinstance(f, StockHeroQuestParticipant)]
+    if unsupported:
+        raise PackageFormatError(f"unsupported Standard script declarations: {unsupported}")
+    return definition
+
+
+def _read_mod_definition(path: Union[str, Path]) -> Mapping[str, object]:
+    """Read the common strict JSON envelope without choosing a component."""
     definition_path = Path(path)
     try:
         definition_path = definition_path.resolve(strict=True)
@@ -367,7 +412,7 @@ def load_mod_definition(path: Union[str, Path]) -> ModDefinition:
 
     if not isinstance(value, Mapping):
         raise PackageFormatError("mod definition root must be a JSON object")
-    return parse_mod_definition(value)
+    return value
 
 
 def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
@@ -1367,6 +1412,7 @@ __all__ = [
     "load_mod_definition",
     "load_package",
     "load_standard_component",
+    "load_standard_definition",
     "mod_definition_mapping",
     "parse_mod_definition",
 ]

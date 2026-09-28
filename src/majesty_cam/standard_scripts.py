@@ -19,7 +19,7 @@ from .gpl import (DefinitionKind, ParsedSemanticSource, SemanticMergeResult,
                   require_complete_semantic_coverage)
 from .gpl_features import StockHeroQuestParticipant
 from .gpl_function_merge import merge_function, FunctionMergeError, _tokens, _Parser
-from .package import GplLoad, ModPackage, load_standard_component, load_mod_definition
+from .package import GplLoad, ModPackage, load_standard_component, load_standard_definition
 from .stock_input_cache import StockInputCache
 from .bcd import definition_keys, BcdIndexError
 
@@ -152,13 +152,10 @@ def read(entry):
         participants = ()
         definition_path = root / 'mod-definition.json'
         if definition_path.is_file():
-            definition = load_mod_definition(definition_path)
-            if definition.mod_id.strip('{}').casefold() != entry.content_id.strip('{}').casefold():
-                raise ValueError(f'{entry.display_name}: Standard script definition has a different Mod ID')
-            unsupported = [f.type for f in definition.runtime_features
-                           if not isinstance(f, StockHeroQuestParticipant)]
-            if unsupported:
-                raise ValueError(f'{entry.display_name}: unsupported Standard script declarations: {unsupported}')
+            try:
+                definition = load_standard_definition(definition_path, entry.content_id)
+            except ValueError as exc:
+                raise ValueError(f'{entry.display_name}: {exc}') from exc
             participants = definition.runtime_features
         paths = tuple(inputs())
         payloads = {p: p.read_bytes() if p.is_file() else None for p in paths}

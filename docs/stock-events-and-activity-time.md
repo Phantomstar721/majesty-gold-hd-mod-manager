@@ -66,6 +66,17 @@ No new native clock query or timing hook is installed.
 `ATTRIB_NumHealingPotions`. Observe immediately after that decrement, inside
 the existing positive-inventory branch. Non-potion healing is unchanged.
 
+A selected mod may extract that branch into one synchronous helper taking the
+same hero. When the helper has verifiable selected source, straight-line work,
+and exactly one terminal decrement of the same potion attribute by one, the
+observer runs immediately after the helper call returns, inside the original
+positive-inventory branch. An optional terminal `return;` is allowed. The
+helper and its other callers remain untouched; normal and fleeing healing each
+notify once when their own branch consumes a potion. Changes to healing amounts
+and effects are retained. Conditional consumption, early returns, changed
+recipients, nested helper chains, and unavailable source are not inferred.
+This proof runs during composition only and adds no runtime monitoring or state.
+
 `GPLMx/TaskModules/Subtasks/mx_Spells.gpl`: the six Bazaar effect functions
 reject dead casters, apply their stock effects, delete the appropriate carried
 item and forget its spell. Observe after the consumption pair and remaining
