@@ -344,7 +344,7 @@ end
                 continue
             editor = boundary(name)
             for node, after in _potion_consumption_boundaries(editor):
-                editor.insert(node, '\n' + notify + '\n', after=after)
+                editor.insert(node, '\n' + notify if after else notify + '\n', after=after)
             save_boundary(editor)
 
     payout_roots = {}

@@ -6,14 +6,20 @@ support. Install this manager and launch Majesty through it to use them
 individually or together. It automatically finds and organizes your mods and
 quests, remembers your choices, and prepares anything that needs extra support.
 
-The latest update simplifies conflict choices: see the mods and affected
+The latest update fixes a launch failure when research or movement features
+are selected on default Steam or GOG. It also preserves missing stock artwork
+needed by merged content and refreshes stale compatibility results after changing game
+versions or repairing game files. The Manager automatically refreshes affected
+checks while keeping unchanged results cached for faster startup.
+
+Recent updates also simplify conflict choices: see the mods and affected
 gameplay at a glance, with more information under Details. Choose a preferred
 mod for each pair; both stay enabled, and changes that can be combined are kept.
 It also improves compatibility with custom healing-potion behavior and lets mod
 authors share hero quest-participation declarations across Standard mod variants.
-Close Majesty and the Manager before updating. Afterwards, reopen the Manager,
-select Rescan Content, and Prepare Selected Mods (or Prepare Again) before
-launching Majesty.
+Close Majesty and the Manager before updating. Afterwards, reopen the Manager
+and Prepare Selected Mods (or Prepare Again) before launching Majesty.
+Rescan Content remains available if you want to force a fresh mod check.
 
 First launch:
 

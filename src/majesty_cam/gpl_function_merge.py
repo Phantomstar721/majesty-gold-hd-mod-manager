@@ -330,7 +330,7 @@ class _GuardProof:
         return self.parsed[name]
 
     def readonly_expr(self, tokens):
-        if any(t in ("=", "+=", "-=", "*=", "/=", "<<", ">>") for t in tokens):
+        if any(t in ("=", "+=", "-=", "*=", "/=", "++", "--", "<<", ">>") for t in tokens):
             return False
         for i, token in enumerate(tokens):
             if i and token in ("+", "-") and tokens[i - 1] == token:

@@ -621,8 +621,8 @@ bool InstallMapQueryRuntime(std::uintptr_t imageBase, MajestyBuildId buildId,
                            int (*movementDistance)(void*, int)) {
     if ((researchOrder == nullptr) != (researchEligible == nullptr)) return false;
     if (!mapQuery && !movementQuery && timing == nullptr && !researchOrder) return true;
-    if (researchOrder && buildId != MajestyBuildId::SteamBeta2) return false;
-    if (movementDistance && buildId != MajestyBuildId::SteamBeta2) return false;
+    // Research and movement callbacks come from guarded per-build adapters.
+    // The shared GPL bridge must use the selected profile, not a beta2 gate.
     if (timing != nullptr && !timing->nativeTiming) return false;
     g_base = imageBase;
     switch (buildId) {

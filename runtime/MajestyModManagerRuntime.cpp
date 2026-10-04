@@ -7784,11 +7784,11 @@ DWORD WINAPI InitializeRuntime(void*) {
         RequireManagerRuntimeInstall(
             InstallEquipmentRuntime(g_imageBase, g_buildProfile->buildId,
                 g_runtimeFeatureRegistry, &StopUnsafeManagerRuntimeLaunch),
-            managerLaunch, "Private equipment requires the audited beta2 registration boundaries.");
+            managerLaunch, "Private equipment registration failed for the selected executable profile.");
     }
     if (!g_runtimeFeatureRegistry.movementScales.empty()) {
         RequireManagerRuntimeInstall(InstallMovementScale(), managerLaunch,
-            "Overlay movement scaling requires the audited beta2 linear movement boundary.");
+            "Overlay movement scaling failed its selected executable profile checks.");
     }
     if (g_runtimeFeatureRegistry.mapFogQuery || g_runtimeFeatureRegistry.movementQuery ||
         g_runtimeFeatureRegistry.nativeTiming || kingdomResearch) {

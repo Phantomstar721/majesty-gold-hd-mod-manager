@@ -41,12 +41,13 @@ from .qol_service import (
 )
 
 
-STARTUP_CACHE_SCHEMA_VERSION = 5
+STARTUP_CACHE_SCHEMA_VERSION = 6
 STARTUP_CACHE_FILENAME = "startup-cache.json"
 QOL_CACHE_SCHEMA_VERSION = 1
 _MAX_QOL_INSTALLATIONS = 8
 _STOCK_PREFLIGHT_INPUTS = (
     Path("MajestyHD.exe"),
+    Path("Data/gpltext.cam"),
     Path("DataMX/mx_gpltext.cam"),
     Path("SDK/OriginalQuests/GPLMx/mx_defines.gpl"),
 )
@@ -318,6 +319,35 @@ class StartupCache:
             return
 
 
+def game_preflight_signature(game_path: Path) -> str:
+    """Share one stock-input snapshot across the outer and per-mod caches.
+
+    Read only the small stock project lists; stat their declared sources and
+    native data. No compiler, content hashing, or recursive game-folder scan.
+    Missing projects remain inputs so repairing an installation invalidates
+    cached errors as well as successes.
+    """
+    from ..dataset_dependencies import stock_dependency_paths
+    from ..stock_gpl import STOCK_GPL_RUNTIME_PAIRS, _BASE_MANIFEST, _EXPANSION_MANIFEST
+
+    paths = [game_path / p for p in (*_STOCK_PREFLIGHT_INPUTS, _BASE_MANIFEST, _EXPANSION_MANIFEST)]
+    for pair in STOCK_GPL_RUNTIME_PAIRS:
+        paths.extend((game_path / 'SDK/OriginalQuests' / pair.project_relative,
+                      game_path / pair.target_relative))
+    context = ['game-preflight-v1', str(game_path.resolve(strict=False)).casefold()]
+    for directory in (game_path / 'Data', game_path / 'DataMX'):
+        # Stock panels, descriptions and art are also inspected by preflight.
+        try:
+            paths.extend(p for p in directory.iterdir() if p.suffix.casefold() in {'.cam', '.xml'})
+        except OSError as exc:
+            context.extend((str(directory), type(exc).__name__))
+    try:
+        paths.extend(game_path / p for p in stock_dependency_paths(game_path, include_data=True))
+    except (OSError, ValueError) as exc:
+        context.extend((type(exc).__name__, str(exc)))
+    return metadata_signature(paths, context=context)
+
+
 def merge_preflight_signature(
     *,
     content_id: str,
@@ -325,6 +355,7 @@ def merge_preflight_signature(
     source_root: Path,
     registry: CompatibilityRegistry,
     game_path: Path,
+    game_signature: str | None = None,
 ) -> str:
     paths: list[Path] = list(_manager_cache_identity_paths())
     spec = registry.get(content_id)
@@ -341,10 +372,10 @@ def merge_preflight_signature(
     paths.extend(_package_input_paths(source_root, definition=None))
     paths.extend(_package_input_paths(effective_root, definition=definition))
     paths.extend(item.source_path for item in registry.combination_resolutions)
-    paths.extend(game_path / relative for relative in _STOCK_PREFLIGHT_INPUTS)
     return metadata_signature(
         paths,
-        context=("merge-preflight-v1", content_id, display_name),
+        context=("merge-preflight-v2", content_id, display_name,
+                 game_signature if game_signature is not None else game_preflight_signature(game_path)),
     )
 
 
@@ -389,6 +420,7 @@ def catalog_input_signature(
     local_quests_root: Path,
     workshop_roots: Iterable[Path],
     registry: CompatibilityRegistry,
+    game_signature: str,
 ) -> str:
     """Return a content-aware identity for inputs which affect the catalog.
 
@@ -401,7 +433,9 @@ def catalog_input_signature(
     """
 
     paths: list[Path] = [*_manager_cache_identity_paths()]
-    context: list[str] = ["installed-catalog-v2"]
+    # Catalog rows embed preflight errors/readiness. They must never outlive
+    # the game evidence used by the inner validation cache.
+    context: list[str] = ["installed-catalog-v3", game_signature]
     for label, root, workshop in (
         ("local-mods", local_mods_root, False),
         ("local-quests", local_quests_root, False),
@@ -839,6 +873,8 @@ def _manager_cache_identity_paths() -> tuple[Path, ...]:
         return (Path(sys.executable),)
     module_root = Path(__file__).resolve().parent
     return tuple(module_root.parent / name for name in (
+        "package.py", "standard_scripts.py", "private_hero_gpl.py", "gpl_features.py",
+        "stock_gpl.py", "stock_art.py", "strt.py",
         "gpl.py", "gpl_function_merge.py", "compose.py", "gameplay_events.py",
         "event_boundaries.py", "potion_policy.py", "source_context.py", "dataset_dependencies.py",
         "inventory_spell_display.py", "runtime_features.py", "stock_controller_features.py",
@@ -903,6 +939,7 @@ __all__ = [
     "STARTUP_CACHE_SCHEMA_VERSION",
     "StartupCache",
     "catalog_input_signature",
+    "game_preflight_signature",
     "merge_preflight_signature",
     "metadata_signature",
     "package_input_metadata_signature",

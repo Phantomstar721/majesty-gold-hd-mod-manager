@@ -67,6 +67,7 @@ from .qol_service import (
 from .startup_cache import (
     StartupCache,
     catalog_input_signature,
+    game_preflight_signature,
     metadata_signature,
     merge_preflight_signature,
     qol_input_signature,
@@ -192,6 +193,7 @@ class ManagerController:
             self._prepared_merge_cache.clear()
         cache = StartupCache.load(self.paths.startup_cache_path)
         preflight_ids: set[str] = set()
+        game_signature = game_preflight_signature(self.paths.game_path)
 
         def inspect_merge(
             content_id: str, display_name: str, package_root: Path
@@ -203,6 +205,7 @@ class ManagerController:
                 source_root=package_root,
                 registry=self.registry,
                 game_path=self.paths.game_path,
+                game_signature=game_signature,
             )
             if not force_refresh:
                 cached = cache.get_preflight(content_id, signature)
@@ -222,6 +225,7 @@ class ManagerController:
             return issues
 
         catalog_signature = catalog_input_signature(
+            game_signature=game_signature,
             local_mods_root=self.paths.local_mods_root,
             local_quests_root=self.paths.local_quests_root,
             workshop_roots=self.paths.workshop_roots,

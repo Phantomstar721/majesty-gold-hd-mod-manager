@@ -148,8 +148,8 @@ A pull request for a new runtime feature should include all of the following.
   dispatch, ownership, timing, callbacks, cancellation, cleanup, and UI refresh.
 - Identify every native hook site and why it is necessary rather than using CAM
   or GPL.
-- Implement and validate the feature for both supported executable profiles:
-  the public version and the `beta2` Steam Multiplayer Support version.
+- Implement and validate the feature for all three supported executable profiles:
+  default Steam 1.5.2.24, Steam beta2 1.5.2.28, and GOG 1.5.2.28.
 - Fingerprint supported sites and reject unknown or ambiguous binaries.
 - Preserve unrelated stock behavior when the feature is absent.
 

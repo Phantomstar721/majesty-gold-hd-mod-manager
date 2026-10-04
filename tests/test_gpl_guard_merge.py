@@ -69,6 +69,7 @@ class GuardMergeTests(unittest.TestCase):
                        'if ($Opaque(unit)) return FALSE;',
                        'if (unit\'s "Callback"(unit)) return FALSE;',
                        'if (unit\'s "Counter" ++ > 0) return FALSE;',
+                       'if (-- unit\'s "Counter" > 0) return FALSE;',
                        'if ($HasWayPoints(unit)) return TRUE;',
                        'if ($attempt(unit)==FALSE) return FALSE;',
                        'if ($Unknown(unit)==FALSE) return FALSE;'):

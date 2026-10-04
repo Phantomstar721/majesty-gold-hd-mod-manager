@@ -68,7 +68,10 @@ foreach ($path in $required) {
     }
 }
 
-$runtimeArguments = @{ OutputRoot = $runtimeSource }
+$releasePython = Join-Path $repoRoot ".venv\Scripts\python.exe"
+& $releasePython (Join-Path $repoRoot "scripts\verify_release_parity.py")
+if ($LASTEXITCODE -ne 0) { throw "Three-version release profile verification failed" }
+$runtimeArguments = @{ OutputRoot = $runtimeSource; RegistrationTests = $true; FeatureTests = $true; ExplorationTests = $true }
 if ($MsvcToolRoot) { $runtimeArguments.MsvcToolRoot = $MsvcToolRoot }
 if ($WindowsSdkRoot) { $runtimeArguments.WindowsSdkRoot = $WindowsSdkRoot }
 & $runtimeBuild @runtimeArguments

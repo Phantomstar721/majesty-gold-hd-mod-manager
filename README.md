@@ -68,14 +68,13 @@ download Workshop subscriptions. The legacy GOG 1.5.1.2 executable is not suppor
 
 Close Majesty and the Manager before replacing or updating the application.
 Keep the complete folder together, including `_internal`. After Steam finishes
-downloading any updated mods, reopen the Manager, select **Rescan Content**,
-then **Prepare Selected Mods** (or **Prepare Again**) to refresh your generated
+downloading any updated mods, reopen the Manager and choose
+**Prepare Selected Mods** (or **Prepare Again**) to refresh your generated
 package before launching.
 
-See the [September 28 update notes](release/2026-09-28-update.md) for the latest
-source and staged Workshop changes. The [0.3.8 release notes](release/v0.3.8.md)
-describe the earlier downloadable release; a source update does not replace
-the GitHub release ZIP.
+See the [0.3.9 release notes](release/v0.3.9.md) for the launch compatibility,
+artwork and cache corrections. Compatibility checks refresh automatically when
+relevant inputs change; **Rescan Content** remains available for a manual refresh.
 
 ## Content tabs
 

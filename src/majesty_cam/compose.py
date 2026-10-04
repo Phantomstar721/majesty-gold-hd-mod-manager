@@ -1909,6 +1909,7 @@ def merge_art_resource_domains(
     inventories: Sequence[PackageInventory],
     *,
     required_stock_imag_ids: Sequence[bytes] = (),
+    description_imag_ids: Sequence[bytes] = (),
     art_resolutions: Mapping[
         tuple[str, bytes], ScopedArtResourceResolution
     ] | None = None,
@@ -2015,6 +2016,9 @@ def merge_art_resource_domains(
             art_resolutions=art_resolutions,
         )
         results.append(_restore_required_stock_art(result, lineage.effective, lineage.ancestors, required))
+    results = list(_complete_description_art(
+        game_path, results, lineages, description_imag_ids
+    ))
     emitted_imag: dict[bytes, str] = {}
     for result in results:
         for section in result.archive.sections:
@@ -2031,6 +2035,68 @@ def merge_art_resource_domains(
                     )
                 emitted_imag[key] = result.domain
     return tuple(results)
+
+
+def _description_imag_ids(descriptions: DescriptionMergeResult) -> tuple[bytes, ...]:
+    """Include hidden overlays: native loading still initializes their artwork."""
+    return tuple(sorted({
+        (node.text or "").strip().encode("ascii")
+        for record in descriptions.document.records
+        for node in record.to_element().findall("./Engine/ImageIDBase")
+        if (node.text or "").strip()
+    }))
+
+
+def _complete_description_art(game_path, results, lineages, references):
+    """Close expansion-only stock references without replacing authored images.
+
+    Base artwork already falls through natively. Use the dataset-loaded source
+    archives, not the first ancestor (a lineage can be expansion-only), to
+    identify it. Missing expansion images use the existing provenance-aware
+    TILE/palette relocation used for required stock presenters.
+    """
+    emitted = {entry.name[:4] for result in results
+               for entry in _require_section(result.archive, b"IMAG").entries}
+    base_root = (game_path / "Data").resolve()
+    base_keys = set()
+    for lineage in lineages:
+        for path, archive in zip(lineage.source_paths, lineage.ancestors):
+            if base_root in path.resolve().parents:
+                base_keys.update(entry.name[:4]
+                                 for entry in _require_section(archive, b"IMAG").entries)
+    missing = set(references) - emitted - base_keys
+    output = list(results)
+    for key in sorted(missing):
+        matches = [lineage for lineage in lineages if key in lineage.imag_keys]
+        # Non-stock references belong to their authored providers; this closure
+        # must not invent artwork or reject separately loaded Standard content.
+        if not matches:
+            continue
+        if len(matches) != 1:
+            raise ComposeError(f"description IMAG {_display_key(key)} has no unique installed art lineage")
+    for lineage in lineages:
+        required = tuple(sorted(missing & lineage.imag_keys))
+        if not required:
+            continue
+        index = next((i for i, result in enumerate(output)
+                      if result.domain == lineage.domain), None)
+        if index is None:
+            result = _required_stock_art_domain(lineage.domain, lineage.effective, required)
+        else:
+            result = output[index]
+            images = _require_section(result.archive, b"IMAG")
+            entries = _materialize_required_stock_imag_entries(
+                images.entries, lineage.effective, required, domain=lineage.domain)
+            result = replace(result, archive=CamArchive(tuple(
+                replace(section, entries=entries) if section.extension == b"IMAG" else section
+                for section in result.archive.sections)))
+        result = _restore_required_stock_art(
+            result, lineage.effective, lineage.ancestors, required)
+        if index is None:
+            output.append(result)
+        else:
+            output[index] = result
+    return tuple(output)
 
 
 def _required_stock_art_domain(
@@ -7835,22 +7901,11 @@ def compose_package(
         inventories,
         resolutions=bdep_resolutions,
     )
-    art_results = merge_art_resource_domains(
-        game_path,
-        inventories,
-        required_stock_imag_ids=tuple(sorted(
-            {item.image_id.encode("ascii") for item in runtime_feature_registry.equipment}
-            | ({b"IX93"} if runtime_feature_registry.enchantment_rows else set())
-            | ({b"INTn", b"IX93"} if runtime_feature_registry.hero_info_rows else set())
-        )),
-        art_resolutions=art_resolutions,
-    )
     audio_archive, sound_archive, sound_selections = merge_sound_resources(
         inventories,
         named_resolutions=named_cam_resolutions,
         stock_named_resources=stock_named_resources,
     )
-    art_results = bind_equipment_art(art_results, inventories)
     controlled_follower_markers = tuple(
         sorted(
             (
@@ -7921,6 +7976,18 @@ def compose_package(
         descriptions = transform_descriptions(descriptions, spell_policy_plan)
     except ValueError as exc:
         raise ComposeError(str(exc)) from exc
+    art_results = merge_art_resource_domains(
+        game_path,
+        inventories,
+        required_stock_imag_ids=tuple(sorted(
+            {item.image_id.encode("ascii") for item in runtime_feature_registry.equipment}
+            | ({b"IX93"} if runtime_feature_registry.enchantment_rows else set())
+            | ({b"INTn", b"IX93"} if runtime_feature_registry.hero_info_rows else set())
+        )),
+        description_imag_ids=_description_imag_ids(descriptions),
+        art_resolutions=art_resolutions,
+    )
+    art_results = bind_equipment_art(art_results, inventories)
     script_bundle = prepare_gpl_bundle(
         game_path,
         inventories,

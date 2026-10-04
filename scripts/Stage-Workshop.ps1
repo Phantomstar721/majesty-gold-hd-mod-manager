@@ -1,6 +1,7 @@
 param(
     [string]$ApplicationRoot = "",
-    [string]$WorkshopId = "3793024054"
+    [string]$WorkshopId = "3793024054",
+    [ValidateSet("", "Private", "Public", "FriendsOnly")][string]$Visibility = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +11,17 @@ if (-not $ApplicationRoot) {
     $ApplicationRoot = Join-Path $distRoot "Majesty Mod Manager"
 }
 $applicationRoot = [IO.Path]::GetFullPath($ApplicationRoot)
+$receiptPath = Join-Path (Split-Path -Parent $applicationRoot) "release-parity.json"
+if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) {
+    throw "Workshop staging requires a three-version verified application build"
+}
+$receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+if ($receipt.schema -ne 1 -or
+    -not $receipt.profiles.MAJESTY_PUBLIC_EXE -or -not $receipt.profiles.MAJESTY_BETA2_EXE -or -not $receipt.profiles.MAJESTY_GOG_EXE -or
+    (Get-FileHash -LiteralPath (Join-Path $applicationRoot "Majesty Mod Manager.exe") -Algorithm SHA256).Hash -ne $receipt.managerSha256 -or
+    (Get-FileHash -LiteralPath (Join-Path $applicationRoot "_internal\payload\runtime\MajestyBuildingRuntime.dll") -Algorithm SHA256).Hash -ne $receipt.runtimeSha256) {
+    throw "Workshop content does not match the three-version verified application build"
+}
 $target = Join-Path $distRoot "workshop-upload"
 $stage = Join-Path $distRoot (".workshop-upload-stage-" + [guid]::NewGuid().ToString("N"))
 $backup = Join-Path $distRoot (".workshop-upload-backup-" + [guid]::NewGuid().ToString("N"))
@@ -116,7 +128,7 @@ try {
     Copy-Item -LiteralPath $previewSource -Destination (Join-Path $stage "workshop-preview.jpg") -Force
 
     $projectId = $WorkshopId
-    $visibility = "Private"
+    $selectedVisibility = if ($Visibility) { $Visibility } else { "Private" }
     $existingProject = Join-Path $target $projectName
     if (Test-Path -LiteralPath $existingProject -PathType Leaf) {
         $existingText = Get-Content -LiteralPath $existingProject -Raw
@@ -128,8 +140,8 @@ try {
             $existingText,
             '<SteamWorkshop[^>]+visibility="(Private|Public|FriendsOnly)"'
         )
-        if ($existingVisibility.Success) {
-            $visibility = $existingVisibility.Groups[1].Value
+        if ($existingVisibility.Success -and -not $Visibility) {
+            $selectedVisibility = $existingVisibility.Groups[1].Value
         }
     }
     if ($projectId -notmatch '^(0|[1-9][0-9]*)$') {
@@ -143,7 +155,7 @@ try {
     )
     $projectText = @"
 <Majesty>
-	<SteamWorkshop id="$projectId" visibility="$visibility">
+	<SteamWorkshop id="$projectId" visibility="$selectedVisibility">
 		<Title lang="en_US">Majesty Mod Manager</Title>
 		<Description lang="en_US">$description</Description>
 		<ContentPath>$finalContentPath</ContentPath>

@@ -6,10 +6,19 @@ param(
     [switch]$FreestyleDiagnosticNamedRetention,
     [switch]$SiegeCrashDiagnostic,
     [switch]$ExplorationTests,
-    [switch]$FeatureTests
+    [switch]$FeatureTests,
+    [switch]$RegistrationTests
 )
 
 $ErrorActionPreference = "Stop"
+if ($RegistrationTests) {
+    foreach ($name in @("MAJESTY_PUBLIC_EXE", "MAJESTY_BETA2_EXE", "MAJESTY_GOG_EXE")) {
+        $fixturePath = [Environment]::GetEnvironmentVariable($name)
+        if (-not $fixturePath -or -not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) {
+            throw "Three-version runtime verification requires $name. No skipped profiles are allowed."
+        }
+    }
+}
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $sourceRoot = Join-Path $repoRoot "runtime"
 $output = if ([IO.Path]::IsPathRooted($OutputRoot)) {
@@ -146,16 +155,63 @@ if ($LASTEXITCODE -ne 0) { throw "Runtime launcher build failed with exit code $
 $fixtureNames = @()
 if ($ExplorationTests) { $fixtureNames += "ExplorationNativeTests" }
 if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests" }
+if ($RegistrationTests) { $fixtureNames += "SharedRegistrationRuntimeTests" }
 foreach ($fixtureName in $fixtureNames) {
+    $fixtureLinkOptions = @()
+    $fixtureArguments = @()
+    if ($fixtureName -eq "SharedRegistrationRuntimeTests") {
+        # Reserve the game image's preferred base for nonexecuted fixture bytes.
+        $fixtureLinkOptions = @("/BASE:0x10000000", "/ALIGN:65536", "/DYNAMICBASE:NO")
+        $fixtureArguments = @($env:MAJESTY_PUBLIC_EXE, $env:MAJESTY_BETA2_EXE, $env:MAJESTY_GOG_EXE)
+    }
     $fixtureSources = @($runtimeSources | Where-Object { [IO.Path]::GetFileName($_) -ne "MajestyModManagerRuntime.cpp" })
+    if ($RegistrationTests -and $fixtureName -eq "SharedRegistrationRuntimeTests") {
+        $fixtureSources += (Join-Path $repoRoot "tests\GogFixtureMemory.cpp")
+    }
     & $compiler /nologo /W4 /O2 /EHsc @commonIncludes @runtimeDefines `
         @fixtureSources (Join-Path $repoRoot "tests\$fixtureName.cpp") `
-        "/Fo$output\" "/Fe:$output\$fixtureName.exe" /link @commonLibPaths @runtimeLibraries
+        "/Fo$output\" "/Fe:$output\$fixtureName.exe" /link @commonLibPaths @runtimeLibraries @fixtureLinkOptions
     if ($LASTEXITCODE -ne 0) { throw "$fixtureName build failed" }
-    & (Join-Path $output "$fixtureName.exe")
+    if ($fixtureName -eq "SharedRegistrationRuntimeTests") {
+        # Same fixed-address, data-only fixture layout used by GOG profile tests.
+        $testExe = Join-Path $output "$fixtureName.exe"
+        $testBytes = [IO.File]::ReadAllBytes($testExe)
+        $peOffset = [BitConverter]::ToInt32($testBytes, 0x3C)
+        $count = [BitConverter]::ToUInt16($testBytes, $peOffset + 6)
+        $table = $peOffset + 24 + [BitConverter]::ToUInt16($testBytes, $peOffset + 20)
+        $fixtureRva = 0
+        for ($i = 0; $i -lt $count; $i++) {
+            $offset = $table + 40 * $i
+            if ([Text.Encoding]::ASCII.GetString($testBytes, $offset, 8) -eq '.fixture') {
+                $fixtureRva = [BitConverter]::ToUInt32($testBytes, $offset + 12)
+            }
+        }
+        if ($fixtureRva -eq 0 -or $fixtureRva -ge 0x400000 -or ($fixtureRva % 65536) -ne 0) {
+            throw "Invalid registration fixture section"
+        }
+        $testBase = '0x{0:X}' -f (0x400000 - $fixtureRva)
+        $objects = @($fixtureSources | ForEach-Object { Join-Path $output (([IO.Path]::GetFileNameWithoutExtension($_)) + '.obj') })
+        $objects += (Join-Path $output "$fixtureName.obj")
+        & $compiler /nologo @objects "/Fe:$testExe" /link "/BASE:$testBase" /ALIGN:65536 /DYNAMICBASE:NO @commonLibPaths @runtimeLibraries
+        if ($LASTEXITCODE -ne 0) { throw "Registration fixture layout did not link" }
+    }
+    & (Join-Path $output "$fixtureName.exe") @fixtureArguments
     if ($LASTEXITCODE -ne 0) { throw "$fixtureName failed" }
 }
 
+if ($RegistrationTests -and $FeatureTests -and $ExplorationTests) {
+    $receipt = @{
+        schema = 1
+        verification = "offline-native-installation-and-lifecycle-fixtures"
+        liveGameplayAcceptance = $false
+        runtimeSha256 = (Get-FileHash -LiteralPath (Join-Path $output "MajestyBuildingRuntime.dll") -Algorithm SHA256).Hash
+        profiles = @{}
+    }
+    foreach ($name in @("MAJESTY_PUBLIC_EXE", "MAJESTY_BETA2_EXE", "MAJESTY_GOG_EXE")) {
+        $receipt.profiles[$name] = (Get-FileHash -LiteralPath ([Environment]::GetEnvironmentVariable($name)) -Algorithm SHA256).Hash
+    }
+    $receipt | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $output "runtime-parity.json") -Encoding UTF8
+}
 Write-Host "Built x86 Majesty Mod Manager native runtime:"
 Write-Host $output
 if ($FreestyleDiagnosticNamedRetention) {

@@ -125,6 +125,14 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\GPL-3.0.txt") -Destination
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\PYINSTALLER.txt") -Destination $applicationLicenses -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\FREESTYLE-CAM-SIDECAR.txt") -Destination $applicationLicenses -Force
 Copy-Item -LiteralPath (Join-Path $assetRoot "STEAM-ICON-NOTICE.txt") -Destination $applicationLicenses -Force
+$receiptPath = Join-Path $repoRoot "local\manager-runtime-release\runtime-parity.json"
+$receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+$packagedRuntime = Join-Path $applicationOutput "_internal\payload\runtime\MajestyBuildingRuntime.dll"
+if ((Get-FileHash -LiteralPath $packagedRuntime -Algorithm SHA256).Hash -ne $receipt.runtimeSha256) {
+    throw "Packaged runtime does not match the three-version verified runtime"
+}
+$receipt | Add-Member -NotePropertyName managerSha256 -NotePropertyValue ((Get-FileHash -LiteralPath (Join-Path $applicationOutput "Majesty Mod Manager.exe") -Algorithm SHA256).Hash)
+$receipt | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $OutputDir "release-parity.json") -Encoding UTF8
 if (-not $KeepBuildFiles) {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
