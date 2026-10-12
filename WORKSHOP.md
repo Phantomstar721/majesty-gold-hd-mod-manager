@@ -6,7 +6,11 @@ support. Install this manager and launch Majesty through it to use them
 individually or together. It automatically finds and organizes your mods and
 quests, remembers your choices, and prepares anything that needs extra support.
 
-The latest update fixes a launch failure when research or movement features
+The latest update preserves timed image data during merging and improves script
+comparison. Combine Standard and Merge mods, choosing one preferred mod per
+conflicting pair while retaining changes that safely combine.
+
+The previous update fixes a launch failure when research or movement features
 are selected on default Steam or GOG. It also preserves missing stock artwork
 needed by merged content and refreshes stale compatibility results after changing game
 versions or repairing game files. The Manager automatically refreshes affected

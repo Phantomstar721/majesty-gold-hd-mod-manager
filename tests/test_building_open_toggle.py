@@ -234,7 +234,7 @@ class BuildingOpenToggleEvidenceTests(unittest.TestCase):
             self.skipTest('stock CAM fixtures are not configured')
         from majesty_cam.compose import _require_cam_entry, _split_imag_sets, _join_imag_sets
         from majesty_cam.cam import read_cam
-        source = Path(executable).parent / 'Data' / 'interfacedata.cam'
+        source = Path(os.environ.get('MAJESTY_STOCK_ROOT', Path(executable).parent)) / 'Data' / 'interfacedata.cam'
         stock = _require_cam_entry(source, b'IMAG', b'INBb')
         header, sets = _split_imag_sets(stock)
         private = _join_imag_sets(CamEntry(pad_name(b'PBTN'), b''), header, ((4097, dict(sets)[1009]),))

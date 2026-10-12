@@ -155,7 +155,7 @@ class HeroInfoTests(unittest.TestCase):
         exe = os.environ.get("MAJESTY_BETA2_EXE")
         if not exe:
             self.skipTest("stock executable not provided")
-        root = Path(exe).parent
+        root = Path(os.environ.get('MAJESTY_STOCK_ROOT', Path(exe).parent))
         from majesty_cam.stock_cam import stock_image_ids
         keys = stock_image_ids(root)
         self.assertIn(b"INTn", keys)
@@ -183,7 +183,7 @@ class HeroInfoTests(unittest.TestCase):
         self.assertEqual(len(append), 54)
         for rva in (0x272410, 0x272450):
             self.assertEqual(image.read(rva, len(append)), append)
-        text = read_cam(Path(path).parent/'Data/textdata.cam')
+        text = read_cam(Path(os.environ.get('MAJESTY_STOCK_ROOT', Path(path).parent))/'Data/textdata.cam')
         panel = next(e for s in text.sections if s.extension == b'SMNU'
                      for e in s.entries if e.name[:4] == b'AP78')
         changed = enable_native_tooltips(panel.data)

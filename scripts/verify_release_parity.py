@@ -14,6 +14,7 @@ MODULES = (
     "test_exploration_profiles", "test_occupant_runtime_profiles",
     "test_panel_lifecycle_profiles", "test_building_toggle_runtime_profiles",
     "test_quest_board_runtime_profiles", "test_release_scope",
+    "test_timed_imag", "test_release_merge_literals",
 )
 
 def main():

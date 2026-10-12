@@ -418,6 +418,30 @@ def allocate_collision_free_ranges(
     )
 
 
+def _timed_v4_frame_start(data: bytes, anchor: int, direction_end: int) -> int | None:
+    """Proven group-one v4 layout: header, optional rectangle, pairs, timing.
+
+    Other existing layouts stay with their existing parsers. Never infer this
+    layout from values resembling TILE indices or from changed-slot coverage.
+    """
+    if _u32(data, 0) != 4 or anchor + 20 > direction_end:
+        return None
+    streams, frames, rect_mask, other_mask, _a, _b, timing, groups = struct.unpack_from('<8H', data, anchor + 4)
+    if not timing:
+        return None
+    if rect_mask not in (0, 1) or other_mask or groups != 1:
+        raise UnsupportedImagShapeError('Unsupported timed version-4 masks or frame groups')
+    count = streams * frames
+    first = anchor + 24 + (8 if rect_mask else 0)
+    if not streams or not frames or count > MAX_FRAMES or first + count * 8 + 20 != direction_end:
+        raise UnsupportedImagShapeError('Timed version-4 frame/group/trailer bounds disagree')
+    for offset in range(first + 4, first + count * 8, 8):
+        index = _u32(data, offset) & 0xFFFFFF
+        if index != 0xFFFFFF and index >= LOW16_SENTINEL:
+            raise UnsupportedImagShapeError('Timed version-4 TILE index exceeds the supported positional table')
+    return first
+
+
 def _parse_end_anchored_direction_references(
     data: bytes,
     *,
@@ -440,6 +464,9 @@ def _parse_end_anchored_direction_references(
     stream_count = count_word & 0xFFFF
     total = frame_count * stream_count
     frame_start = direction_end - total * 8
+    timed_start = _timed_v4_frame_start(data, anchor, direction_end)
+    if timed_start is not None:
+        frame_start = timed_start
     if (
         frame_count <= 0
         or stream_count <= 0
@@ -461,6 +488,8 @@ def _parse_end_anchored_direction_references(
         if mark_single_terminal and total == 1
         else "stock-end-anchored"
     )
+    if timed_start is not None:
+        layout = 'compact-timed-v4'
     references: list[ImagTileReference] = []
     for stream in range(stream_count):
         for frame in range(frame_count):
@@ -1676,6 +1705,11 @@ def _parse_direction_layout(
     direction: int,
 ) -> tuple[str, int, int]:
     """Select one audited custom-package direction schema."""
+
+    timed_start = _timed_v4_frame_start(data, anchor, direction_end)
+    if timed_start is not None:
+        count = _u32(data, anchor + 4)
+        return 'compact-timed-v4', (count >> 16) * (count & 0xFFFF), timed_start + 4
 
     if anchor + 12 > direction_end:
         raise UnsupportedImagShapeError(

@@ -20,7 +20,7 @@ class FunctionMergeError(ValueError):
 
 _LEX = re.compile(
     r'\s+|//[^\r\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|'
-    r"'s\b|[$#]?[A-Za-z_][A-Za-z_0-9]*|0[xX][0-9A-Fa-f]+|\d+(?:\.\d+)?|"
+    r"'s\b|[$#]?[A-Za-z_][A-Za-z_0-9]*|0[xX][0-9A-Fa-f]+|(?:\d+\.\d+|\.\d+|\d+)|"
     r"==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|/=|<<|>>|[^\s]",
     re.IGNORECASE,
 )

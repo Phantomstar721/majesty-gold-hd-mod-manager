@@ -94,7 +94,7 @@ class KingdomResearchTests(unittest.TestCase):
     def test_stock_compiler_accepts_generated_service_and_real_award_insertions(self):
         game = os.environ.get('MAJESTY_BETA2_EXE')
         if not game: self.skipTest('stock compiler fixture not supplied')
-        root = Path(game).parent / 'SDK'
+        root = Path(os.environ.get('MAJESTY_STOCK_ROOT', Path(game).parent)) / 'SDK'
         sources = root / 'OriginalQuests/GPLMx'
         stock = {}
         for path in (sources/'mx_Monster_Deaths.gpl', sources/'TaskModules/Subtasks/mx_give_exp.gpl'):

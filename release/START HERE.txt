@@ -1,4 +1,4 @@
-MAJESTY MOD MANAGER 0.3.9
+MAJESTY MOD MANAGER 0.3.10
 
 Keep this entire folder together. "Majesty Mod Manager.exe" requires the
 nearby "_internal" folder and will not work if the EXE is moved by itself.

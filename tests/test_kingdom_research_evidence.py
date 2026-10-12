@@ -21,7 +21,7 @@ class KingdomResearchEvidenceTests(unittest.TestCase):
     def setUp(self):
         game = os.environ.get('MAJESTY_BETA2_EXE')
         if not game: self.skipTest('stock CAM fixture not supplied')
-        archive = read_cam(Path(game).parent/'Data/textdata.cam')
+        archive = read_cam(Path(os.environ.get('MAJESTY_STOCK_ROOT', Path(game).parent))/'Data/textdata.cam')
         self.templates = {entry.name[:4]: entry.data for section in archive.sections
                           if section.extension == b'SMNU' for entry in section.entries
                           if entry.name[:4] in (b'AP99', b'AP24', b'AP52')}
@@ -103,7 +103,7 @@ class KingdomResearchEvidenceTests(unittest.TestCase):
         self.assertEqual(bindings((NS(selected=NS()),)), ())
 
     def test_optional_overlay_is_literal_stock_and_owned(self):
-        game = Path(os.environ['MAJESTY_BETA2_EXE']).parent
+        game = Path(os.environ.get('MAJESTY_STOCK_ROOT', Path(os.environ['MAJESTY_BETA2_EXE']).parent))
         stock = ET.parse(game/'SDK/OriginalQuests/Data/M_Overlays.xml').find(
             ".//Description[@Name='super_charge_effector']")
         self.assertEqual(_shape(stock), _shape(ET.fromstring(_ACTIVE_EFFECTOR)))

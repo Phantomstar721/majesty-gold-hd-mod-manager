@@ -125,7 +125,7 @@ class PrivateRecruitmentProfileTests(unittest.TestCase):
         beta = os.environ.get("MAJESTY_BETA2_EXE")
         if not beta: self.skipTest("stock CAM fixtures are not configured")
         from majesty_cam.compose import _require_cam_entry
-        path = Path(beta).parent / "Data" / "textdata.cam"
+        path = Path(os.environ.get('MAJESTY_STOCK_ROOT', Path(beta).parent)) / "Data" / "textdata.cam"
         templates = {key: _require_cam_entry(path, b"SMNU", key).data for key in (b"AP52", b"AP53", b"AP10", b"AP69")}
         stock = records(templates[b"AP52"])
         def clone(source, control, old=None, position=None):
@@ -216,7 +216,7 @@ class PrivateRecruitmentProfileTests(unittest.TestCase):
             self.assertEqual(resolved.registry.private_recruitments[0].child_dialog_id,
                              int.from_bytes(resolved.panels[0].resolved_child_dialog_id,"little"))
             _validate_authored_controller_panel_controls((inventory,), resolved.registry, resolved.panels)
-            _validate_authored_private_recruitment(Path(beta).parent, (inventory,), resolved.registry, stock_descriptions={})
+            _validate_authored_private_recruitment(Path(os.environ.get('MAJESTY_STOCK_ROOT', Path(beta).parent)), (inventory,), resolved.registry, stock_descriptions={})
         for control in (0x1388,0x1389,0x1F48,0x7301,0x1F4D):
             bad = list(sub); index = bad.index(control_record(bad,control))
             row = list(bad[index]); row[4] += 1; bad[index] = tuple(row)
@@ -231,7 +231,7 @@ class PrivateRecruitmentProfileTests(unittest.TestCase):
         beta = os.environ.get("MAJESTY_BETA2_EXE")
         if not beta: self.skipTest("stock CAM fixtures are not configured")
         from majesty_cam.compose import _require_cam_entry
-        stock_path = Path(beta).parent / "Data" / "textdata.cam"
+        stock_path = Path(os.environ.get('MAJESTY_STOCK_ROOT', Path(beta).parent)) / "Data" / "textdata.cam"
         ap52 = _require_cam_entry(stock_path, b"SMNU", b"AP52").data
         ap53 = _require_cam_entry(stock_path, b"SMNU", b"AP53").data
         panel = list(records(ap52))
