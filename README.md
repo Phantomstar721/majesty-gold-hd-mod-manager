@@ -25,7 +25,9 @@ needed by custom buildings, panels, and other advanced features.
   combining mods for original-game quests.
 - Reuses unchanged stock data to keep repeated selection checks responsive.
 - Combines independent changes within shared GPL functions and XML Descriptions,
-  and asks for one preferred mod per pair when script changes cannot be safely combined.
+  and asks for one preferred mod per pair when changes cannot be safely combined.
+- Reviews Standard load-order choices together, with expandable conflict details;
+  conflicting sound records use the same preferred-mod choices.
 - Supports reusable list, research, reward, and recruitment panels, including
   single-panel layouts at lower resolutions.
 - Supports custom ability names, icons, and hover descriptions in hero panels.
@@ -72,8 +74,9 @@ downloading any updated mods, reopen the Manager and choose
 **Prepare Selected Mods** (or **Prepare Again**) to refresh your generated
 package before launching.
 
-See the [0.3.9 release notes](release/v0.3.9.md) for the launch compatibility,
-artwork and cache corrections. Compatibility checks refresh automatically when
+See the [0.3.10 release notes](release/v0.3.10.md) for conflict review and art
+composition updates, and the [sound naming guidance](docs/sound-resource-preferences.md)
+for authors. Compatibility checks refresh automatically when
 relevant inputs change; **Rescan Content** remains available for a manual refresh.
 
 ## Content tabs

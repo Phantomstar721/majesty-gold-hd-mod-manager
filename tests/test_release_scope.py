@@ -18,7 +18,20 @@ class ReleaseScopeTests(unittest.TestCase):
                      "runtime/PaidSourceTargetRuntime.inl", "runtime/SavedAttributeRuntime.inl"):
             self.assertFalse((ROOT / path).exists(), "Development source entered release: " + path)
         from majesty_cam.manager.capabilities import DERIVED_RUNTIME_CAPABILITIES
-        self.assertNotIn("manager.attack-projectile-observation.v1", DERIVED_RUNTIME_CAPABILITIES)
+        self.assertIn("manager.projectile-interception.v1", DERIVED_RUNTIME_CAPABILITIES)
+        from majesty_cam.package import parse_mod_definition, PackageFormatError
+        from majesty_cam.attack_observation_proof import encode, Proof
+        with self.assertRaises(ValueError):
+            encode(Proof(object(), ()))
+        for feature in ('stock.attack-projectile-observation.v1', 'stock.checked-placement.v1'):
+            with self.assertRaises(PackageFormatError):
+                parse_mod_definition({'schema_version': 3,
+                    'mod_id': '{00000000-0000-0000-0000-000000000001}',
+                    'internal_name': 'Test', 'display_name': 'Test', 'custom_buildings': [],
+                    'runtime_features': [{'type': feature}]})
+        runtime = (ROOT / 'runtime/NativeImpactRuntime.cpp').read_text()
+        for excluded in ('CAM_ATTACK_DIAGNOSTIC', 'MajestyCheckedPlacement', 'AttackSettled', 'ShotPending', 'life.Query('):
+            self.assertNotIn(excluded, runtime)
         self.assertNotIn("manager.checked-placement.v1", DERIVED_RUNTIME_CAPABILITIES)
 
     def test_unknown_builds_still_fail_runtime_profile_selection(self):

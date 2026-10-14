@@ -28,6 +28,8 @@
 #include "FreestyleCamRuntime.h"
 #include "IntentTextRegistry.h"
 #include "MapQueryRuntime.h"
+#include "NativeImpactRuntime.h"
+#include "BooleanRuntime.h"
 #include "EquipmentRuntime.h"
 #include "RuntimeCapabilityManifest.h"
 #include "RuntimeFeatureRegistry.h"
@@ -411,6 +413,8 @@ constexpr std::uint32_t kMx05DialogId = 0x3530584D;
 bool ValidateOccupantPanelProfile();
 bool ValidateSelectedParentControllerProfiles();
 bool ValidateQuestBoardProfile();
+bool PrepareProjectileBoolean();
+bool SelectMajestyBuildProfile();
 bool ValidateKingdomResearchProfile();
 bool ValidateHeroInfoProfile();
 bool ValidateMovementScaleProfile();
@@ -866,6 +870,14 @@ CapabilityManifestState LoadRuntimeCapabilityManifest() {
             "Manager capability manifest rejected before hook installation: %s.",
             parseError.c_str());
         WriteLog(message);
+        return CapabilityManifestState::Invalid;
+    }
+    const bool intercept=manifest.Has(MajestyRuntimeCapabilities::kProjectileInterception);
+    const bool observation=manifest.Has(MajestyRuntimeCapabilities::kAttackObservation);
+    if (intercept != observation || (intercept &&
+        (!SelectMajestyBuildProfile() || !PrepareProjectileBoolean() ||
+         !MajestyAttackObservation::PrepareRuntime(manifestPath,g_buildProfile->buildId,true)))) {
+        WriteLog("Projectile interception rejected: exact executable or composed-output evidence unavailable.");
         return CapabilityManifestState::Invalid;
     }
     g_runtimeCapabilities = std::move(manifest);
@@ -4821,6 +4833,13 @@ const QuestBoardBuildProfile& QuestBoardProfile() {
     }
 }
 
+bool PrepareProjectileBoolean() {
+    return g_buildProfile && ValidateQuestBoardProfile() &&
+        MajestyBooleanRuntime::Prepare(g_buildProfile->buildId,
+            g_imageBase+OccupantProfile().stringConstructor,
+            g_imageBase+QuestBoardProfile().stringDestructor);
+}
+
 bool ValidateSelectedParentControllerProfiles() {
     std::vector<std::uint32_t> selected;
     if (!g_stockControllerRegistry.privateRecruitments.empty()) {
@@ -7791,14 +7810,17 @@ DWORD WINAPI InitializeRuntime(void*) {
             "Overlay movement scaling failed its selected executable profile checks.");
     }
     if (g_runtimeFeatureRegistry.mapFogQuery || g_runtimeFeatureRegistry.movementQuery ||
-        g_runtimeFeatureRegistry.nativeTiming || kingdomResearch) {
+        g_runtimeFeatureRegistry.nativeTiming || kingdomResearch ||
+        HasRuntimeCapability(MajestyRuntimeCapabilities::kProjectileInterception)) {
         RequireManagerRuntimeInstall(
             InstallMapQueryRuntime(g_imageBase, g_buildProfile->buildId,
                 g_runtimeFeatureRegistry.mapFogQuery, g_runtimeFeatureRegistry.movementQuery,
                 g_runtimeFeatureRegistry.nativeTiming ? &g_runtimeFeatureRegistry : nullptr,
                 kingdomResearch ? &KingdomResearchOrder : nullptr,
                 kingdomResearch ? &KingdomResearchEligible : nullptr,
-                g_runtimeFeatureRegistry.movementScales.empty() ? nullptr : &MovementQueryDistance),
+                g_runtimeFeatureRegistry.movementScales.empty() ? nullptr : &MovementQueryDistance,
+                HasRuntimeCapability(MajestyRuntimeCapabilities::kProjectileInterception),
+                &StopUnsafeManagerRuntimeLaunch, &WriteLog),
             managerLaunch, "The stock GPL interface registration boundary did not match its profile.");
     }
 

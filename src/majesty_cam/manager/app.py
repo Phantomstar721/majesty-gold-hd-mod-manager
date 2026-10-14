@@ -1841,36 +1841,33 @@ if _PYSIDE_IMPORT_ERROR is None:
                 self.snapshot.catalog,
                 self.snapshot.selections,
             )
-            for conflict in conflicts:
-                if content_id is not None and content_id not in (
-                    conflict.left_id,
-                    conflict.right_id,
-                ):
-                    continue
-                winner = self.controller.standard_conflict_winners.get(
-                    conflict.pair_key
-                )
-                if not force_review and winner in (
-                    conflict.left_id,
-                    conflict.right_id,
-                ):
-                    continue
-                options = ((conflict.left_id, conflict.left_name), (conflict.right_id, conflict.right_name))
-                previews = {
-                    key: preview_standard_choice(
-                        self.snapshot.catalog, self.snapshot.selections, self.controller.order,
-                        self.controller.standard_conflict_winners, conflict, key,
-                    ) for key, _name in options
-                }
-                dialog = _ConflictChoiceDialog(options, previews, winner, self)
+            from .standard_review import StandardReviewConflict, native_choices, validate_native_choices
+            from .script_review_dialog import ScriptReviewDialog
+            from ..script_review import pair_key
+            saved = self.controller.standard_conflict_winners
+            try:
+                validate_native_choices(self.snapshot.catalog, self.snapshot.selections, saved)
+                invalid_order = False
+            except ValueError:
+                invalid_order = True
+            if conflicts and (force_review or invalid_order or any(saved.get(c.pair_key) not in
+                               (c.left_id, c.right_id) for c in conflicts)):
+                # Include every pair so contradictory saved choices can be repaired
+                # together, even when review was opened from one mod's Details.
+                def validate(decisions):
+                    validate_native_choices(self.snapshot.catalog, self.snapshot.selections,
+                                            {**saved, **native_choices(conflicts, decisions)})
+                dialog = ScriptReviewDialog(tuple(StandardReviewConflict(c) for c in conflicts), self,
+                    preferences={pair_key(c.left_id, c.right_id): saved[c.pair_key]
+                                 for c in conflicts if c.pair_key in saved},
+                    validate_choices=validate)
+                dialog.introduction.setText('Choose a preferred mod in each pair. Both stay enabled; '
+                                            'the preferred mod wins their shared changes.')
+                dialog.continue_button.setText('Save preferences')
                 if dialog.exec() != QDialog.DialogCode.Accepted:
                     return False
-                winner = dialog.winner
-                self.snapshot = self.controller.set_standard_conflict_winner(
-                    conflict.left_id,
-                    conflict.right_id,
-                    winner,
-                )
+                self.snapshot = self.controller.set_standard_conflict_winners(
+                    native_choices(conflicts, dialog.decisions))
             if self.snapshot is not None:
                 self._render_snapshot(self.snapshot)
             return True

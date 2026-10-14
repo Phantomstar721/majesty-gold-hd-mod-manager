@@ -6,11 +6,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
+if (Test-Path -LiteralPath (Join-Path $repoRoot 'RELEASE-HOLD.txt')) {
+    throw 'Workshop staging is on hold; see RELEASE-HOLD.txt.'
+}
 $distRoot = Join-Path $repoRoot "dist"
 if (-not $ApplicationRoot) {
     $ApplicationRoot = Join-Path $distRoot "Majesty Mod Manager"
 }
 $applicationRoot = [IO.Path]::GetFullPath($ApplicationRoot)
+& (Join-Path $repoRoot '.venv\Scripts\python.exe') (Join-Path $PSScriptRoot 'verify_regression.py') --mode release --application $applicationRoot --verify-receipt
+if ($LASTEXITCODE -ne 0) { throw 'Workshop staging requires an unchanged regression-tested release build.' }
 $receiptPath = Join-Path (Split-Path -Parent $applicationRoot) "release-parity.json"
 if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) {
     throw "Workshop staging requires a three-version verified application build"

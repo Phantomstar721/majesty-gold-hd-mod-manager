@@ -19,7 +19,7 @@ from .gpl import (DefinitionKind, ParsedSemanticSource, SemanticMergeResult,
                   require_complete_semantic_coverage)
 from .gpl_features import StockHeroQuestParticipant
 from .gpl_function_merge import merge_function, FunctionMergeError, _tokens, _Parser
-from .package import GplLoad, ModPackage, load_standard_component, load_standard_definition
+from .package import GplLoad, DescriptionsLoad, ModPackage, load_standard_component, load_standard_definition
 from .stock_input_cache import StockInputCache
 from .bcd import definition_keys, BcdIndexError
 
@@ -39,6 +39,7 @@ class StandardScripts:
     digests: tuple[tuple[str, str | None], ...] = ()
     payloads: tuple[tuple[Path, bytes], ...] = ()
     compiled_payloads: tuple[tuple[Path, bytes], ...] = ()
+    description_payloads: tuple[tuple[str, bytes], ...] = ()
 
     @cached_property
     def parsed_sources(self):
@@ -133,8 +134,10 @@ def read(entry):
             manifest_bytes = entry.manifest_path.read_bytes()
             package = load_standard_component(root, manifest_path=entry.manifest_path,
                                               mod_id=entry.content_id,
-                                              recover_project_sources=False)
+                                              recover_project_sources=True)
         return (entry.manifest_path.resolve(), root / 'mod-definition.json',
+                *(directive.file.absolute_path for d in package.datasets[:1] for load in d.loads
+                  for directive in load.directives if isinstance(directive, DescriptionsLoad)),
                 *(f.file.absolute_path for d in package.datasets[:1] for load in d.loads
                   for directive in load.directives if isinstance(directive, GplLoad)
                   for f in directive.files),
@@ -168,14 +171,17 @@ def read(entry):
                                tuple((p.absolute_path, payloads[p.absolute_path])
                                      for block in loads for p in block.sources),
                                tuple((block.target.absolute_path, payloads[block.target.absolute_path])
-                                     for block in loads))
+                                     for block in loads),
+                               tuple((d.base.casefold(), payloads[x.file.absolute_path])
+                                     for d in package.datasets[:1] for b in d.loads
+                                     for x in b.directives if isinstance(x, DescriptionsLoad)))
     return _CACHE.get(root, (entry.content_id, str(entry.manifest_path)), inputs, load)
 
 
 def file_inputs(inputs):
     """Exact source/target identity, including absence of an optional declaration."""
     return tuple((item.package.mod_id, item.digests) for item in inputs
-                 if item.loads or item.participants)
+                 if item.loads or item.participants or item.description_payloads)
 
 
 def fingerprint(entries):
@@ -234,7 +240,7 @@ def verify(item, compiler, block_index=None):
                     process = run('Probe.bcd')
                     probe_path = directory / 'Probe.bcd'
                     probe = probe_path.read_bytes() if not process.returncode and probe_path.is_file() else b''
-                    names = {name.encode(): p.relative_path for name, p in
+                    names = {name.encode(): (p.declared_path if block.recovered_project else p.relative_path) for name, p in
                              zip(files, block.sources)}
                     if not _matches_source_locations(runtime, exact, probe, names):
                         raise ValueError(f'{item.name}: registered GPL source does not reproduce '

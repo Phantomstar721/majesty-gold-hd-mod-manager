@@ -17,6 +17,9 @@ import xml.etree.ElementTree as ET
 
 from ._subprocess import no_console_window_options
 from .stock_input_cache import StockInputCache
+from .native_impact import (ProjectileInterception, selected as native_impact_selected,
+    CAPABILITY as NATIVE_IMPACT_CAPABILITY, OBSERVATION_CAPABILITY,
+    require_exact_profile as require_impact_profile)
 from .equipment import EquipmentRegistration, EQUIPMENT_FEATURE_TYPE
 from .manager.runtime_profiles import require_supported_runtime
 from .potion_policy import (POTIONS, PotionPolicy, Plan as PotionPlan, selected as potion_policies,
@@ -2484,7 +2487,6 @@ def _compose_art_domain(
     tile_deltas = {
         analysis.mod_id: analysis.tile_delta for analysis in analyses
     }
-    tile_collisions = find_positional_collisions(tile_deltas)
     protected_tile_indices = {
         analysis.mod_id: {
             change.index
@@ -2495,20 +2497,6 @@ def _compose_art_domain(
         }
         for analysis in analyses
     }
-    tile_moves = _select_later_conflict_runs(
-        tile_deltas,
-        tile_collisions,
-        order,
-        protected_indices=protected_tile_indices,
-    )
-    tile_start = _first_free_after_reserved(tile_deltas, tile_moves)
-    tile_allocation = allocate_collision_free_ranges(
-        tile_deltas,
-        start=tile_start,
-        indices_by_mod=tile_moves,
-        maximum_index=0xFFFE,
-    )
-
     palette_deltas = {
         analysis.mod_id: analysis.palette_delta
         for analysis in analyses
@@ -2578,6 +2566,27 @@ def _compose_art_domain(
             effective_entries = rewritten.entries
             palette_reports.append((owner, rewritten.report))
         rewritten_tiles[owner] = effective_entries
+
+    # Palette relocation can make previously identical TILE bytes different.
+    # Allocate from the final payloads, before rewriting any IMAG references.
+    tile_deltas = {
+        owner: replace(delta, changes=tuple(
+            replace(change, entry=rewritten_tiles[owner][change.index])
+            for change in delta.changes
+        ))
+        for owner, delta in tile_deltas.items()
+    }
+    tile_collisions = find_positional_collisions(tile_deltas)
+    tile_moves = _select_later_conflict_runs(
+        tile_deltas, tile_collisions, order,
+        protected_indices=protected_tile_indices,
+    )
+    tile_allocation = allocate_collision_free_ranges(
+        tile_deltas,
+        start=_first_free_after_reserved(tile_deltas, tile_moves),
+        indices_by_mod=tile_moves,
+        maximum_index=0xFFFE,
+    )
 
     imag_resources: list[CamResource] = []
     imag_reports: list[tuple[str, ImagRelocationReport]] = []
@@ -2842,6 +2851,14 @@ def _compose_art_domain(
         sections.append(
             palette_section
         )
+    else:
+        # No palette writes means native stock fallback, not permission for
+        # emitted TILEs to reference absent private palettes. This includes
+        # sparse-ID packages whose only supplied palette was unreferenced.
+        stock_palettes = next((section for section in stock.sections
+                               if section.extension in {b"SPLT", b"PALT"}), None)
+        if stock_palettes is not None:
+            validate_external_palette_closure(sections[1], stock_palettes)
 
     return ArtDomainComposeResult(
         domain=domain,
@@ -3076,16 +3093,17 @@ def _split_imag_sets(entry: CamEntry) -> tuple[bytes, tuple[tuple[int, bytes], .
     )
     offsets = tuple(offset for _set_id, offset in directory)
     if (
-        offsets != tuple(sorted(offsets))
-        or len(set(offsets)) != len(offsets)
-        or offsets[0] < table_end
-        or offsets[-1] >= len(data)
+        len(set(offsets)) != len(offsets)
+        or min(offsets) < table_end
+        or max(offsets) >= len(data)
     ):
         raise ComposeError(f"{_display_key(entry.name[:4])}: invalid IMAG set offsets")
+    physical = sorted(offsets)
+    ends = dict(zip(physical, physical[1:] + [len(data)]))
     sets = tuple(
         (
             set_id,
-            data[offset:(directory[index + 1][1] if index + 1 < count else len(data))],
+            data[offset:ends[offset]],
         )
         for index, (set_id, offset) in enumerate(directory)
     )
@@ -3496,6 +3514,9 @@ def merge_description_resources(
     reserved_description_names: Iterable[str] = (),
     resolutions: Mapping[DescriptionKey, DescriptionRecord] | None = None,
     stock_records: Mapping[DescriptionKey, DescriptionRecord] | None = None,
+    external_variants=(),
+    conflict_resolver=None,
+    excluded_keys=(),
 ) -> DescriptionMergeResult:
     """Merge every XML Description and apply only declared building DialogIDs."""
 
@@ -3509,7 +3530,7 @@ def merge_description_resources(
             # Majesty applies a component's Description directives in manifest
             # order. Later records from that same component replace earlier
             # records before the component competes with any other owner.
-            effective.update(document.index)
+            effective.update((key, record) for key, record in document.index.items() if key not in excluded_keys)
         if effective:
             document = DescriptionsDocument(
                 root_tag="Majesty",
@@ -3529,6 +3550,11 @@ def merge_description_resources(
         inventory.selected.alias: inventory.selected.package.definition
         for inventory in inventories
     }
+    owned_keys = {record.key for _, payload in variants for record in parse_descriptions(payload).records}
+    for owner, document in external_variants:
+        records = tuple(record for record in document.records if record.key in owned_keys)
+        if records:
+            variants.append((owner, DescriptionsDocument('Majesty', (), records)))
     if dialog_resolutions is None:
         dialog_resolutions = resolve_building_dialogs(inventories)
     resolution_by_building = {
@@ -3537,7 +3563,7 @@ def merge_description_resources(
     matched: dict[tuple[str, str], int] = {}
 
     def transform(owner: str, key: DescriptionKey, element):
-        definition = definitions[owner]
+        definition = definitions.get(owner)
         if definition is None:
             return element
         transform_equipment_description(definition, element)
@@ -3589,13 +3615,15 @@ def merge_description_resources(
         record = requested_resolutions.get(conflict.key)
         if record is not None:
             used_resolutions.add(conflict.key)
+        elif conflict_resolver is not None:
+            return conflict_resolver(conflict)
         return record
 
     result = merge_descriptions(
         b"<Majesty />",
         variants,
         transform=transform,
-        resolve=resolve if requested_resolutions else None,
+        resolve=resolve if requested_resolutions or conflict_resolver is not None else None,
         field_merge_stock=stock_records,
     )
     from .spell_policy import SpecialSpell, validate_action
@@ -4064,12 +4092,13 @@ def analyze_description_stock_deltas(
 
 def _load_effective_stock_descriptions(
     game_path: Path,
+    dataset: str = 'majestyexpansion',
 ) -> dict[DescriptionKey, tuple[object, str]]:
     """Load the effective Original+MX stock Description index."""
 
     sdk_root = game_path / "SDK" / "OriginalQuests"
     paths: list[Path] = []
-    for relative_directory in (Path("Data"), Path("DataMX")):
+    for relative_directory in ((Path("Data"),) if dataset == 'majesty' else (Path("Data"), Path("DataMX"))):
         directory = sdk_root / relative_directory
         if not directory.is_dir():
             raise ComposeError(f"stock Description directory was not found: {directory}")
@@ -4121,6 +4150,8 @@ def validate_controller_stock_evidence(
     controller_toggles: Sequence[ResolvedControllerToggle] = (),
     runtime_feature_registry: RuntimeFeatureRegistry = RuntimeFeatureRegistry(),
     description_stock_deltas: Sequence[DescriptionStockDelta] | None = None,
+    external_building_keys=(),
+    defer_external_buildings=False,
 ) -> None:
     """Prove private controller identifiers are additions, not stock overrides."""
 
@@ -4178,6 +4209,8 @@ def validate_controller_stock_evidence(
                     continue
                 if description_kinds.get((owner, record.key)) != "addition":
                     continue
+                if record.key in external_building_keys:
+                    continue
                 dialog = element.find("./Game/DialogID")
                 dialog_text = dialog.get("value", "") if dialog is not None else ""
                 try:
@@ -4207,6 +4240,8 @@ def validate_controller_stock_evidence(
                     )
                 ]
                 if len(matches) != 1:
+                    if not matches and defer_external_buildings:
+                        continue  # Selection-time composition must establish the native provider.
                     raise ComposeError(
                         f"{owner}: package-added Building Description "
                         f"{record.key!r} must match exactly one declared "
@@ -5287,6 +5322,29 @@ def merge_gpl_resources(
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
         stock_function_loader = standard_providers.functions
+    damage_review = None
+    from .damage_contributions import selected as has_damage, review_weapon
+    if script_review is not None and has_damage(inventories):
+        damage_key = (DefinitionKind.FUNCTION, 'damage')
+        damage_candidates = list(authored_candidates.get(damage_key, ()))
+        if standard_providers is not None:
+            native = standard_providers.native_candidate(damage_key)
+            if native is not None:
+                damage_candidates.append(native)
+        try:
+            damage_review = review_weapon(script_dataset, tuple(
+                (owner_ids[inventory.selected.alias], labels[inventory.selected.alias],
+                 inventory.selected.package.definition.runtime_features,
+                 _parse_inventory_gpl_sources(inventory)) for inventory in inventories),
+                damage_candidates,
+                standard_providers.stock if standard_providers is not None else stock_function_loader,
+                script_review)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+    from .event_review import analyze as analyze_event_preferences, apply as apply_event_preferences
+    event_preferences = analyze_event_preferences(script_dataset, final, _shared_bindings(inventories),
+        stock_gameplay_event_items or {}, standard_providers,
+        {owner_ids[a]: label for a, label in labels.items()}, script_review)
     reviewed = tuple(conflict for conflict in script_review.conflicts
                      if conflict.identity not in review_before) if script_review else ()
     required_patch_keys.update(conflict.key for conflict in reviewed)
@@ -5407,6 +5465,7 @@ def merge_gpl_resources(
             except ValueError as exc:
                 raise ComposeError(str(exc)) from exc
         shared = _shared_bindings(inventories)
+        final, shared = apply_event_preferences(final, shared, event_preferences, script_review)
         try:
             final, stock_gameplay_event_items = compose_potion_policy(
                 final, potion_plan,
@@ -5452,6 +5511,18 @@ def merge_gpl_resources(
         from .spell_origin import compose_service as compose_spell_origin
         from .source_context import compose as compose_source_context
         try:
+            from .damage_contributions import validate_bindings as validate_damage, compose as compose_damage, selected as damage_selected
+            if damage_selected(inventories):
+                damage_features = validate_damage(tuple(
+                    (inventory.selected.alias, inventory.selected.package.definition.runtime_features,
+                     _parse_inventory_gpl_sources(inventory)) for inventory in inventories))
+                weapon_features = None
+                if damage_review is not None:
+                    conflict, providers = damage_review
+                    retained = script_review.selected_owners(conflict)
+                    weapon_features = tuple(f for owner in retained for f in providers.get(owner, ()))
+                final = compose_damage(final, damage_features, stock_function_loader,
+                    reviewed_weapon=damage_review is not None, weapon_features=weapon_features)
             policy_bindings = _spell_policy_bindings(inventories)
             if spell_policy_plan is not None:
                 final = compose_discovered(final, policy_bindings, spell_policy_plan, stock_function_loader)
@@ -5459,6 +5530,9 @@ def merge_gpl_resources(
                 final = compose_guards(final, policy_bindings, stock_function_loader)
             final = compose_spell_origin(final, spell_origin_selected(inventories))
             context_bindings = _source_context_bindings(inventories)
+            from .source_context import GENERATED_TARGETS
+            if any(f.target_symbol.casefold() in GENERATED_TARGETS for f in context_bindings) and not damage_selected(inventories):
+                raise ValueError('generated damage attribution target requires a damage-contribution provider')
             if context_bindings and source_context_loader is None:
                 raise ValueError("source-context dispatch requires installed native callback and GPL evidence")
             roots = (source_context_root_loader(final) if context_bindings and source_context_root_loader
@@ -7671,12 +7745,13 @@ def _uses_destination_stock_features(inventories):
     do not acquire an SDK dependency merely because they have declarations.
     """
     from .kingdom_research import KingdomResearch
+    from .damage_contributions import DamageContribution
     from .source_context import SourceContextDispatch
     from .spell_policy import FEATURE_CLASSES as SPELL_FEATURES
     kinds = (StockGplmxPurchaseEquipmentTail, StockGplmxPurchaseBazaarTail,
              StockControlledFollowerSpeedSync, StockHeroQuestLifecycle,
              StockHeroQuestParticipant, StockSpellEvaluationEquivalent,
-             PotionPolicy, KingdomResearch, SourceContextDispatch, *SPELL_FEATURES)
+             PotionPolicy, KingdomResearch, SourceContextDispatch, DamageContribution, ProjectileInterception, *SPELL_FEATURES)
     for inventory in inventories:
         definition = getattr(getattr(inventory.selected, 'package', None), 'definition', None)
         for feature in getattr(definition, 'runtime_features', ()):
@@ -7715,7 +7790,7 @@ def prepare_gpl_bundle(game_path, inventories, *, standard_script_inputs=(),
         except (ComposeError, ValueError) as exc:
             failures.append(f'{scope}: {exc}')
     if failures:
-        conflicts = '\n'.join(f'{c.dataset}: {c.key[0].value}:{c.name}: {c.detail}'
+        conflicts = '\n'.join(f'{c.dataset}: {getattr(c.key[0], "value", c.key[0])}:{c.name}: {c.detail}'
                               for c in review.unresolved)
         raise ComposeError('Script analysis is blocked:\n' + '\n'.join(failures)
             + ('\nOther unresolved script changes:\n' + conflicts if conflicts else '')
@@ -7723,9 +7798,15 @@ def prepare_gpl_bundle(game_path, inventories, *, standard_script_inputs=(),
     if review.unresolved:
         if script_conflict_resolver is None:
             review.require_resolved()
-        decisions = script_conflict_resolver(review.conflicts)
+        from .script_review import group_conflicts
+        xml_pairs = group_conflicts(tuple(c for c in review.conflicts if hasattr(c, 'gameplay_label')))
+        fixed = {p.identity: review.decisions[p.identity] for p in xml_pairs if p.identity in review.decisions}
+        decisions = script_conflict_resolver(tuple(replace(c, fixed_preferences=tuple(fixed.items()))
+                                                  for c in review.conflicts))
         if decisions is None:
             raise ScriptReviewCancelled('Mod preferences cancelled; your last completed setup is unchanged.')
+        if any(key in decisions and decisions[key] != value for key, value in fixed.items()):
+            raise ValueError('Resource preferences already used by this build cannot change during script review')
         review.apply(decisions)
     completed = []
     for scope, view in zip(scopes, views):
@@ -7901,11 +7982,6 @@ def compose_package(
         inventories,
         resolutions=bdep_resolutions,
     )
-    audio_archive, sound_archive, sound_selections = merge_sound_resources(
-        inventories,
-        named_resolutions=named_cam_resolutions,
-        stock_named_resources=stock_named_resources,
-    )
     controlled_follower_markers = tuple(
         sorted(
             (
@@ -7933,20 +8009,33 @@ def compose_package(
         if controlled_follower_markers
         else ()
     )
-    descriptions = merge_description_resources(
-        inventories,
+    from .script_review import ScriptReviewSession
+    from .description_composition import prepare_description_views
+    from .description_review import DescriptionReviewConflict
+    from .sound_review import collect_sound_conflicts, sound_resolutions
+    if script_review is None:
+        script_review = ScriptReviewSession()
+    sound_conflicts = collect_sound_conflicts(
+        inventories, script_review, stock_named_resources, named_cam_resolutions)
+    descriptions, description_patches, external_building_keys = prepare_description_views(
+        game_path, inventories, standard_script_inputs, script_review, script_conflict_resolver,
         dialog_resolutions=dialog_resolutions,
         controlled_follower_markers=controlled_follower_markers,
         reserved_description_keys=stock_description_keys,
         reserved_description_names=reserved_description_names,
         resolutions=description_resolutions,
-        stock_records=stock_description_records,
     )
     descriptions = filter_passthrough_descriptions(
         descriptions,
         inventories,
         stock_records=stock_description_records,
-        forced_keys=(description_resolutions or {}),
+        forced_keys=(*tuple(description_resolutions or {}),
+                     *(c.key for c in script_review.observed if isinstance(c, DescriptionReviewConflict))),
+    )
+    audio_archive, sound_archive, sound_selections = merge_sound_resources(
+        inventories,
+        named_resolutions=sound_resolutions(inventories, script_review, sound_conflicts, named_cam_resolutions),
+        stock_named_resources=stock_named_resources,
     )
     strings = merge_string_resources(
         inventories,
@@ -7966,6 +8055,7 @@ def compose_package(
         controller_toggles=controller_result.toggles,
         runtime_feature_registry=runtime_feature_registry,
         description_stock_deltas=description_stock_deltas,
+        external_building_keys=external_building_keys,
     )
     from .spell_discovery import discover, transform_descriptions
     try:
@@ -8003,6 +8093,23 @@ def compose_package(
         script_conflict_resolver=script_conflict_resolver,
     )
     gpl = script_bundle.common
+    from .scoped_output import ScriptBundle, SCOPES
+    patches = dict(script_bundle.patches)
+    for scope in SCOPES:
+        if scope.casefold() in description_patches and scope not in patches:
+            patches[scope] = replace(gpl, source_set=SemanticMergeResult((), ()).emit_project_source_set(),
+                                     mod_preference_resolutions=())
+    script_bundle = ScriptBundle(gpl, tuple((scope, patches[scope]) for scope in SCOPES if scope in patches))
+    native_features = tuple(f for i in inventories for f in i.selected.package.definition.runtime_features
+                            if isinstance(f, ProjectileInterception))
+    native_bindings = ()
+    if native_features:
+        from .scoped_output import complete_observer_patches
+        from .native_impact import resolve_bundle
+        require_impact_profile(game_path / 'MajestyHD.exe')
+        script_bundle = complete_observer_patches(script_bundle, tuple(f.callback_symbol for f in native_features))
+        gpl = script_bundle.common
+        native_bindings = resolve_bundle(game_path, inventories, script_bundle, descriptions, description_patches)
     if max_generated_mods is not None and len(script_bundle.outputs) > max_generated_mods:
         raise ComposeError('This selection needs ' + str(len(script_bundle.outputs)) +
                            ' generated Mod IDs, exceeding the active-mod persistence limit. '
@@ -8027,6 +8134,7 @@ def compose_package(
         controller_registry=controller_result.registry,
         has_source_exploration=exploration_selected(inventories),
         has_spell_origin=spell_origin_selected(inventories),
+        has_projectile_interception=bool(native_bindings),
     )
     actual_display_name = display_name or f"CAM Manager: {profile_slug}"
     actual_internal_name = internal_name or (
@@ -8074,6 +8182,8 @@ def compose_package(
             (data_directory / filename).write_bytes(archive.to_bytes())
         descriptions_path = data_directory / "merged_descriptions.xml"
         descriptions_path.write_bytes(descriptions.payload)
+        for scope, result in description_patches.items():
+            (data_directory / f'merged_descriptions-{scope}.xml').write_bytes(result.payload)
         strings_paths: list[Path] = []
         if strings is not None:
             strings_path = data_directory / "merged_strings.xml"
@@ -8091,6 +8201,18 @@ def compose_package(
             compiled_output.target.unlink()
             compiled_outputs[scope] = compiled_output
         compiled = compiled_outputs.get('Any')
+        if native_bindings:
+            from .attack_observation_proof import from_composed_output, encode, RELATIVE_PATH
+            from .native_impact import encode as encode_impact, RELATIVE_PATH as IMPACT_PATH
+            proof = from_composed_output(game_path, (),
+                tuple((data_directory / ('Merged.bcd' if scope == 'Any' else f'Merged-{scope}.bcd')).read_bytes()
+                      for scope, _ in script_bundle.outputs), shared_only=True,
+                required_functions=tuple(f.callback_symbol for f in native_features),
+                protected_functions=tuple(b.script for b in native_bindings))
+            proof_path = staging / RELATIVE_PATH
+            proof_path.parent.mkdir(parents=True, exist_ok=True)
+            proof_path.write_bytes(encode(proof))
+            (staging / IMPACT_PATH).write_bytes(encode_impact(native_bindings, proof_path.read_bytes()))
 
         manifest_name = f"CAMManager-{profile_slug}.mmxml"
         manifest_path = staging / manifest_name
@@ -8104,6 +8226,8 @@ def compose_package(
                 strings_filenames=tuple(path.name for path in strings_paths),
                 source_set=gpl.source_set,
                 scoped_sources=tuple((scope, output.source_set) for scope, output in script_bundle.patches),
+                scoped_descriptions={scope: f'merged_descriptions-{scope.casefold()}.xml'
+                                     for scope in SCOPES if scope.casefold() in description_patches},
             )
         )
         (staging / "mod-definition.json").write_text(
@@ -8164,6 +8288,16 @@ def compose_package(
         report_payload['mod_preferences'] = list({
             row['identity']: row for _, output in script_bundle.outputs
             for row in output.mod_preference_resolutions}.values())
+        report_payload['xml_mod_preferences'] = [
+            {'dataset': c.dataset, 'key': list(c.key), 'name': c.name,
+             'contributors': [candidate.label for candidate in c.candidates],
+             'retained_mod_ids': list(script_review.selected_owners(c))}
+            for c in script_review.observed if isinstance(c, DescriptionReviewConflict)]
+        report_payload['sound_mod_preferences'] = [
+            {'section': c.key[0].decode('ascii'), 'key_hex': c.key[1].hex(),
+             'contributors': [candidate.label for candidate in c.candidates],
+             'retained_mod_ids': list(script_review.selected_owners(c))}
+            for c in sound_conflicts]
         (staging / report_name).write_text(
             json.dumps(report_payload, indent=2) + "\n", encoding="utf-8"
         )
@@ -8220,6 +8354,7 @@ def _derive_runtime_capabilities(
     controller_registry: ResolvedControllerRegistry | None = None,
     has_source_exploration: bool = False,
     has_spell_origin: bool = False,
+    has_projectile_interception: bool = False,
 ) -> tuple[tuple[str, ...], bytes]:
     """Validate caller capabilities and derive evidence-owned hook groups.
 
@@ -8237,6 +8372,10 @@ def _derive_runtime_capabilities(
         if has_source_exploration:
             effective.add(EXPLORATION_CAPABILITY)
         effective.discard(SPELL_ORIGIN_CAPABILITY)
+        effective.discard(NATIVE_IMPACT_CAPABILITY)
+        effective.discard(OBSERVATION_CAPABILITY)
+        if has_projectile_interception:
+            effective.update((NATIVE_IMPACT_CAPABILITY, OBSERVATION_CAPABILITY))
         if has_spell_origin:
             effective.add(SPELL_ORIGIN_CAPABILITY)
         effective.discard(PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY)
@@ -8505,6 +8644,28 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
         raise ComposeError(
             "generated package must carry a schema-version 2 merge definition"
         )
+    from .attack_observation_proof import RELATIVE_PATH as PROOF_PATH, decode as decode_proof, validate_output
+    from .native_impact import RELATIVE_PATH as IMPACT_PATH, decode as decode_impact
+    proof_path, impact_path = root / PROOF_PATH, root / IMPACT_PATH
+    if (proof_path.exists() != (OBSERVATION_CAPABILITY in runtime_capabilities) or
+            impact_path.exists() != (NATIVE_IMPACT_CAPABILITY in runtime_capabilities) or
+            proof_path.exists() != impact_path.exists()):
+        raise ComposeError('projectile interception proof, registry and capabilities disagree')
+    if impact_path.exists():
+        try:
+            from .bcd import definition_keys
+            proof_bytes = proof_path.read_bytes()
+            proof = decode_proof(proof_bytes)
+            targets = tuple(g.target.absolute_path.read_bytes() for g in all_gpl)
+            validate_output(proof, targets)
+            bindings = decode_impact(impact_path.read_bytes(), proof_bytes)
+            keys = tuple(definition_keys(t) for t in targets)
+            views = (keys[0],) if not proof.scoped else (keys[0] | keys[1], keys[0] | keys[2])
+            needed = {(DefinitionKind.FUNCTION, b.provider.casefold()) for b in bindings}
+            if any(not needed <= view for view in views):
+                raise ValueError('compiled interception provider missing')
+        except (OSError, ValueError) as exc:
+            raise ComposeError('invalid generated projectile evidence: ' + str(exc)) from exc
     if package.definition.runtime_capabilities != runtime_capabilities:
         raise ComposeError(
             "generated package definition and runtime capability manifest disagree"
@@ -8576,8 +8737,14 @@ def validate_composed_package(root: Path) -> Mapping[str, object]:
 
     generated_inventory = inventory_package(SelectedMod("generated", package, semantic_passthrough=True))
     patch_loads = {p.datasets[0].base: p.datasets[0].loads[0].gpl for p in packages[1:]}
+    patch_descriptions = {p.datasets[0].base: tuple(x.absolute_path for x in p.datasets[0].loads[0].descriptions)
+                          for p in packages[1:]}
     for scope in ('Majesty', 'MajestyExpansion') if patch_loads else ('Any',):
-        view = replace(generated_inventory, gpl_loads=(*load.gpl, *patch_loads.get(scope, ())))
+        view = replace(generated_inventory, gpl_loads=(*load.gpl, *patch_loads.get(scope, ())),
+                       descriptions=(*generated_inventory.descriptions, *patch_descriptions.get(scope, ())))
+        xml_keys = [r.key for path in view.descriptions for r in _parse_description_file(path).records]
+        if len(xml_keys) != len(set(xml_keys)):
+            raise ComposeError(f'{scope}: generated common and scoped XML duplicate a definition')
         # Each native view must remain a conflict-free, complete source graph.
         sources = [_parse_semantic_source_file(source.absolute_path) for g in view.gpl_loads for source in g.sources]
         for source in sources:
@@ -9084,6 +9251,7 @@ def _build_manifest(
     source_set: GplProjectSourceSet,
     strings_filenames: Sequence[str] = (),
     scoped_sources=(),
+    scoped_descriptions=None,
 ) -> bytes:
     root = ET.Element("Majesty")
     mod = ET.SubElement(root, "Mod", {"id": mod_id})
@@ -9115,7 +9283,7 @@ def _build_manifest(
     add_gpl(load, source_set, 'Any')
     from .scoped_output import scoped_mod_id
     for scope, sources in scoped_sources:
-        if not sources.files:
+        if not sources.files and scope not in (scoped_descriptions or {}):
             raise ComposeError('cannot emit an empty scoped Mod record')
         patch = ET.SubElement(root, 'Mod', {'id': scoped_mod_id(mod_id, scope)})
         ET.SubElement(patch, 'Name').text = internal_name + scope
@@ -9123,6 +9291,8 @@ def _build_manifest(
         config = ET.SubElement(patch, 'DataConfiguration')
         scoped_load = ET.SubElement(ET.SubElement(config, 'Dataset', {'base': scope}), 'Load')
         add_gpl(scoped_load, sources, scope)
+        if scope in (scoped_descriptions or {}):
+            ET.SubElement(scoped_load, 'Descriptions').text = 'Data\\' + scoped_descriptions[scope]
     ET.indent(root, space="\t")
     return ET.tostring(root, encoding="utf-8") + b"\n"
 

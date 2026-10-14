@@ -41,7 +41,7 @@ from .qol_service import (
 )
 
 
-STARTUP_CACHE_SCHEMA_VERSION = 6
+STARTUP_CACHE_SCHEMA_VERSION = 7
 STARTUP_CACHE_FILENAME = "startup-cache.json"
 QOL_CACHE_SCHEMA_VERSION = 1
 _MAX_QOL_INSTALLATIONS = 8
@@ -874,9 +874,11 @@ def _manager_cache_identity_paths() -> tuple[Path, ...]:
     module_root = Path(__file__).resolve().parent
     return tuple(module_root.parent / name for name in (
         "package.py", "standard_scripts.py", "private_hero_gpl.py", "gpl_features.py",
+        "descriptions.py", "description_review.py", "description_composition.py", "script_review.py", "scoped_output.py",
         "stock_gpl.py", "stock_art.py", "strt.py",
         "gpl.py", "gpl_function_merge.py", "compose.py", "gameplay_events.py",
         "event_boundaries.py", "potion_policy.py", "source_context.py", "dataset_dependencies.py",
+        "damage_contributions.py", "event_review.py", "native_impact.py", "native_impact_profiles.py", "attack_observation_proof.py",
         "inventory_spell_display.py", "runtime_features.py", "stock_controller_features.py",
     )) + tuple(
         module_root / name

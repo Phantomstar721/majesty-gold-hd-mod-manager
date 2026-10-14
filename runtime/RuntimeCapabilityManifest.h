@@ -33,6 +33,8 @@ constexpr char kInventorySpellDisplay[] = "manager.inventory-spell-display.v1";
 constexpr char kMovementScale[] = "manager.overlay-movement-scale.v1";
 constexpr char kSourceExploration[] = "manager.source-exploration.v1";
 constexpr char kSpellOrigin[] = "manager.spell-origin.v1";
+constexpr char kAttackObservation[] = "manager.attack-projectile-observation.v1";
+constexpr char kProjectileInterception[] = "manager.projectile-interception.v1";
 
 struct Manifest {
     std::vector<std::string> capabilities;

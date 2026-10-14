@@ -27,6 +27,7 @@ from ..compose import (
 from ..gameplay_events import event_stock_paths
 from ..exploration_events import selected as exploration_selected, CAPABILITY as EXPLORATION_CAPABILITY, require_supported_profile as require_exploration_profile
 from ..spell_origin import selected as spell_origin_selected, CAPABILITY as SPELL_ORIGIN_CAPABILITY
+from ..native_impact import selected as native_impact_selected, require_exact_profile as require_impact_profile, CAPABILITY as NATIVE_IMPACT_CAPABILITY, OBSERVATION_CAPABILITY
 from ..gpl import (
     DefinitionKind,
     SemanticItem,
@@ -84,7 +85,7 @@ from ..script_review import ScriptReviewSession, ScriptReviewCancelled, validate
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
-PLAN_SCHEMA_VERSION = 26
+PLAN_SCHEMA_VERSION = 27
 STANDARD_SELECTION_ISSUE_CODES = frozenset(
     {
         "mutually_exclusive_mods",
@@ -606,6 +607,8 @@ def create_build_plan(
     ):
         try:
             inventories = _prepared_inventories(prepared)
+            if native_impact_selected(inventories):
+                require_impact_profile(game_path / 'MajestyHD.exe' if game_path else None)
             validate_gpl_feature_evidence(inventories, game_path=game_path)
             runtime_feature_registry = resolve_runtime_feature_registry(
                 inventories,
@@ -632,6 +635,7 @@ def create_build_plan(
                     controller_panels=controller_result.panels,
                     controller_toggles=controller_result.toggles,
                     runtime_feature_registry=runtime_feature_registry,
+                    defer_external_buildings=True,
                 )
             capabilities = set(
                 derive_feature_runtime_capabilities(
@@ -643,6 +647,10 @@ def create_build_plan(
             if exploration_selected(inventories):
                 capabilities.add(EXPLORATION_CAPABILITY)
             capabilities.discard(SPELL_ORIGIN_CAPABILITY)
+            capabilities.discard(NATIVE_IMPACT_CAPABILITY)
+            capabilities.discard(OBSERVATION_CAPABILITY)
+            if native_impact_selected(inventories):
+                capabilities.update((NATIVE_IMPACT_CAPABILITY, OBSERVATION_CAPABILITY))
             if spell_origin_selected(inventories):
                 capabilities.add(SPELL_ORIGIN_CAPABILITY)
             capabilities.discard(STOCK_CONTROLLER_RUNTIME_CAPABILITY)

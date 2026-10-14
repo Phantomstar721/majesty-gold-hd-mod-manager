@@ -8,6 +8,7 @@
 #include "NativeTiming.h"
 #include "EarnedRewards.h"
 #include "RuntimeFeatureRegistry.h"
+#include "NativeImpactRuntime.h"
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -30,6 +31,9 @@ constexpr Profile kGog = {
 std::uintptr_t g_base = 0;
 const Profile* g_profile = nullptr;
 bool g_mapQuery = false, g_movementQuery = false;
+bool g_attackObservation = false;
+void (*g_unsafeLaunch)(const char*) = nullptr;
+void (*g_observationLog)(const char*) = nullptr;
 int (*g_researchOrder)(void*, std::uint32_t) = nullptr;
 int (*g_researchEligible)(void*, std::uint32_t) = nullptr;
 int (*g_movementDistance)(void*, int) = nullptr;
@@ -588,6 +592,11 @@ void __cdecl ResearchAwardBonus(void* arguments) {
 }
 void __cdecl RegisterAfterStock() {
     reinterpret_cast<void (__cdecl*)()>(g_base+g_profile->registration)();
+    if (g_attackObservation && !MajestyAttackObservation::InstallRuntime(g_base,&Register,g_observationLog)) {
+        g_unsafeLaunch("Projectile interception rejected at the stock registration boundary.");
+        TerminateProcess(GetCurrentProcess(),ERROR_INVALID_DATA);
+        return;
+    }
     if (g_mapQuery) {
         Register("MM_MapFog", &Fog);
         Register("MM_MapNextFrontier", &Frontier);
@@ -618,9 +627,14 @@ bool InstallMapQueryRuntime(std::uintptr_t imageBase, MajestyBuildId buildId,
                            const MajestyRuntimeFeatures::Registry* timing,
                            int (*researchOrder)(void*, std::uint32_t),
                            int (*researchEligible)(void*, std::uint32_t),
-                           int (*movementDistance)(void*, int)) {
+                           int (*movementDistance)(void*, int),
+                           bool attackObservation,
+                           void (*unsafeLaunch)(const char*),
+                           void (*log)(const char*)) {
     if ((researchOrder == nullptr) != (researchEligible == nullptr)) return false;
-    if (!mapQuery && !movementQuery && timing == nullptr && !researchOrder) return true;
+    if (!mapQuery && !movementQuery && timing == nullptr && !researchOrder && !attackObservation) return true;
+    if (attackObservation && !unsafeLaunch) return false;
+    g_attackObservation=attackObservation;g_unsafeLaunch=unsafeLaunch;g_observationLog=log;
     // Research and movement callbacks come from guarded per-build adapters.
     // The shared GPL bridge must use the selected profile, not a beta2 gate.
     if (timing != nullptr && !timing->nativeTiming) return false;

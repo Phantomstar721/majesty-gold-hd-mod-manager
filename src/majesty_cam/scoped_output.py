@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from .gpl import SemanticMergeResult, parse_gpl, parse_dat, _mask_non_code
 from .gpl_function_merge import _tokens
-from .package import (ModPackage, PackageFormatError, GplLoad, _resolve_package_root,
+from .package import (ModPackage, PackageFormatError, GplLoad, DescriptionsLoad, _resolve_package_root,
                       _select_manifest, _select_definition, _parse_manifest, _same_mod_id)
 
 SCOPES = ('Majesty', 'MajestyExpansion')
@@ -62,6 +62,24 @@ def partition(base, expansion):
                     for scope, result, values in ((SCOPES[0], base, left), (SCOPES[1], expansion, right))
                     if values.keys() - common)
     return ScriptBundle(subset(base, (i for key, i in left.items() if key in common)), patches)
+
+
+def complete_observer_patches(bundle, callback_names):
+    """Move existing common callbacks into both real scoped compiler outputs."""
+    if len(bundle.patches) != 1:
+        return bundle
+    names = {name.casefold() for name in callback_names}
+    common = source_items(bundle.common.source_set)
+    moved = tuple(item for item in common if item.kind.value == 'function' and item.normalized_name in names)
+    if {item.normalized_name for item in moved} != names:
+        raise ValueError('observer release callbacks must be shared before completing dataset patches')
+    keys = {item.key for item in moved}
+    patches = dict(bundle.patches)
+    def subset(result, items):
+        return replace(result, source_set=SemanticMergeResult(tuple(items),()).emit_project_source_set())
+    return ScriptBundle(subset(bundle.common,(item for item in common if item.key not in keys)),
+        tuple((scope,subset(patches.get(scope,bundle.common),
+            (*source_items(patches[scope].source_set),*moved) if scope in patches else moved)) for scope in SCOPES))
 
 
 def audit_scope_dependencies(result, providers, stock):
@@ -127,8 +145,12 @@ def load_generated_bundle(root, *, manifest_path=None):
             if not _same_mod_id(metadata.mod_id, scoped_mod_id(definition.mod_id, scope)):
                 raise PackageFormatError('generated patch ID does not match its common profile and scope')
             load = metadata.datasets[0].loads[0]
-            if len(load.directives) != 1 or not isinstance(load.directives[0], GplLoad):
-                raise PackageFormatError('generated dataset patch may contain only one GPL load')
+            if (not load.directives or len(load.gpl) > 1 or len(load.descriptions) > 1
+                    or any(not isinstance(d, (GplLoad, DescriptionsLoad)) for d in load.directives)):
+                raise PackageFormatError('generated dataset patch may contain only one GPL and one XML load')
+            for description in load.descriptions:
+                if description.relative_path.replace('\\', '/') != f'Data/merged_descriptions-{scope.casefold()}.xml':
+                    raise PackageFormatError('generated XML target is not owned by its scope')
         scopes.append(scope)
         load = metadata.datasets[0].loads[0]
         if len(load.gpl) > 1:

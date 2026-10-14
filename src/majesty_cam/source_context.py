@@ -9,6 +9,7 @@ from .spell_policy import signature
 
 FEATURE_TYPE = "stock.source-context-dispatch.v1"
 _SYMBOL = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
+GENERATED_TARGETS = {'mm_damage_periodicplayerspellattack': ('agent','integer','integer')}
 
 
 @dataclass(frozen=True)
@@ -25,12 +26,16 @@ def parse_feature(value):
         raise ValueError("source-context dispatch requires its exact versioned fields")
     for key in ("feature_key", "target_symbol", "callback_symbol"):
         name = value[key]
-        if not isinstance(name, str) or not _SYMBOL.fullmatch(name) or name.casefold().startswith("mm_"):
+        allowed_generated = key == 'target_symbol' and isinstance(name, str) and name.casefold() in GENERATED_TARGETS
+        if not isinstance(name, str) or not _SYMBOL.fullmatch(name) or (name.casefold().startswith("mm_") and not allowed_generated):
             raise ValueError(f"source-context {key} must be an unreserved bounded identifier")
     args = value["parameter_types"]
     if (not isinstance(args,(tuple,list)) or not 1 <= len(args) <= 7
             or any(t not in ("agent","integer","string","boolean","location","list") for t in args)):
         raise ValueError("source-context dispatch requires 1..7 GPL parameter types")
+    expected = GENERATED_TARGETS.get(value['target_symbol'].casefold())
+    if expected is not None and tuple(args) != expected:
+        raise ValueError('source-context generated target signature differs from its contract')
     if value["target_symbol"].casefold() == value["callback_symbol"].casefold():
         raise ValueError("source-context adapter cannot replace itself")
     return SourceContextDispatch(value["feature_key"],value["target_symbol"],tuple(args),value["callback_symbol"])

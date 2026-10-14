@@ -1,0 +1,10 @@
+[
+  "majesty-gold-hd-adventurers-guild/dist/workshop/AdventurerGuild",
+  "majesty-gold-hd-custom-guild-alchemist/dist/workshop-upload/content",
+  "majesty-gold-hd-custom-guild-bard/dist/workshop/CustomGuildBards",
+  "majesty-gold-hd-custom-guild-phantoms-haunt/dist/workshop-upload/content",
+  "majesty-gold-hd-custom-guild-phantoms-haunt/dist/CustomGuildPhantomsHauntExpanded",
+  "majesty-gold-hd-restore-abandoned-zoo/dist/workshop-upload/content",
+  "majesty-gold-hd-custom-guild-troubadour/dist/CustomGuildTroubadour",
+  {"path": "majesty-gold-hd-custom-guild-witch-hunter/dist/WitchHunterFourSkills", "development_only": true}
+]

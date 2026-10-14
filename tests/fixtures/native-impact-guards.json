@@ -1,0 +1,1272 @@
+{
+  "source": "native-impact-parity-20261005.json",
+  "production_enabled": false,
+  "profiles": [
+    {
+      "name": "Public",
+      "sha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "windows": [
+        {
+          "name": "StockCostEvaluatorPrefix",
+          "va": 4963760,
+          "size": 137,
+          "sha256": "3408de8a4e6ada2d00b023993fac19c0464027f36919118c25b56f24c230cc5b",
+          "calls": [
+            {
+              "site": 4963805,
+              "target": 6453888
+            },
+            {
+              "site": 4963827,
+              "target": 5650048
+            },
+            {
+              "site": 4963841,
+              "target": 6454320
+            },
+            {
+              "site": 4963855,
+              "target": 5647424
+            },
+            {
+              "site": 4963864,
+              "target": 5650368
+            },
+            {
+              "site": 4963873,
+              "target": 5649696
+            },
+            {
+              "site": 4963892,
+              "target": 5650272
+            }
+          ]
+        },
+        {
+          "name": "InstalledImpact",
+          "va": 5097792,
+          "size": 274,
+          "sha256": "fac51226d7510a0fadf011cc1114f355479cb2c259f8facbf20d5a5d34a9abe5",
+          "calls": [
+            {
+              "site": 5097892,
+              "target": 6004688
+            },
+            {
+              "site": 5097925,
+              "target": 6275936
+            },
+            {
+              "site": 5097976,
+              "target": 5097600
+            },
+            {
+              "site": 5098003,
+              "target": 6014272
+            },
+            {
+              "site": 5098053,
+              "target": 6263040
+            }
+          ]
+        },
+        {
+          "name": "DefaultImpact",
+          "va": 6263040,
+          "size": 90,
+          "sha256": "2de43356af4c6909f2e8a54f11c2f59765c743b218d5afa13bd9be20a30a2287",
+          "calls": [
+            {
+              "site": 6263059,
+              "target": 6014272
+            },
+            {
+              "site": 6263123,
+              "target": 6053040
+            }
+          ]
+        },
+        {
+          "name": "ImpactSetter",
+          "va": 6263136,
+          "size": 30,
+          "sha256": "2eebf24e48acff0d97f010e8271d87b1b5b43c752ad6a28ccf9cea7bf5d23880",
+          "calls": []
+        },
+        {
+          "name": "Terminal100A",
+          "va": 6263168,
+          "size": 102,
+          "sha256": "41b37c966b6140e9e037b20a8198da23dcb55b4f5e30f8c40b60e24278bc2c4d",
+          "calls": [
+            {
+              "site": 6263195,
+              "target": 5903856
+            },
+            {
+              "site": 6263208,
+              "target": 5903856
+            },
+            {
+              "site": 6263226,
+              "target": 6037600
+            }
+          ]
+        },
+        {
+          "name": "Final1005",
+          "va": 6256864,
+          "size": 21,
+          "sha256": "12962a49b4e9d38e3fc2a74e654ef0ea433422c7433e4da84c6a872707a8110e",
+          "calls": []
+        },
+        {
+          "name": "Relaunch",
+          "va": 5097600,
+          "size": 82,
+          "sha256": "f669140d379178764566e7348f2712afd71695c3b3e2865be830a894735b7dcc",
+          "calls": [
+            {
+              "site": 5097605,
+              "target": 6238352
+            }
+          ]
+        },
+        {
+          "name": "TargetedMissileSubmit",
+          "va": 6263664,
+          "size": 245,
+          "sha256": "ef35289c5f7809592ff054b0dc4637e6cc521186862f1d5bd2e9993f35c53553",
+          "calls": [
+            {
+              "site": 6263800,
+              "target": 6037248
+            },
+            {
+              "site": 6263845,
+              "target": 6086272
+            }
+          ]
+        },
+        {
+          "name": "ScriptShapeDispatch",
+          "va": 6053040,
+          "size": 214,
+          "sha256": "f8b7558d4ab05b717b33fe66250c5fbd47920ae2f21e96c0d5127bb215ae54e6",
+          "calls": [
+            {
+              "site": 6053083,
+              "target": 6052448
+            },
+            {
+              "site": 6053117,
+              "target": 4380016
+            },
+            {
+              "site": 6053129,
+              "target": 6052272
+            },
+            {
+              "site": 6053159,
+              "target": 4380016
+            },
+            {
+              "site": 6053195,
+              "target": 6052832
+            },
+            {
+              "site": 6053225,
+              "target": 4380016
+            },
+            {
+              "site": 6053238,
+              "target": 6052640
+            }
+          ]
+        },
+        {
+          "name": "TerminalRetire",
+          "va": 6278800,
+          "size": 47,
+          "sha256": "6cae381b4757c6a85b707e236b093d8c0e943e0d484fd586aeca4402dd92d4b3",
+          "calls": []
+        },
+        {
+          "name": "CancelRetire",
+          "va": 6278720,
+          "size": 68,
+          "sha256": "456ae1caa39316834e70dceda3b93a5f0ab891452e60d2d9fd0f99b8d61b579e",
+          "calls": []
+        },
+        {
+          "name": "InstallImpact",
+          "va": 5172935,
+          "size": 10,
+          "sha256": "9698af640f2b9499cf39f8942211b975722ac02c9087701a821dbe4335bdbd29",
+          "calls": [
+            {
+              "site": 5172940,
+              "target": 6263136
+            }
+          ]
+        },
+        {
+          "name": "AbsorptionAnimation",
+          "va": 6014272,
+          "size": 148,
+          "sha256": "45d32ae7c672a256c00f0ddc5470036bef5b8e4bc4e9a4bb1e2d7cf91f7663a9",
+          "calls": [
+            {
+              "site": 6014390,
+              "target": 6013888
+            }
+          ]
+        },
+        {
+          "name": "EvaluatorConstruct",
+          "va": 5650048,
+          "size": 218,
+          "sha256": "acb19205127838a6674827bdae056e937c88f89c4acde7b17a368ff74d1cec82",
+          "calls": [
+            {
+              "site": 5650127,
+              "target": 5649728
+            },
+            {
+              "site": 5650143,
+              "target": 5631728
+            },
+            {
+              "site": 5650152,
+              "target": 5684688
+            },
+            {
+              "site": 5650161,
+              "target": 5631728
+            },
+            {
+              "site": 5650170,
+              "target": 5684224
+            },
+            {
+              "site": 5650209,
+              "target": 5539216
+            },
+            {
+              "site": 5650252,
+              "target": 7180020
+            }
+          ]
+        },
+        {
+          "name": "AddAgent",
+          "va": 5647424,
+          "size": 8,
+          "sha256": "fe48b657501b1780a4e940aa69a3e38e22b280586f51cf8eb9fc198c5e6c4df5",
+          "calls": []
+        },
+        {
+          "name": "AppendAgentFrame",
+          "va": 5752256,
+          "size": 191,
+          "sha256": "a7fae1c3f54165a40ecf2b16072d087eadfb1dd5babafd4ec9dda0e197887a06",
+          "calls": [
+            {
+              "site": 5752296,
+              "target": 5631728
+            },
+            {
+              "site": 5752306,
+              "target": 5604480
+            },
+            {
+              "site": 5752333,
+              "target": 4380016
+            },
+            {
+              "site": 5752348,
+              "target": 5604896
+            },
+            {
+              "site": 5752412,
+              "target": 5602336
+            },
+            {
+              "site": 5752421,
+              "target": 5751760
+            }
+          ]
+        },
+        {
+          "name": "EvaluatorExecute",
+          "va": 5650368,
+          "size": 261,
+          "sha256": "2ffa094042aa0b9247f7d54a8e4c5dd42d904e9c0aab52c38fc79868302463f9",
+          "calls": [
+            {
+              "site": 5650444,
+              "target": 5539216
+            },
+            {
+              "site": 5650471,
+              "target": 5756816
+            },
+            {
+              "site": 5650497,
+              "target": 5756944
+            },
+            {
+              "site": 5650513,
+              "target": 5551856
+            },
+            {
+              "site": 5650528,
+              "target": 5573296
+            },
+            {
+              "site": 5650540,
+              "target": 5576336
+            },
+            {
+              "site": 5650555,
+              "target": 5745952
+            },
+            {
+              "site": 5650560,
+              "target": 4358848
+            },
+            {
+              "site": 5650587,
+              "target": 5573296
+            },
+            {
+              "site": 5650614,
+              "target": 7180020
+            }
+          ]
+        },
+        {
+          "name": "EvaluatorDestroy",
+          "va": 5650272,
+          "size": 26,
+          "sha256": "b44dc0203275e44622e50dbb7dfb60738b65a7c2c9ccc754a0ffafaa05e653db",
+          "calls": [
+            {
+              "site": 5650285,
+              "target": 5572800
+            }
+          ]
+        },
+        {
+          "name": "ResultAtPrefix",
+          "va": 4382192,
+          "size": 48,
+          "sha256": "11be08ecc955655957e815b18c2411c49989f93f22419ac73bed7ec79e739960",
+          "calls": []
+        },
+        {
+          "name": "ScalarIntegerResult",
+          "va": 5649696,
+          "size": 22,
+          "sha256": "7edea360dc7ab6760001e93ec9cf9832d72027800a2717a1095f950cf83ec987",
+          "calls": [
+            {
+              "site": 5649701,
+              "target": 4382192
+            }
+          ]
+        },
+        {
+          "name": "BooleanConstruct",
+          "va": 5782000,
+          "size": 20,
+          "sha256": "46ed926b484ce78f42686c7b1ff6379fab2a002e44ea972d488dd6484d2d96c0",
+          "calls": []
+        },
+        {
+          "name": "BooleanAssign",
+          "va": 5781616,
+          "size": 23,
+          "sha256": "30b56f4d7c400616785d07cedc433b736473dd9a79b3976bb7c2dcca481c7706",
+          "calls": []
+        },
+        {
+          "name": "DescriptorPublish",
+          "va": 6006800,
+          "size": 47,
+          "sha256": "8f792cfea65caa13b066f900c22b50f1b556d84aa8c4783aff839254d834cbfb",
+          "calls": [
+            {
+              "site": 6006815,
+              "target": 4242688
+            }
+          ]
+        },
+        {
+          "name": "MovementRouteFlag",
+          "va": 6069071,
+          "size": 16,
+          "sha256": "8c27ccf116036a9357b8b7af76fcb35f11067f4d5bee403f35c3389202c5dd0c",
+          "calls": []
+        }
+      ],
+      "impact_global": 8099452,
+      "final_callback_table": {
+        "va": 8099168,
+        "size": 16,
+        "sha256": "3dbbc08bb6b272e6a46a185c4f20ea1ca3bbba04a6c73567398047616f9e3ff3"
+      },
+      "boolean": {
+        "type": 6,
+        "vtable": 7627364,
+        "getter": 5782048,
+        "getterSHA256": "8a905797df24e4a1fe68a2f630971aa55b606cd6a92fed57303379d0f93a7a2d",
+        "slotSHA256": "3f0ebc96f1bb92e789077759a901870a863cf655da235b1f48e2d671e4ae5fb9"
+      }
+    },
+    {
+      "name": "Beta2",
+      "sha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "windows": [
+        {
+          "name": "StockCostEvaluatorPrefix",
+          "va": 4966384,
+          "size": 137,
+          "sha256": "a72ddcfd203094a716673fb9fd685a4cf7f81adf5844d9a3e6cba7d58279976e",
+          "calls": [
+            {
+              "site": 4966429,
+              "target": 6529568
+            },
+            {
+              "site": 4966451,
+              "target": 5740464
+            },
+            {
+              "site": 4966465,
+              "target": 6530000
+            },
+            {
+              "site": 4966479,
+              "target": 5737840
+            },
+            {
+              "site": 4966488,
+              "target": 5740784
+            },
+            {
+              "site": 4966497,
+              "target": 5740112
+            },
+            {
+              "site": 4966516,
+              "target": 5740688
+            }
+          ]
+        },
+        {
+          "name": "InstalledImpact",
+          "va": 5099344,
+          "size": 274,
+          "sha256": "a394b6b52c5673686daa251120ee8bb0c6adc280f07cfcb321ce3c456c7db1db",
+          "calls": [
+            {
+              "site": 5099444,
+              "target": 6090608
+            },
+            {
+              "site": 5099477,
+              "target": 6362784
+            },
+            {
+              "site": 5099528,
+              "target": 5099152
+            },
+            {
+              "site": 5099555,
+              "target": 6100208
+            },
+            {
+              "site": 5099605,
+              "target": 6349888
+            }
+          ]
+        },
+        {
+          "name": "DefaultImpact",
+          "va": 6349888,
+          "size": 90,
+          "sha256": "842ccbd63a075de55fdd5685cf998658deb95a045334a1d4b9cbe52ade148668",
+          "calls": [
+            {
+              "site": 6349907,
+              "target": 6100208
+            },
+            {
+              "site": 6349971,
+              "target": 6139536
+            }
+          ]
+        },
+        {
+          "name": "ImpactSetter",
+          "va": 6349984,
+          "size": 30,
+          "sha256": "1a811731b2fa692008ef9ff991ef52be6c708e00c91a3c675465bb9486156e23",
+          "calls": []
+        },
+        {
+          "name": "Terminal100A",
+          "va": 6350016,
+          "size": 102,
+          "sha256": "4101e47e96a964d6668c40a54ffb5739c5a758ccd477772f59125c99baee550b",
+          "calls": [
+            {
+              "site": 6350043,
+              "target": 5989792
+            },
+            {
+              "site": 6350056,
+              "target": 5989792
+            },
+            {
+              "site": 6350074,
+              "target": 6124096
+            }
+          ]
+        },
+        {
+          "name": "Final1005",
+          "va": 6343712,
+          "size": 21,
+          "sha256": "12962a49b4e9d38e3fc2a74e654ef0ea433422c7433e4da84c6a872707a8110e",
+          "calls": []
+        },
+        {
+          "name": "Relaunch",
+          "va": 5099152,
+          "size": 82,
+          "sha256": "4d83da0b802d06bdd4c14b1075991207279010c4f0c6a7d692ac6fd039d72931",
+          "calls": [
+            {
+              "site": 5099157,
+              "target": 6325200
+            }
+          ]
+        },
+        {
+          "name": "TargetedMissileSubmit",
+          "va": 6350512,
+          "size": 245,
+          "sha256": "b03f4a4eed313b9e64f94262973fe8c294ae15859d538c1eca3ab60041ce67a7",
+          "calls": [
+            {
+              "site": 6350648,
+              "target": 6123744
+            },
+            {
+              "site": 6350693,
+              "target": 6172768
+            }
+          ]
+        },
+        {
+          "name": "ScriptShapeDispatch",
+          "va": 6139536,
+          "size": 214,
+          "sha256": "6164d387a84bf848ac28f14bfae04f014e4874293b8af69951f779b7bfc048de",
+          "calls": [
+            {
+              "site": 6139579,
+              "target": 6138944
+            },
+            {
+              "site": 6139613,
+              "target": 4384688
+            },
+            {
+              "site": 6139625,
+              "target": 6138768
+            },
+            {
+              "site": 6139655,
+              "target": 4384688
+            },
+            {
+              "site": 6139691,
+              "target": 6139328
+            },
+            {
+              "site": 6139721,
+              "target": 4384688
+            },
+            {
+              "site": 6139734,
+              "target": 6139136
+            }
+          ]
+        },
+        {
+          "name": "TerminalRetire",
+          "va": 6365648,
+          "size": 47,
+          "sha256": "6cae381b4757c6a85b707e236b093d8c0e943e0d484fd586aeca4402dd92d4b3",
+          "calls": []
+        },
+        {
+          "name": "CancelRetire",
+          "va": 6365568,
+          "size": 68,
+          "sha256": "456ae1caa39316834e70dceda3b93a5f0ab891452e60d2d9fd0f99b8d61b579e",
+          "calls": []
+        },
+        {
+          "name": "InstallImpact",
+          "va": 5174407,
+          "size": 10,
+          "sha256": "6050b7220df7374467cdf2659c7fe8083f0fa388d2ed6d515beba7174b384a57",
+          "calls": [
+            {
+              "site": 5174412,
+              "target": 6349984
+            }
+          ]
+        },
+        {
+          "name": "AbsorptionAnimation",
+          "va": 6100208,
+          "size": 148,
+          "sha256": "45d32ae7c672a256c00f0ddc5470036bef5b8e4bc4e9a4bb1e2d7cf91f7663a9",
+          "calls": [
+            {
+              "site": 6100326,
+              "target": 6099824
+            }
+          ]
+        },
+        {
+          "name": "EvaluatorConstruct",
+          "va": 5740464,
+          "size": 218,
+          "sha256": "0b521bf8a34e3218c1cbda2439e5b59a167a4cb40784f53a65af53afb6f5fd41",
+          "calls": [
+            {
+              "site": 5740543,
+              "target": 5740144
+            },
+            {
+              "site": 5740559,
+              "target": 5722160
+            },
+            {
+              "site": 5740568,
+              "target": 5774816
+            },
+            {
+              "site": 5740577,
+              "target": 5722160
+            },
+            {
+              "site": 5740586,
+              "target": 5774352
+            },
+            {
+              "site": 5740625,
+              "target": 5623440
+            },
+            {
+              "site": 5740668,
+              "target": 7267506
+            }
+          ]
+        },
+        {
+          "name": "AddAgent",
+          "va": 5737840,
+          "size": 8,
+          "sha256": "ed3435da00db196a1da5ce82bce335ea757e751091cd2af697172d0df65e856d",
+          "calls": []
+        },
+        {
+          "name": "AppendAgentFrame",
+          "va": 5842656,
+          "size": 191,
+          "sha256": "7f342ee127b927e2ba0355a1480663d54301ae624137d9db54934d1734a8034d",
+          "calls": [
+            {
+              "site": 5842696,
+              "target": 5722160
+            },
+            {
+              "site": 5842706,
+              "target": 5694912
+            },
+            {
+              "site": 5842733,
+              "target": 4384688
+            },
+            {
+              "site": 5842748,
+              "target": 5695328
+            },
+            {
+              "site": 5842812,
+              "target": 5692768
+            },
+            {
+              "site": 5842821,
+              "target": 5842160
+            }
+          ]
+        },
+        {
+          "name": "EvaluatorExecute",
+          "va": 5740784,
+          "size": 260,
+          "sha256": "4331c5225355cbceafdd67be9c88e4610e6f8dbe9d9ae97efc4f26c01b84f775",
+          "calls": [
+            {
+              "site": 5740860,
+              "target": 5623440
+            },
+            {
+              "site": 5740887,
+              "target": 5846416
+            },
+            {
+              "site": 5740913,
+              "target": 5846544
+            },
+            {
+              "site": 5740929,
+              "target": 5636752
+            },
+            {
+              "site": 5740944,
+              "target": 5660976
+            },
+            {
+              "site": 5740956,
+              "target": 5676992
+            },
+            {
+              "site": 5740971,
+              "target": 5836352
+            },
+            {
+              "site": 5740976,
+              "target": 4367552
+            },
+            {
+              "site": 5741002,
+              "target": 5660976
+            },
+            {
+              "site": 5741029,
+              "target": 7267506
+            }
+          ]
+        },
+        {
+          "name": "EvaluatorDestroy",
+          "va": 5740688,
+          "size": 26,
+          "sha256": "c53ee376c21b7a337eb954f61984bd84f18efa26564a97a82e8e61f2ac5acff6",
+          "calls": [
+            {
+              "site": 5740701,
+              "target": 5660224
+            }
+          ]
+        },
+        {
+          "name": "ResultAtPrefix",
+          "va": 4386128,
+          "size": 48,
+          "sha256": "3d338a6ebea5f1075e22f01d2dff6478a1d50ad08ab7d2b670d8118a7d9f874c",
+          "calls": []
+        },
+        {
+          "name": "ScalarIntegerResult",
+          "va": 5740112,
+          "size": 22,
+          "sha256": "a770b6c7fc7fe537d4fbf90f7b5b8cc1b7d41b2c4869c7d9bef871f799175ca3",
+          "calls": [
+            {
+              "site": 5740117,
+              "target": 4386128
+            }
+          ]
+        },
+        {
+          "name": "BooleanConstruct",
+          "va": 5872272,
+          "size": 20,
+          "sha256": "f7912b2fda6564a5e9f44eb571f46a5a9bab9810f6da990c63c003be9ebf33dd",
+          "calls": []
+        },
+        {
+          "name": "BooleanAssign",
+          "va": 5871888,
+          "size": 23,
+          "sha256": "30b56f4d7c400616785d07cedc433b736473dd9a79b3976bb7c2dcca481c7706",
+          "calls": []
+        },
+        {
+          "name": "DescriptorPublish",
+          "va": 6092720,
+          "size": 47,
+          "sha256": "3405b2aa41b1ca7fe2d82ca3e94fd1ec55ac293c1c466a5423ee0a891eb7db18",
+          "calls": [
+            {
+              "site": 6092735,
+              "target": 4246672
+            }
+          ]
+        },
+        {
+          "name": "MovementRouteFlag",
+          "va": 6155567,
+          "size": 16,
+          "sha256": "8c27ccf116036a9357b8b7af76fcb35f11067f4d5bee403f35c3389202c5dd0c",
+          "calls": []
+        }
+      ],
+      "impact_global": 8225068,
+      "final_callback_table": {
+        "va": 8224784,
+        "size": 16,
+        "sha256": "2bd21a49b22f73cb1b5ef1c63f7ee70338e5b688590c2c5ee0f4cbe77aba5449"
+      },
+      "boolean": {
+        "type": 6,
+        "vtable": 7733692,
+        "getter": 5872320,
+        "getterSHA256": "8a905797df24e4a1fe68a2f630971aa55b606cd6a92fed57303379d0f93a7a2d",
+        "slotSHA256": "e41ee82c7df5e76a4d5ff6c421911452947cab9c9f0b68b6cd1a7823860555e2"
+      }
+    },
+    {
+      "name": "Gog",
+      "sha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "windows": [
+        {
+          "name": "StockCostEvaluatorPrefix",
+          "va": 4967920,
+          "size": 137,
+          "sha256": "4d6e87deacb80b7203cecb6e6a1e8c2f169caf7deef54aa0309eff21de8a73b6",
+          "calls": [
+            {
+              "site": 4967965,
+              "target": 6538096
+            },
+            {
+              "site": 4967987,
+              "target": 5737136
+            },
+            {
+              "site": 4968001,
+              "target": 6538528
+            },
+            {
+              "site": 4968015,
+              "target": 5734512
+            },
+            {
+              "site": 4968024,
+              "target": 5737456
+            },
+            {
+              "site": 4968033,
+              "target": 5736784
+            },
+            {
+              "site": 4968052,
+              "target": 5737360
+            }
+          ]
+        },
+        {
+          "name": "InstalledImpact",
+          "va": 5101200,
+          "size": 274,
+          "sha256": "0a39ff5f2ca57954e06f62cd8a26287ae832620d6f98a48cec62bb4e776d5cd2",
+          "calls": [
+            {
+              "site": 5101300,
+              "target": 6087360
+            },
+            {
+              "site": 5101333,
+              "target": 6359536
+            },
+            {
+              "site": 5101384,
+              "target": 5101008
+            },
+            {
+              "site": 5101411,
+              "target": 6096960
+            },
+            {
+              "site": 5101461,
+              "target": 6346640
+            }
+          ]
+        },
+        {
+          "name": "DefaultImpact",
+          "va": 6346640,
+          "size": 90,
+          "sha256": "842ccbd63a075de55fdd5685cf998658deb95a045334a1d4b9cbe52ade148668",
+          "calls": [
+            {
+              "site": 6346659,
+              "target": 6096960
+            },
+            {
+              "site": 6346723,
+              "target": 6136288
+            }
+          ]
+        },
+        {
+          "name": "ImpactSetter",
+          "va": 6346736,
+          "size": 30,
+          "sha256": "4351153e48e75d4f427bf19bc3b3fc69624c4e501ad69d7ece1d3d653de27094",
+          "calls": []
+        },
+        {
+          "name": "Terminal100A",
+          "va": 6346768,
+          "size": 102,
+          "sha256": "c1fb564e3f273175d4009609d965ba972586fd05a57c8e8ba8c0144bf903693d",
+          "calls": [
+            {
+              "site": 6346795,
+              "target": 5986544
+            },
+            {
+              "site": 6346808,
+              "target": 5986544
+            },
+            {
+              "site": 6346826,
+              "target": 6120848
+            }
+          ]
+        },
+        {
+          "name": "Final1005",
+          "va": 6340464,
+          "size": 21,
+          "sha256": "12962a49b4e9d38e3fc2a74e654ef0ea433422c7433e4da84c6a872707a8110e",
+          "calls": []
+        },
+        {
+          "name": "Relaunch",
+          "va": 5101008,
+          "size": 82,
+          "sha256": "3adb105653fa8493a966f47dc6c5962a23734e4084f6cb20e414b7a7f5a2de7a",
+          "calls": [
+            {
+              "site": 5101013,
+              "target": 6321952
+            }
+          ]
+        },
+        {
+          "name": "TargetedMissileSubmit",
+          "va": 6347264,
+          "size": 245,
+          "sha256": "b03f4a4eed313b9e64f94262973fe8c294ae15859d538c1eca3ab60041ce67a7",
+          "calls": [
+            {
+              "site": 6347400,
+              "target": 6120496
+            },
+            {
+              "site": 6347445,
+              "target": 6169520
+            }
+          ]
+        },
+        {
+          "name": "ScriptShapeDispatch",
+          "va": 6136288,
+          "size": 214,
+          "sha256": "6ac1d56ec81c63a0e27396c8aea8b9e032e0d65766cc4fe2fcf5aab5de0dc269",
+          "calls": [
+            {
+              "site": 6136331,
+              "target": 6135696
+            },
+            {
+              "site": 6136365,
+              "target": 4383744
+            },
+            {
+              "site": 6136377,
+              "target": 6135520
+            },
+            {
+              "site": 6136407,
+              "target": 4383744
+            },
+            {
+              "site": 6136443,
+              "target": 6136080
+            },
+            {
+              "site": 6136473,
+              "target": 4383744
+            },
+            {
+              "site": 6136486,
+              "target": 6135888
+            }
+          ]
+        },
+        {
+          "name": "TerminalRetire",
+          "va": 6362400,
+          "size": 47,
+          "sha256": "6cae381b4757c6a85b707e236b093d8c0e943e0d484fd586aeca4402dd92d4b3",
+          "calls": []
+        },
+        {
+          "name": "CancelRetire",
+          "va": 6362320,
+          "size": 68,
+          "sha256": "456ae1caa39316834e70dceda3b93a5f0ab891452e60d2d9fd0f99b8d61b579e",
+          "calls": []
+        },
+        {
+          "name": "InstallImpact",
+          "va": 5176375,
+          "size": 10,
+          "sha256": "6bfbb3db93df0c1e43908d543f2a91bd209d1c1ec666d4fb4e6c1f6b3ba86622",
+          "calls": [
+            {
+              "site": 5176380,
+              "target": 6346736
+            }
+          ]
+        },
+        {
+          "name": "AbsorptionAnimation",
+          "va": 6096960,
+          "size": 148,
+          "sha256": "45d32ae7c672a256c00f0ddc5470036bef5b8e4bc4e9a4bb1e2d7cf91f7663a9",
+          "calls": [
+            {
+              "site": 6097078,
+              "target": 6096576
+            }
+          ]
+        },
+        {
+          "name": "EvaluatorConstruct",
+          "va": 5737136,
+          "size": 218,
+          "sha256": "48891c89a6bb56a01701c934826531d797222869f387aeb0c86ddefebfd6fe42",
+          "calls": [
+            {
+              "site": 5737215,
+              "target": 5736816
+            },
+            {
+              "site": 5737231,
+              "target": 5718832
+            },
+            {
+              "site": 5737240,
+              "target": 5771488
+            },
+            {
+              "site": 5737249,
+              "target": 5718832
+            },
+            {
+              "site": 5737258,
+              "target": 5771024
+            },
+            {
+              "site": 5737297,
+              "target": 5620112
+            },
+            {
+              "site": 5737340,
+              "target": 7264674
+            }
+          ]
+        },
+        {
+          "name": "AddAgent",
+          "va": 5734512,
+          "size": 8,
+          "sha256": "ed3435da00db196a1da5ce82bce335ea757e751091cd2af697172d0df65e856d",
+          "calls": []
+        },
+        {
+          "name": "AppendAgentFrame",
+          "va": 5839328,
+          "size": 191,
+          "sha256": "2871d9e6009b803ae72445595d5f883d81c4095fb805092d6e9c8297003c4f72",
+          "calls": [
+            {
+              "site": 5839368,
+              "target": 5718832
+            },
+            {
+              "site": 5839378,
+              "target": 5691584
+            },
+            {
+              "site": 5839405,
+              "target": 4383744
+            },
+            {
+              "site": 5839420,
+              "target": 5692000
+            },
+            {
+              "site": 5839484,
+              "target": 5689440
+            },
+            {
+              "site": 5839493,
+              "target": 5838832
+            }
+          ]
+        },
+        {
+          "name": "EvaluatorExecute",
+          "va": 5737456,
+          "size": 260,
+          "sha256": "d08accb272e265ef0e1301b9779442c4a08cf9113a72bf8a3327edbbcfa9a81d",
+          "calls": [
+            {
+              "site": 5737532,
+              "target": 5620112
+            },
+            {
+              "site": 5737559,
+              "target": 5843088
+            },
+            {
+              "site": 5737585,
+              "target": 5843216
+            },
+            {
+              "site": 5737601,
+              "target": 5633424
+            },
+            {
+              "site": 5737616,
+              "target": 5657648
+            },
+            {
+              "site": 5737628,
+              "target": 5673664
+            },
+            {
+              "site": 5737643,
+              "target": 5833024
+            },
+            {
+              "site": 5737648,
+              "target": 4364032
+            },
+            {
+              "site": 5737674,
+              "target": 5657648
+            },
+            {
+              "site": 5737701,
+              "target": 7264674
+            }
+          ]
+        },
+        {
+          "name": "EvaluatorDestroy",
+          "va": 5737360,
+          "size": 26,
+          "sha256": "40e42379bed22f4b39cac6dcee3d2bc776af0f023e559abce1a81b5063525359",
+          "calls": [
+            {
+              "site": 5737373,
+              "target": 5656896
+            }
+          ]
+        },
+        {
+          "name": "ResultAtPrefix",
+          "va": 4385824,
+          "size": 48,
+          "sha256": "baa3c0cb4f7f1a38b44cca4ff887c5800fccc62b45407de18507f4f5c82df771",
+          "calls": []
+        },
+        {
+          "name": "ScalarIntegerResult",
+          "va": 5736784,
+          "size": 22,
+          "sha256": "6d9952990238041a5d33988821449dc08f5c4fa12e6e28d5a635231fd25bf522",
+          "calls": [
+            {
+              "site": 5736789,
+              "target": 4385824
+            }
+          ]
+        },
+        {
+          "name": "BooleanConstruct",
+          "va": 5868960,
+          "size": 20,
+          "sha256": "f4ed7ea54c1b3d2ac144582508470d16e26195f4cb134f268b603a6d36fc28b4",
+          "calls": []
+        },
+        {
+          "name": "BooleanAssign",
+          "va": 5868576,
+          "size": 23,
+          "sha256": "30b56f4d7c400616785d07cedc433b736473dd9a79b3976bb7c2dcca481c7706",
+          "calls": []
+        },
+        {
+          "name": "DescriptorPublish",
+          "va": 6089472,
+          "size": 47,
+          "sha256": "142a51fe647185be549010919006c947f445fa4f7e5d4ce372dfe4f02b028f4e",
+          "calls": [
+            {
+              "site": 6089487,
+              "target": 4243232
+            }
+          ]
+        },
+        {
+          "name": "MovementRouteFlag",
+          "va": 6152319,
+          "size": 16,
+          "sha256": "8c27ccf116036a9357b8b7af76fcb35f11067f4d5bee403f35c3389202c5dd0c",
+          "calls": []
+        }
+      ],
+      "impact_global": 8225740,
+      "final_callback_table": {
+        "va": 8225456,
+        "size": 16,
+        "sha256": "47f4971297a384e9fa146414fa33302d598497ca2b0369e7c53e33cc86b4cbe1"
+      },
+      "boolean": {
+        "type": 6,
+        "vtable": 7729268,
+        "getter": 5869008,
+        "getterSHA256": "8a905797df24e4a1fe68a2f630971aa55b606cd6a92fed57303379d0f93a7a2d",
+        "slotSHA256": "3dd03cb8b18498b991d3f5c6a77b8d66a4015fc0c820a47999309a48cd11fbac"
+      }
+    }
+  ]
+}

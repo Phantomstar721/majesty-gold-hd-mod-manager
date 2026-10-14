@@ -428,6 +428,21 @@ class ManagerController:
         self.profile = profile
         self._prepared_merge_cache = prepared
 
+    def set_standard_conflict_winners(self, choices) -> ControllerSnapshot:
+        """Validate and save one complete choice set, never intermediate cycles."""
+        from .standard_review import validate_native_choices
+        combined = dict(self.standard_conflict_winners)
+        for pair, winner in choices.items():
+            parts = pair.split('|')
+            if len(parts) != 2 or standard_conflict_pair_key(*parts) != pair or winner not in parts:
+                raise ValueError('Invalid Standard mod preference.')
+            combined[pair] = winner
+        validate_native_choices(self.snapshot().catalog, self.snapshot().selections, combined)
+        self.standard_conflict_winners = combined
+        self._refresh_standard_plan()
+        self._save_selection_state()
+        return self.snapshot()
+
     def set_standard_conflict_winner(
         self,
         left_id: str,

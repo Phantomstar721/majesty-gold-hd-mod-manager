@@ -29,6 +29,8 @@ constexpr const char* kSupportedCapabilities[] = {
     kMovementScale,
     kSourceExploration,
     kSpellOrigin,
+    kAttackObservation,
+    kProjectileInterception,
 };
 
 void SetError(std::string* error, const char* message) {

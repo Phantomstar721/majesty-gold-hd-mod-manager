@@ -16,6 +16,8 @@ GOG_RUNTIME_CAPABILITIES = frozenset((
     "stock.controller-recipes.v1",
     "manager.source-exploration.v1",
     "manager.spell-origin.v1",
+    "manager.projectile-interception.v1",
+    "manager.attack-projectile-observation.v1",
     "stock.equipment.v1",
     "manager.kingdom-research.v1",
     "stock.ap78-info-row.v1",

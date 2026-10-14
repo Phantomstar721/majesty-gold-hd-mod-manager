@@ -10,6 +10,18 @@ The latest update preserves timed image data during merging and improves script
 comparison. Combine Standard and Merge mods, choosing one preferred mod per
 conflicting pair while retaining changes that safely combine.
 
+These choices also cover building XML overrides, including buildings supplied
+by another selected mod. Existing-building patches need no new custom-building
+declaration, and expansion-only changes stay in expansion quests.
+Compact art archives with sparse tile and palette IDs are also supported;
+they no longer have to pad their tables with thousands of empty records.
+Art merging also preserves authored image-set ordering and correctly places
+tiles whose palettes change during combination.
+
+Standard conflict choices are now shown together in one window. Sound conflicts
+use preferred-mod choices too, and periodic spell damage keeps the selected
+script's arguments and branches rather than requiring an exact stock statement.
+
 The previous update fixes a launch failure when research or movement features
 are selected on default Steam or GOG. It also preserves missing stock artwork
 needed by merged content and refreshes stale compatibility results after changing game

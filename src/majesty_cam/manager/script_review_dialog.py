@@ -33,6 +33,8 @@ def _scope_label(conflicts) -> str:
 
 
 def _gameplay_label(conflict) -> str:
+    if hasattr(conflict, 'gameplay_label'):
+        return conflict.gameplay_label
     label = rule_label(f"{conflict.key[0].value}:{conflict.key[1]}")
     # Do not expose language terms or pretend to understand unknown changes.
     return {
@@ -45,7 +47,8 @@ def _gameplay_label(conflict) -> str:
 def _gameplay_descriptions(conflicts) -> str:
     descriptions = set()
     for conflict in conflicts:
-        explanation = rule_explanation(f"{conflict.key[0].value}:{conflict.key[1]}")
+        explanation = (conflict.gameplay_explanation if hasattr(conflict, 'gameplay_explanation')
+                       else rule_explanation(f"{conflict.key[0].value}:{conflict.key[1]}"))
         if explanation:
             descriptions.add((_gameplay_label(conflict), explanation))
     return "\n".join(f"{label}: {explanation}" for label, explanation in sorted(descriptions))
@@ -99,10 +102,12 @@ if _PYSIDE_IMPORT_ERROR is None:
     class ScriptReviewDialog(QDialog):
         """One explicit preference per mod pair, across all affected rules/scopes."""
 
-        def __init__(self, conflicts: Sequence["ScriptConflict"], parent=None, *, preferences=None):
+        def __init__(self, conflicts: Sequence["ScriptConflict"], parent=None, *, preferences=None, validate_choices=None):
             super().__init__(parent)
             self.conflicts = tuple(conflicts)
-            self.pairs = group_conflicts(self.conflicts)
+            self._validate_choices = validate_choices
+            self._fixed = dict(pair for c in self.conflicts for pair in getattr(c, 'fixed_preferences', ()))
+            self.pairs = tuple(p for p in group_conflicts(self.conflicts) if p.identity not in self._fixed)
             self.decisions = {}
             self._choices = {}
             self._groups = []
@@ -251,11 +256,13 @@ if _PYSIDE_IMPORT_ERROR is None:
             try:
                 for conflict in self.conflicts:
                     session.resolve(conflict)
-                session.apply(self._choices)
+                session.apply({**self._fixed, **self._choices})
+                if self._validate_choices is not None:
+                    self._validate_choices(session.decisions)
             except ValueError as exc:
                 self.error.setText(str(exc))
                 return
-            self.decisions = dict(self._choices)
+            self.decisions = {**self._fixed, **self._choices}
             super().accept()
 
         def reject(self):

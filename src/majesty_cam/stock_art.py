@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 from pathlib import Path
 import re
-from typing import Sequence
+import struct
+from typing import Mapping, Sequence
 import xml.etree.ElementTree as ET
 
 from .art import (
@@ -22,6 +23,106 @@ from .cam import CamArchive, CamEntry, CamSection, read_cam
 
 class StockArtError(ValueError):
     """Raised when a positional-art archive has no unique stock ancestry."""
+
+
+def normalize_art_slots(
+    archive: CamArchive, *, palette_mapping: Mapping[int, int] | None = None,
+    palette_floor: int = 0,
+) -> CamArchive:
+    """Convert numeric ID-keyed art tables to the composer's dense slot view.
+
+    Native numeric lookup uses the ordinal shortcut only for section flag 1;
+    otherwise it searches TOC IDs backwards. PALT and IMAG are named tables
+    and must not be interpreted as numeric IDs. The raw CAM reader/writer stays
+    lossless; this conversion is confined to art composition.
+    """
+    if palette_mapping is None:
+        palette_mapping = _palette_id_mapping((archive,), palette_floor)
+    sections = []
+    for section in archive.sections:
+        if palette_mapping and section.extension == b"SPLT" and not (int.from_bytes(section.padding, "little") & 1):
+            section = replace(section, entries=tuple(
+                replace(entry, name=struct.pack("<I", palette_mapping.get(
+                    int.from_bytes(entry.name[:4], "little"),
+                    int.from_bytes(entry.name[:4], "little"))) + entry.name[4:])
+                for entry in section.entries
+            ))
+        elif palette_mapping and section.extension == b"TILE":
+            entries = []
+            for index, entry in enumerate(section.entries):
+                # Inspect only the documented external-palette field. Unknown
+                # unrelated TILEs are still handled by the existing owned-art
+                # validator, not newly rejected during import.
+                if len(entry.data) >= 26 and int.from_bytes(entry.data[22:26], "little") in palette_mapping:
+                    reference = parse_tile_palette_reference(entry.data, tile_index=index)
+                    if reference is not None:
+                        payload = bytearray(entry.data)
+                        struct.pack_into("<I", payload, 22, palette_mapping[reference.palette_index])
+                        entry = replace(entry, data=bytes(payload))
+                entries.append(entry)
+            section = replace(section, entries=tuple(entries))
+        sections.append(_normalize_numeric_art_section(section))
+    return replace(archive, sections=tuple(sections))
+
+
+def _palette_id_mapping(archives: Sequence[CamArchive], floor: int) -> dict[int, int]:
+    """Allocate full DWORD SPLT keys without allocating up to their value.
+
+    The mapping is shared by every CAM in one component, so palette providers
+    and TILE consumers in separate CAMs retain the same identity. It starts
+    after stock and every authored low-ID/ordinal slot, never over stock art.
+    """
+    high_ids: set[int] = set()
+    for archive in archives:
+        for section in archive.sections:
+            if section.extension != b"SPLT":
+                continue
+            if int.from_bytes(section.padding, "little") & 1:
+                floor = max(floor, len(section.entries))
+                continue
+            for entry in section.entries:
+                key = int.from_bytes(entry.name[:4], "little")
+                if key <= 65535:
+                    floor = max(floor, key + 1)
+                else:
+                    high_ids.add(key)
+    if high_ids and floor + len(high_ids) > 65536:
+        raise StockArtError("SPLT composition exceeds supported palette slot capacity")
+    return {key: floor + index for index, key in enumerate(sorted(high_ids))}
+
+
+def _normalize_numeric_art_section(section: CamSection) -> CamSection:
+    if section.extension not in {b"TILE", b"SPLT"}:
+        return section
+    flags = int.from_bytes(section.padding, "little")
+    if flags & 1 or not section.entries:
+        return section
+    if all(int.from_bytes(entry.name[:4], "little") == index
+           for index, entry in enumerate(section.entries)):
+        return section
+    # Last TOC entry with an ID wins, including an empty last entry. Do not
+    # let an earlier payload win merely because the last entry is empty.
+    by_id = {int.from_bytes(entry.name[:4], "little"): entry
+             for entry in section.entries}
+    highest = max(by_id)
+    # The dense composition pipeline is bounded; never allocate from an
+    # unchecked DWORD ID. TILE 65535 is the IMAG no-frame sentinel.
+    limit = 65534 if section.extension == b"TILE" else 65535
+    if highest > limit:
+        raise StockArtError(
+            f"{section.display_extension} TOC ID {highest} exceeds supported "
+            f"art slot range 0..{limit}"
+        )
+    entries = tuple(
+        by_id[index] if index in by_id else CamEntry(
+            # A hole carries no authored lineage hint. Giving it a numeric
+            # name would overwrite stock's diagnostic inheritance metadata.
+            b"\0" * 20, b""
+        )
+        for index in range(highest + 1)
+    )
+    return replace(section, entries=entries, header_offset=None,
+                   padding=struct.pack("<I", flags | 1))
 
 
 @dataclass(frozen=True)
@@ -67,7 +168,7 @@ def load_stock_art_lineages(game_path: Path) -> tuple[StockArtLineage, ...]:
     declared = _stock_cam_paths(root)
     lineages: list[StockArtLineage] = []
     for path in declared:
-        archive = read_cam(path)
+        archive = normalize_art_slots(read_cam(path))
         extensions = {section.extension for section in archive.sections}
         if b"IMAG" not in extensions and b"TILE" not in extensions:
             continue
@@ -134,6 +235,9 @@ def classify_art_archive(
 ) -> tuple[StockArtLineage, ArtArchiveAnalysis]:
     """Choose one ancestry from the archive's typed content evidence."""
 
+    archive = normalize_art_slots(archive, palette_floor=max(
+        (len(section.entries) for lineage in lineages for section in lineage.effective.sections
+         if section.extension == b"SPLT"), default=0))
     extensions = {section.extension for section in archive.sections}
     if b"IMAG" not in extensions:
         raise StockArtError(f"{owner}: positional art requires IMAG")
@@ -266,6 +370,12 @@ def collapse_art_archives(
 
     if lineages is None:
         lineages = load_stock_art_lineages(game_path)
+    palette_floor = max((len(section.entries) for lineage in lineages
+                         for section in lineage.effective.sections
+                         if section.extension == b"SPLT"), default=0)
+    palette_mapping = _palette_id_mapping(tuple(archive for _, archive in source_archives), palette_floor)
+    source_archives = [(path, normalize_art_slots(archive, palette_mapping=palette_mapping))
+                       for path, archive in source_archives]
     assigned: list[
         tuple[Path, CamArchive, StockArtLineage, ArtArchiveAnalysis] | None
     ] = []
@@ -793,6 +903,8 @@ def _private_positional_indices(
 
 
 def _overlay_positional(base: CamSection, overlay: CamSection, *, preserve_inherited_names: bool = False) -> CamSection:
+    base = _normalize_numeric_art_section(base)
+    overlay = _normalize_numeric_art_section(overlay)
     output = list(base.entries)
     if len(output) < len(overlay.entries):
         output.extend(overlay.entries[len(output) :])
@@ -803,7 +915,13 @@ def _overlay_positional(base: CamSection, overlay: CamSection, *, preserve_inher
             # before expansion reused it. Never erase an earlier real payload,
             # and never change stock dataset last-write/fallthrough semantics.
             output[index] = entry
-    return CamSection(base.extension, tuple(output), padding=base.padding)
+    padding = base.padding
+    if base.extension in {b"TILE", b"SPLT"} and any(
+        int.from_bytes(entry.name[:4], "little") != index
+        for index, entry in enumerate(output)
+    ):
+        padding = struct.pack("<I", int.from_bytes(padding, "little") | 1)
+    return CamSection(base.extension, tuple(output), padding=padding)
 
 
 def _imag_entries(archive: CamArchive) -> dict[bytes, CamEntry]:

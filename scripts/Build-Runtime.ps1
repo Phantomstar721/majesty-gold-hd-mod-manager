@@ -125,6 +125,11 @@ if ($SiegeCrashDiagnostic) {
 }
 
 $runtimeSources = @(
+    (Join-Path $sourceRoot "BooleanRuntime.cpp"),
+    (Join-Path $sourceRoot "NativeImpactRegistry.cpp"),
+    (Join-Path $sourceRoot "NativeImpactRuntime.cpp"),
+    (Join-Path $sourceRoot "AttackObservation.cpp"),
+    (Join-Path $sourceRoot "AttackObservationProof.cpp"),
     (Join-Path $sourceRoot "EquipmentRuntime.cpp"),
     (Join-Path $sourceRoot "BoundedMapQuery.cpp"),
     (Join-Path $sourceRoot "MapQueryRuntime.cpp"),
@@ -136,7 +141,7 @@ $runtimeSources = @(
     (Join-Path $sourceRoot "RuntimeFeatureRegistry.cpp"),
     (Join-Path $sourceRoot "StockControllerRegistry.cpp")
 )
-$runtimeLibraries = @("user32.lib")
+$runtimeLibraries = @("user32.lib", "bcrypt.lib")
 if ($SiegeCrashDiagnostic) {
     $runtimeSources += (Join-Path $sourceRoot "CrashDumpDiagnostic.cpp")
     $runtimeLibraries += "dbghelp.lib"
@@ -154,7 +159,7 @@ if ($LASTEXITCODE -ne 0) { throw "Runtime launcher build failed with exit code $
 
 $fixtureNames = @()
 if ($ExplorationTests) { $fixtureNames += "ExplorationNativeTests" }
-if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests" }
+if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests"; $fixtureNames += "NativeImpactReleaseTests" }
 if ($RegistrationTests) { $fixtureNames += "SharedRegistrationRuntimeTests" }
 foreach ($fixtureName in $fixtureNames) {
     $fixtureLinkOptions = @()

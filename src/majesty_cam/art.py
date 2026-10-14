@@ -1,9 +1,11 @@
 """Stock-relative analysis and safe relocation for Majesty CAM art.
 
-Majesty resolves ``TILE`` and ``SPLT`` records by their position in a CAM
-section.  A mod CAM commonly contains thousands of empty records so the game
-falls through to the stock archive, followed by a private block of records.
-Consequently, entry names are useful diagnostics but are not allocation keys.
+This module consumes dense numeric-slot views of ``TILE`` and ``SPLT``.
+``stock_art.normalize_art_slots`` converts ID-keyed CAM sections before
+composition; ordinal-flagged sections already use this representation.
+A mod CAM may contain empty records followed by a private block, or a compact
+TOC with sparse numeric IDs. The first four TOC-name bytes are the numeric key
+in ID mode; the remaining name bytes are diagnostics, not allocation keys.
 
 This module deliberately understands only explicitly audited IMAG frame
 layouts.  It never searches an IMAG byte string for integer-looking values.
@@ -567,23 +569,21 @@ def parse_imag_tile_references(
         offset = table_start + set_index * IMAG_SET_ENTRY_SIZE
         set_entries.append((_u32(data, offset), _u32(data, offset + 4)))
     set_offsets = [offset for _, offset in set_entries]
-    if set_offsets != sorted(set_offsets) or len(set(set_offsets)) != len(set_offsets):
+    if len(set(set_offsets)) != len(set_offsets):
         raise UnsupportedImagShapeError(
-            f"IMAG {_display_name(raw_name)!r} set offsets are not strictly increasing"
+            f"IMAG {_display_name(raw_name)!r} set offsets are duplicated"
         )
-    if set_offsets[0] < table_end or set_offsets[-1] >= len(data):
+    if min(set_offsets) < table_end or max(set_offsets) >= len(data):
         raise UnsupportedImagShapeError(
             f"IMAG {_display_name(raw_name)!r} set offsets leave the record"
         )
 
+    physical = sorted(set_offsets)
+    ends = dict(zip(physical, physical[1:] + [len(data)]))
     references: list[ImagTileReference] = []
     layouts: set[str] = set()
-    for set_index, (set_id, set_offset) in enumerate(set_entries):
-        set_end = (
-            set_entries[set_index + 1][1]
-            if set_index + 1 < len(set_entries)
-            else len(data)
-        )
+    for set_id, set_offset in set_entries:
+        set_end = ends[set_offset]
         if set_end - set_offset < IMAG_SET_FIXED_SIZE + 4:
             raise UnsupportedImagShapeError(
                 f"IMAG {_display_name(raw_name)!r} set {set_id} is truncated"
@@ -731,10 +731,9 @@ def parse_stock_imag_tile_references(
     )
     set_offsets = tuple(offset for _set_id, offset in set_entries)
     if (
-        set_offsets != tuple(sorted(set_offsets))
-        or len(set(set_offsets)) != len(set_offsets)
-        or set_offsets[0] < table_end
-        or set_offsets[-1] >= len(data)
+        len(set(set_offsets)) != len(set_offsets)
+        or min(set_offsets) < table_end
+        or max(set_offsets) >= len(data)
     ):
         raise UnsupportedImagShapeError(
             f"IMAG {_display_name(raw_name)!r} has an invalid set directory"
@@ -742,12 +741,10 @@ def parse_stock_imag_tile_references(
 
     references: list[ImagTileReference] = []
     layouts: set[str] = set()
-    for set_index, (set_id, set_start) in enumerate(set_entries):
-        set_end = (
-            set_entries[set_index + 1][1]
-            if set_index + 1 < len(set_entries)
-            else len(data)
-        )
+    physical = sorted(set_offsets)
+    ends = dict(zip(physical, physical[1:] + [len(data)]))
+    for set_id, set_start in set_entries:
+        set_end = ends[set_start]
         direction_count = _u32(data, set_start)
         pointer_start = set_start + IMAG_SET_FIXED_SIZE
         pointer_end = pointer_start + direction_count * 4
@@ -1645,16 +1642,17 @@ def _imag_set_payloads(data: bytes) -> tuple[tuple[int, bytes], ...]:
     )
     offsets = tuple(offset for _set_id, offset in directory)
     if (
-        offsets != tuple(sorted(offsets))
-        or len(set(offsets)) != len(offsets)
-        or offsets[0] < table_end
-        or offsets[-1] >= len(data)
+        len(set(offsets)) != len(offsets)
+        or min(offsets) < table_end
+        or max(offsets) >= len(data)
     ):
         raise UnsupportedImagShapeError("IMAG has invalid set offsets")
+    physical = sorted(offsets)
+    ends = dict(zip(physical, physical[1:] + [len(data)]))
     return tuple(
         (
             set_id,
-            data[offset:(directory[index + 1][1] if index + 1 < count else len(data))],
+            data[offset:ends[offset]],
         )
         for index, (set_id, offset) in enumerate(directory)
     )

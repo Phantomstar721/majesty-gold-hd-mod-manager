@@ -1,0 +1,2369 @@
+{
+  "addressKind": "VA",
+  "imageBase": 4194304,
+  "profiles": [
+    {
+      "name": "Public",
+      "executableSHA256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "windows": [
+        {
+          "name": "RegistrationBridge",
+          "va": 5722188,
+          "size": 29,
+          "sha256": "08625c27f05fd75633b2cd38841a8151b302b3f32861086ed9ffcfbee819f76b",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              1,
+              4
+            ],
+            [
+              16,
+              4
+            ],
+            [
+              25,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "OperationSwitch",
+          "va": 5582154,
+          "size": 19,
+          "sha256": "25d2339d434d83094a57dce5951d0bcd51eee1b54e5afad1c5a188bd3edc98fe",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              8,
+              4
+            ],
+            [
+              15,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "FrameIntegerSeed",
+          "va": 5649728,
+          "size": 103,
+          "sha256": "71f70dfa003d2c4710530882a8c41da07f6386abfa95dcdda88c82fe98081176",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              17,
+              4
+            ],
+            [
+              44,
+              4
+            ],
+            [
+              50,
+              4
+            ],
+            [
+              66,
+              4
+            ],
+            [
+              80,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ReturnDeclaration26",
+          "va": 5582462,
+          "size": 108,
+          "sha256": "ff57e1f848590cae0a90ca628456601c58bbaf6c2003d65963a13dbe685dc0c8",
+          "discovery": "actual opcode dispatch table; separately reviewed body",
+          "maskedRanges": [
+            [
+              12,
+              4
+            ],
+            [
+              30,
+              4
+            ],
+            [
+              41,
+              4
+            ],
+            [
+              54,
+              4
+            ],
+            [
+              71,
+              4
+            ],
+            [
+              89,
+              4
+            ],
+            [
+              104,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ExplicitReturn37",
+          "va": 5583118,
+          "size": 55,
+          "sha256": "deb645a4ca52f079dd7a518a8040b8bc3b95f8718db3a1bccb91bceb53e20b20",
+          "discovery": "actual opcode dispatch table; separately reviewed body",
+          "maskedRanges": [
+            [
+              10,
+              4
+            ],
+            [
+              51,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ValuePoolAcquire",
+          "va": 5604480,
+          "size": 98,
+          "sha256": "43515b0399efd0278a62787df66d5143ef456f0b2c897de8d5a0acaf723fd77f",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              9,
+              4
+            ],
+            [
+              48,
+              4
+            ],
+            [
+              56,
+              4
+            ],
+            [
+              65,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ValuePoolReturn",
+          "va": 5602592,
+          "size": 61,
+          "sha256": "023f392df9cdbd1879c916e07bbf82c8499d8a37a75e5b1080a4bf9e51d53205",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              52,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ContextLookup",
+          "va": 5631728,
+          "size": 9,
+          "sha256": "611a7fedd72752131414be54ec25702fb3f0a6e7e510fe88681d6dd5b7d17a8c",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              1,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "IntegerAssign",
+          "va": 5784880,
+          "size": 23,
+          "sha256": "f52f0624d0afc0b7bd3c78b9b3deab4634d60cadf017a8d7600a4b3e482c4e9b",
+          "discovery": "masked window",
+          "maskedRanges": []
+        },
+        {
+          "name": "BooleanRejectInteger",
+          "va": 5586928,
+          "size": 93,
+          "sha256": "f4003f2e145cd44abc5dbcd47e46b3ceeee4aa5188700f273ad6471bab858e72",
+          "discovery": "Boolean vtable slot witness",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              18,
+              4
+            ],
+            [
+              36,
+              4
+            ],
+            [
+              45,
+              4
+            ],
+            [
+              50,
+              4
+            ],
+            [
+              71,
+              4
+            ],
+            [
+              79,
+              4
+            ],
+            [
+              89,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "VmCallbackPrefix",
+          "va": 5581008,
+          "size": 45,
+          "sha256": "e3d372bed2dc3f96a9b84eba6024d6827a27874601f336d97e7cd77f9fa62fc9",
+          "discovery": "actual registration callback operand; separately reviewed prefix",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              25,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ResultAt",
+          "va": 4382192,
+          "size": 105,
+          "sha256": "9986dba09927f473fbee5c9890b2335e586e6db9ae46e05927f4b52784da584d",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              6,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "FrameDrain",
+          "va": 5747904,
+          "size": 293,
+          "sha256": "ed0fd0ffbbe4b1ec267b17862053378075785cbb75d1d66a15f02ddd71d8dcd8",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              42,
+              4
+            ],
+            [
+              61,
+              4
+            ],
+            [
+              96,
+              4
+            ],
+            [
+              109,
+              4
+            ],
+            [
+              125,
+              4
+            ],
+            [
+              136,
+              4
+            ],
+            [
+              165,
+              4
+            ],
+            [
+              192,
+              4
+            ],
+            [
+              211,
+              4
+            ],
+            [
+              224,
+              4
+            ],
+            [
+              237,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "AppendBoolean",
+          "va": 5752976,
+          "size": 170,
+          "sha256": "d493addb304f8ec41818dfe9d1665a221c9daa55de939b39620b7cac3b3c4ba3",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              21,
+              4
+            ],
+            [
+              41,
+              4
+            ],
+            [
+              51,
+              4
+            ],
+            [
+              72,
+              4
+            ],
+            [
+              115,
+              4
+            ],
+            [
+              136,
+              4
+            ],
+            [
+              145,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "BooleanInputConstruct",
+          "va": 5782112,
+          "size": 29,
+          "sha256": "814e20de864268ae8d42743e72f5732e94625c57eca30f652c8942393964a6c0",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              12,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "StockResetSequence",
+          "va": 5754400,
+          "size": 61,
+          "sha256": "1e142415d873d6328416dd97ce35acbe462c22ad65e7162ba858aaffca045747",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              1,
+              4
+            ],
+            [
+              25,
+              4
+            ],
+            [
+              34,
+              4
+            ],
+            [
+              43,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "AppendInteger",
+          "va": 5752624,
+          "size": 169,
+          "sha256": "5e85af7503e20e2c6d26654c0a72ead49e9ed0a2e3ac20bad55eeefab7b9ae5f",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              21,
+              4
+            ],
+            [
+              41,
+              4
+            ],
+            [
+              51,
+              4
+            ],
+            [
+              71,
+              4
+            ],
+            [
+              114,
+              4
+            ],
+            [
+              135,
+              4
+            ],
+            [
+              144,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "RebuildSlots",
+          "va": 5751760,
+          "size": 244,
+          "sha256": "c7a7de6a40e80725332b828b2f6c453703149114264d0fcdd021188ec19537c5",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              19,
+              4
+            ],
+            [
+              35,
+              4
+            ],
+            [
+              53,
+              4
+            ],
+            [
+              71,
+              4
+            ],
+            [
+              92,
+              4
+            ],
+            [
+              109,
+              4
+            ],
+            [
+              125,
+              4
+            ],
+            [
+              142,
+              4
+            ],
+            [
+              164,
+              4
+            ],
+            [
+              185,
+              4
+            ],
+            [
+              195,
+              4
+            ],
+            [
+              212,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "InsertOwnedValue",
+          "va": 5602336,
+          "size": 180,
+          "sha256": "e6b5ee454b6567761d3a841120d601da5b7e9077de787cd689e1f608f5e58bde",
+          "discovery": "Boolean append insertion operand witness",
+          "maskedRanges": [
+            [
+              37,
+              4
+            ],
+            [
+              57,
+              4
+            ],
+            [
+              90,
+              4
+            ],
+            [
+              104,
+              4
+            ],
+            [
+              122,
+              4
+            ],
+            [
+              157,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "DestroySecondary",
+          "va": 5572800,
+          "size": 103,
+          "sha256": "037fd882f2810e344c41a4286713cbd3bd11bb624b7fdd0a0a4862fb6d4c71cb",
+          "discovery": "named evaluator destruction operand witness",
+          "maskedRanges": [
+            [
+              19,
+              4
+            ],
+            [
+              35,
+              4
+            ],
+            [
+              53,
+              4
+            ],
+            [
+              68,
+              4
+            ],
+            [
+              88,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "DestroyPrimary",
+          "va": 5749632,
+          "size": 113,
+          "sha256": "8d72eee56791d2ad694ed5f90d93981727c628156d0c90d11282bda6ac8918fa",
+          "discovery": "named evaluator destruction operand witness",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              18,
+              4
+            ],
+            [
+              43,
+              4
+            ],
+            [
+              54,
+              4
+            ],
+            [
+              67,
+              4
+            ],
+            [
+              88,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "BooleanReset",
+          "va": 5781936,
+          "size": 5,
+          "sha256": "13dacda5d1f956a6bf3b0b3b645d15f694c453cc1bb3a8d954606894adce7960",
+          "discovery": "Boolean vtable slot witness",
+          "maskedRanges": []
+        },
+        {
+          "name": "LiteralTypeDispatch",
+          "va": 5775475,
+          "size": 20,
+          "sha256": "30a141acb3d81a1825974217ba04b66da7a882865cdabe5ef08d2461118c0026",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              9,
+              4
+            ],
+            [
+              16,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "BindBooleanLiteral",
+          "va": 5775613,
+          "size": 37,
+          "sha256": "a35152a2904146bbe4a80af1c814b2d66a46d9f6bccb0f7eb625ed1156222455",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              4,
+              4
+            ],
+            [
+              11,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "BooleanPayloadAddress",
+          "va": 5782032,
+          "size": 4,
+          "sha256": "840cd7c1c41b518c1fe191951395dcac56c16a63d65f97ad855355ba794b2ca7",
+          "discovery": "Boolean vtable slot witness",
+          "maskedRanges": []
+        },
+        {
+          "name": "SourceOperandWord",
+          "va": 5757456,
+          "size": 4,
+          "sha256": "916ae10aa3fd76a4d5b25b2fb66e9df0fd04957c7ab10930268d1ed7808be689",
+          "discovery": "Boolean literal source word operand witness",
+          "maskedRanges": []
+        },
+        {
+          "name": "SelectSourceOperand",
+          "va": 5757616,
+          "size": 37,
+          "sha256": "4102e1ef1e57dbffed2c0909ca77995dd49eb313797fb8c8fd35c29df676d4c1",
+          "discovery": "masked window",
+          "maskedRanges": []
+        },
+        {
+          "name": "NamePresent",
+          "va": 5684688,
+          "size": 65,
+          "sha256": "36b7267b437643d2ded1a64b3c27f09cd0ad4e0e4914eb3a30945e519ccc2c4c",
+          "discovery": "named constructor lookup operand witness",
+          "maskedRanges": [
+            [
+              21,
+              4
+            ],
+            [
+              44,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "NameLookup",
+          "va": 5684224,
+          "size": 102,
+          "sha256": "a0be568bb145c441d34ec48c3d06d4a3b0758b8be6518269d7ea3addc3528a30",
+          "discovery": "named constructor lookup operand witness",
+          "maskedRanges": [
+            [
+              23,
+              4
+            ],
+            [
+              38,
+              4
+            ]
+          ]
+        }
+      ],
+      "resolved": {
+        "RegistrationBridge": 5722188,
+        "OperationSwitch": 5582154,
+        "FrameIntegerSeed": 5649728,
+        "ReturnDeclaration26": 5582462,
+        "ExplicitReturn37": 5583118,
+        "ValuePoolAcquire": 5604480,
+        "ValuePoolReturn": 5602592,
+        "ContextLookup": 5631728,
+        "IntegerAssign": 5784880,
+        "BooleanRejectInteger": 5586928,
+        "VmCallbackPrefix": 5581008,
+        "ResultAt": 4382192,
+        "FrameDrain": 5747904,
+        "AppendBoolean": 5752976,
+        "BooleanInputConstruct": 5782112,
+        "StockResetSequence": 5754400,
+        "AppendInteger": 5752624,
+        "RebuildSlots": 5751760,
+        "InsertOwnedValue": 5602336,
+        "DestroySecondary": 5572800,
+        "DestroyPrimary": 5749632,
+        "BooleanReset": 5781936,
+        "LiteralTypeDispatch": 5775475,
+        "BindBooleanLiteral": 5775613,
+        "BooleanPayloadAddress": 5782032,
+        "SourceOperandWord": 5757456,
+        "SelectSourceOperand": 5757616,
+        "NamePresent": 5684688,
+        "NameLookup": 5684224
+      },
+      "dispatchTable": {
+        "va": 5586672,
+        "size": 76,
+        "sha256": "b914983bf2f9de922607843823417be3e7e048c77db404c69c15a03923d8ebf6"
+      },
+      "boolean": {
+        "type": 6,
+        "vtable": 7627364,
+        "getter": 5782048,
+        "getterSHA256": "8a905797df24e4a1fe68a2f630971aa55b606cd6a92fed57303379d0f93a7a2d",
+        "slotSHA256": "3f0ebc96f1bb92e789077759a901870a863cf655da235b1f48e2d671e4ae5fb9"
+      },
+      "literalTypeTable": {
+        "va": 5776092,
+        "size": 32,
+        "sha256": "452c808e64de1979d0db5759b6926eea527099d86d14ba2fda5087874bd4958f"
+      }
+    },
+    {
+      "name": "Beta2",
+      "executableSHA256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "windows": [
+        {
+          "name": "RegistrationBridge",
+          "va": 5812588,
+          "size": 29,
+          "sha256": "ad654e2ca8aeaea84eaf0a61aa0ed59e0be04ec77216500d41fe2f5feab07d87",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              1,
+              4
+            ],
+            [
+              16,
+              4
+            ],
+            [
+              25,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "OperationSwitch",
+          "va": 5672336,
+          "size": 19,
+          "sha256": "b3f39e2e153e854b94dd9d36fe49abd4e33bca7248fa89af172e8b4fb61d17d2",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              8,
+              4
+            ],
+            [
+              15,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "FrameIntegerSeed",
+          "va": 5740144,
+          "size": 103,
+          "sha256": "074ce81b82c0e1711feeeb9b51b9b0e1136c2a4ad947b4101528643041c55c4f",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              17,
+              4
+            ],
+            [
+              44,
+              4
+            ],
+            [
+              50,
+              4
+            ],
+            [
+              66,
+              4
+            ],
+            [
+              80,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ReturnDeclaration26",
+          "va": 5672644,
+          "size": 108,
+          "sha256": "95ab6859334a9a857143135a5d119d6e63d9efe7ac7dcea75429d200af3674d3",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              12,
+              4
+            ],
+            [
+              30,
+              4
+            ],
+            [
+              41,
+              4
+            ],
+            [
+              54,
+              4
+            ],
+            [
+              71,
+              4
+            ],
+            [
+              89,
+              4
+            ],
+            [
+              104,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ExplicitReturn37",
+          "va": 5673353,
+          "size": 55,
+          "sha256": "62929d3cad243897378b3e36c2426035a33ce2b59cf40f9801ffbcdb1fc285c1",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              10,
+              4
+            ],
+            [
+              51,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ValuePoolAcquire",
+          "va": 5694912,
+          "size": 98,
+          "sha256": "e7fa750175d79e7c2e9e36299aaeee2a66830121428d74811174a5e84f6f5656",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              9,
+              4
+            ],
+            [
+              48,
+              4
+            ],
+            [
+              56,
+              4
+            ],
+            [
+              65,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ValuePoolReturn",
+          "va": 5693024,
+          "size": 61,
+          "sha256": "023f392df9cdbd1879c916e07bbf82c8499d8a37a75e5b1080a4bf9e51d53205",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              52,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ContextLookup",
+          "va": 5722160,
+          "size": 9,
+          "sha256": "8b714509802104fac5a689418fb62b87334da32e72f65a3b24fa6806daf32e1c",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              1,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "IntegerAssign",
+          "va": 5875152,
+          "size": 23,
+          "sha256": "f52f0624d0afc0b7bd3c78b9b3deab4634d60cadf017a8d7600a4b3e482c4e9b",
+          "discovery": "masked window",
+          "maskedRanges": []
+        },
+        {
+          "name": "BooleanRejectInteger",
+          "va": 5677360,
+          "size": 93,
+          "sha256": "a42f49c399f49178fb1fabbd48af5db00a0b5eb89e2a6b52966fec2e06a00dbb",
+          "discovery": "Boolean vtable slot witness",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              18,
+              4
+            ],
+            [
+              36,
+              4
+            ],
+            [
+              45,
+              4
+            ],
+            [
+              50,
+              4
+            ],
+            [
+              71,
+              4
+            ],
+            [
+              79,
+              4
+            ],
+            [
+              89,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "VmCallbackPrefix",
+          "va": 5671152,
+          "size": 45,
+          "sha256": "ab5121fb93276cbb5ea1a9768969c1d029c450ab85104cdb65d92b2136291022",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              25,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ResultAt",
+          "va": 4386128,
+          "size": 105,
+          "sha256": "74ddfbf616e321645ceb7ddc2af5b9e0819e5c1e2b9d8da2d1c1832559faa752",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              6,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "FrameDrain",
+          "va": 5838304,
+          "size": 293,
+          "sha256": "d56a27953aa8d7fe7187465a31bfdd3ba554d739cc9a556fef5a6d863a8faef5",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              42,
+              4
+            ],
+            [
+              61,
+              4
+            ],
+            [
+              96,
+              4
+            ],
+            [
+              109,
+              4
+            ],
+            [
+              125,
+              4
+            ],
+            [
+              136,
+              4
+            ],
+            [
+              165,
+              4
+            ],
+            [
+              192,
+              4
+            ],
+            [
+              211,
+              4
+            ],
+            [
+              224,
+              4
+            ],
+            [
+              237,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "AppendBoolean",
+          "va": 5843376,
+          "size": 170,
+          "sha256": "2472750e235e8e91d498db89634e53bd213b35dfc023d2c19e52113d05c45312",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              21,
+              4
+            ],
+            [
+              41,
+              4
+            ],
+            [
+              51,
+              4
+            ],
+            [
+              72,
+              4
+            ],
+            [
+              115,
+              4
+            ],
+            [
+              136,
+              4
+            ],
+            [
+              145,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "BooleanInputConstruct",
+          "va": 5872384,
+          "size": 29,
+          "sha256": "0312a8460e1a6e621d4300aa941ede786087fbf1fcee57dbfc1c5c0d54779014",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              12,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "StockResetSequence",
+          "va": 5844800,
+          "size": 61,
+          "sha256": "3cb8a23d90d0b0dcf02a963995f9a598e6e016823adced40f7ca0d836f16b719",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              1,
+              4
+            ],
+            [
+              25,
+              4
+            ],
+            [
+              34,
+              4
+            ],
+            [
+              43,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "AppendInteger",
+          "va": 5843024,
+          "size": 169,
+          "sha256": "cea65e214e9b062648dc1e0528c3b1f47e452043eadf5c5e0e042aba15acd91d",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              21,
+              4
+            ],
+            [
+              41,
+              4
+            ],
+            [
+              51,
+              4
+            ],
+            [
+              71,
+              4
+            ],
+            [
+              114,
+              4
+            ],
+            [
+              135,
+              4
+            ],
+            [
+              144,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "RebuildSlots",
+          "va": 5842160,
+          "size": 244,
+          "sha256": "d5212f7aa4018a30de69c733af00c5b016b3719a3b6ceb4253cc1b9f8de3370b",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              19,
+              4
+            ],
+            [
+              35,
+              4
+            ],
+            [
+              53,
+              4
+            ],
+            [
+              71,
+              4
+            ],
+            [
+              92,
+              4
+            ],
+            [
+              109,
+              4
+            ],
+            [
+              125,
+              4
+            ],
+            [
+              142,
+              4
+            ],
+            [
+              164,
+              4
+            ],
+            [
+              185,
+              4
+            ],
+            [
+              195,
+              4
+            ],
+            [
+              212,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "InsertOwnedValue",
+          "va": 5692768,
+          "size": 180,
+          "sha256": "a89ff189d763e781376109977e81f754db033ed332d231740864a32481e5573b",
+          "discovery": "Boolean append insertion operand witness",
+          "maskedRanges": [
+            [
+              37,
+              4
+            ],
+            [
+              57,
+              4
+            ],
+            [
+              90,
+              4
+            ],
+            [
+              104,
+              4
+            ],
+            [
+              122,
+              4
+            ],
+            [
+              157,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "DestroySecondary",
+          "va": 5660224,
+          "size": 103,
+          "sha256": "d70e97206a668741b5ea6cc467f7d22c79def29bd0cddb6f33a2728f75eb7be5",
+          "discovery": "named evaluator destruction operand witness",
+          "maskedRanges": [
+            [
+              19,
+              4
+            ],
+            [
+              35,
+              4
+            ],
+            [
+              53,
+              4
+            ],
+            [
+              68,
+              4
+            ],
+            [
+              88,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "DestroyPrimary",
+          "va": 5840032,
+          "size": 113,
+          "sha256": "b898f640cf184b87ce2c36af28dee0b487156d22d109c57830fd31fe4147fa03",
+          "discovery": "named evaluator destruction operand witness",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              18,
+              4
+            ],
+            [
+              43,
+              4
+            ],
+            [
+              54,
+              4
+            ],
+            [
+              67,
+              4
+            ],
+            [
+              88,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "BooleanReset",
+          "va": 5872208,
+          "size": 5,
+          "sha256": "13dacda5d1f956a6bf3b0b3b645d15f694c453cc1bb3a8d954606894adce7960",
+          "discovery": "Boolean vtable slot witness",
+          "maskedRanges": []
+        },
+        {
+          "name": "LiteralTypeDispatch",
+          "va": 5865795,
+          "size": 20,
+          "sha256": "537fb70ad42f01a43e4737ba1dde66a90fe42bd6f642f4e3d48b8fe3b8d25ee8",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              9,
+              4
+            ],
+            [
+              16,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "BindBooleanLiteral",
+          "va": 5865933,
+          "size": 37,
+          "sha256": "a35152a2904146bbe4a80af1c814b2d66a46d9f6bccb0f7eb625ed1156222455",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              4,
+              4
+            ],
+            [
+              11,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "BooleanPayloadAddress",
+          "va": 5872304,
+          "size": 4,
+          "sha256": "840cd7c1c41b518c1fe191951395dcac56c16a63d65f97ad855355ba794b2ca7",
+          "discovery": "Boolean vtable slot witness",
+          "maskedRanges": []
+        },
+        {
+          "name": "SourceOperandWord",
+          "va": 5847776,
+          "size": 4,
+          "sha256": "916ae10aa3fd76a4d5b25b2fb66e9df0fd04957c7ab10930268d1ed7808be689",
+          "discovery": "Boolean literal source word operand witness",
+          "maskedRanges": []
+        },
+        {
+          "name": "SelectSourceOperand",
+          "va": 5847936,
+          "size": 37,
+          "sha256": "4102e1ef1e57dbffed2c0909ca77995dd49eb313797fb8c8fd35c29df676d4c1",
+          "discovery": "masked window",
+          "maskedRanges": []
+        },
+        {
+          "name": "NamePresent",
+          "va": 5774816,
+          "size": 65,
+          "sha256": "9b6d50cfc4d9837c75770d67e52e467480f14511fb482f48463fa99d125db008",
+          "discovery": "named constructor lookup operand witness",
+          "maskedRanges": [
+            [
+              21,
+              4
+            ],
+            [
+              44,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "NameLookup",
+          "va": 5774352,
+          "size": 102,
+          "sha256": "37fe3c13af23be9eb1032daa3d915b95cf65b831d92412b1fdb2f07aa7bc754b",
+          "discovery": "named constructor lookup operand witness",
+          "maskedRanges": [
+            [
+              23,
+              4
+            ],
+            [
+              38,
+              4
+            ]
+          ]
+        }
+      ],
+      "resolved": {
+        "RegistrationBridge": 5812588,
+        "OperationSwitch": 5672336,
+        "FrameIntegerSeed": 5740144,
+        "ReturnDeclaration26": 5672644,
+        "ExplicitReturn37": 5673353,
+        "ValuePoolAcquire": 5694912,
+        "ValuePoolReturn": 5693024,
+        "ContextLookup": 5722160,
+        "IntegerAssign": 5875152,
+        "BooleanRejectInteger": 5677360,
+        "VmCallbackPrefix": 5671152,
+        "ResultAt": 4386128,
+        "FrameDrain": 5838304,
+        "AppendBoolean": 5843376,
+        "BooleanInputConstruct": 5872384,
+        "StockResetSequence": 5844800,
+        "AppendInteger": 5843024,
+        "RebuildSlots": 5842160,
+        "InsertOwnedValue": 5692768,
+        "DestroySecondary": 5660224,
+        "DestroyPrimary": 5840032,
+        "BooleanReset": 5872208,
+        "LiteralTypeDispatch": 5865795,
+        "BindBooleanLiteral": 5865933,
+        "BooleanPayloadAddress": 5872304,
+        "SourceOperandWord": 5847776,
+        "SelectSourceOperand": 5847936,
+        "NamePresent": 5774816,
+        "NameLookup": 5774352
+      },
+      "dispatchTable": {
+        "va": 5676908,
+        "size": 76,
+        "sha256": "32ab03f5be332a87f22338d1a5f73c570734fb7eeed430e0c8dad24134b54fbb"
+      },
+      "boolean": {
+        "type": 6,
+        "vtable": 7733692,
+        "getter": 5872320,
+        "getterSHA256": "8a905797df24e4a1fe68a2f630971aa55b606cd6a92fed57303379d0f93a7a2d",
+        "slotSHA256": "e41ee82c7df5e76a4d5ff6c421911452947cab9c9f0b68b6cd1a7823860555e2"
+      },
+      "literalTypeTable": {
+        "va": 5866412,
+        "size": 32,
+        "sha256": "2c74d5c98880e644861704177a3fcdddd850069b254c1df4d7c1985f6b1f7532"
+      }
+    },
+    {
+      "name": "Gog",
+      "executableSHA256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "windows": [
+        {
+          "name": "RegistrationBridge",
+          "va": 5809260,
+          "size": 29,
+          "sha256": "769158f0c4093d116a4f420ef9268c22d7ede459b19d7e468fdd90dff49e095a",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              1,
+              4
+            ],
+            [
+              16,
+              4
+            ],
+            [
+              25,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "OperationSwitch",
+          "va": 5669008,
+          "size": 19,
+          "sha256": "7442a027d4d069e47c5fd8e7c0329e8a2d31b240c7d2b97190a05b1e164391f9",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              8,
+              4
+            ],
+            [
+              15,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "FrameIntegerSeed",
+          "va": 5736816,
+          "size": 103,
+          "sha256": "1dbffba76e983c89cee40a59d15f0089dc6d4d6af524a41c34d415379ffd0b87",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              17,
+              4
+            ],
+            [
+              44,
+              4
+            ],
+            [
+              50,
+              4
+            ],
+            [
+              66,
+              4
+            ],
+            [
+              80,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ReturnDeclaration26",
+          "va": 5669316,
+          "size": 108,
+          "sha256": "b523af68195bf2e3499a07844bec6e07451750557fd398d2e13f034ae3e6e488",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              12,
+              4
+            ],
+            [
+              30,
+              4
+            ],
+            [
+              41,
+              4
+            ],
+            [
+              54,
+              4
+            ],
+            [
+              71,
+              4
+            ],
+            [
+              89,
+              4
+            ],
+            [
+              104,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ExplicitReturn37",
+          "va": 5670025,
+          "size": 55,
+          "sha256": "e0370315ebd921867c03db7bfe55426775b52d0e7424069748a4274d5d227ff1",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              10,
+              4
+            ],
+            [
+              51,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ValuePoolAcquire",
+          "va": 5691584,
+          "size": 98,
+          "sha256": "024d0a5ccb2571a61f17e137e9b64ecdde664339137b5776e4a5e88bc715b7dd",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              9,
+              4
+            ],
+            [
+              48,
+              4
+            ],
+            [
+              56,
+              4
+            ],
+            [
+              65,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ValuePoolReturn",
+          "va": 5689696,
+          "size": 61,
+          "sha256": "023f392df9cdbd1879c916e07bbf82c8499d8a37a75e5b1080a4bf9e51d53205",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              52,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ContextLookup",
+          "va": 5718832,
+          "size": 9,
+          "sha256": "8b714509802104fac5a689418fb62b87334da32e72f65a3b24fa6806daf32e1c",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              1,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "IntegerAssign",
+          "va": 5871840,
+          "size": 23,
+          "sha256": "f52f0624d0afc0b7bd3c78b9b3deab4634d60cadf017a8d7600a4b3e482c4e9b",
+          "discovery": "masked window",
+          "maskedRanges": []
+        },
+        {
+          "name": "BooleanRejectInteger",
+          "va": 5674032,
+          "size": 93,
+          "sha256": "e1ac93b0894a2ac894fe0c0331cd21e47451091ae8615988a0f983b98086a5bb",
+          "discovery": "Boolean vtable slot witness",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              18,
+              4
+            ],
+            [
+              36,
+              4
+            ],
+            [
+              45,
+              4
+            ],
+            [
+              50,
+              4
+            ],
+            [
+              71,
+              4
+            ],
+            [
+              79,
+              4
+            ],
+            [
+              89,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "VmCallbackPrefix",
+          "va": 5667824,
+          "size": 45,
+          "sha256": "4e3fb5e287a57eba49fc353920942913a12f1eda82201909d2ba86ce6e405b2f",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              25,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "ResultAt",
+          "va": 4385824,
+          "size": 105,
+          "sha256": "3a49426d0777dd715363f61ed5163927c13b0661ef0a3a23182cd1176ebdc4db",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              6,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "FrameDrain",
+          "va": 5834976,
+          "size": 293,
+          "sha256": "c895d94984f2536c5bccf281ca3caf8d461558c7866ddfca1f5d8483732554f3",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              42,
+              4
+            ],
+            [
+              61,
+              4
+            ],
+            [
+              96,
+              4
+            ],
+            [
+              109,
+              4
+            ],
+            [
+              125,
+              4
+            ],
+            [
+              136,
+              4
+            ],
+            [
+              165,
+              4
+            ],
+            [
+              192,
+              4
+            ],
+            [
+              211,
+              4
+            ],
+            [
+              224,
+              4
+            ],
+            [
+              237,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "AppendBoolean",
+          "va": 5840048,
+          "size": 170,
+          "sha256": "71db5130a846179412136b91e8d11a3bf1d3479a393db3ee811c4b24e18c1e7e",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              21,
+              4
+            ],
+            [
+              41,
+              4
+            ],
+            [
+              51,
+              4
+            ],
+            [
+              72,
+              4
+            ],
+            [
+              115,
+              4
+            ],
+            [
+              136,
+              4
+            ],
+            [
+              145,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "BooleanInputConstruct",
+          "va": 5869072,
+          "size": 29,
+          "sha256": "3a345ee9b4281229dbcb96a8b9057cd250a86495d9bcd1132859a2a3e47c2f21",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              12,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "StockResetSequence",
+          "va": 5841472,
+          "size": 61,
+          "sha256": "db6ed3f6ca5c6a44b918390450e2e0cd6511f05eee32410f6e82700a32efc28b",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              1,
+              4
+            ],
+            [
+              25,
+              4
+            ],
+            [
+              34,
+              4
+            ],
+            [
+              43,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "AppendInteger",
+          "va": 5839696,
+          "size": 169,
+          "sha256": "27d85e57324be0d639540a92a422cfca72e9cbd2c9d0d0719eedb6ba564951a5",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              21,
+              4
+            ],
+            [
+              41,
+              4
+            ],
+            [
+              51,
+              4
+            ],
+            [
+              71,
+              4
+            ],
+            [
+              114,
+              4
+            ],
+            [
+              135,
+              4
+            ],
+            [
+              144,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "RebuildSlots",
+          "va": 5838832,
+          "size": 244,
+          "sha256": "ff3029ab2d8d557f799390d7ce532a021a8a2f12ca4d5cb2ebc5b4944ae64566",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              19,
+              4
+            ],
+            [
+              35,
+              4
+            ],
+            [
+              53,
+              4
+            ],
+            [
+              71,
+              4
+            ],
+            [
+              92,
+              4
+            ],
+            [
+              109,
+              4
+            ],
+            [
+              125,
+              4
+            ],
+            [
+              142,
+              4
+            ],
+            [
+              164,
+              4
+            ],
+            [
+              185,
+              4
+            ],
+            [
+              195,
+              4
+            ],
+            [
+              212,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "InsertOwnedValue",
+          "va": 5689440,
+          "size": 180,
+          "sha256": "3bc4f1fc8b43206d983f5e7d5a01f0d2cefe87826d6629b86981dee82f8c2f96",
+          "discovery": "Boolean append insertion operand witness",
+          "maskedRanges": [
+            [
+              37,
+              4
+            ],
+            [
+              57,
+              4
+            ],
+            [
+              90,
+              4
+            ],
+            [
+              104,
+              4
+            ],
+            [
+              122,
+              4
+            ],
+            [
+              157,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "DestroySecondary",
+          "va": 5656896,
+          "size": 103,
+          "sha256": "a098e3913005d054320268781a807be112ae9dcf9c5b3e8ec92f45ee23b443f2",
+          "discovery": "named evaluator destruction operand witness",
+          "maskedRanges": [
+            [
+              19,
+              4
+            ],
+            [
+              35,
+              4
+            ],
+            [
+              53,
+              4
+            ],
+            [
+              68,
+              4
+            ],
+            [
+              88,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "DestroyPrimary",
+          "va": 5836704,
+          "size": 113,
+          "sha256": "12b1e967cdeb2785db3b629a6f8b5d89049b0834b58558e378493ac0fbf898b2",
+          "discovery": "named evaluator destruction operand witness",
+          "maskedRanges": [
+            [
+              3,
+              4
+            ],
+            [
+              18,
+              4
+            ],
+            [
+              43,
+              4
+            ],
+            [
+              54,
+              4
+            ],
+            [
+              67,
+              4
+            ],
+            [
+              88,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "BooleanReset",
+          "va": 5868896,
+          "size": 5,
+          "sha256": "13dacda5d1f956a6bf3b0b3b645d15f694c453cc1bb3a8d954606894adce7960",
+          "discovery": "Boolean vtable slot witness",
+          "maskedRanges": []
+        },
+        {
+          "name": "LiteralTypeDispatch",
+          "va": 5862467,
+          "size": 20,
+          "sha256": "75b2856b05a194ec3a9152ea82f382357c4fa0987b97356d05ed086f2e8091da",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              9,
+              4
+            ],
+            [
+              16,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "BindBooleanLiteral",
+          "va": 5862605,
+          "size": 37,
+          "sha256": "a35152a2904146bbe4a80af1c814b2d66a46d9f6bccb0f7eb625ed1156222455",
+          "discovery": "masked window",
+          "maskedRanges": [
+            [
+              4,
+              4
+            ],
+            [
+              11,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "BooleanPayloadAddress",
+          "va": 5868992,
+          "size": 4,
+          "sha256": "840cd7c1c41b518c1fe191951395dcac56c16a63d65f97ad855355ba794b2ca7",
+          "discovery": "Boolean vtable slot witness",
+          "maskedRanges": []
+        },
+        {
+          "name": "SourceOperandWord",
+          "va": 5844448,
+          "size": 4,
+          "sha256": "916ae10aa3fd76a4d5b25b2fb66e9df0fd04957c7ab10930268d1ed7808be689",
+          "discovery": "Boolean literal source word operand witness",
+          "maskedRanges": []
+        },
+        {
+          "name": "SelectSourceOperand",
+          "va": 5844608,
+          "size": 37,
+          "sha256": "4102e1ef1e57dbffed2c0909ca77995dd49eb313797fb8c8fd35c29df676d4c1",
+          "discovery": "masked window",
+          "maskedRanges": []
+        },
+        {
+          "name": "NamePresent",
+          "va": 5771488,
+          "size": 65,
+          "sha256": "44acc9322e29c92d785f3bcf1fb6369ff0c5f5a04b603aecf08a8985f50a3f65",
+          "discovery": "named constructor lookup operand witness",
+          "maskedRanges": [
+            [
+              21,
+              4
+            ],
+            [
+              44,
+              4
+            ]
+          ]
+        },
+        {
+          "name": "NameLookup",
+          "va": 5771024,
+          "size": 102,
+          "sha256": "139e7bc58480081bc3566513e63a7c1a0b43b15cabfec290b6c16b9afb6fe558",
+          "discovery": "named constructor lookup operand witness",
+          "maskedRanges": [
+            [
+              23,
+              4
+            ],
+            [
+              38,
+              4
+            ]
+          ]
+        }
+      ],
+      "resolved": {
+        "RegistrationBridge": 5809260,
+        "OperationSwitch": 5669008,
+        "FrameIntegerSeed": 5736816,
+        "ReturnDeclaration26": 5669316,
+        "ExplicitReturn37": 5670025,
+        "ValuePoolAcquire": 5691584,
+        "ValuePoolReturn": 5689696,
+        "ContextLookup": 5718832,
+        "IntegerAssign": 5871840,
+        "BooleanRejectInteger": 5674032,
+        "VmCallbackPrefix": 5667824,
+        "ResultAt": 4385824,
+        "FrameDrain": 5834976,
+        "AppendBoolean": 5840048,
+        "BooleanInputConstruct": 5869072,
+        "StockResetSequence": 5841472,
+        "AppendInteger": 5839696,
+        "RebuildSlots": 5838832,
+        "InsertOwnedValue": 5689440,
+        "DestroySecondary": 5656896,
+        "DestroyPrimary": 5836704,
+        "BooleanReset": 5868896,
+        "LiteralTypeDispatch": 5862467,
+        "BindBooleanLiteral": 5862605,
+        "BooleanPayloadAddress": 5868992,
+        "SourceOperandWord": 5844448,
+        "SelectSourceOperand": 5844608,
+        "NamePresent": 5771488,
+        "NameLookup": 5771024
+      },
+      "dispatchTable": {
+        "va": 5673580,
+        "size": 76,
+        "sha256": "fa0f92cceb6ebe480dd75468a8735c6d74f1665e256180b59be010b72f90a980"
+      },
+      "boolean": {
+        "type": 6,
+        "vtable": 7729268,
+        "getter": 5869008,
+        "getterSHA256": "8a905797df24e4a1fe68a2f630971aa55b606cd6a92fed57303379d0f93a7a2d",
+        "slotSHA256": "3dd03cb8b18498b991d3f5c6a77b8d66a4015fc0c820a47999309a48cd11fbac"
+      },
+      "literalTypeTable": {
+        "va": 5863084,
+        "size": 32,
+        "sha256": "5cfb3b290372c8864f2a5d3c76f442a560f54657a776db577852c02f5ab0b22b"
+      }
+    }
+  ],
+  "compiler": {
+    "sha256": "8cfbf6fff1cf90d7aaf334392352515eb0f989a35a16bc99f225e52af38820c4",
+    "decoderSHA256": "77aeb0f830de89ded7d5c54d7b553adfdf9cbda3371de45792a6a4dcc63bf652",
+    "TRUE": {
+      "sourceSHA256": "3ac396d52ce25544d67ba86cd4ac33ad22624835af9a48b93bf47875cc5df8bb",
+      "bcdSHA256": "7a1fe1003431609609c311fdb37465b6885d7f9a8f4741ef5ccbde5343e87800",
+      "declarationFileOffset": 221,
+      "returnFileOffset": 459,
+      "expressionRecord": 8,
+      "rhsTag": 6,
+      "rhsPayload": 1,
+      "recordCount": 10,
+      "returnReferenceMode": 2,
+      "parameterSlots": [
+        1,
+        2
+      ]
+    },
+    "FALSE": {
+      "sourceSHA256": "af25816c3082316779b1457fce28bddec83cf1b133727ad08758ea413a13cad8",
+      "bcdSHA256": "03fd028b8ed5a2c4cb4ca30200f6ce6b090295374cf7282081083d7312303d6e",
+      "declarationFileOffset": 221,
+      "returnFileOffset": 459,
+      "expressionRecord": 8,
+      "rhsTag": 6,
+      "rhsPayload": 0,
+      "recordCount": 10,
+      "returnReferenceMode": 2,
+      "parameterSlots": [
+        1,
+        2
+      ]
+    }
+  },
+  "models": {
+    "TRUE": {
+      "preparedSeedTag": 6,
+      "finalByte": 1,
+      "sameObjectAtReturn": true,
+      "primaryReturnOrder": [
+        1,
+        5,
+        5,
+        6
+      ],
+      "secondaryValueReleases": 0,
+      "execution": {
+        "outcome": "normal return",
+        "trace": [
+          0,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          3
+        ],
+        "tag": 6,
+        "byte": 1
+      },
+      "unmodifiedSeed": {
+        "outcome": "Boolean-to-integer conversion rejects",
+        "trace": [
+          0,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "tag": 1
+      },
+      "nullCellBranch": {
+        "outcome": "normal return",
+        "trace": [
+          0,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          3
+        ],
+        "tag": 6,
+        "byte": 1
+      },
+      "integerSeedOutcome": "Operation26 resets but preserves integer object; operation37 calls integer assignment and Boolean integer conversion rejects."
+    },
+    "FALSE": {
+      "preparedSeedTag": 6,
+      "finalByte": 0,
+      "sameObjectAtReturn": true,
+      "primaryReturnOrder": [
+        1,
+        5,
+        5,
+        6
+      ],
+      "secondaryValueReleases": 0,
+      "execution": {
+        "outcome": "normal return",
+        "trace": [
+          0,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          3
+        ],
+        "tag": 6,
+        "byte": 0
+      },
+      "unmodifiedSeed": {
+        "outcome": "Boolean-to-integer conversion rejects",
+        "trace": [
+          0,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "tag": 1
+      },
+      "nullCellBranch": {
+        "outcome": "normal return",
+        "trace": [
+          0,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          3
+        ],
+        "tag": 6,
+        "byte": 0
+      },
+      "integerSeedOutcome": "Operation26 resets but preserves integer object; operation37 calls integer assignment and Boolean integer conversion rejects."
+    }
+  },
+  "prerequisiteEvidenceSHA256": "d0f38e2d948f4ea3ebb3dc56a09d9c88ca23a2e44516cede520794936b78b23d",
+  "preparation": [
+    "construct named evaluator",
+    "stock FrameDrain(evaluator+8)",
+    "stock AppendBoolean(evaluator+8,false)",
+    "stock RebuildSlots(evaluator+24,evaluator+8)",
+    "stock AddAgent(source)",
+    "stock AddAgent(target)",
+    "stock Execute",
+    "fresh ResultAt(evaluator+24,0); require tag6 and guarded Boolean vtable; virtual64 -> AL",
+    "stock evaluator destruction; retain only copied Boolean byte"
+  ],
+  "limits": "Pinned offline compiler output plus reviewed normal VM fragments and finite model; no game execution, arbitrary handle/provider, allocation failure or unwind certification."
+}

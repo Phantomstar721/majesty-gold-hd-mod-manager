@@ -42,6 +42,8 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $managerIcon -PathType Leaf)) {
     throw "The Majesty Mod Manager icon was not found: $managerIcon"
 }
+& $python (Join-Path $PSScriptRoot 'verify_regression.py') --mode release
+if ($LASTEXITCODE -ne 0) { throw 'Source regression gate failed; application packaging was not started.' }
 $releaseFiles = @(
     (Join-Path $repoRoot "LICENSE"),
     (Join-Path $repoRoot "THIRD-PARTY-NOTICES.md"),
@@ -125,6 +127,8 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\GPL-3.0.txt") -Destination
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\PYINSTALLER.txt") -Destination $applicationLicenses -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\FREESTYLE-CAM-SIDECAR.txt") -Destination $applicationLicenses -Force
 Copy-Item -LiteralPath (Join-Path $assetRoot "STEAM-ICON-NOTICE.txt") -Destination $applicationLicenses -Force
+& $python (Join-Path $PSScriptRoot 'verify_regression.py') --mode release --application $applicationOutput
+if ($LASTEXITCODE -ne 0) { throw 'Packaged Manager regression gate failed. Do not distribute this build.' }
 $receiptPath = Join-Path $repoRoot "local\manager-runtime-release\runtime-parity.json"
 $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
 $packagedRuntime = Join-Path $applicationOutput "_internal\payload\runtime\MajestyBuildingRuntime.dll"

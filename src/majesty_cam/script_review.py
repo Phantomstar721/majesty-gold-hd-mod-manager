@@ -8,7 +8,7 @@ existing structural merger. Each pair's choice applies across all datasets.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, field
 from functools import cached_property
 import hashlib
 import json
@@ -122,13 +122,16 @@ class ScriptConflict:
     base: SemanticItem | None
     candidates: tuple[ScriptCandidate, ...]
     compatibility_groups: tuple[tuple[str, ...], ...] = ()
+    fixed_preferences: tuple[tuple[str, str], ...] = ()
+    combine_candidates: object = field(default=None, compare=False, repr=False)
 
     @cached_property
     def identity(self):
         value = [self.dataset, [self.key[0].value, self.key[1]],
                  _item_identity(self.base),
                  [[candidate.owner, candidate.label, _item_identity(candidate.item)]
-                  for candidate in self.candidates], self.compatibility_groups]
+                  for candidate in self.candidates], self.compatibility_groups,
+                 self.combine_candidates is not None]
         return hashlib.sha256(json.dumps(value, ensure_ascii=True, separators=(',', ':')).encode('ascii')).hexdigest()
 
     def validate_choice(self, owner):
@@ -165,7 +168,8 @@ class ScriptConflict:
         owners = tuple(sorted(candidates))
         all_pairs = tuple((left, right) for index, left in enumerate(owners)
                           for right in owners[index + 1:]
-                          if not _same_instructions(candidates[left].item, candidates[right].item))
+                          if self.combine_candidates is not None or
+                          not _same_instructions(candidates[left].item, candidates[right].item))
         try:
             combined = _combine(self, owners)
         except FunctionMergeError:
@@ -203,6 +207,8 @@ def _same_instructions(left, right):
 
 
 def _candidate_map(conflict):
+    if hasattr(conflict, 'candidate_map'):
+        return conflict.candidate_map()
     candidates = {}
     for candidate in conflict.candidates:
         if candidate.item.key != conflict.key:
@@ -229,6 +235,10 @@ def _decline_helper_proof(name):
 
 
 def _combine(conflict, owners):
+    if hasattr(conflict, 'combine'):
+        return conflict.combine(owners)
+    if conflict.combine_candidates is not None:
+        return conflict.combine_candidates(tuple(owners))
     candidates = _candidate_map(conflict)
     items = tuple(candidates[owner].item for owner in owners)
     if not items:

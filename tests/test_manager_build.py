@@ -1444,7 +1444,14 @@ class ManagerBuildPlanTests(unittest.TestCase):
             try:
                 fixed_input.symlink_to(target)
             except OSError:
-                self.skipTest("file symlinks are unavailable on this Windows host")
+                # Exercise rejection even when Windows denies symlink creation.
+                # This is a synthetic filesystem predicate, not native link coverage.
+                fixed_input.write_bytes(b"replacement")
+                original_is_symlink = Path.is_symlink
+                predicate = patch.object(Path, "is_symlink", lambda p:
+                    p == fixed_input or original_is_symlink(p))
+                predicate.start()
+                self.addCleanup(predicate.stop)
             with self.assertRaisesRegex(
                 ManagerBuildError,
                 "stock composition inputs could not be revalidated after symlink",

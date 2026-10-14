@@ -34,6 +34,26 @@ from majesty_cam.cam import CamArchive, CamEntry, CamSection, pad_extension, pad
 
 
 class PositionalArtTests(unittest.TestCase):
+    def test_reordered_set_directory_preserves_selection_and_body_bounds(self):
+        from majesty_cam.compose import _split_imag_sets
+        from majesty_cam.art import _imag_set_payloads
+        original = _imag([_SetSpec(1000, 'compact', (1,)),
+                          _SetSpec(97, 'compact', (2,)),
+                          _SetSpec(208, 'compact', (3,))])
+        data = bytearray(original)
+        data[24:48] = original[40:48] + original[24:40]
+        parsed = parse_imag_tile_references(bytes(data), tile_count=4)
+        self.assertEqual([(r.set_id, r.tile_index) for r in parsed.references],
+                         [(208, 3), (1000, 1), (97, 2)])
+        expected = dict(_imag_set_payloads(original))
+        pairs = _imag_set_payloads(bytes(data))
+        self.assertEqual([key for key, body in pairs], [208, 1000, 97])
+        self.assertEqual(dict(pairs), expected)
+        self.assertEqual(_split_imag_sets(CamEntry(pad_name(b'TEST'), bytes(data)))[1], pairs)
+        struct.pack_into('<I', data, 36, struct.unpack_from('<I', data, 28)[0])
+        with self.assertRaises(UnsupportedImagShapeError):
+            parse_imag_tile_references(bytes(data), tile_count=4)
+
     def test_best_imag_layout_prefers_the_parser_covering_changed_tiles(self):
         historical = ParsedImag(
             entry_name=b"TEST",

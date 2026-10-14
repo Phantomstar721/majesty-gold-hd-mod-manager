@@ -136,18 +136,19 @@ class ManagerAppLayoutTests(unittest.TestCase):
                            selections={first.content_id: True, second.content_id: True})
         controller = SimpleNamespace(order=(first.content_id, second.content_id),
                                      standard_conflict_winners={},
-                                     set_standard_conflict_winner=Mock(return_value=snapshot))
+                                     set_standard_conflict_winners=Mock(return_value=snapshot))
         window = SimpleNamespace(snapshot=snapshot, controller=controller, _render_snapshot=Mock())
-        with patch.object(manager_app, "_ConflictChoiceDialog") as dialog:
+        from majesty_cam.script_review import pair_key
+        with patch('majesty_cam.manager.script_review_dialog.ScriptReviewDialog') as dialog:
             dialog.return_value.exec.return_value = manager_app.QDialog.DialogCode.Rejected
             self.assertFalse(manager_app.ManagerWindow._resolve_selected_conflicts(window))
-            controller.set_standard_conflict_winner.assert_not_called()
+            controller.set_standard_conflict_winners.assert_not_called()
             window._render_snapshot.assert_not_called()
             dialog.return_value.exec.return_value = manager_app.QDialog.DialogCode.Accepted
-            dialog.return_value.winner = second.content_id
+            dialog.return_value.decisions = {pair_key(first.content_id, second.content_id): second.content_id}
             self.assertTrue(manager_app.ManagerWindow._resolve_selected_conflicts(window))
-        controller.set_standard_conflict_winner.assert_called_once_with(
-            first.content_id, second.content_id, second.content_id)
+        controller.set_standard_conflict_winners.assert_called_once_with(
+            {'|'.join(sorted((first.content_id, second.content_id))): second.content_id})
         window._render_snapshot.assert_called_once_with(snapshot)
 
     def test_detected_installation_switch_rescans_and_recovers_from_invalid_choice(self):
