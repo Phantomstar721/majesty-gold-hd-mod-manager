@@ -17,6 +17,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT / "tests")]
 sys.dont_write_bytecode = True
 
 COMMON = (
+    "test_imag_v5", "test_timed_imag",
     "test_feature_parity_profiles", "test_native_impact_profiles",
     "test_impact_compatible_image", "test_manager_build", "test_startup_cache",
     "test_stock_input_cache", "test_regression_gate",

@@ -426,6 +426,8 @@ def _timed_v4_frame_start(data: bytes, anchor: int, direction_end: int) -> int |
     Other existing layouts stay with their existing parsers. Never infer this
     layout from values resembling TILE indices or from changed-slot coverage.
     """
+    if _u32(data, 0) == 5:
+        return _v5_frame_start(data, anchor, direction_end)
     if _u32(data, 0) != 4 or anchor + 20 > direction_end:
         return None
     streams, frames, rect_mask, other_mask, _a, _b, timing, groups = struct.unpack_from('<8H', data, anchor + 4)
@@ -441,6 +443,47 @@ def _timed_v4_frame_start(data: bytes, anchor: int, direction_end: int) -> int |
         index = _u32(data, offset) & 0xFFFFFF
         if index != 0xFFFFFF and index >= LOW16_SENTINEL:
             raise UnsupportedImagShapeError('Timed version-4 TILE index exceeds the supported positional table')
+    return first
+
+
+def _v5_frame_start(data: bytes, anchor: int, direction_end: int) -> int:
+    """Native v5: 24-byte header, rectangles, group/pairs, timing, events.
+
+    References are located forward from the header, never backward from the
+    direction end: optional event records follow the last frame. See
+    docs/imag-v5-remapping.md for the independent native read contract.
+    """
+    if anchor + 24 > direction_end:
+        raise UnsupportedImagShapeError('Truncated version-5 direction header')
+    streams, frames, rectangles, other, timing, groups, events = struct.unpack_from(
+        '<HHIIHHI', data, anchor + 4)
+    if groups != 1:
+        raise UnsupportedImagShapeError('Unsupported version-5 masks or frame groups')
+    count = streams * frames
+    first = anchor + 24 + 8 * bin(rectangles).count('1')
+    for _ in range(bin(other).count('1')):
+        if first + 4 > direction_end:
+            raise UnsupportedImagShapeError('Truncated version-5 auxiliary count')
+        first += 4 + _u32(data, first) * 8
+        if first > direction_end:
+            raise UnsupportedImagShapeError('Truncated version-5 auxiliary records')
+    first += 4  # Frame-group tag, not a frame coordinate or TILE.
+    cursor = first + count * 8 + (20 if timing else 0)
+    if not streams or not frames or count > MAX_FRAMES or cursor > direction_end:
+        raise UnsupportedImagShapeError('Version-5 frame/group/timing bounds disagree')
+    for _ in range(bin(events).count('1')):
+        if cursor + 4 > direction_end:
+            raise UnsupportedImagShapeError('Truncated version-5 event count')
+        event_count = _u32(data, cursor)
+        cursor += 4 + event_count * 32
+        if cursor > direction_end:
+            raise UnsupportedImagShapeError('Truncated version-5 event records')
+    # Native set/direction reads seek by the offset table. Unreferenced bytes
+    # between bodies are legal and are not additional frames or dependencies.
+    for offset in range(first + 4, first + count * 8, 8):
+        index = _u32(data, offset) & 0xFFFFFF
+        if index != 0xFFFFFF and index >= LOW16_SENTINEL:
+            raise UnsupportedImagShapeError('Version-5 TILE index exceeds the supported positional table')
     return first
 
 
@@ -491,7 +534,7 @@ def _parse_end_anchored_direction_references(
         else "stock-end-anchored"
     )
     if timed_start is not None:
-        layout = 'compact-timed-v4'
+        layout = 'compact-v5' if _u32(data, 0) == 5 else 'compact-timed-v4'
     references: list[ImagTileReference] = []
     for stream in range(stream_count):
         for frame in range(frame_count):
@@ -1707,7 +1750,8 @@ def _parse_direction_layout(
     timed_start = _timed_v4_frame_start(data, anchor, direction_end)
     if timed_start is not None:
         count = _u32(data, anchor + 4)
-        return 'compact-timed-v4', (count >> 16) * (count & 0xFFFF), timed_start + 4
+        layout = 'compact-v5' if _u32(data, 0) == 5 else 'compact-timed-v4'
+        return layout, (count >> 16) * (count & 0xFFFF), timed_start + 4
 
     if anchor + 12 > direction_end:
         raise UnsupportedImagShapeError(

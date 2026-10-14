@@ -13,6 +13,21 @@ not published. See `art-order-and-palette-relocation.md`,
 
 ## Earlier verification history
 
+### Version-5 art correction (2026-10-13)
+
+The corrected candidate also reads version-5 image frames using the native
+header/group order rather than anchoring backward from the direction end.
+This preserves coordinates and trailing events and restores previously missed
+TILE dependencies. See [format evidence and reproduction](imag-v5-remapping.md).
+The independent `test_imag_v5` and existing `test_timed_imag` modules are now
+mandatory in the common release/development regression gate.
+
+Source and packaged release receipts include Public, beta2 and GOG fixtures.
+The corrected release output was staged separately from the development build;
+Witch Hunter development capabilities remain excluded. Evidence is retained in
+`local/imag-v5-build.log`, `local/imag-v5-shipped-art.json`, and
+`local/regression/release-package.json`. No new live-game acceptance is claimed.
+
 Base: bb0a30e (production 0.3.9), not the dirty development checkout.
 Standard/Standard and Standard/Merge script review, player-facing pair choices,
 dataset scoping, cache invalidation and three-profile runtime support are retained.
