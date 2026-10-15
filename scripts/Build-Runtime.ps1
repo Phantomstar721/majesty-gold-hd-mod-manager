@@ -7,14 +7,16 @@ param(
     [switch]$SiegeCrashDiagnostic,
     [switch]$ExplorationTests,
     [switch]$FeatureTests,
-    [switch]$RegistrationTests
+    [switch]$RegistrationTests,
+    [switch]$RegistrationDiagnostic
 )
 
 $ErrorActionPreference = "Stop"
 if ($RegistrationTests) {
-    foreach ($name in @("MAJESTY_PUBLIC_EXE", "MAJESTY_BETA2_EXE", "MAJESTY_GOG_EXE")) {
+    foreach ($name in @("MAJESTY_PUBLIC_EXE", "MAJESTY_BETA2_EXE", "MAJESTY_GOG_EXE", "MAJESTY_BCD_GAME", "MAJESTY_BCD_GOG_GAME")) {
         $fixturePath = [Environment]::GetEnvironmentVariable($name)
-        if (-not $fixturePath -or -not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) {
+        $fixtureType = if ($name -like '*_GAME') { 'Container' } else { 'Leaf' }
+        if (-not $fixturePath -or -not (Test-Path -LiteralPath $fixturePath -PathType $fixtureType)) {
             throw "Three-version runtime verification requires $name. No skipped profiles are allowed."
         }
     }
@@ -115,6 +117,9 @@ $commonLibPaths = @(
 )
 
 $runtimeDefines = @()
+if ($RegistrationDiagnostic) {
+    $runtimeDefines += "/DMAJESTY_REGISTRATION_DIAGNOSTIC=1"
+}
 if ($FreestyleDiagnosticNamedRetention) {
     $runtimeDefines += "/DFREESTYLE_CAM_DIAGNOSTIC_NAMED_RETENTION=1"
 } elseif ($FreestyleDiagnosticParity) {
@@ -159,25 +164,30 @@ if ($LASTEXITCODE -ne 0) { throw "Runtime launcher build failed with exit code $
 
 $fixtureNames = @()
 if ($ExplorationTests) { $fixtureNames += "ExplorationNativeTests" }
-if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests"; $fixtureNames += "NativeImpactReleaseTests" }
-if ($RegistrationTests) { $fixtureNames += "SharedRegistrationRuntimeTests" }
+if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests"; $fixtureNames += "NativeImpactReleaseTests"; $fixtureNames += "RegistrationDiagnosticTests" }
+if ($RegistrationTests) { $fixtureNames += "SharedRegistrationRuntimeTests"; $fixtureNames += "NativeRegistrationLifecycleTests" }
 foreach ($fixtureName in $fixtureNames) {
     $fixtureLinkOptions = @()
     $fixtureArguments = @()
-    if ($fixtureName -eq "SharedRegistrationRuntimeTests") {
+    $fixedImageFixture = $fixtureName -in @("SharedRegistrationRuntimeTests", "NativeRegistrationLifecycleTests")
+    if ($fixedImageFixture) {
         # Reserve the game image's preferred base for nonexecuted fixture bytes.
         $fixtureLinkOptions = @("/BASE:0x10000000", "/ALIGN:65536", "/DYNAMICBASE:NO")
         $fixtureArguments = @($env:MAJESTY_PUBLIC_EXE, $env:MAJESTY_BETA2_EXE, $env:MAJESTY_GOG_EXE)
     }
     $fixtureSources = @($runtimeSources | Where-Object { [IO.Path]::GetFileName($_) -ne "MajestyModManagerRuntime.cpp" })
-    if ($RegistrationTests -and $fixtureName -eq "SharedRegistrationRuntimeTests") {
+    if ($fixtureName -eq "NativeRegistrationLifecycleTests") {
+        $fixtureSources = @("AttackObservation.cpp", "AttackObservationProof.cpp", "NativeImpactRegistry.cpp") |
+            ForEach-Object { Join-Path $sourceRoot $_ }
+    }
+    if ($RegistrationTests -and $fixedImageFixture) {
         $fixtureSources += (Join-Path $repoRoot "tests\GogFixtureMemory.cpp")
     }
     & $compiler /nologo /W4 /O2 /EHsc @commonIncludes @runtimeDefines `
         @fixtureSources (Join-Path $repoRoot "tests\$fixtureName.cpp") `
         "/Fo$output\" "/Fe:$output\$fixtureName.exe" /link @commonLibPaths @runtimeLibraries @fixtureLinkOptions
     if ($LASTEXITCODE -ne 0) { throw "$fixtureName build failed" }
-    if ($fixtureName -eq "SharedRegistrationRuntimeTests") {
+    if ($fixedImageFixture) {
         # Same fixed-address, data-only fixture layout used by GOG profile tests.
         $testExe = Join-Path $output "$fixtureName.exe"
         $testBytes = [IO.File]::ReadAllBytes($testExe)
@@ -200,8 +210,24 @@ foreach ($fixtureName in $fixtureNames) {
         & $compiler /nologo @objects "/Fe:$testExe" /link "/BASE:$testBase" /ALIGN:65536 /DYNAMICBASE:NO @commonLibPaths @runtimeLibraries
         if ($LASTEXITCODE -ne 0) { throw "Registration fixture layout did not link" }
     }
-    & (Join-Path $output "$fixtureName.exe") @fixtureArguments
-    if ($LASTEXITCODE -ne 0) { throw "$fixtureName failed" }
+    if ($fixtureName -eq "NativeRegistrationLifecycleTests") {
+        for ($profileIndex = 0; $profileIndex -lt 3; $profileIndex++) {
+            & (Join-Path $output "$fixtureName.exe") $fixtureArguments[$profileIndex] $profileIndex
+            if ($LASTEXITCODE -ne 0) { throw "$fixtureName failed for profile $profileIndex" }
+        }
+    } else {
+        & (Join-Path $output "$fixtureName.exe") @fixtureArguments
+        if ($LASTEXITCODE -ne 0) { throw "$fixtureName failed" }
+    }
+    if ($fixtureName -eq "RegistrationDiagnosticTests") {
+        # Prove the normal release build cannot emit these diagnostics.
+        & $compiler /nologo /W4 /O2 /EHsc @commonIncludes `
+            (Join-Path $repoRoot "tests\RegistrationDiagnosticTests.cpp") `
+            "/Fo$output\RegistrationDiagnosticDisabled.obj" "/Fe:$output\RegistrationDiagnosticDisabled.exe" /link @commonLibPaths
+        if ($LASTEXITCODE -ne 0) { throw "Disabled registration diagnostic fixture build failed" }
+        & (Join-Path $output "RegistrationDiagnosticDisabled.exe")
+        if ($LASTEXITCODE -ne 0) { throw "Disabled registration diagnostic emitted output" }
+    }
 }
 
 if ($RegistrationTests -and $FeatureTests -and $ExplorationTests) {

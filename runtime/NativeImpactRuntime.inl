@@ -66,7 +66,7 @@ void __cdecl InterceptImpact(Word projectile,Word source,Word target,Word x,Word
     auto fallback=[&] { originalImpact(projectile,source,target,x,y); };
     const auto& c=current.identity;
     if(!originalImpact)return; // Unreachable before stock setter publishes us.
-    if(!Owner()||fault||!loadProof.Ready()||impactInvoking||
+    if(!Owner("NativeImpact")||fault||!loadProof.Ready()||impactInvoking||
         caller!=impactNative->terminal+0x5A||current.unit!=projectile||!source||!target||
         !ImpactGate()||!ImpactIdentity(projectile,c.projectile,c.world,c.generation)||
         !ImpactIdentity(source,c.actor,c.world,c.generation)||!ImpactIdentity(target,c.target,c.world,c.generation)) {

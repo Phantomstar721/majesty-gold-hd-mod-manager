@@ -1,4 +1,5 @@
 #include "AttackObservationProof.h"
+#include "AttackObservationBaseline.h"
 #include <algorithm>
 #include <cstring>
 #include <set>
@@ -7,6 +8,46 @@ namespace MajestyAttackObservation {
 int PackageProof::Find(const unsigned char* digest) const {
     if (digest) for (std::size_t i=0;i<digests.size();++i)
         if (!std::memcmp(digests[i].data(),digest,32)) return static_cast<int>(i);
+    // The shipped SDK archives carry different debug-source records.
+    // Their instructions, signatures and DAT records match the retail bundle.
+    // Admit only these reviewed byte identities, and only against that complete
+    // retail bundle; a path or filename never grants stock ownership.
+    static const char* retail[]={
+        "024e1b872e4b21d79677bca811ebb11a09a4434049c03d2c2f9d758fa04ee58f",
+        "a5f4f612406506316e2b409b35f4e7014dbca4291143f8c888f040d5c15f6f91",
+        "461f47f4e8ec83301be81f524013b1603a8251ca86a7f2ce13ddc192ebb49494",
+        "0467f3cc06c676bdf7e77dece17673c2a651da66450b7dd3eb5acde066e26513",
+        "3922797215f49906962b92dcd5411f707a9b0d7db31b0b9bc77e945d11353b7c",
+        "308294eb59e05d620dde6b4f2691d8c312d10f7fd4dab76b3dfecd0cbc1b987f"};
+    static const char* sdk[]={
+        "7d258dfc4067f2a1376c12950a1148d50a4678a3e6f88fe2e2885445931b7a27",
+        retail[1],
+        "178e57097f67daf7d8c443b6078c2b66e8e9ff5f71359669ff640a0d8a3fceb5",
+        "3269972da9b7b9ec42281d52d9c05c2c4c4dfc1a42832dff56e29dac47f540f9",
+        "195e05881df63ed67bc618a2e646d012db68df74212cd2df6cbd4e4ebb3e5026",
+        "19bca1c34d15fb22606d8232bbd7981c2c1c6ba1591bf61ccb0259db05aec4bf"};
+    static const char* originalSdk[]={
+        "715707fb88e75303c5991e80d0ce86528df9f48efb8c7b4860d28dd9239a36ea",
+        retail[1],
+        "b6bf02a542b12e4d890ce81e358ec2af39aec9c62a994420cab0d31e3059fec9",
+        "bf5f79ffc0231dfcba319b057853b594763aad1daae6517043fa0f6003c8d78c",
+        sdk[4],
+        "8b572cfd429007ffd3f50eb11dbec5b39c2baa7bcbf640c565c0fc100a6bc9f7"};
+    const auto matches=[](const unsigned char* bytes,const char* hex) {
+        const auto digit=[](char c){return c<='9'?c-'0':c-'a'+10;};
+        for(unsigned j=0;j<32;++j)
+            if(bytes[j]!=(digit(hex[2*j])*16+digit(hex[2*j+1])))return false;
+        return true;
+    };
+    if(!digest || digests.size()<6)return -1;
+    bool publicBundle=true,originalBundle=true;
+    for(unsigned i=0;i<6;++i) {
+        publicBundle &= matches(digests[i].data(),retail[i]);
+        originalBundle &= !std::memcmp(digests[i].data(),kBaselineDigests[i],32);
+    }
+    if(!publicBundle&&!originalBundle)return -1;
+    for(unsigned i=0;i<6;++i)
+        if(matches(digest,publicBundle?sdk[i]:originalSdk[i]))return static_cast<int>(i);
     return -1;
 }
 bool ParsePackageProof(const unsigned char* bytes,std::size_t size,PackageProof& output) {

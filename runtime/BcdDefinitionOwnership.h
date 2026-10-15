@@ -110,18 +110,23 @@ public:
             BaselineRetainsWinners(definitions,protectedNames) ? -2 : index;
     }
     bool Admit(const Definitions& definitions,const std::set<std::string>& protectedNames,
-               bool generated,bool baseline) const {
+               bool generated,bool baseline,const Key** rejected=nullptr,const char** reason=nullptr) const {
+        const auto reject=[&](const Key& key,const char* why) {
+            if(rejected)*rejected=&key;
+            if(reason)*reason=why;
+            return false;
+        };
         for(const auto& key:definitions) {
             if(!protectedNames.count(Lower(key.second)))continue;
             const auto prior=first_.find(key);
             if(generated) {
-                if(prior!=first_.end()&&!prior->second)return false;
+                if(prior!=first_.end()&&!prior->second)return reject(key,"generated-after-other-owner");
                 // Tape keys fold case, while symbol keys do not. A case-only
                 // competing spelling cannot establish consistent ownership.
                 for(const auto& entry:first_)
                     if(entry.first.first==key.first && entry.first.second!=key.second &&
-                       Lower(entry.first.second)==Lower(key.second))return false;
-            } else if(!baseline && (prior==first_.end()||!prior->second))return false;
+                       Lower(entry.first.second)==Lower(key.second))return reject(key,"case-only-owner-collision");
+            } else if(!baseline && (prior==first_.end()||!prior->second))return reject(key,"optional-protected-definition-not-shadowed");
         }
         return true;
     }

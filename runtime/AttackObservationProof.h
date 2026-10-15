@@ -28,6 +28,11 @@ public:
     bool Ready() const { return !fault_ && stack_.empty() && completed_ == 6 &&
         (finished_ & (1u<<6)) && (!scoped_ || (finished_ & ((1u<<7)|(1u<<8)))); }
     bool Faulted() const { return fault_; }
+    struct State { unsigned started,completed,finished,depth; int top; bool fault,scoped; };
+    State DiagnosticState() const {
+        return {started_,completed_,finished_,static_cast<unsigned>(stack_.size()),
+                stack_.empty()?-99:stack_.back(),fault_,scoped_};
+    }
 private:
     std::vector<int> stack_;
     unsigned started_{}, completed_{};
