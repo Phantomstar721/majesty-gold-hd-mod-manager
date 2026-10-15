@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from .gpl import SemanticMergeResult, parse_gpl, parse_dat, _mask_non_code
 from .gpl_function_merge import _tokens
-from .package import (ModPackage, PackageFormatError, GplLoad, _resolve_package_root,
+from .package import (ModPackage, PackageFormatError, GplLoad, DescriptionsLoad, CamLoad, _resolve_package_root,
                       _select_manifest, _select_definition, _parse_manifest, _same_mod_id)
 
 SCOPES = ('Majesty', 'MajestyExpansion')
@@ -127,8 +127,20 @@ def load_generated_bundle(root, *, manifest_path=None):
             if not _same_mod_id(metadata.mod_id, scoped_mod_id(definition.mod_id, scope)):
                 raise PackageFormatError('generated patch ID does not match its common profile and scope')
             load = metadata.datasets[0].loads[0]
-            if len(load.directives) != 1 or not isinstance(load.directives[0], GplLoad):
-                raise PackageFormatError('generated dataset patch may contain only one GPL load')
+            if (not load.directives or len(load.gpl)>1 or len(load.descriptions)>1 or len(load.cams)>1 or
+                    any(not isinstance(d, (GplLoad, DescriptionsLoad, CamLoad)) for d in load.directives)):
+                raise PackageFormatError('generated dataset patch may contain one Description, toolbar CAM and GPL load')
+            for path in load.cams:
+                if path.relative_path.replace('\\', '/') != f'Data/merged_toolbar-{scope}.cam':
+                    raise PackageFormatError('generated toolbar CAM is not owned by its scope')
+                from .cam import read_cam
+                archive = read_cam(path.absolute_path)
+                if (tuple(s.extension for s in archive.sections) != (b'SMNU', b'STRT') or
+                        any(len(s.entries) != 1 or s.entries[0].name[:4] != b'AP92' for s in archive.sections)):
+                    raise PackageFormatError('generated toolbar CAM must contain only AP92 panel and help')
+            for path in load.descriptions:
+                if path.relative_path.replace('\\', '/').casefold() != f'Data/merged_descriptions-{scope}.xml'.casefold():
+                    raise PackageFormatError('generated Description file is not owned by its scope')
         scopes.append(scope)
         load = metadata.datasets[0].loads[0]
         if len(load.gpl) > 1:

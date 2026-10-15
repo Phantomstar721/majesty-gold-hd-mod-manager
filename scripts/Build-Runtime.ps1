@@ -119,6 +119,7 @@ $runtimeSources = @(
     (Join-Path $sourceRoot "EquipmentRuntime.cpp"),
     (Join-Path $sourceRoot "BoundedMapQuery.cpp"),
     (Join-Path $sourceRoot "MapQueryRuntime.cpp"),
+    (Join-Path $sourceRoot "PaidSourceTargetCommand.cpp"),
     (Join-Path $sourceRoot "MajestyModManagerRuntime.cpp"),
     (Join-Path $sourceRoot "ControllerLifecycleRegistry.cpp"),
     (Join-Path $sourceRoot "FreestyleCamRuntime.cpp"),
@@ -145,7 +146,7 @@ if ($LASTEXITCODE -ne 0) { throw "Runtime launcher build failed with exit code $
 
 $fixtureNames = @()
 if ($ExplorationTests) { $fixtureNames += "ExplorationNativeTests" }
-if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests" }
+if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests", "PaidSourceTargetCommandTests", "PanelLifecycleRuntimeTests" }
 foreach ($fixtureName in $fixtureNames) {
     $fixtureSources = @($runtimeSources | Where-Object { [IO.Path]::GetFileName($_) -ne "MajestyModManagerRuntime.cpp" })
     & $compiler /nologo /W4 /O2 /EHsc @commonIncludes @runtimeDefines `

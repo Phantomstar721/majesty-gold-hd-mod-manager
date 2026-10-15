@@ -16,6 +16,8 @@ import uuid
 import xml.etree.ElementTree as ET
 
 from ._subprocess import no_console_window_options
+from .compact_sovereign_toolbar import ToolbarAction
+from .compact_toolbar_resources import append_toolbar, bind_toolbar_chrome
 from .stock_input_cache import StockInputCache
 from .equipment import EquipmentRegistration, EQUIPMENT_FEATURE_TYPE
 from .manager.runtime_profiles import require_supported_runtime
@@ -213,6 +215,7 @@ from .stock_controller_features import (
     StockAp24TimedRageAction,
     StockAp69SovereignTargetAction,
     StockAp69SourceTargetAction,
+    StockAp69PaidSourceTargetAction,
     StockAp99ResearchRow,
     UpgradeRequirement,
     legacy_controller_features,
@@ -465,6 +468,7 @@ class TextMergeResult:
     named: tuple[NamedMergeSelection, ...]
     dialog_renames: tuple[tuple[str, bytes, bytes], ...]
     private_activity_texts: tuple[PrivateActivityTextRecord, ...]
+    scoped_text_archives: tuple[tuple[str, CamArchive], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1337,6 +1341,22 @@ def merge_text_resources(
         sections=(CamSection(extension=b"STRT", entries=tuple(gpltext_strt)),)
     )
     whole_order = (*_TEXT_WHOLE_ORDER, *_GPLTEXT_WHOLE_ORDER)
+    scoped_text_archives = ()
+    if controller_registry is not None:
+        if controller_registry.toolbar_actions:
+            expansion = append_toolbar(text_archive, game_path, controller_registry,
+                                       dataset="MajestyExpansion")
+            scoped_text_archives = (("MajestyExpansion", CamArchive(tuple(
+                replace(section, entries=tuple(e for e in section.entries if e.name[:4] == b"AP92"))
+                for section in expansion.sections if section.extension in (b"SMNU", b"STRT")
+            ))),)
+        text_archive = append_toolbar(text_archive, game_path, controller_registry)
+        if scoped_text_archives:
+            def toolbar_width(archive):
+                return next(e.data[16:20] for s in archive.sections if s.extension == b"SMNU"
+                            for e in s.entries if e.name[:4] == b"AP92")
+            if any(toolbar_width(a) != toolbar_width(text_archive) for _, a in scoped_text_archives):
+                raise ComposeError("dataset toolbar widths disagree with their shared chrome")
     return TextMergeResult(
         text_archive=text_archive,
         gpltext_archive=gpltext_archive,
@@ -1344,6 +1364,7 @@ def merge_text_resources(
         named=(*smnu_selections, *private_strt_selections),
         dialog_renames=dialog_renames,
         private_activity_texts=detached_activity_texts,
+        scoped_text_archives=scoped_text_archives,
     )
 
 
@@ -6901,6 +6922,7 @@ def resolve_controller_registry(
 
 
 _CONTROLLER_FEATURE_CLASSES = (
+    ToolbarAction,
     StockAp52PrivateRecruitment,
     StockMx05LiveAgentListPanel,
     StockMx04Mx05OccupantActionPanel,
@@ -6943,6 +6965,9 @@ def _qualified_controller_key(mod_uuid: str, raw_key: str) -> str:
 
 
 def _qualify_controller_feature(feature: ControllerFeature, qualify) -> ControllerFeature:
+    if isinstance(feature, ToolbarAction):
+        return replace(feature, panel_key=qualify("panel", feature.panel_key),
+                       action_key=qualify("action", feature.action_key))
     if isinstance(feature, StockMx22BuildingOpenToggle):
         return replace(
             feature,
@@ -7002,6 +7027,9 @@ def _qualify_controller_feature(feature: ControllerFeature, qualify) -> Controll
             action_key=qualify("action", feature.action_key),
             resource_key=qualify("resource", feature.resource_key),
         )
+    if isinstance(feature, StockAp69PaidSourceTargetAction):
+        return replace(feature, panel_key=panel,
+                       action_key=qualify("action", feature.action_key))
     if isinstance(feature, StockAp69SovereignTargetAction):
         return replace(
             feature,
@@ -7139,10 +7167,19 @@ def _require_controller_feature_evidence(
                     f"{inventory.selected.alias}: panel {feature.panel_key!r} "
                     f"parent_building {feature.parent_building!r} is not declared"
                 )
-            if (
-                parent.controller_base,
-                parent.panel_resource_template,
-            ) != ("AP10", "AP10"):
+            # AP07 and AP10 are literal aliases of the cataloged Guild class
+            # (including its setup/control/event/destructor slots). Keep the
+            # AP10 resource layout and permit the additional parent only for
+            # the paid-only action panel, without broadening research recipes.
+            panel_actions = tuple(item for item in normalized
+                                  if getattr(item, "panel_key", None) == feature.panel_key
+                                  and item is not feature and not isinstance(item, ToolbarAction))
+            paid_guild_parent = (
+                parent.controller_base == "AP07" and parent.panel_resource_template == "AP10"
+                and panel_actions and all(isinstance(item, StockAp69PaidSourceTargetAction)
+                                          for item in panel_actions))
+            if ((parent.controller_base, parent.panel_resource_template) != ("AP10", "AP10")
+                    and not paid_guild_parent):
                 raise ComposeError(
                     f"{inventory.selected.alias}: panel {feature.panel_key!r} "
                     "uses the stock AP10/AP69 secondary-panel lifecycle and "
@@ -7309,6 +7346,14 @@ def _require_controller_feature_evidence(
                     f"{feature.cursor_ordinal} requires exactly one package-owned "
                     f"CUR1 set {expected_set}; found {cursor_matches}"
                 )
+        elif isinstance(feature, ToolbarAction):
+            icons = [resource for resource in inventory.resources
+                     if resource.section == b"IMAG" and resource.key == feature.icon_id.encode("ascii")]
+            if len(icons) != 1:
+                raise ComposeError(f"{inventory.selected.alias}: toolbar needs exactly one owned icon {feature.icon_id}")
+            _header, sets = _split_imag_sets(icons[0].entry)
+            if sum(set_id == feature.icon_set for set_id, _payload in sets) != 1:
+                raise ComposeError(f"{inventory.selected.alias}: toolbar icon set is missing or ambiguous")
         elif isinstance(feature, (StockAp24TimedRageAction, StockAp24RageCommandAction)):
             matches = gpl_functions.get(feature.callback_symbol.casefold(), ())
             if len(matches) != 1:
@@ -7842,6 +7887,7 @@ def compose_package(
             {item.image_id.encode("ascii") for item in runtime_feature_registry.equipment}
             | ({b"IX93"} if runtime_feature_registry.enchantment_rows else set())
             | ({b"INTn", b"IX93"} if runtime_feature_registry.hero_info_rows else set())
+            | ({b"INDz"} if controller_result.registry.toolbar_actions else set())
         )),
         art_resolutions=art_resolutions,
     )
@@ -7851,6 +7897,7 @@ def compose_package(
         stock_named_resources=stock_named_resources,
     )
     art_results = bind_equipment_art(art_results, inventories)
+    art_results = bind_toolbar_chrome(art_results, text_result.text_archive, controller_result.registry)
     controlled_follower_markers = tuple(
         sorted(
             (
@@ -7936,8 +7983,9 @@ def compose_package(
         script_conflict_resolver=script_conflict_resolver,
     )
     gpl = script_bundle.common
-    if max_generated_mods is not None and len(script_bundle.outputs) > max_generated_mods:
-        raise ComposeError('This selection needs ' + str(len(script_bundle.outputs)) +
+    generated_scope_count = 1 + len({scope for scope, _ in script_bundle.patches} | {scope for scope, _ in text_result.scoped_text_archives})
+    if max_generated_mods is not None and generated_scope_count > max_generated_mods:
+        raise ComposeError('This selection needs ' + str(generated_scope_count) +
                            ' generated Mod IDs, exceeding the active-mod persistence limit. '
                            'Deselect some Standard mods before preparing.')
 
@@ -8005,6 +8053,11 @@ def compose_package(
         )
         for filename, archive in cam_outputs:
             (data_directory / filename).write_bytes(archive.to_bytes())
+        scoped_cam_files = []
+        for scope, archive in text_result.scoped_text_archives:
+            filename = f"merged_toolbar-{scope}.cam"
+            (data_directory / filename).write_bytes(archive.to_bytes())
+            scoped_cam_files.append((scope, filename))
         descriptions_path = data_directory / "merged_descriptions.xml"
         descriptions_path.write_bytes(descriptions.payload)
         strings_paths: list[Path] = []
@@ -8037,6 +8090,7 @@ def compose_package(
                 strings_filenames=tuple(path.name for path in strings_paths),
                 source_set=gpl.source_set,
                 scoped_sources=tuple((scope, output.source_set) for scope, output in script_bundle.patches),
+                scoped_cams=tuple(scoped_cam_files),
             )
         )
         (staging / "mod-definition.json").write_text(
@@ -9017,6 +9071,7 @@ def _build_manifest(
     source_set: GplProjectSourceSet,
     strings_filenames: Sequence[str] = (),
     scoped_sources=(),
+    scoped_cams=(),
 ) -> bytes:
     root = ET.Element("Majesty")
     mod = ET.SubElement(root, "Mod", {"id": mod_id})
@@ -9046,16 +9101,26 @@ def _build_manifest(
         for filename in sources.files:
             ET.SubElement(gpl, 'Source').text = f'{prefix}\\{filename}'
     add_gpl(load, source_set, 'Any')
-    from .scoped_output import scoped_mod_id
-    for scope, sources in scoped_sources:
-        if not sources.files:
+    from .scoped_output import scoped_mod_id, SCOPES
+    scoped_source_map = dict(scoped_sources)
+    scoped_cam_map = dict(scoped_cams)
+    if (set(scoped_source_map) | set(scoped_cam_map)) - set(SCOPES):
+        raise ComposeError('unsupported generated Description scope')
+    for scope in SCOPES:
+        if scope not in scoped_source_map and scope not in scoped_cam_map:continue
+        sources = scoped_source_map.get(scope)
+        if sources is not None and not sources.files and scope not in scoped_cam_map:
             raise ComposeError('cannot emit an empty scoped Mod record')
         patch = ET.SubElement(root, 'Mod', {'id': scoped_mod_id(mod_id, scope)})
         ET.SubElement(patch, 'Name').text = internal_name + scope
         ET.SubElement(patch, 'DisplayName', {'lang': 'en_US'}).text = display_name + ' (' + scope + ' scripts)'
         config = ET.SubElement(patch, 'DataConfiguration')
         scoped_load = ET.SubElement(ET.SubElement(config, 'Dataset', {'base': scope}), 'Load')
-        add_gpl(scoped_load, sources, scope)
+        if scope in scoped_cam_map:
+            if scoped_cam_map[scope] != f'merged_toolbar-{scope}.cam':
+                raise ComposeError('generated toolbar filename does not match its scope')
+            ET.SubElement(scoped_load, 'CAM').text = 'Data\\' + scoped_cam_map[scope]
+        if sources is not None:add_gpl(scoped_load, sources, scope)
     ET.indent(root, space="\t")
     return ET.tostring(root, encoding="utf-8") + b"\n"
 

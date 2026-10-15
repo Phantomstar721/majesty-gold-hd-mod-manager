@@ -265,10 +265,10 @@ public:
         return ReadIdentifier(value, kMaximumCallbackBytes, true);
     }
 
-    bool ReadText(std::string* value) {
+    bool ReadText(std::string* value, std::uint32_t maximum = kMaximumCompletionTextBytes) {
         std::uint32_t length = 0;
         if (!ReadU32(&length) || length == 0 ||
-            length > kMaximumCompletionTextBytes) {
+            length > maximum) {
             return false;
         }
         const unsigned char* source = nullptr;
@@ -471,7 +471,7 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
              registry.sovereignTargetActions.begin();
          item != registry.sovereignTargetActions.end(); ++item) {
         if (panels.find(item->panelKey) == panels.end() ||
-            meters.find(std::make_pair(item->panelKey, item->resourceKey)) == meters.end() ||
+            (!item->sovereignGoldCost && meters.find(std::make_pair(item->panelKey, item->resourceKey)) == meters.end()) ||
             !actions.insert(std::make_pair(item->panelKey, item->actionKey)).second ||
             !globalCommands.insert(item->privateControlId).second ||
             !privateModes.insert(item->privateMode).second ||
@@ -670,6 +670,7 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
 }  // namespace
 
 void Registry::Clear() {
+    toolbarActions.clear();
     privateRecruitments.clear();
     liveAgentLists.clear();
     buildingOpenToggles.clear();
@@ -881,10 +882,10 @@ bool ParseRegistry(
         return Fail(error, "MMCR registry magic is invalid");
     }
     std::uint32_t version = 0;
-    std::uint32_t counts[13] = {};
+    std::uint32_t counts[14] = {};
     if (!reader.ReadU32(&version)) return Fail(error, "MMCR header is truncated");
     if (version < 2 || version > kRegistryVersion) return Fail(error, "MMCR version is unsupported");
-    const std::size_t countSize = version >= 17 ? 13u : version >= 5 ? 12u : version == 4 ? 11u : version == 3 ? 10u : 9u;
+    const std::size_t countSize = version >= 25 ? 14u : version >= 17 ? 13u : version >= 5 ? 12u : version == 4 ? 11u : version == 3 ? 10u : 9u;
     for (std::size_t index = 0; index < countSize; ++index) {
         if (!reader.ReadU32(&counts[index])) return Fail(error, "MMCR header is truncated");
     }
@@ -904,7 +905,7 @@ bool ParseRegistry(
     if (version >= 17 && version < 19 && counts[12] == 0)
         return Fail(error, "MMCR v17 without private recruitment is noncanonical");
     std::uint64_t total = 0;
-    for (std::size_t index = 0; index < 13; ++index) total += counts[index];
+    for (std::size_t index = 0; index < countSize; ++index) total += counts[index];
     if (total > kMaximumRecordCount ||
         static_cast<std::uint64_t>(counts[0]) + counts[7] + counts[9] + counts[11] > kMaximumPanelCount) {
         return Fail(error, "MMCR record count is outside supported bounds");
@@ -1101,8 +1102,10 @@ bool ParseRegistry(
     }
     for (std::uint32_t index = 0; index < counts[6]; ++index) {
         SovereignTargetActionRecord item = {};
+        std::uint32_t paid = 0;
         if (!reader.ReadLogical(&item.panelKey) ||
             !reader.ReadLogical(&item.actionKey) ||
+            (version >= 22 && (!reader.ReadU32(&paid) || paid > (version >= 24 ? 2u : 1u))) ||
             !reader.ReadU32(&item.visualControlId) ||
             !reader.ReadU32(&item.privateControlId) ||
             !reader.ReadU32(&item.visualTemplateControlId) ||
@@ -1113,39 +1116,42 @@ bool ParseRegistry(
             !reader.ReadU32(&item.privateUnitId) ||
             !reader.ReadU32(&item.cursorOrdinal) ||
             !reader.ReadU32(&item.requiredLevel) ||
-            !reader.ReadLogical(&item.resourceKey) ||
-            !reader.ReadU32(&item.resourceCost) ||
+            (paid ? !reader.ReadU32(&item.sovereignGoldCost) :
+                (!reader.ReadLogical(&item.resourceKey) || !reader.ReadU32(&item.resourceCost))) ||
             !reader.ReadU32(&item.iconControlId) ||
             !reader.ReadU32(&item.priceControlId)) {
             return Fail(error, "MMCR sovereign action is truncated or invalid");
-        }
-        const std::uint32_t ids[] = {
-            item.visualControlId, item.privateControlId,
-            item.iconControlId, item.priceControlId};
-        if (item.visualTemplateControlId != kProvenSovereignVisualTemplate ||
-            item.targetTemplateControlId != kProvenSovereignTargetTemplate ||
-            !IsPrintableFourCC(item.stockTargetMode) ||
-            !IsPrintableFourCC(item.stockExecutorMode) ||
-            !IsPrintableFourCC(item.privateMode) ||
-            !IsPrintableFourCC(item.privateUnitId) ||
-            item.stockTargetMode != kProvenSovereignTargetMode ||
-            item.stockExecutorMode != kProvenSovereignExecutorMode ||
-            HasFourCCPrefix(item.privateMode, 'S', 'p') ||
-            item.privateMode == item.stockTargetMode || item.cursorOrdinal > 255 ||
-            item.requiredLevel != kProvenSovereignTargetLevel ||
-            !IsPositiveGameValue(item.resourceCost) ||
-            !ControlsAreDistinct(ids) ||
-            (!parsed.sovereignTargetActions.empty() &&
-             std::tie(parsed.sovereignTargetActions.back().panelKey,
-                      parsed.sovereignTargetActions.back().actionKey) >=
-             std::tie(item.panelKey, item.actionKey))) {
-            return Fail(error, "MMCR sovereign action is invalid or noncanonical");
         }
         if (version >= 20) {
             std::uint32_t hasCallback = 0;
             if (!reader.ReadU32(&hasCallback) || hasCallback > 1 ||
                 (hasCallback && !reader.ReadSymbol(&item.sourceTargetCallback)))
                 return Fail(error, "MMCR source-target callback is invalid");
+        }
+        if (paid == 2 && (!reader.ReadU32(&item.attackBountyAmount) ||
+            !IsPositiveGameValue(item.attackBountyAmount) || item.attackBountyAmount > item.sovereignGoldCost))
+            return Fail(error, "MMCR attack bounty amount is outside the total price");
+        const std::uint32_t ids[] = {
+            item.visualControlId, item.privateControlId,
+            item.iconControlId, item.priceControlId};
+        if (item.visualTemplateControlId != kProvenSovereignVisualTemplate ||
+            item.targetTemplateControlId != (paid ? 0x1138u : kProvenSovereignTargetTemplate) ||
+            !IsPrintableFourCC(item.stockTargetMode) ||
+            !IsPrintableFourCC(item.stockExecutorMode) ||
+            !IsPrintableFourCC(item.privateMode) ||
+            !IsPrintableFourCC(item.privateUnitId) ||
+            item.stockTargetMode != (paid ? 0x39327053u : kProvenSovereignTargetMode) ||
+            item.stockExecutorMode != kProvenSovereignExecutorMode ||
+            HasFourCCPrefix(item.privateMode, 'S', 'p') ||
+            item.privateMode == item.stockTargetMode || item.cursorOrdinal > 255 ||
+            item.requiredLevel != (paid ? 2u : kProvenSovereignTargetLevel) ||
+            (paid ? (!IsPositiveGameValue(item.sovereignGoldCost) || item.sourceTargetCallback.empty()) : !IsPositiveGameValue(item.resourceCost)) ||
+            !ControlsAreDistinct(ids) ||
+            (!parsed.sovereignTargetActions.empty() &&
+             std::tie(parsed.sovereignTargetActions.back().panelKey,
+                      parsed.sovereignTargetActions.back().actionKey) >=
+             std::tie(item.panelKey, item.actionKey))) {
+            return Fail(error, "MMCR sovereign action is invalid or noncanonical");
         }
         parsed.sovereignTargetActions.push_back(std::move(item));
     }
@@ -1313,7 +1319,7 @@ bool ParseRegistry(
             (version >= 16 && !reader.ReadU32(&dataRecordRows)) ||
             dataRecordRows > 1 ||
             stayOnPanelAfterAction > 1 || focusSelectedRowOnClick > 1 ||
-            actionUsesParent > 1 ||
+            actionUsesParent > (version >= 23 ? 2u : 1u) ||
             !IsPrintableFourCC(item.parentDialogId) ||
             !IsPrintableFourCC(item.childDialogId) || item.openCommandId == 0 ||
             !MajestyStockBuildingControllers::IsSupported(
@@ -1321,8 +1327,28 @@ bool ParseRegistry(
             return Fail(error, "MMCR live-agent-list record is invalid");
         item.stayOnPanelAfterAction = stayOnPanelAfterAction != 0;
         item.focusSelectedRowOnClick = focusSelectedRowOnClick != 0;
-        item.actionUsesParent = actionUsesParent != 0;
+        item.actionUsesParent = actionUsesParent == 1;
+        item.actionUsesPair = actionUsesParent == 2;
         item.dataRecordRows = dataRecordRows != 0;
+        if (version >= 23) {
+            std::uint32_t hasAdmission = 0, gateCount = 0;
+            if (!reader.ReadU32(&hasAdmission) || hasAdmission > 1)
+                return Fail(error, "MMCR employment admission marker is invalid");
+            if (hasAdmission) {
+                if (!item.actionUsesPair || !reader.ReadSymbol(&item.admissionCallbackSymbol) ||
+                    !reader.ReadU32(&gateCount) || gateCount == 0 || gateCount > 16)
+                    return Fail(error, "MMCR employment admission is invalid");
+                for (std::uint32_t i = 0; i < gateCount; ++i) {
+                    std::uint32_t id = 0;
+                    if (!reader.ReadU32(&id) || id == 0 || id > 65535 || id == item.openCommandId ||
+                        id == 0x1F47 || id == 0x1F4D || id == 0x1F40 || id == 0x1F41 ||
+                        id == 0x1388 || id == 0x138B ||
+                        (!item.gatedControlIds.empty() && id <= item.gatedControlIds.back()))
+                        return Fail(error, "MMCR employment primary gate is invalid");
+                    item.gatedControlIds.push_back(id);
+                }
+            }
+        }
         if (item.dataRecordRows && (!item.actionUsesParent || item.focusSelectedRowOnClick ||
             !item.stayOnPanelAfterAction ||
             (!item.hasRowVariants && item.rowTitleIntentId == 0) ||
@@ -1350,6 +1376,29 @@ bool ParseRegistry(
             return Fail(error, "MMCR private recruitment record is invalid or noncanonical");
         parsed.privateRecruitments.push_back(std::move(item));
     }
+    for(std::uint32_t index=0; index<counts[13]; ++index) {
+        ToolbarActionRecord item{};
+        if(!reader.ReadLogical(&item.panelKey)||!reader.ReadLogical(&item.actionKey)||
+           !reader.ReadU32(&item.requiredLevel)||!reader.ReadU32(&item.iconId)||
+           !reader.ReadU32(&item.iconSet)||!reader.ReadText(&item.hoverText,1024)||
+           item.requiredLevel<1||item.requiredLevel>3||!IsPrintableFourCC(item.iconId)||item.iconSet>65535)
+            return Fail(error,"MMCR compact toolbar record is invalid");
+        const SovereignTargetActionRecord* action=nullptr;
+        for(const auto& candidate:parsed.sovereignTargetActions)
+            if(candidate.panelKey==item.panelKey&&candidate.actionKey==item.actionKey)action=&candidate;
+        if(!action||!action->sovereignGoldCost||item.requiredLevel<action->requiredLevel||
+           (!parsed.toolbarActions.empty()&&std::tie(parsed.toolbarActions.back().panelKey,parsed.toolbarActions.back().actionKey)>=
+                                                std::tie(item.panelKey,item.actionKey)))
+            return Fail(error,"MMCR compact toolbar action reference is invalid");
+        parsed.toolbarActions.push_back(std::move(item));
+    }
+    if(version==25&&parsed.toolbarActions.empty())return Fail(error,"MMCR v25 requires compact toolbar actions");
+    if (version == 23 && std::none_of(parsed.liveAgentLists.begin(), parsed.liveAgentLists.end(),
+        [](const LiveAgentListRecord& item) { return item.actionUsesPair; }))
+        return Fail(error, "MMCR v23 without paired list actions is noncanonical");
+    if (version == 22 && std::none_of(parsed.sovereignTargetActions.begin(), parsed.sovereignTargetActions.end(),
+            [](const SovereignTargetActionRecord& item) { return item.sovereignGoldCost != 0; }))
+        return Fail(error, "MMCR v22 without paid source-target actions is noncanonical");
     if (version == 21 && std::none_of(parsed.buildingOpenToggles.begin(), parsed.buildingOpenToggles.end(),
             [](const BuildingOpenToggleRecord& item) { return item.panelDialogId != 0; }))
         return Fail(error, "MMCR v21 requires a recruitment-child toggle");

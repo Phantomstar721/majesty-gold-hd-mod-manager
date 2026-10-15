@@ -23,6 +23,7 @@ import tempfile
 from typing import Iterable, Mapping, Optional, Tuple, Type
 
 from .stock_building_controllers import is_stock_building_controller
+from .compact_sovereign_toolbar import ToolbarAction
 from .action_callback_bridge import bridge_symbol
 from .stock_controller_features import (
     MAX_CONTROLLER_FEATURES,
@@ -48,6 +49,8 @@ from .stock_controller_features import (
     StockAp24RageCommandAction,
     StockAp24TimedRageAction,
     StockAp69SovereignTargetAction,
+    StockAp69PaidSourceTargetAction,
+    StockAp69AttackBountyAction,
     StockAp69SourceTargetAction,
     StockAp99ResearchRow,
     UpgradeRequirement,
@@ -56,7 +59,7 @@ from .stock_controller_features import (
 
 
 CONTROLLER_REGISTRY_MAGIC = b"MMCR"
-CONTROLLER_REGISTRY_VERSION = 21
+CONTROLLER_REGISTRY_VERSION = 25
 STOCK_CONTROLLER_RUNTIME_CAPABILITY = "stock.controller-recipes.v1"
 CONTROLLER_REGISTRY_ENVIRONMENT = "MAJESTY_MOD_MANAGER_CONTROLLERS"
 CONTROLLER_REGISTRY_RELATIVE_PATH = Path(
@@ -69,6 +72,7 @@ _OCCUPANT_HEADER = struct.Struct("<4s11I")
 _TOGGLE_HEADER = struct.Struct("<4s12I")
 _LIST_HEADER = struct.Struct("<4s13I")
 _RECRUITMENT_HEADER = struct.Struct("<4s14I")
+_TOOLBAR_HEADER = struct.Struct("<4s15I")
 _U32 = struct.Struct("<I")
 _SECTIONS: Tuple[Type[ControllerFeature], ...] = (
     StockAp10Ap69SecondaryPanel,
@@ -84,6 +88,7 @@ _SECTIONS: Tuple[Type[ControllerFeature], ...] = (
     StockMx22BuildingOpenToggle,
     StockMx05LiveAgentListPanel,
     StockAp52PrivateRecruitment,
+    ToolbarAction,
 )
 
 
@@ -180,6 +185,9 @@ class ResolvedLiveAgentListRecord:
     focus_selected_row_on_click: bool = True
     action_uses_parent: bool = False
     data_record_rows: bool = False
+    action_uses_pair: bool = False
+    admission_callback_symbol: Optional[str] = None
+    gated_control_ids: Tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -221,6 +229,7 @@ class ResolvedControllerRegistry:
     building_open_toggles: Tuple[ResolvedBuildingOpenToggleRecord, ...] = ()
     live_agent_lists: Tuple[ResolvedLiveAgentListRecord, ...] = ()
     private_recruitments: Tuple[ResolvedPrivateRecruitmentRecord, ...] = ()
+    toolbar_actions: Tuple[ToolbarAction, ...] = ()
 
     @property
     def child_panels(self):
@@ -369,6 +378,9 @@ def resolve_stock_controller_registry(
                 item.focus_selected_row_on_click,
                 item.action_agent_scope == "parent",
                 isinstance(item, StockMx05DataRecordListPanel),
+                item.action_agent_scope == "parent-and-selected-row",
+                getattr(item, "admission_callback_symbol", None),
+                tuple(sorted(getattr(item, "gated_control_ids", ()))),
             ))
         else:
             reward_panels.append(ResolvedRewardPanelRecord(
@@ -455,6 +467,7 @@ def resolve_stock_controller_registry(
         building_open_toggles=tuple(toggles),
         live_agent_lists=tuple(live_agent_lists),
         private_recruitments=recruitments,
+        toolbar_actions=tuple(item for item in features if isinstance(item, ToolbarAction)),
     ))
 
 
@@ -569,8 +582,17 @@ def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> by
     if any(item.data_record_rows for item in registry.live_agent_lists):
         version = 16
     source_target = any(isinstance(item, StockAp69SourceTargetAction) for item in registry.sovereign_target_actions)
-    if source_target or any(item.state_attribute for item in registry.building_open_toggles):
-        version = (21 if any(item.panel_dialog_id for item in registry.building_open_toggles)
+    paired = any(item.action_uses_pair for item in registry.live_agent_lists)
+    if registry.toolbar_actions:
+        version = 25
+        sections += (registry.occupant_action_panels, registry.building_open_toggles,
+                     registry.live_agent_lists, registry.private_recruitments, registry.toolbar_actions)
+        writer.data += _TOOLBAR_HEADER.pack(
+            CONTROLLER_REGISTRY_MAGIC, version, *(len(section) for section in sections))
+    elif paired or source_target or any(item.state_attribute for item in registry.building_open_toggles):
+        version = (24 if any(isinstance(item, StockAp69AttackBountyAction) for item in registry.sovereign_target_actions)
+                   else 23 if paired else 22 if any(isinstance(item, StockAp69PaidSourceTargetAction) for item in registry.sovereign_target_actions)
+                   else 21 if any(item.panel_dialog_id for item in registry.building_open_toggles)
                    else 20 if source_target else 19)
         sections += (registry.occupant_action_panels, registry.building_open_toggles,
                      registry.live_agent_lists, registry.private_recruitments)
@@ -667,7 +689,13 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
             "MMCR v13 live-agent lists lack the row-focus policy; "
             "rebuild with the current Manager"
         )
-    if version in (17, 18, 19, 20, 21):
+    if version == 25:
+        if len(payload) < _TOOLBAR_HEADER.size:
+            raise ControllerRegistryError("MMCR v25 header is truncated")
+        magic, version, *counts = _TOOLBAR_HEADER.unpack_from(payload)
+        if not counts[13]:
+            raise ControllerRegistryError("MMCR v25 requires toolbar actions")
+    elif version in (17, 18, 19, 20, 21, 22, 23, 24):
         if len(payload) < _RECRUITMENT_HEADER.size:
             raise ControllerRegistryError(f"MMCR v{version} header is truncated")
         magic, version, *counts = _RECRUITMENT_HEADER.unpack_from(payload)
@@ -703,7 +731,9 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
         raise ControllerRegistryError("MMCR panel count is outside bounds")
 
     reader = _Reader(payload)
-    if version in (17, 18, 19, 20, 21):
+    if version == 25:
+        reader.cursor = _TOOLBAR_HEADER.size
+    elif version in (17, 18, 19, 20, 21, 22, 23, 24):
         reader.cursor = _RECRUITMENT_HEADER.size
     elif version in (14, 15, 16):
         reader.cursor = _LIST_HEADER.size
@@ -768,7 +798,13 @@ def _encode_feature(writer: _Writer, feature: object, version: int) -> None:
         if isinstance(feature, ResolvedBuildingOpenToggleRecord)
         else feature.panel_key
     )
-    if isinstance(feature, ResolvedSecondaryPanelRecord):
+    if isinstance(feature, ToolbarAction):
+        writer.logical(feature.action_key)
+        writer.u32(feature.required_level)
+        writer.fourcc(feature.icon_id)
+        writer.u32(feature.icon_set)
+        writer.text(feature.hover_text)
+    elif isinstance(feature, ResolvedSecondaryPanelRecord):
         writer.u32(feature.parent_dialog_id)
         writer.u32(feature.child_dialog_id)
         writer.family(feature.building_family_id)
@@ -835,6 +871,9 @@ def _encode_feature(writer: _Writer, feature: object, version: int) -> None:
         writer.u32(feature.price_control_id)
     elif isinstance(feature, StockAp69SovereignTargetAction):
         writer.logical(feature.action_key)
+        paid = isinstance(feature, StockAp69PaidSourceTargetAction)
+        if version >= 22:
+            writer.u32(2 if isinstance(feature, StockAp69AttackBountyAction) else int(paid))
         writer.u32(feature.visual_control_id)
         writer.u32(feature.private_control_id)
         writer.u32(feature.visual_template_control_id)
@@ -845,14 +884,19 @@ def _encode_feature(writer: _Writer, feature: object, version: int) -> None:
         writer.fourcc(feature.private_unit_id)
         writer.u32(feature.cursor_ordinal)
         writer.u32(feature.required_level)
-        writer.logical(feature.resource_key)
-        writer.u32(feature.resource_cost)
+        if paid:
+            writer.u32(feature.sovereign_gold_cost)
+        else:
+            writer.logical(feature.resource_key)
+            writer.u32(feature.resource_cost)
         writer.u32(feature.icon_control_id)
         writer.u32(feature.price_control_id)
         if version >= 20:
             writer.u32(int(isinstance(feature, StockAp69SourceTargetAction)))
             if isinstance(feature, StockAp69SourceTargetAction):
                 writer.symbol(feature.callback_symbol)
+        if isinstance(feature, StockAp69AttackBountyAction):
+            writer.u32(feature.bounty_amount)
     elif isinstance(feature, ResolvedRewardPanelRecord):
         writer.u32(feature.parent_dialog_id)
         writer.u32(feature.child_dialog_id)
@@ -913,9 +957,16 @@ def _encode_feature(writer: _Writer, feature: object, version: int) -> None:
         writer.u32(1 if feature.stay_on_panel_after_action else 0)
         writer.u32(1 if feature.focus_selected_row_on_click else 0)
         if version >= 15:
-            writer.u32(1 if feature.action_uses_parent else 0)
+            writer.u32(2 if feature.action_uses_pair else 1 if feature.action_uses_parent else 0)
         if version >= 16:
             writer.u32(1 if feature.data_record_rows else 0)
+        if version >= 23:
+            writer.u32(1 if feature.admission_callback_symbol else 0)
+            if feature.admission_callback_symbol:
+                writer.symbol(feature.admission_callback_symbol)
+                writer.u32(len(feature.gated_control_ids))
+                for control in feature.gated_control_ids:
+                    writer.u32(control)
     elif isinstance(feature, ResolvedHostileMonsterFlagRecord):
         writer.logical(feature.action_key)
         writer.fourcc(feature.private_mode)
@@ -936,6 +987,10 @@ def _decode_feature(
     version: int,
 ) -> object:
     panel = reader.logical("panel_key")
+    if kind is ToolbarAction:
+        return ToolbarAction(panel, reader.logical("action_key"), reader.u32("required_level"),
+                             reader.fourcc("icon_id"), reader.u32("icon_set"),
+                             reader._string("hover_text", 1024, "cp1252"))
     if kind is StockAp52PrivateRecruitment:
         return ResolvedPrivateRecruitmentRecord(
             panel, reader.u32("parent_dialog_id"), reader.u32("third_price_control_id"),
@@ -1024,21 +1079,33 @@ def _decode_feature(
             reader.u32("live-agent-list action-agent scope")
             if version >= 15 else 0
         )
-        if action_uses_parent not in (0, 1):
+        if action_uses_parent not in ((0, 1, 2) if version >= 23 else (0, 1)):
             raise ControllerRegistryError(
                 "MMCR live-agent-list action-agent scope is invalid"
             )
         data_record_rows = reader.u32("data-record row policy") if version >= 16 else 0
         if data_record_rows not in (0, 1):
             raise ControllerRegistryError("MMCR data-record row policy is invalid")
+        admission = reader.u32("employment gate") if version >= 23 else 0
+        if admission not in (0, 1):
+            raise ControllerRegistryError("MMCR employment gate marker is invalid")
+        admission_symbol, gated = None, ()
+        if admission:
+            admission_symbol = reader.symbol("employment admission callback")
+            gate_count = reader.u32("employment gate count")
+            if not 1 <= gate_count <= 16:
+                raise ControllerRegistryError("MMCR employment gate count is invalid")
+            gated = tuple(reader.u32("employment gated control") for _ in range(gate_count))
         return ResolvedLiveAgentListRecord(
             panel, parent, child, opened, action_command,
             row_count, row_agent, revision, title_id, text_id,
             variant_callback, variants,
             value_callback, value_suffix_id,
             action_cost, action, parent_controller_base, bool(stay_on_panel),
-            bool(focus_selected_row), bool(action_uses_parent),
+            bool(focus_selected_row), action_uses_parent == 1,
             bool(data_record_rows),
+            action_uses_parent == 2,
+            admission_symbol, gated,
         )
     if kind is StockAp10Ap69SecondaryPanel:
         return ResolvedSecondaryPanelRecord(
@@ -1091,10 +1158,27 @@ def _decode_feature(
         )
     if kind is StockAp69SovereignTargetAction:
         action = reader.logical("action_key")
+        paid = reader.u32("paid source-target marker") if version >= 22 else 0
+        if paid not in ((0, 1, 2) if version >= 24 else (0, 1)):
+            raise ControllerRegistryError("invalid paid source-target marker")
         controls = [reader.u32("sovereign control field") for _ in range(4)]
         modes = [reader.fourcc("sovereign FourCC field") for _ in range(4)]
         cursor = reader.u32("cursor_ordinal")
         level = reader.u32("required_level")
+        if paid:
+            gold = reader.u32("sovereign_gold_cost")
+            icon, price = reader.u32("icon_control_id"), reader.u32("price_control_id")
+            if reader.u32("source_target_callback") != 1:
+                raise ControllerRegistryError("paid source-target callback required")
+            callback = reader.symbol("callback_symbol")
+            if paid == 2:
+                return StockAp69AttackBountyAction(
+                    panel, action, *controls, *modes, cursor, level, icon, price,
+                    callback_symbol=callback, sovereign_gold_cost=gold,
+                    bounty_amount=reader.u32("bounty_amount"))
+            return StockAp69PaidSourceTargetAction(
+                panel, action, *controls, *modes, cursor, level, icon, price,
+                callback_symbol=callback, sovereign_gold_cost=gold)
         resource = reader.logical("resource_key")
         record = StockAp69SovereignTargetAction(
             panel, action, *controls, *modes, cursor, level, resource,
@@ -1147,6 +1231,7 @@ def _validate_resolved_registry(
         registry.building_open_toggles,
         registry.live_agent_lists,
         registry.private_recruitments,
+        registry.toolbar_actions,
     )
     if any(not isinstance(section, tuple) for section in sections):
         raise ControllerRegistryError("MMCR resolved registry sections must be tuples")
@@ -1279,6 +1364,18 @@ def _validate_resolved_registry(
             raise ControllerRegistryError(
                 "MMCR live-agent-list action-agent scope is invalid"
             )
+        if type(item.action_uses_pair) is not bool or (item.action_uses_pair and item.action_uses_parent):
+            raise ControllerRegistryError("MMCR live-agent-list paired action scope is invalid")
+        if item.admission_callback_symbol is not None:
+            _gpl_runtime_symbol(item.admission_callback_symbol, "employment admission callback")
+            if (not item.action_uses_pair or not isinstance(item.gated_control_ids, tuple)
+                    or not 1 <= len(item.gated_control_ids) <= 16
+                    or any(type(c) is not int or not 1 <= c <= 65535 for c in item.gated_control_ids)
+                    or tuple(sorted(set(item.gated_control_ids))) != item.gated_control_ids
+                    or set(item.gated_control_ids) & {item.open_command_id, 0x1F47, 0x1F4D, 0x1F40, 0x1F41, 0x1388, 0x138B}):
+                raise ControllerRegistryError("MMCR employment primary gates are invalid")
+        elif item.gated_control_ids:
+            raise ControllerRegistryError("MMCR employment gates require their admission callback")
         if type(item.data_record_rows) is not bool:
             raise ControllerRegistryError("MMCR data-record row policy is invalid")
         optional_text_ids = (
@@ -1345,7 +1442,7 @@ def _validate_resolved_registry(
             ),
             item.stay_on_panel_after_action,
             item.focus_selected_row_on_click,
-            "parent" if item.action_uses_parent else "selected-row",
+            "parent-and-selected-row" if item.action_uses_pair else "parent" if item.action_uses_parent else "selected-row",
         ))
     toggle_by_key = {}
     toggle_commands = set()
@@ -1458,6 +1555,7 @@ def _validate_resolved_registry(
             item.private_flag_id, item.cursor_ordinal,
             item.availability_attribute_id, item.unavailable_alert_text,
         ))
+    author_features.extend(registry.toolbar_actions)
     normalized = normalize_controller_features(author_features)
     parent_ids = {item.parent_dialog_id for item in (
         *registry.panels, *registry.reward_panels, *registry.occupant_action_panels,
@@ -1509,6 +1607,7 @@ def _validate_resolved_registry(
             if isinstance(item, StockMx05LiveAgentListPanel)
         ),
         private_recruitments=tuple(recruitment_by_key[key] for key in sorted(recruitment_by_key)),
+        toolbar_actions=tuple(item for item in normalized if isinstance(item, ToolbarAction)),
     )
 
 
