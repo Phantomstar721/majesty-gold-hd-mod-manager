@@ -177,9 +177,11 @@ __declspec(naked) void HeroPassivesHook() {
         jmp dword ptr [g_heroPassiveResume]
     }
 }
+#include "InventoryItemDisplay.inl"
+
 bool InstallHeroInfo() {
     // Run before the legacy enchantment adapter changes the audited switch.
-    if (!ValidateHeroInfoProfile()) return false;
+    if (!ValidateHeroInfoProfile() || !ValidateInventoryItemDisplay()) return false;
     g_heroAppend = reinterpret_cast<HeroAppend>(g_imageBase+ParityRva(ParitySite::HeroAppend));
     g_heroImageCtor = reinterpret_cast<HeroImageLife>(g_imageBase+ParityRva(ParitySite::ImageCtor));
     g_heroImageDtor = reinterpret_cast<HeroImageLife>(g_imageBase+ParityRva(ParitySite::ImageDtor));
@@ -191,7 +193,7 @@ bool InstallHeroInfo() {
     g_heroSelected = reinterpret_cast<HeroSelected>(g_imageBase+ParityRva(ParitySite::HeroSelected));
     g_heroPassiveResume = g_imageBase+ParityRva(ParitySite::HeroLearned)+0x483;
     // A failed install stops before Majesty resumes; never continue partially.
-    return WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x216, reinterpret_cast<void*>(&HeroSpellAppendHook), 0xE8) &&
+    return InstallInventoryItemDisplay() && WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x216, reinterpret_cast<void*>(&HeroSpellAppendHook), 0xE8) &&
         WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x24B, reinterpret_cast<void*>(&HeroSpellImage), 0xE8) &&
         WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x28D, reinterpret_cast<void*>(&HeroSpellFinishHook), 0xE8) &&
         WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x47C, reinterpret_cast<void*>(&HeroPassivesHook), 0xE9, 7) &&

@@ -454,7 +454,7 @@ def encode_runtime_feature_registry(
     chunks = [
         _HEADER.pack(
             _MAGIC,
-            9 if registry.hidden_inventory_actions else 8 if registry.movement_scales else 7 if registry.hero_info_rows else 6 if visual_research else 5 if registry.kingdom_research else 4 if registry.equipment else 3 if registry.native_timing is not None else
+            12 if any(r.kind == "inventory" for r in registry.hero_info_rows) else 9 if registry.hidden_inventory_actions else 8 if registry.movement_scales else 7 if registry.hero_info_rows else 6 if visual_research else 5 if registry.kingdom_research else 4 if registry.equipment else 3 if registry.native_timing is not None else
             2 if registry.map_fog_query or registry.movement_query else _VERSION,
             len(registry.name_generators),
             len(registry.enchantment_rows),
@@ -515,7 +515,7 @@ def encode_runtime_feature_registry(
         for row in registry.hero_info_rows:
             key, label, tooltip = row.feature_key.encode("ascii"), _display_text_bytes(row.display_text), _display_text_bytes(row.tooltip_text)
             chunks.append(struct.pack("<8I", HERO_INFO_KINDS.index(row.kind) + 1,
-                _fourcc_u32(row.subject_id), row.unlock_level, _fourcc_u32(row.image_id),
+                int(row.subject_id) if row.kind == "inventory" else _fourcc_u32(row.subject_id), row.unlock_level, _fourcc_u32(row.image_id),
                 row.image_set, len(key), len(label), len(tooltip)))
             chunks.extend((key, label, tooltip))
     if registry.movement_scales:
@@ -545,7 +545,7 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
     magic, version, name_count, row_count = _HEADER.unpack_from(payload)
     if magic != _MAGIC:
         raise ValueError("runtime feature registry magic is invalid")
-    if version not in (1, 2, 3, 4, 5, 6, 7, 8, 9):
+    if version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 12):
         raise ValueError(f"unsupported runtime feature registry version: {version}")
     if name_count > _MAX_NAME_GENERATORS:
         raise ValueError(
@@ -562,10 +562,10 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
     if len(payload) < header_size:
         raise ValueError("runtime feature registry flags are truncated")
     flags = struct.unpack_from("<I", payload, _HEADER.size)[0] if version >= 2 else 0
-    if (flags & ~(255 if version == 9 else 127 if version == 8 else 63 if version == 7 else 31 if version >= 5 else 15 if version == 4 else 7 if version == 3 else 3)
+    if (flags & ~(255 if version >= 9 else 127 if version == 8 else 63 if version == 7 else 31 if version >= 5 else 15 if version == 4 else 7 if version == 3 else 3)
             or (version == 3 and not flags & 4) or (version == 4 and not flags & 8)
             or (version in (5, 6) and not flags & 16) or (version == 7 and not flags & 32)
-            or (version == 8 and not flags & 64) or (version == 9 and not flags & 128)):
+            or (version == 12 and not flags & 32) or (version == 8 and not flags & 64) or (version == 9 and not flags & 128)):
         raise ValueError("runtime feature registry has unsupported flags")
     minimum_size = (
         header_size
@@ -715,17 +715,19 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
                 raise ValueError("hero information record is truncated")
             kind, subject, level, image, image_set, nk, nl, nt = struct.unpack_from("<8I", payload, offset)
             offset += 32
-            if not (1 <= kind <= 3 and 1 <= nk <= 64 and 1 <= nl <= 512 and 1 <= nt <= 512) or offset + nk + nl + nt > len(payload):
+            if not ((1 <= kind <= 3 or version == 12 and kind == 5) and 1 <= nk <= 64 and 1 <= nl <= 512 and 1 <= nt <= 512) or offset + nk + nl + nt > len(payload):
                 raise ValueError("hero information fields are invalid or truncated")
             key = payload[offset:offset+nk].decode("ascii")
             label = payload[offset+nk:offset+nk+nl].decode("cp1252")
             tooltip = payload[offset+nk+nl:offset+nk+nl+nt].decode("cp1252")
             offset += nk + nl + nt
-            row = HeroInfoRow(key, HERO_INFO_KINDS[kind-1], _u32_fourcc(subject), level,
+            row = HeroInfoRow(key, HERO_INFO_KINDS[kind-1], str(subject) if kind == 5 else _u32_fourcc(subject), level,
                               label, tooltip, _u32_fourcc(image), image_set)
             if info and row.sort_key <= info[-1].sort_key:
                 raise ValueError("hero information rows must be sorted and unique")
             info.append(row)
+    if version == 12 and not any(row.kind == "inventory" for row in info):
+        raise ValueError("MMFR12 requires an inventory display row")
     scales = []
     if flags & 64:
         if offset + 4 > len(payload):

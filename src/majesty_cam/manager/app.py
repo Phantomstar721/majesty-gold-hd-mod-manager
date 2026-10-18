@@ -25,6 +25,7 @@ from .preflight import PreparedMergeMod
 from .shortcuts import ShortcutError, create_manager_desktop_shortcut
 from .workshop import open_workshop_item
 from ..script_review import ScriptReviewCancelled
+from ..version import MANAGER_VERSION
 
 
 try:  # Keep non-GUI merger imports usable without the optional Qt runtime.
@@ -1236,7 +1237,7 @@ if _PYSIDE_IMPORT_ERROR is None:
             except Exception as exc:
                 self.brand_assets = BrandAssets(None, None, None, (str(exc),))
 
-            self.setWindowTitle(APP_NAME)
+            self.setWindowTitle(f"{APP_NAME} — Manager {MANAGER_VERSION}")
             self.setMinimumSize(980, 640)
             self.resize(1180, 760)
             self.setObjectName("managerWindow")
@@ -1288,6 +1289,11 @@ if _PYSIDE_IMPORT_ERROR is None:
             tagline = QLabel("Choose your adventures, mods, and game helpers")
             tagline.setObjectName("tagline")
             titles.addWidget(tagline)
+            self.manager_version = QLabel(f"Manager version: {MANAGER_VERSION}")
+            self.manager_version.setObjectName("managerVersion")
+            self.manager_version.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.manager_version.setToolTip("Version of this Mod Manager application, not MajestyHD.exe.")
+            titles.addWidget(self.manager_version)
             header_layout.addLayout(titles)
             header_layout.setAlignment(
                 titles, Qt.AlignmentFlag.AlignTop
@@ -1300,7 +1306,7 @@ if _PYSIDE_IMPORT_ERROR is None:
 
             game_version = QVBoxLayout()
             game_version.setSpacing(3)
-            version_label = QLabel("GAME VERSION")
+            version_label = QLabel("GAME EXE VERSION")
             version_label.setObjectName("microLabel")
             version_label.setAlignment(header_label_alignment)
             version_label.setFixedHeight(14)
@@ -2221,7 +2227,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                         f"{label}  ·  {version}" if version else label,
                         "ready",
                     )
-                    tooltip = f"Detected Majesty version {version}" if version else text
+                    tooltip = f"Game executable version: {version}\n{self.controller.paths.game_path / 'MajestyHD.exe'}" if version else text
             else:
                 text, state = "Majesty Gold HD", "pending"
                 tooltip = "Game version details will appear after the version check."

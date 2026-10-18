@@ -623,7 +623,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 display_text=display_text,
             )
             feature_key = (feature_type, overlay_id.casefold())
-        elif feature_type == HERO_INFO_TYPE:
+        elif feature_type in (HERO_INFO_TYPE, "stock.inventory-item-display.v1"):
             try:
                 feature = parse_hero_info(raw_feature)
             except ValueError as exc:

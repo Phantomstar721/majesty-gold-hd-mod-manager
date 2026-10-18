@@ -32,6 +32,7 @@ DEVELOPMENT = (
     "test_dawnfall_action_profiles", "test_cosmetic_action_profiles",
 )
 RELEASE = (
+    "test_inventory_display",
     "test_standard_review",
     "test_sound_review",
     "test_release_scope", "test_description_review", "test_sparse_art_ids",

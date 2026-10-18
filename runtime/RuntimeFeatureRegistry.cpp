@@ -153,16 +153,16 @@ bool ParseRegistry(
         SetError(error, "runtime feature registry header is truncated");
         return false;
     }
-    if (version < kRegistryVersion || version > 9) {
+    if (version < kRegistryVersion || (version > 9 && version != 12)) {
         SetError(error, "runtime feature registry schema version is unsupported");
         return false;
     }
     std::uint32_t flags = 0;
     if (version >= 2 && (!ReadU32(bytes, size, &cursor, &flags) ||
-        (flags & ~(version == 9 ? 255u : version == 8 ? 127u : version == 7 ? 63u : version >= 5 ? 31u : version == 4 ? 15u : version == 3 ? 7u : 3u)) != 0 ||
+        (flags & ~(version >= 9 ? 255u : version == 8 ? 127u : version == 7 ? 63u : version >= 5 ? 31u : version == 4 ? 15u : version == 3 ? 7u : 3u)) != 0 ||
         (version == 3 && !(flags & 4u)) || (version == 4 && !(flags & 8u)) ||
         ((version == 5 || version == 6) && !(flags & 16u)) || (version == 7 && !(flags & 32u)) ||
-        (version == 8 && !(flags & 64u)) || (version == 9 && !(flags & 128u)))) {
+        (version == 12 && !(flags & 32u)) || (version == 8 && !(flags & 64u)) || (version == 9 && !(flags & 128u)))) {
         SetError(error, "runtime feature registry flags are invalid or truncated");
         return false;
     }
@@ -417,7 +417,8 @@ bool ParseRegistry(
                     SetError(error, "hero information row is truncated"); return false;
                 }
             }
-            if (r.kind < 1 || r.kind > 3 || !IsPrintableFourCC(r.subjectId) ||
+            if (!(r.kind >= 1 && r.kind <= 3 || version == 12 && r.kind == 5) ||
+                (r.kind == 5 ? r.subjectId > 127 : !IsPrintableFourCC(r.subjectId)) ||
                 !IsPrintableFourCC(r.imageId) || r.imageId == 0x6E544E49 || r.imageId == 0x33395849 ||
                 r.imageSet > 0xFFFFFF || (r.kind == 3 ? r.unlockLevel < 1 || r.unlockLevel > 1000 : r.unlockLevel != 0) ||
                 !nk || nk > 64 || !nl || nl > 512 || !nt || nt > 512 || size-cursor < nk+nl+nt) {
@@ -450,6 +451,9 @@ bool ParseRegistry(
             }
             info.push_back(std::move(r));
         }
+    }
+    if (version == 12 && std::none_of(info.begin(), info.end(), [](const HeroInfoRecord& r){return r.kind == 5;})) {
+        SetError(error, "MMFR12 requires an inventory display row"); return false;
     }
     std::vector<MovementScaleRecord> scales;
     if (flags & 64u) {

@@ -4331,7 +4331,7 @@ def validate_controller_stock_evidence(
             subject_type = "Action" if row.kind == "spell" else "Unit"
             matches = [kind for (_owner, key), kind in description_kinds.items()
                        if key == (subject_type, row.subject_id)]
-            if matches != ["addition"]:
+            if row.kind != "inventory" and matches != ["addition"]:
                 raise ComposeError(f"hero information {row.subject_id!r} must identify exactly one package-added Description")
             if row.image_id.encode("ascii") in stock_images:
                 raise ComposeError(f"hero information image {row.image_id!r} cannot override a stock IMAG")

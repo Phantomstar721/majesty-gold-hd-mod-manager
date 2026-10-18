@@ -291,6 +291,62 @@ __declspec(naked) void HeroTestFinishEffect(void*, int, void*) {
         ret
     }
 }
+int inventoryMessageCount=0;
+int __fastcall InventoryTestMenuMessage(void*,void*,unsigned control,unsigned message,unsigned row,unsigned data) {
+    assert(control==0x232D);++inventoryMessageCount;
+    return HeroTestMessage(heroExpectedList,nullptr,message,row,reinterpret_cast<const void*>(data));
+}
+int __fastcall InventoryTestMenuAppend(void*,void*,unsigned control,int index,const MajestyStringView* text) {
+    assert(control==0x232D && index==-1);
+    heroLabels.push_back(HeroTestCopyString(text));heroTips.emplace_back();
+    return static_cast<int>(heroLabels.size()-1);
+}
+__declspec(naked) void InventoryTestReturn() { __asm { ret } }
+int InvokeInventoryAppend(void* controller,void* menu,unsigned key,const MajestyStringView* label) {
+    unsigned node[4]={0,0,0,key};auto* pointer=node;int result=-1;
+    auto* append=reinterpret_cast<void*>(&InventoryTestMenuAppend);
+    __asm {
+        push ebx
+        push esi
+        mov ebx,pointer
+        mov esi,controller
+        mov ecx,menu
+        mov eax,append
+        push offset inventoryReturned
+        push label
+        push -1
+        jmp InventoryItemAppendHook
+    inventoryReturned:
+        mov result,eax
+        pop esi
+        pop ebx
+    }
+    assert(node[3]==key);return result;
+}
+void RunInventoryItemRowTests() {
+    std::uintptr_t table[32]={};auto* menu=table;unsigned controller[10]={};
+    controller[9]=reinterpret_cast<unsigned>(&menu);
+    g_inventoryItemResume=reinterpret_cast<std::uintptr_t>(&InventoryTestReturn);
+    MajestyBuildProfile profile=*g_buildProfile;const auto* saved=g_buildProfile;
+    g_runtimeFeatureRegistry.heroInfoRows={{5,114,0,0x31304944,1019,"dose","Private dose","Use this dose"}};
+    auto original=HeroInfoString("Stock text");
+    for(auto id:{MajestyBuildId::SteamPublic,MajestyBuildId::SteamBeta2,MajestyBuildId::Gog}) {
+        profile.buildId=id;profile.streamMessageSlot=id==MajestyBuildId::Gog?0x74:0x68;
+        table[profile.streamMessageSlot/4]=reinterpret_cast<std::uintptr_t>(&InventoryTestMenuMessage);
+        g_buildProfile=&profile;inventoryMessageCount=0;
+        auto index=InvokeInventoryAppend(controller,&menu,0x72564E49,&original);
+        assert(heroLabels[index]=="Private dose" && heroTips[index]=="Use this dose");
+        assert(inventoryMessageCount==3 && heroDestroyed==heroConstructed);
+        inventoryMessageCount=0;
+        index=InvokeInventoryAppend(controller,&menu,0x71564E49,&original);
+        assert(heroLabels[index]=="Stock text" && heroTips[index].empty() && inventoryMessageCount==0);
+        DecorateInventoryItem(reinterpret_cast<unsigned>(controller),-1,0x72564E49);
+        DecorateInventoryItem(reinterpret_cast<unsigned>(controller),index,0xFFFFFFFF);
+        assert(inventoryMessageCount==0);
+    }
+    g_buildProfile=saved;
+}
+
 void RunHeroInfoRuntimeTests() {
     const auto savedBase = g_imageBase;
     const auto* savedProfile = g_buildProfile;
@@ -416,6 +472,7 @@ void RunHeroInfoRuntimeTests() {
     heroLabels.clear(); heroTips.clear();
     AppendHeroPassives(nullptr, &list);
     assert(heroLabels.empty());
+    RunInventoryItemRowTests();
     g_runtimeFeatureRegistry = std::move(savedRegistry);
     g_heroSpellRow = g_heroEffectRow = nullptr;
     g_privateEnchantmentRowString = nullptr;

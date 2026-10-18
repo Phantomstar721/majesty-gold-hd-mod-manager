@@ -4,7 +4,8 @@ import re
 import struct
 
 HERO_INFO_TYPE = "stock.ap78-info-row.v1"
-HERO_INFO_KINDS = ("spell", "enchantment", "passive")
+HERO_INFO_KINDS = ("spell", "enchantment", "passive", "reserved", "inventory")
+INVENTORY_ITEM_DISPLAY_TYPE = "stock.inventory-item-display.v1"
 MAX_HERO_INFO_ROWS = 1024
 
 
@@ -38,18 +39,27 @@ class HeroInfoRow:
     @property
     def sort_key(self):
         return (HERO_INFO_KINDS.index(self.kind) + 1,
-                int.from_bytes(self.subject_id.encode("ascii"), "little"), self.feature_key)
+                int(self.subject_id) if self.kind == "inventory" else int.from_bytes(self.subject_id.encode("ascii"), "little"), self.feature_key)
 
 
 def parse_hero_info(value):
     from .runtime_features import _fourcc_bytes, _display_text_bytes
+    if value.get("type") == INVENTORY_ITEM_DISPLAY_TYPE:
+        fields = {"type", "feature_key", "item_id", "display_text", "tooltip_text", "image_id", "image_set"}
+        if set(value) != fields or type(value.get("item_id")) is not int or not 0 <= value["item_id"] <= 127:
+            raise ValueError("inventory display requires exactly feature_key, item_id (0..127), display_text, tooltip_text, image_id, image_set")
+        base = parse_hero_info(dict(type=HERO_INFO_TYPE, feature_key=value["feature_key"], kind="passive",
+            subject_id="----", unlock_level=1, display_text=value["display_text"],
+            tooltip_text=value["tooltip_text"], image_id=value["image_id"], image_set=value["image_set"]))
+        return HeroInfoRow(base.feature_key, "inventory", str(value["item_id"]), 0,
+                           base.display_text, base.tooltip_text, base.image_id, base.image_set)
     fields = set(HeroInfoRow.__dataclass_fields__)
     if set(value) != fields | {"type"} or value.get("type") != HERO_INFO_TYPE:
         raise ValueError("hero information row requires exactly " + ", ".join(sorted(fields)))
     if not isinstance(value["feature_key"], str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", value["feature_key"]):
         raise ValueError("hero information feature_key must be a lowercase logical key")
     kind = value["kind"]
-    if kind not in HERO_INFO_KINDS:
+    if kind not in HERO_INFO_KINDS[:3]:
         raise ValueError("hero information kind must be spell, enchantment or passive")
     for name in ("subject_id", "image_id"):
         _fourcc_bytes(value[name])
@@ -66,6 +76,14 @@ def parse_hero_info(value):
 
 
 def hero_info_mapping(row):
+    if row.kind == "inventory":
+        value = dict(type=INVENTORY_ITEM_DISPLAY_TYPE, feature_key=row.feature_key,
+            item_id=int(row.subject_id), display_text=row.display_text, tooltip_text=row.tooltip_text,
+            image_id=row.image_id, image_set=row.image_set)
+        if row.unlock_level != 0:
+            raise ValueError("inventory display cannot declare a level")
+        parse_hero_info(value)
+        return value
     value = dict(type=HERO_INFO_TYPE, **asdict(row))
     parse_hero_info(value)
     return value
@@ -74,18 +92,19 @@ def hero_info_mapping(row):
 def validate_hero_info_evidence(inventory, row):
     from .compose import _parse_description_file, _split_imag_sets
     hero_info_mapping(row)
-    type_name, subtype = {"spell": ("Action", "Standard"),
-                          "enchantment": ("Unit", "Overlay"),
-                          "passive": ("Unit", "Character")}[row.kind]
-    matches = [record.to_element() for path in inventory.descriptions
-               for record in _parse_description_file(path).records
-               if record.key == (type_name, row.subject_id)]
-    if len(matches) != 1 or matches[0].get("subType") != subtype:
-        raise ValueError(f"hero information {row.subject_id} needs one owned {type_name}/{subtype} Description")
-    if row.kind == "spell":
-        flags = matches[0].findall("./Game/Flags")
-        if len(flags) != 1 or "IsSpell" not in re.split(r"[\s|,]+", flags[0].get("value", "")):
-            raise ValueError("hero spell row must identify an actual IsSpell Action")
+    if row.kind != "inventory":
+        type_name, subtype = {"spell": ("Action", "Standard"),
+                              "enchantment": ("Unit", "Overlay"),
+                              "passive": ("Unit", "Character")}[row.kind]
+        matches = [record.to_element() for path in inventory.descriptions
+                   for record in _parse_description_file(path).records
+                   if record.key == (type_name, row.subject_id)]
+        if len(matches) != 1 or matches[0].get("subType") != subtype:
+            raise ValueError(f"hero information {row.subject_id} needs one owned {type_name}/{subtype} Description")
+        if row.kind == "spell":
+            flags = matches[0].findall("./Game/Flags")
+            if len(flags) != 1 or "IsSpell" not in re.split(r"[\s|,]+", flags[0].get("value", "")):
+                raise ValueError("hero spell row must identify an actual IsSpell Action")
     images = [r for r in inventory.resources if r.section == b"IMAG" and r.key == row.image_id.encode("ascii")]
     if len(images) != 1:
         raise ValueError(f"hero information requires exactly one owned IMAG/{row.image_id}")

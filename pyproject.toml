@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "majesty-gold-hd-mod-manager"
-version = "0.3.10"
+dynamic = ["version"]
 description = "Organize, combine, and launch Majesty Gold HD mods and quests."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -13,6 +13,9 @@ authors = [
   { name = "Majesty Gold HD Mod Manager contributors" }
 ]
 dependencies = []
+
+[tool.hatch.version]
+path = "src/majesty_cam/version.py"
 
 [project.optional-dependencies]
 dev = []

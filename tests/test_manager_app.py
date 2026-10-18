@@ -484,9 +484,19 @@ class ManagerAppLayoutTests(unittest.TestCase):
             label.text(): label
             for label in window.findChildren(QLabel)
             if label.text()
-            in {"MAJESTY GOLD HD", "GAME VERSION", "GAME INSTALL"}
+            in {"MAJESTY GOLD HD", "GAME EXE VERSION", "GAME INSTALL"}
         }
         self.assertEqual(len(header_labels), 3)
+        self.assertEqual(window.manager_version.text(), f"Manager version: {manager_app.MANAGER_VERSION}")
+        self.assertIn(manager_app.MANAGER_VERSION, window.windowTitle())
+        for branch, version in (("Steam Default", "1.5.2.24"), ("Steam beta2", "1.5.2.28"), ("GOG", "1.5.2.28")):
+            window._render_game_build(SimpleNamespace(game_build=SimpleNamespace(display_name=branch, version=version)))
+            self.assertEqual(window.game_build.text(), f"{branch}  ·  {version}")
+            self.assertIn("MajestyHD.exe", window.game_build.toolTip())
+            self.assertEqual(window.manager_version.text(), f"Manager version: {manager_app.MANAGER_VERSION}")
+        window._render_game_build(SimpleNamespace(game_build=None))
+        self.assertEqual(window.game_build.text(), "Unsupported build")
+        self.assertEqual(window.manager_version.text(), f"Manager version: {manager_app.MANAGER_VERSION}")
         self.assertEqual(
             {label.height() for label in header_labels.values()}, {14}
         )
