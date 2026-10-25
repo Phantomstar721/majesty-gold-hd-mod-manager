@@ -149,7 +149,7 @@ class ManagerCompatibilityTests(unittest.TestCase):
         self.assertEqual(alchemist.alias, "alchemist")
         self.assertEqual(alchemist.merge_priority, 100)
         self.assertEqual(alchemist.resolution_owners, ())
-        combined = registry.combination_resolutions[0]
+        combined = next(c for c in registry.combination_resolutions if haunt.mod_id in c.required_mod_ids)
         self.assertEqual(
             set(combined.required_mod_ids),
             {
@@ -158,6 +158,12 @@ class ManagerCompatibilityTests(unittest.TestCase):
             },
         )
         self.assertTrue(combined.source_path.is_file())
+        expanded = registry.get("8FAFA371-810C-419D-8F5C-7E3931450E3F")
+        self.assertEqual(expanded.alias, haunt.alias)
+        self.assertEqual(expanded.replacement_roots, ())
+        alternate = next(c for c in registry.combination_resolutions if expanded.mod_id in c.required_mod_ids)
+        self.assertEqual(alternate.source_path, combined.source_path)
+        self.assertEqual(alternate.items, combined.items)
         self.assertEqual(
             [(item.kind, item.name) for item in combined.items],
             [

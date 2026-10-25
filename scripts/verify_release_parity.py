@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "tests")]
 
 MODULES = (
+    "test_compact_sovereign_toolbar", "test_compact_toolbar_profiles", "test_paid_acquisition_profiles", "test_breach_native_profiles",
     "test_sound_review",
     "test_feature_parity_profiles", "test_map_query_runtime_profiles",
     "test_movement_query_profiles", "test_native_timing_profiles",

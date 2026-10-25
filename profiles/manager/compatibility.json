@@ -1,6 +1,15 @@
 {
   "schema_version": 1,
   "mods": {
+    "8FAFA371-810C-419D-8F5C-7E3931450E3F": {
+      "alias": "phantoms-haunt",
+      "definition": "profiles/poc/phantoms-haunt-expanded.mod-definition.json",
+      "replacement_roots": [],
+      "merge_priority": 200,
+      "badge": "Expanded Haunt compatibility; the stock Elf Guild remains native.",
+      "runtime_capabilities": ["expanded-building-slots.cg-prefix", "freestyle-cam-rebind.v1"],
+      "resolution_owners": []
+    },
     "8C48289E-7C70-4426-8913-133F3544A182": {
       "alias": "phantoms-haunt",
       "definition": "profiles/poc/phantoms-haunt.mod-definition.json",
@@ -33,6 +42,14 @@
     }
   },
   "combination_resolutions": [
+    {
+      "requires": ["8FAFA371-810C-419D-8F5C-7E3931450E3F", "42BA4603-2B13-446D-A2A4-6CF3A55DDAC3"],
+      "source": "profiles/manager/resolutions/haunt-alchemist.gpl",
+      "items": [
+        {"kind": "function", "name": "Random_Hero_Type"},
+        {"kind": "function", "name": "spell_extra_value"}
+      ]
+    },
     {
       "requires": [
         "8C48289E-7C70-4426-8913-133F3544A182",

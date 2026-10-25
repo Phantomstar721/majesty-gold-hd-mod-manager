@@ -30,10 +30,11 @@ never raw package JSON.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 import json
 import re
 from typing import Iterable, Mapping, Optional, Sequence, Tuple, Union
+from .compact_sovereign_toolbar import ToolbarAction, parse as parse_toolbar, bind as bind_toolbar
 
 
 LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY = (
@@ -370,7 +371,24 @@ class StockAp69SourceTargetAction(StockAp69SovereignTargetAction):
     type: str = "stock.ap69-sovereign-target-action.v2"
 
 
+@dataclass(frozen=True)
+class StockAp69PaidSourceTargetAction(StockAp69SourceTargetAction):
+    """Paid exact hostile-lair action; no resource-meter field in its recipe."""
+    resource_key: str = field(default="", init=False)
+    resource_cost: int = field(default=0, init=False)
+    sovereign_gold_cost: int = 0
+    type: str = "stock.ap69-sovereign-target-action.v3"
+
+
+@dataclass(frozen=True)
+class StockAp69AttackBountyAction(StockAp69PaidSourceTargetAction):
+    """Opt-in stock attack bounty funded from, not in addition to, the price."""
+    bounty_amount: int = 0
+    type: str = "stock.ap69-attack-bounty-action.v1"
+
+
 ControllerFeature = Union[
+    ToolbarAction,
     StockAp52PrivateRecruitment,
     StockMx22BuildingOpenToggle,
     StockMx22IndependentToggle,
@@ -387,10 +405,13 @@ ControllerFeature = Union[
     StockAp24RageCommandAction,
     StockAp69SovereignTargetAction,
     StockAp69SourceTargetAction,
+    StockAp69PaidSourceTargetAction,
+    StockAp69AttackBountyAction,
 ]
 
 
 _FEATURE_TYPES = {
+    "stock.ap92-sovereign-toolbar-action.v1": ToolbarAction,
     "stock.ap52-private-recruitment.v1": StockAp52PrivateRecruitment,
     "stock.ap52-recruitment-panel.v1": StockAp52RecruitmentPanel,
     "stock.mx22-building-open-toggle.v1": StockMx22BuildingOpenToggle,
@@ -409,6 +430,7 @@ _FEATURE_TYPES = {
     "stock.ap24-rage-command-action.v1": StockAp24RageCommandAction,
     "stock.ap69-sovereign-target-action.v1": StockAp69SovereignTargetAction,
     "stock.ap69-sovereign-target-action.v2": StockAp69SourceTargetAction,
+    "stock.ap69-sovereign-target-action.v3": StockAp69PaidSourceTargetAction,
 }
 
 _FEATURE_ORDER = {name: index for index, name in enumerate(_FEATURE_TYPES)}
@@ -591,7 +613,7 @@ def parse_controller_feature(value: Mapping[str, object]) -> ControllerFeature:
             f"unsupported controller feature type: {feature_type!r}"
         )
     cls = _FEATURE_TYPES[feature_type]
-    expected = {field.name for field in fields(cls)}
+    expected = {field.name for field in fields(cls) if field.init}
     if cls is StockMx05DataRecordListPanel:
         expected.remove("row_agent_id_callback_symbol")
         expected.add("row_key_callback_symbol")
@@ -680,6 +702,9 @@ def controller_feature_mapping(feature: ControllerFeature) -> dict:
 
     feature = _validate_feature(feature)
     value = asdict(feature)
+    if isinstance(feature, StockAp69PaidSourceTargetAction):
+        value.pop("resource_key")
+        value.pop("resource_cost")
     if isinstance(feature, StockMx05DataRecordListPanel):
         value["row_key_callback_symbol"] = value.pop("row_agent_id_callback_symbol")
     if isinstance(feature, StockAp17UpgradeResearchGate):
@@ -757,6 +782,11 @@ def decode_controller_features(payload: bytes) -> Tuple[ControllerFeature, ...]:
 
 
 def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
+    if isinstance(feature, ToolbarAction):
+        try:
+            return parse_toolbar(vars(feature))
+        except ValueError as exc:
+            raise ControllerFeatureError(str(exc)) from exc
     if not isinstance(feature, tuple(_FEATURE_TYPES.values())):
         raise ControllerFeatureError("unsupported controller feature object")
     if isinstance(feature, StockMx22BuildingOpenToggle):
@@ -1074,10 +1104,12 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
             feature.price_control_id,
         )
     elif isinstance(feature, StockAp69SovereignTargetAction):
+        paid = isinstance(feature, StockAp69PaidSourceTargetAction)
         if isinstance(feature, StockAp69SourceTargetAction):
             _gpl_symbol(feature.callback_symbol)
         _logical(feature.action_key, "action_key")
-        _logical(feature.resource_key, "resource_key")
+        if not paid:
+            _logical(feature.resource_key, "resource_key")
         _control(feature.visual_template_control_id, "visual_template_control_id")
         _control(feature.target_template_control_id, "target_template_control_id")
         if (
@@ -1113,7 +1145,7 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
         if type(feature.cursor_ordinal) is not int or not 0 <= feature.cursor_ordinal <= 255:
             raise ControllerFeatureError("cursor_ordinal must be in 0..255")
         _level(feature.required_level)
-        target_metadata = _PROVEN_AP69_SOVEREIGN_TARGET_TEMPLATE_METADATA.get(
+        target_metadata = ({0x1138: ("Sp29", 2)} if paid else _PROVEN_AP69_SOVEREIGN_TARGET_TEMPLATE_METADATA).get(
             feature.target_template_control_id
         )
         if target_metadata is None:
@@ -1128,7 +1160,14 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
                 f"stock_target_mode {stock_target_mode!r} and "
                 f"required_level {required_level}"
             )
-        _positive_u32(feature.resource_cost, "resource_cost")
+        if paid:
+            _positive_u32(feature.sovereign_gold_cost, "sovereign_gold_cost")
+            if isinstance(feature, StockAp69AttackBountyAction):
+                _positive_u32(feature.bounty_amount, "bounty_amount")
+                if feature.bounty_amount > feature.sovereign_gold_cost:
+                    raise ControllerFeatureError("bounty_amount must be included in sovereign_gold_cost")
+        else:
+            _positive_u32(feature.resource_cost, "resource_cost")
         _distinct_controls(
             "AP69 sovereign target action",
             feature.visual_control_id,
@@ -1140,6 +1179,17 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
 
 
 def _validate_composition(features: Sequence[ControllerFeature]) -> None:
+    toolbar_keys = set()
+    for item in features:
+        if isinstance(item, ToolbarAction):
+            try:
+                bind_toolbar(item, features)
+            except ValueError as exc:
+                raise ControllerFeatureError(str(exc)) from exc
+            key = (item.panel_key, item.action_key)
+            if key in toolbar_keys:
+                raise ControllerFeatureError("duplicate compact toolbar action")
+            toolbar_keys.add(key)
     recruitments = [item for item in features if isinstance(item, StockAp52PrivateRecruitment)]
     _unique_field(recruitments, "panel_key", "private recruitment panel_key")
     _unique_field(recruitments, "parent_building", "private recruitment parent")
@@ -1334,7 +1384,7 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
             if identity in actions:
                 raise ControllerFeatureError("duplicate controller action identity")
             actions.add(identity)
-            if (feature.panel_key, feature.resource_key) not in meters:
+            if not isinstance(feature, StockAp69PaidSourceTargetAction) and (feature.panel_key, feature.resource_key) not in meters:
                 raise ControllerFeatureError(
                     "controller action refers to an unknown resource_key"
                 )
@@ -1438,6 +1488,9 @@ def _canonical_record_bytes(feature: ControllerFeature) -> bytes:
 
 def controller_feature_mapping_unchecked(feature: ControllerFeature) -> dict:
     value = asdict(feature)
+    if isinstance(feature, StockAp69PaidSourceTargetAction):
+        value.pop("resource_key")
+        value.pop("resource_cost")
     if isinstance(feature, StockAp17UpgradeResearchGate):
         value["requirements"] = [asdict(item) for item in feature.requirements]
     return value
@@ -1628,6 +1681,8 @@ __all__ = [
     "StockAp24TimedRageAction",
     "StockAp69SovereignTargetAction",
     "StockAp69SourceTargetAction",
+    "StockAp69PaidSourceTargetAction",
+    "StockAp69AttackBountyAction",
     "StockAp99ResearchRow",
     "StockMx22BuildingOpenToggle",
     "StockMx22IndependentToggle",

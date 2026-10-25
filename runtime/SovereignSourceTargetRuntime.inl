@@ -24,6 +24,7 @@ bool HasSourceTargetActions() {
 }
 
 bool ValidateSourceTargetProfile() {
+    if (!ValidatePaidProfile()) return false;
     if (!HasSourceTargetActions()) return true;
     const auto p = SourceTargetProfile();
     const unsigned char args[] = {0x57,0x56,0x8D,0x88,0x90,0,0,0};
@@ -54,6 +55,8 @@ void* ResolveSovereignUnit(std::uint32_t handle) {
 using SovereignUnitResolver = void* (*)(std::uint32_t);
 SovereignUnitResolver g_sovereignUnitResolver = &ResolveSovereignUnit;
 
+ #include "PaidSourceTargetRuntime.inl"
+
 bool SourceMatchesAction(void* source, std::uint32_t player,
     const MajestyStockControllers::SovereignTargetActionRecord& action) {
     const auto* panel = g_stockControllerRegistry.FindPanelByKey(action.panelKey);
@@ -69,6 +72,8 @@ bool SourceMatchesAction(void* source, std::uint32_t player,
         SelectedBuildingLevel(source) >= static_cast<int>(action.requiredLevel);
 }
 
+ #include "PaidSourceTargetPolicy.inl"
+
 using SovereignExecutor = void (__cdecl*)(std::uint32_t, std::uint32_t,
     std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t);
 SovereignExecutor g_sourceTargetExecutor = nullptr;
@@ -77,6 +82,13 @@ struct SourceTargetExecution {
     void* source;
     void* target;
     bool dispatched;
+    bool paid = false;
+    PaidRecord record{};
+    void* world = nullptr;
+    void* spell = nullptr;
+    std::uint32_t spellId = 0;
+    bool birthObserved = false;
+    std::uint32_t nativeGoldCost = 0;
 };
 thread_local SourceTargetExecution* g_sourceTargetExecution = nullptr;
 struct SourceTargetScope {
@@ -103,6 +115,21 @@ void __cdecl ExecuteSourceTargetSovereignCommand(std::uint32_t mode,
     SourceTargetExecution execution = {action, nullptr, nullptr, false};
     SourceTargetScope scope(paired ? &execution : nullptr);
     if (paired) {
+        if(action->sovereignGoldCost) {
+            const auto* r=g_paidRecord;
+            if(!r || r->mode!=mode || r->context!=commandContext || r->player!=player ||
+                r->x!=x || r->y!=y || r->target!=target || r->gold!=cost ||
+                cost!=action->sovereignGoldCost)return;
+            execution.paid=true;execution.record=*r;execution.world=g_paidWorld();
+            g_paidRecord=nullptr; // one executor claim per queued dispatch
+            execution.source=g_sovereignUnitResolver(r->source);
+            execution.target=g_sovereignUnitResolver(r->target);
+            const char* rejection=PaidActorsRejection(*r,*action,execution.source,execution.target,execution.world);
+            LogPaidClick("queued-execute",rejection ? rejection : "accepted",*r);
+            if(rejection)return;
+            execution.nativeGoldCost=cost;
+
+        } else {
         // V2 reserves the otherwise-zero private gold-cost word for source ID.
         // Decode before entering stock code, so it can never become a gold debit.
         execution.source = g_sovereignUnitResolver(cost);
@@ -118,12 +145,15 @@ void __cdecl ExecuteSourceTargetSovereignCommand(std::uint32_t mode,
                 x, y, target, kStockUnaffordableGoldCost);
             return;
         }
+        }
     }
     if (action) {
         g_executingSovereignUnit = static_cast<LONG>(action->privateUnitId);
         mode = action->stockExecutorMode;
     } else g_executingSovereignUnit = 0;
     g_sourceTargetExecutor(mode, commandContext, player, x, y, target, cost);
+    if(execution.paid && !execution.dispatched)
+        LogPaidClick("executor-return","payment-callback-not-reached",execution.record);
 }
 
 bool __fastcall SourceTargetBirth(void* nativeCallback, void*, void* spell, void* target) {
@@ -131,6 +161,11 @@ bool __fastcall SourceTargetBirth(void* nativeCallback, void*, void* spell, void
     if (frame && !frame->dispatched && frame->target == target && spell &&
         *reinterpret_cast<const std::uint32_t*>(static_cast<unsigned char*>(spell) + 0x7C) ==
             frame->action->privateUnitId) {
+        if(frame->paid) {
+            if(frame->birthObserved)return false;
+            frame->birthObserved=true;frame->spell=spell;frame->spellId=PaidWord(spell,0x70);
+            return true; // Consumer callback belongs after the native gold mutation.
+        }
         frame->dispatched = true;
         return g_sourceTargetCallback(frame->action->sourceTargetCallback.c_str(),
             spell, frame->source, target);
@@ -154,4 +189,21 @@ bool InstallSourceTargetBirthHook() {
     DWORD ignored = 0;
     VirtualProtect(call, 5, old, &ignored);
     return true;
+}
+
+void NativePaidStatistics(void* statistics,std::uint32_t gold) {
+    reinterpret_cast<void (__thiscall*)(void*,std::uint32_t)>(g_imageBase+PaidProfile().statistics)(statistics,gold);
+}
+using PaidStatistics=void (*)(void*,std::uint32_t);
+PaidStatistics g_paidStatistics=&NativePaidStatistics;
+void __fastcall PaidPostPayment(void* statistics,void*,std::uint32_t gold) {
+    g_paidStatistics(statistics,gold);
+    auto* frame=g_sourceTargetExecution;
+    if(!frame || !frame->paid || frame->dispatched || gold!=frame->nativeGoldCost)return;
+    frame->dispatched=true;
+    LogPaidClick("payment","deducted",frame->record);
+    if(!frame->birthObserved || !PaidIdentity(frame->spell,frame->spellId,frame->world,false) ||
+        PaidWord(frame->spell,0x7C)!=frame->action->privateUnitId ||
+        !PaidActors(frame->record,*frame->action,frame->source,frame->target,frame->world))return;
+    g_sourceTargetCallback(frame->action->sourceTargetCallback.c_str(),frame->spell,frame->source,frame->target);
 }

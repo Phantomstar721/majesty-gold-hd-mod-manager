@@ -32,6 +32,7 @@ DEVELOPMENT = (
     "test_dawnfall_action_profiles", "test_cosmetic_action_profiles",
 )
 RELEASE = (
+    "test_compact_sovereign_toolbar", "test_compact_toolbar_profiles", "test_paid_acquisition_profiles", "test_breach_native_profiles", "test_manager_compatibility", "test_scoped_output",
     "test_inventory_display",
     "test_standard_review",
     "test_sound_review",

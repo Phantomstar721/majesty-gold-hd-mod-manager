@@ -731,6 +731,8 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 "stock.ap24-rage-command-action.v1",
                 "stock.ap69-sovereign-target-action.v1",
                 "stock.ap69-sovereign-target-action.v2",
+                "stock.ap69-sovereign-target-action.v3",
+                "stock.ap92-sovereign-toolbar-action.v1",
                 "stock.ap41-fl00-hostile-monster-flag.v1",
             }:
                 local_identity = str(mapping["action_key"])

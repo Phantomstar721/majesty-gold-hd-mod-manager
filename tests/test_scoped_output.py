@@ -73,6 +73,42 @@ def package_fixture(root, common, patches=()):
 
 
 class ScopedOutputTests(unittest.TestCase):
+    def test_toolbar_only_scope_loads_without_inventing_a_script_patch(self):
+        from majesty_cam.cam import CamArchive, CamSection, CamEntry, pad_name
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = package_fixture(root, result(''))
+            filename = 'merged_toolbar-MajestyExpansion.cam'
+            archive = CamArchive(tuple(CamSection(section,(CamEntry(pad_name(b'AP92'),b'fixture'),))
+                                       for section in (b'SMNU',b'STRT')))
+            (root/'Data'/filename).write_bytes(archive.to_bytes())
+            xml = ET.fromstring(manifest.read_bytes())
+            cams = [Path(e.text.replace('\\','/')).name for e in xml.findall('./Mod/DataConfiguration/Dataset/Load/CAM')]
+            manifest.write_bytes(_build_manifest(mod_id=COMMON_ID,internal_name='Fixture',display_name='Fixture',
+                cam_filenames=cams,description_filename='Descriptions.xml',source_set=result('').source_set,
+                scoped_cams=(('MajestyExpansion',filename),)))
+            packages = load_generated_bundle(root)
+            self.assertEqual([p.datasets[0].base for p in packages], ['Any','MajestyExpansion'])
+            self.assertEqual(len(packages[1].datasets[0].loads[0].cams),1)
+            self.assertFalse(packages[1].datasets[0].loads[0].gpl)
+            validate_composed_package(root)
+            # Release XML deltas and toolbar CAMs share the same native scope.
+            description_name = 'merged_descriptions-majestyexpansion.xml'
+            (root/'Data'/description_name).write_text('<Descriptions/>')
+            manifest.write_bytes(_build_manifest(mod_id=COMMON_ID,internal_name='Fixture',display_name='Fixture',
+                cam_filenames=cams,description_filename='Descriptions.xml',source_set=result('').source_set,
+                scoped_cams=(('MajestyExpansion',filename),),
+                scoped_descriptions={'MajestyExpansion': description_name}))
+            combined = load_generated_bundle(root)[1].datasets[0].loads[0]
+            self.assertEqual(len(combined.cams), 1)
+            self.assertEqual(len(combined.descriptions), 1)
+            self.assertFalse(combined.gpl)
+            validate_composed_package(root)
+            bad = replace(archive, sections=(CamSection(b'IMAG',archive.sections[0].entries),))
+            (root/'Data'/filename).write_bytes(bad.to_bytes())
+            with self.assertRaisesRegex(PackageFormatError,'only AP92'):
+                load_generated_bundle(root)
+
     def test_shared_and_differing_definitions_are_partitioned_without_loss(self):
         a = result(function('Shared') + function('Changed', 10) + function('BaseOnly'))
         b = result(function('Shared') + function('Changed', 20) + function('ExpansionOnly'))

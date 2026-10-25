@@ -7,7 +7,7 @@
 
 namespace MajestyStockControllers {
 
-constexpr std::uint32_t kRegistryVersion = 21;
+constexpr std::uint32_t kRegistryVersion = 25;
 constexpr std::uint32_t kMaximumRecordCount = 256;
 constexpr std::uint32_t kMaximumPanelCount = 32;
 constexpr std::uint32_t kMaximumLiveAgentListVariants = 64;
@@ -114,6 +114,14 @@ struct SovereignTargetActionRecord {
     std::uint32_t iconControlId;
     std::uint32_t priceControlId;
     std::string sourceTargetCallback; // Empty retains the v1 callback contract.
+    std::uint32_t sovereignGoldCost = 0; // V3 only; never shares the source ID word.
+    std::uint32_t attackBountyAmount = 0; // Opt-in MMCR24; included in total cost.
+};
+
+struct ToolbarActionRecord {
+    std::string panelKey, actionKey;
+    std::uint32_t requiredLevel, iconId, iconSet;
+    std::string hoverText;
 };
 
 struct RewardPanelRecord {
@@ -183,6 +191,9 @@ struct LiveAgentListRecord {
     bool focusSelectedRowOnClick;
     bool actionUsesParent;
     bool dataRecordRows;
+    bool actionUsesPair = false;
+    std::string admissionCallbackSymbol;
+    std::vector<std::uint32_t> gatedControlIds;
 };
 
 struct PrivateRecruitmentRecord {
@@ -207,6 +218,7 @@ struct Registry {
     std::vector<BuildingOpenToggleRecord> buildingOpenToggles;
     std::vector<LiveAgentListRecord> liveAgentLists;
     std::vector<PrivateRecruitmentRecord> privateRecruitments;
+    std::vector<ToolbarActionRecord> toolbarActions;
 
     void Clear();
     const PrivateRecruitmentRecord* FindPrivateRecruitmentByParent(std::uint32_t id) const;

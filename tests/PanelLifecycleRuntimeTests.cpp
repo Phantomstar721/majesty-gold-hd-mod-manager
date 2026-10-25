@@ -65,6 +65,7 @@ std::uint32_t presentedQuestParentActionCost = 0;
 bool presentedQuestParentActionAffordable = false;
 std::uint32_t questVectorStorage[68] = {};
 std::uint32_t lastMessageControl = 0, lastMessage = 0;
+std::map<std::uint32_t, bool> disabledControls;
 std::uint32_t lastVisibleControl = 0, lastVisibleValue = 0;
 std::uint32_t visibleControls[16] = {};
 std::uint32_t visibleValues[16] = {};
@@ -114,8 +115,9 @@ void __fastcall WriteAttribute(void*, void*, std::uint32_t attribute, int value)
         attribute == kResearchDurationAttributeId);
 }
 std::uint32_t __fastcall Send(void*, void*, std::uint32_t control, std::uint32_t message,
-                             std::uint32_t, std::uint32_t) {
+                             std::uint32_t value, std::uint32_t) {
     lastMessageControl = control; lastMessage = message;
+    if (message == 0x0A) disabledControls[control] = value != 0;
     if (control == 0x1388u && message == 0x22u) {
         return static_cast<std::uint32_t>(selectedQuestIndex);
     }
@@ -625,6 +627,8 @@ void RecruitmentChildLifecycle() {
 }
 
 #include "SovereignSourceTargetChecks.inl"
+#include "PaidSourceTargetChecks.inl"
+#include "CompactToolbarChecks.inl"
 
 int main() {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -1486,6 +1490,7 @@ int main() {
     ClearSecondaryPanelControllerOwnedState();
     assert(g_renderedDataRecordRevision == -1 && g_questOfferPresentationCount == 0);
     assert(g_questOfferPresentations[0].recordKey == 0);
-    SovereignChecks::Run();
+    PaidChecks::Run();
+    CompactChecks::Run();
     std::puts("Panel lifecycle x86 tests passed.");
 }

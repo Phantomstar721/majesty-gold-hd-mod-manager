@@ -15,7 +15,7 @@ class ReleaseScopeTests(unittest.TestCase):
     def test_development_features_are_not_in_production_sources(self):
         for path in ("runtime/AttackObservationRuntime.cpp", "runtime/CheckedPlacementRuntime.cpp",
                      "runtime/EffectSequence.cpp", "src/majesty_cam/paired_accuracy.py",
-                     "runtime/PaidSourceTargetRuntime.inl", "runtime/SavedAttributeRuntime.inl"):
+                     "runtime/SavedAttributeRuntime.inl"):
             self.assertFalse((ROOT / path).exists(), "Development source entered release: " + path)
         from majesty_cam.manager.capabilities import DERIVED_RUNTIME_CAPABILITIES
         self.assertIn("manager.projectile-interception.v1", DERIVED_RUNTIME_CAPABILITIES)

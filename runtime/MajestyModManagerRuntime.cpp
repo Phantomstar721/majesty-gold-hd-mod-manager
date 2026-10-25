@@ -7,6 +7,7 @@
 #include <cwchar>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <map>
 #include <string>
 #include <utility>
@@ -36,6 +37,8 @@
 #include "StockBuildingControllerCatalog.h"
 #include "StockControllerRegistry.h"
 #include "PrivateRecruitment.h"
+#include "PaidSourceTargetCommand.h"
+#include "PaidSourceTargetProfiles.h"
 
 namespace {
 
@@ -424,6 +427,8 @@ bool CompleteKingdomResearch(std::uint32_t, void*, std::uint32_t, std::uint32_t,
 bool OccupantCallMatches(std::uintptr_t callRva, std::uintptr_t targetRva);
 bool HasSourceTargetActions();
 bool ValidateSourceTargetProfile();
+bool ValidatePaidProfile();
+int StockCurrentPlayerGold();
 bool QuestSummaryCallMatches(
     std::uintptr_t callRva,
     std::uintptr_t targetRva,
@@ -619,6 +624,8 @@ std::vector<PrivateSpellDescriptor> g_privateSpellDescriptors;
 const MajestyStockControllers::SovereignTargetActionRecord*
     g_pendingSovereignAction = nullptr;
 LONG g_pendingSovereignBuilding = 0;
+std::uint32_t g_pendingToolbarControl = 0;
+const MajestyStockControllers::ToolbarActionRecord* ToolbarForControl(std::uint32_t);
 LONG g_executingSovereignUnit = 0;
 
 struct RewardFlagRuntimeState {
@@ -2388,14 +2395,14 @@ void RefreshPrivateActionRows(
             SelectedBuildingLevel(context) >= static_cast<int>(action.requiredLevel);
         SetControllerControlVisible(controller, action.visualControlId, levelAvailable);
         SetControllerControlVisible(controller, action.iconControlId, levelAvailable);
-        SetControllerControlVisible(controller, action.priceControlId, false);
-        if (levelAvailable) {
-            const bool unavailable =
-                ResourceStock(FindActiveMeter(action.resourceKey)) <
-                    static_cast<int>(action.resourceCost);
-            SendControllerMessage(
-                controller, action.visualControlId, 0x0A,
-                unavailable ? 1 : 0, 0);
+        SetControllerControlVisible(controller, action.priceControlId, levelAvailable && action.sovereignGoldCost != 0);
+        const bool unavailable = !levelAvailable || (action.sovereignGoldCost
+            ? StockCurrentPlayerGold() < static_cast<int>(action.sovereignGoldCost)
+            : ResourceStock(FindActiveMeter(action.resourceKey)) < static_cast<int>(action.resourceCost));
+        // Stock AP69 refreshes all three controls together. Periodic private
+        // refresh must not leave the icon/quote at their panel-open state.
+        for (const auto control : {action.visualControlId, action.priceControlId, action.iconControlId}) {
+            SendControllerMessage(controller, control, 0x0A, unavailable ? 1 : 0, 0);
         }
     }
 }
@@ -2954,11 +2961,12 @@ int HandleRageCommandAction(
 int HandleSovereignTargetAction(
     std::uint32_t controller,
     const MajestyStockControllers::SovereignTargetActionRecord& action) {
+    g_pendingToolbarControl = 0;
     unsigned char* context = ActivePanelContext();
     if (context == nullptr ||
         SelectedBuildingLevel(context) < static_cast<int>(action.requiredLevel) ||
-        ResourceStock(FindActiveMeter(action.resourceKey)) <
-            static_cast<int>(action.resourceCost)) {
+        (action.sovereignGoldCost ? StockCurrentPlayerGold() < static_cast<int>(action.sovereignGoldCost) :
+         ResourceStock(FindActiveMeter(action.resourceKey)) < static_cast<int>(action.resourceCost))) {
         RefreshPrivateActionRows(controller, false);
         WriteLog("Stock-shaped resource or level gating rejected a sovereign target action.");
         return 0;
@@ -3289,7 +3297,7 @@ const std::uint32_t* BuildPrivateSpellDescriptor(
         std::memcpy(state->descriptor, source, 5 * sizeof(std::uint32_t));
         state->descriptor[0] = panel->buildingFamilyId;
         state->descriptor[1] = panel->childDialogId;
-        state->descriptor[4] = 0;
+        state->descriptor[4] = action.sovereignGoldCost;
         break;
     }
     case PrivateSpellDescriptorKind::SovereignTarget: {
@@ -3306,8 +3314,8 @@ const std::uint32_t* BuildPrivateSpellDescriptor(
         state->descriptor[0] = panel->buildingFamilyId;
         state->descriptor[1] = panel->childDialogId;
         state->descriptor[2] = action.stockTargetMode;
-        state->descriptor[3] = 1;
-        state->descriptor[4] = 0;
+        state->descriptor[3] = action.sovereignGoldCost ? action.requiredLevel : 1;
+        state->descriptor[4] = action.sovereignGoldCost;
         break;
     }
     }
@@ -3316,10 +3324,12 @@ const std::uint32_t* BuildPrivateSpellDescriptor(
 
 extern "C" const std::uint32_t* __stdcall ResolvePrivateSpellDescriptor(
     std::uint32_t controlId) {
-    if (g_activePanelRecord == nullptr) return nullptr;
+    const bool toolbarTarget = ToolbarForControl(controlId) != nullptr;
+    if (g_activePanelRecord == nullptr && !toolbarTarget) return nullptr;
     for (auto& state : g_privateSpellDescriptors) {
         const auto* panel = PanelForSpellRecord(state);
-        if (panel != g_activePanelRecord) continue;
+        if (panel != g_activePanelRecord &&
+            !(toolbarTarget && state.kind == PrivateSpellDescriptorKind::SovereignTarget)) continue;
         bool matches = false;
         switch (state.kind) {
         case PrivateSpellDescriptorKind::TimedRage:
@@ -3362,8 +3372,6 @@ extern "C" const std::uint32_t* __stdcall ResolvePrivateSpellDescriptor(
 
 __declspec(naked) void ResolveSpellDescriptorHook() {
     __asm {
-        cmp dword ptr [g_secondaryPanelActive], 1
-        jne stock_resolver
         push dword ptr [esp + 4]
         call ResolvePrivateSpellDescriptor
         test eax, eax
@@ -3480,6 +3488,18 @@ extern "C" void __cdecl SubmitPrivateSovereignCommand(
         &g_pendingSovereignBuilding, 0, 0));
     if (action != nullptr && building != 0 &&
         mode == action->stockTargetMode) {
+        if(action->sovereignGoldCost) {
+            PaidRecord record{action->privateMode,0,player,x,y,target,action->sovereignGoldCost,building};
+            record.toolbarControl=g_pendingToolbarControl;
+            void* source=g_sovereignUnitResolver(building);
+            void* victim=g_sovereignUnitResolver(target);
+            const char* rejection=PaidActorsRejection(record,*action,source,victim,g_paidWorld());
+            LogPaidClick("target-submit",rejection ? rejection : "accepted",record);
+            if(!rejection) {
+                record.context=g_paidContext(x,y);g_paidSubmission(record);
+            }
+            return;
+        }
         const auto* meter = g_stockControllerRegistry.FindMeter(
             action->panelKey, action->resourceKey);
         const bool paired = !action->sourceTargetCallback.empty();
@@ -3604,6 +3624,7 @@ bool InstallPrivateSovereignSpellRoute() {
         break;
     default: return false;
     }
+    if (!InstallPaidCommandHooks()) return false;
     const bool sourceTarget = HasSourceTargetActions();
     if (sourceTarget) executorHook = reinterpret_cast<const void*>(&ExecuteSourceTargetSovereignCommand);
     auto* commit = reinterpret_cast<unsigned char*>(
@@ -6820,9 +6841,15 @@ bool InstallPrivateRewardFlagModeRegistry() {
     return true;
 }
 
+#include "CompactSovereignToolbar.inl"
+
 extern "C" void __stdcall CaptureSecondaryController(
     std::uint32_t controller,
     std::uint32_t creationHandle) {
+    if(!CompactToolbar::Capture(controller)) {
+        StopUnsafeManagerRuntimeLaunch("The compact sovereign toolbar did not match its verified stock UI profile.");
+        return;
+    }
     if (controller == 0) {
         if (InterlockedExchange(&g_captureParentController, 0) == 1) {
             StopUnsafeManagerRuntimeLaunch(
