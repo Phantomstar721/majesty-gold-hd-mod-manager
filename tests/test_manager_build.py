@@ -153,6 +153,31 @@ class FinalizedRegistryHandoffTests(unittest.TestCase):
 
 
 class ManagerBuildPlanTests(unittest.TestCase):
+    def test_expanded_haunt_pair_resolution_and_variant_exclusion(self):
+        expanded_id = "8FAFA371-810C-419D-8F5C-7E3931450E3F"
+        registry = load_compatibility_registry(repo_root=REPO_ROOT)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_stock_activity_inputs(root)
+            ids = (HAUNT_ID, expanded_id, ALCHEMIST_ID)
+            roots = {key: root / key for key in ids}
+            for path in roots.values():
+                path.mkdir()
+            catalog = Catalog(entries=tuple(_merge_entry(key, key, roots[key]) for key in ids))
+            prepared = {key: _prepared(key, key, roots[key], registry=registry) for key in ids}
+            # Original is substituted with the Expanded payload; package-owned
+            # metadata can give the direct selection a different display alias.
+            prepared[HAUNT_ID] = replace(prepared[HAUNT_ID], package=SimpleNamespace(mod_id=expanded_id))
+            prepared[expanded_id] = replace(prepared[expanded_id], alias="direct-expanded")
+            with patch("majesty_cam.manager.build.prepare_merge_package", side_effect=lambda **kw: prepared[kw['content_id']]), patch("majesty_cam.manager.build.discover_selected_private_activity_texts", return_value=()):
+                expanded_only = create_build_plan(catalog, {expanded_id: True}, registry=registry, game_path=root)
+                pair = create_build_plan(catalog, {expanded_id: True, ALCHEMIST_ID: True}, registry=registry, game_path=root)
+                both = create_build_plan(catalog, {HAUNT_ID: True, expanded_id: True}, registry=registry, game_path=root)
+            self.assertEqual(expanded_only.semantic_resolutions, {})
+            for name in ("random_hero_type", "spell_extra_value"):
+                self.assertIn((DefinitionKind.FUNCTION, name), pair.semantic_resolutions)
+            self.assertTrue(any(issue.code == "duplicate_effective_mod_id" for issue in both.issues))
+
     def test_map_query_package_gets_a_stable_feature_sensitive_scan_plan(self):
         self._query_feature_scan_plan(MapFogQueryFeature(), "map_fog_query", "stock.map-fog-query.v1")
 
