@@ -178,6 +178,37 @@ class ManagerBuildPlanTests(unittest.TestCase):
                 self.assertIn((DefinitionKind.FUNCTION, name), pair.semantic_resolutions)
             self.assertTrue(any(issue.code == "duplicate_effective_mod_id" for issue in both.issues))
 
+    def test_historical_reviewed_bundles_never_gate_or_override_current_inputs(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            roots = {HAUNT_ID: root / 'first', ALCHEMIST_ID: root / 'second'}
+            for path in roots.values():
+                path.mkdir()
+            catalog = Catalog(entries=tuple(_merge_entry(key, key, path)
+                                             for key, path in roots.items()))
+            prepared = {key: PreparedMergeMod(
+                content_id=key, display_name=key, source_root=path,
+                effective_root=path, alias='generic-' + key.casefold(),
+                package=SimpleNamespace(mod_id=key), priority=1000,
+                runtime_capabilities=(), badge=None, substituted=False,
+                compatibility=None, issues=()) for key, path in roots.items()}
+            # Even an absent historical file, changed function, or new helper
+            # must neither gate Prepare nor inject old replacement functions.
+            for hashes in ({HAUNT_ID: {'old': 'a' * 64}},
+                           {HAUNT_ID: {'changed': 'b' * 64, 'new': 'c' * 64}}):
+                rule = CombinationResolution(
+                    required_mod_ids=tuple(roots), source_path=root / 'old.gpl',
+                    items=(ResolutionOwner(kind=DefinitionKind.FUNCTION, name='old'),),
+                    source_sha256='d' * 64, input_function_hashes=hashes)
+                with patch('majesty_cam.manager.build.prepare_merge_package',
+                           side_effect=lambda **kw: prepared[kw['content_id']]), \
+                     patch('majesty_cam.manager.build._parse_resolution_source',
+                           side_effect=AssertionError('Historical bundle read')):
+                    plan = create_build_plan(catalog, {key: True for key in roots},
+                        registry=CompatibilityRegistry(specs={}, combination_resolutions=(rule,)))
+                self.assertEqual(plan.issues, ())
+                self.assertEqual(plan.semantic_resolutions, {})
+
     def test_map_query_package_gets_a_stable_feature_sensitive_scan_plan(self):
         self._query_feature_scan_plan(MapFogQueryFeature(), "map_fog_query", "stock.map-fog-query.v1")
 

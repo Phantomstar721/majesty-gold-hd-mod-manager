@@ -157,7 +157,7 @@ Capture Inspect(const Memory& m, const Profile& p, Address world, Address catalo
     out.failure=nullptr;
     return out;
 }
-void Lifecycle::Invalidate() { ++generation_; ++revision_; coherent_=false; world_=catalog_=0; retiredIds_.clear(); }
+void Lifecycle::Invalidate(const char* reason) { ++generation_; ++revision_; coherent_=false; world_=catalog_=0; retiredIds_.clear(); failure_=reason; }
 bool Lifecycle::Attach(const Memory& m,const Profile& p,int status,int mode,Address world,Address catalog) {
     return AttachWorld(m,p,status==0 && (mode==0 || mode==3),world,catalog);
 }
@@ -165,27 +165,34 @@ bool Lifecycle::AttachCreated(const Memory& m,const Profile& p,int mode,Address 
     return AttachWorld(m,p,mode==0,world,catalog);
 }
 bool Lifecycle::AttachWorld(const Memory& m,const Profile& p,bool accepted,Address world,Address catalog) {
-    Invalidate();
-    if (depth_ || !retirements_.empty() || !accepted || !p.exactExecutable || !p.effectivePackage || !p.lifecycleBound || !catalog || !WorldMatches(m,p,world)) return false;
+    Invalidate("attach-rejected");
+    if (depth_) { failure_="attach-operation-active"; return false; }
+    if (!retirements_.empty()) { failure_="attach-retirement-active"; return false; }
+    if (!accepted) { failure_="attach-route-status-mode"; return false; }
+    if (!p.exactExecutable || !p.lifecycleBound) { failure_="attach-profile"; return false; }
+    if (!p.effectivePackage) { failure_="attach-package"; return false; }
+    if (!catalog) { failure_="attach-null-catalog"; return false; }
+    if (!WorldMatches(m,p,world)) { failure_="attach-world-mismatch"; return false; }
     world_=world; catalog_=catalog; coherent_=true;
+    failure_="none";
     // Every Query reconstructs current native lists, including directly restored orders.
     return true;
 }
-void Lifecycle::EnterOperation() { ++revision_; if (depth_==UINT_MAX) { Invalidate(); return; } ++depth_; }
-void Lifecycle::LeaveOperation() { if (!depth_) { Invalidate(); return; } --depth_; }
-void Lifecycle::BeginWorldTeardown() { Invalidate(); EnterOperation(); }
-void Lifecycle::IdentityIncoherent() { Invalidate(); }
+void Lifecycle::EnterOperation() { ++revision_; if (depth_==UINT_MAX) { Invalidate("operation-depth-overflow"); return; } ++depth_; }
+void Lifecycle::LeaveOperation() { if (!depth_) { Invalidate("operation-depth-underflow"); return; } --depth_; }
+void Lifecycle::BeginWorldTeardown() { Invalidate("world-teardown"); EnterOperation(); }
+void Lifecycle::IdentityIncoherent(const char* reason) { Invalidate(reason); }
 RetirementToken Lifecycle::BeginRetirement(Address pointer,std::uint32_t id) {
     EnterOperation();
-    for (const auto& active:retirements_) if (active.actor==pointer) coherent_=false;
+    for (const auto& active:retirements_) if (active.actor==pointer) { coherent_=false; failure_="duplicate-retirement"; }
     RetirementToken token{generation_,++serial_,pointer,id};
-    if (!pointer || !id) coherent_=false;
+    if (!pointer || !id) { coherent_=false; failure_="invalid-retirement-identity"; }
     retirements_.push_back(token); return token;
 }
 void Lifecycle::EndRetirement(RetirementToken token,bool normalReturn) {
-    if (retirements_.empty() || retirements_.back().serial!=token.serial) { Invalidate(); return; }
+    if (retirements_.empty() || retirements_.back().serial!=token.serial) { Invalidate("retirement-token-mismatch"); return; }
     const auto captured=retirements_.back(); retirements_.pop_back();
-    if (!normalReturn || captured.generation!=generation_) coherent_=false;
+    if (!normalReturn || captured.generation!=generation_) { coherent_=false; failure_="retirement-return-generation"; }
     else retiredIds_.insert(captured.id);
     // No read through captured.actor: the concrete deleting call has returned.
     LeaveOperation();

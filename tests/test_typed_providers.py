@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from majesty_cam.typed_providers import (TypedBooleanProvider, TypedBooleanDispatch,
-    compose_dispatches, parse_feature, feature_mapping)
+    OptionalBooleanDispatch, compose_dispatches, parse_feature, feature_mapping)
 from majesty_cam.gpl import parse_gpl, parse_dat, SemanticMergeResult
 from majesty_cam.compose import compile_gpl
 
@@ -14,6 +14,37 @@ BODY = "function Example_Eligible(agent A, agent B) is boolean\ndeclare\nbegin\n
 
 
 class TypedProviderTests(unittest.TestCase):
+    def test_optional_dispatch_has_no_absent_symbol_or_attribute_access(self):
+        consumer = OptionalBooleanDispatch("optional", P.attribute,
+                                          P.parameter_types, "Optional_Check")
+        self.assertEqual(parse_feature(feature_mapping(consumer)), consumer)
+        for present in (False, True):
+            packages = (("consumer", (consumer,), (parse_gpl(""),)),)
+            if present:
+                packages += (("provider", (P,), (parse_gpl(BODY),)),)
+            generated = compose_dispatches(packages)
+            text = generated[0].text
+            self.assertNotIn("function Provider", text)
+            self.assertNotIn("HasAttribute", text)
+            self.assertEqual("$Example_Eligible" in text, present)
+            self.assertIn("return $Example_Eligible(Arg0, Arg1);" if present
+                          else "return False;", text)
+            compiler = Path("C:/Program Files (x86)/Steam/steamapps/common/Majesty HD/SDK/Gplbcc.exe")
+            if compiler.is_file():
+                source = SemanticMergeResult((*parse_gpl(BODY if present else "").items,
+                                              *generated), ())
+                with TemporaryDirectory(prefix="manager-optional-provider-") as tmp:
+                    compile_gpl(source.emit_project_source_set(), compiler, Path(tmp)/"compiler")
+
+    def test_optional_dispatch_rejects_multiple_providers_without_calling_either(self):
+        consumer = OptionalBooleanDispatch("optional", P.attribute,
+                                          P.parameter_types, "Optional_Check")
+        other = replace(P, callback_symbol="Other_Eligible")
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            compose_dispatches((("consumer", (consumer,), (parse_gpl(""),)),
+                ("one", (P,), (parse_gpl(BODY),)),
+                ("two", (other,), (parse_gpl(BODY.replace("Example_Eligible", "Other_Eligible")),))))
+
     def packages(self, binding="", providers=(P,)):
         return (("provider", providers, (parse_gpl(BODY+binding),)),
                 ("consumer", (C,), (parse_gpl(""),)))

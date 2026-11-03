@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import re
 from pathlib import Path
 from typing import Mapping
 
@@ -28,6 +29,9 @@ class CombinationResolution:
     required_mod_ids: tuple[str, ...]
     source_path: Path
     items: tuple[ResolutionOwner, ...]
+    excluded_mod_ids: tuple[str, ...] = ()
+    source_sha256: str | None = None
+    input_function_hashes: Mapping[str, Mapping[str, str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -221,7 +225,9 @@ def load_compatibility_registry(
     combinations: list[CombinationResolution] = []
     for index, raw in enumerate(raw_combinations):
         context = f"combination_resolutions[{index}]"
-        if not isinstance(raw, dict) or set(raw) != {"requires", "source", "items"}:
+        required_fields = {"requires", "source", "items"}
+        proof_fields = {"excludes", "source_sha256", "input_function_hashes"}
+        if not isinstance(raw, dict) or set(raw) not in (required_fields, required_fields | proof_fields):
             raise CompatibilityFormatError(
                 f"{context} must contain requires, source, and items"
             )
@@ -235,6 +241,30 @@ def load_compatibility_registry(
             raise CompatibilityFormatError(
                 f"{context}.requires needs at least two distinct UUIDs"
             )
+        excluded_ids = ()
+        source_sha256 = None
+        function_hashes = None
+        if "source_sha256" in raw:
+            source_sha256 = raw["source_sha256"]
+            if not isinstance(source_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
+                raise CompatibilityFormatError(f"{context}.source_sha256 must be lowercase SHA256")
+            if not isinstance(raw["excludes"], list) or any(not isinstance(x,str) for x in raw["excludes"]):
+                raise CompatibilityFormatError(f"{context}.excludes must be UUIDs")
+            excluded_ids = tuple(normalize_guid(x) for x in raw["excludes"])
+            if len(set(excluded_ids)) != len(excluded_ids) or set(excluded_ids) & set(required_ids):
+                raise CompatibilityFormatError(f"{context}.excludes repeats or excludes a required participant")
+            supplied = raw["input_function_hashes"]
+            if not isinstance(supplied,dict):
+                raise CompatibilityFormatError(f"{context}.input_function_hashes must be an object")
+            function_hashes = {normalize_guid(key): value for key,value in supplied.items()}
+            if len(function_hashes) != len(supplied) or set(function_hashes) != set(required_ids):
+                raise CompatibilityFormatError(f"{context} must pin every required participant's function set")
+            for hashes in function_hashes.values():
+                if not isinstance(hashes,dict) or not hashes or any(
+                    not isinstance(name,str) or not re.fullmatch(r"[a-z_][a-z0-9_]*",name) or
+                    not isinstance(digest,str) or not re.fullmatch(r"[0-9a-f]{64}",digest)
+                    for name,digest in hashes.items()):
+                    raise CompatibilityFormatError(f"{context} has invalid function identity records")
         source_path = _inside(
             repo_root,
             repo_root / _required_string(raw["source"], f"{context}.source"),
@@ -275,6 +305,9 @@ def load_compatibility_registry(
                 required_mod_ids=required_ids,
                 source_path=source_path,
                 items=tuple(items),
+                excluded_mod_ids=excluded_ids,
+                source_sha256=source_sha256,
+                input_function_hashes=function_hashes,
             )
         )
     return CompatibilityRegistry(

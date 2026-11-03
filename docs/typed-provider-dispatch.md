@@ -75,3 +75,26 @@ This is source-composition support, not new save state or native installation.
 Updated consumer/provider packages and a rebuilt Manager are required before
 the user prepares a new combined package. No existing user profile is rewritten
 as part of implementing or testing this service.
+
+## Optional selected-package dispatch
+
+`stock.optional-boolean-dispatch.v1` has the same declaration fields as the
+typed dispatch above, but its generated function omits the `function Provider`
+argument. It uses the same declared provider attribute/signature contract.
+No attribute installation or access is necessary for this dispatch.
+
+Zero selected providers generates a literal `return False` stub, with no
+reference to the absent callback or its resources. One provider generates one
+ordinary static call, returning its result unchanged. Multiple providers for
+this optional contract are ambiguous and rejected: never try several payment
+callbacks or choose one by load order. Existing dynamic-provider dispatch is
+unchanged. Provider ownership, signature and export-collision checks still apply.
+
+This is a linkage service, not a transaction implementation. A consumer may
+agree with its provider on `(agent Requester, integer Amount, boolean Commit)`;
+the provider must implement a side-effect-free quote when Commit is False,
+then revalidate ownership, eligibility and balances at execution when True.
+It must not yield between final validation and mutation. The UI must not debit
+gold separately if the provider owns both costs. The boolean must describe
+the completed transaction, not merely provider presence. Absent providers are
+disabled, not a reason to hide the consumer's panel or requirement text.

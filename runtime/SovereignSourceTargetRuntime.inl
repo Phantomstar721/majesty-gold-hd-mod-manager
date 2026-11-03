@@ -106,6 +106,9 @@ struct SourceTargetScope {
 bool EvaluateSourceTargetCallback(const char*, void*, void*, void*);
 using SourceTargetCallback = bool (*)(const char*, void*, void*, void*);
 SourceTargetCallback g_sourceTargetCallback = &EvaluateSourceTargetCallback;
+bool EvaluateAttackBountyPreparation(void*, void*, std::uint32_t, std::uint32_t, std::uint32_t*);
+using AttackBountyPreparation = bool (*)(void*, void*, std::uint32_t, std::uint32_t, std::uint32_t*);
+AttackBountyPreparation g_attackBountyPreparation = &EvaluateAttackBountyPreparation;
 
 void __cdecl ExecuteSourceTargetSovereignCommand(std::uint32_t mode,
     std::uint32_t commandContext, std::uint32_t player, std::uint32_t x,
@@ -128,7 +131,15 @@ void __cdecl ExecuteSourceTargetSovereignCommand(std::uint32_t mode,
             LogPaidClick("queued-execute",rejection ? rejection : "accepted",*r);
             if(rejection)return;
             execution.nativeGoldCost=cost;
-
+            if(action->attackBountyAmount) {
+                std::uint32_t remainder=0;
+                if(!g_attackBountyPreparation(execution.source,execution.target,cost,
+                    action->attackBountyAmount,&remainder))return;
+                if(remainder!=cost && remainder!=cost-action->attackBountyAmount)return;
+                if(!PaidActors(*r,*action,execution.source,execution.target,execution.world))return;
+                execution.nativeGoldCost=remainder;
+                cost=remainder;
+            }
         } else {
         // V2 reserves the otherwise-zero private gold-cost word for source ID.
         // Decode before entering stock code, so it can never become a gold debit.

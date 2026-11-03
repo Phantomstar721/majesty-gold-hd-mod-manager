@@ -12,13 +12,13 @@ int main() {
         if(i==1)d.Accept("reregistered");
         else d.Stage("startup-world-present",0x123,0x456,0x789);
     }
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
-    assert(rows.size()==16);
+#if 1
+    assert(rows.size()==18);
     assert(rows[0].find("stage=entry a=00000000 b=00000001 c=0000007b result=000001c8")!=std::string::npos);
     assert(rows[1].find("stage=startup-world-present a=00000123 b=00000456 c=00000789 result=00000000")!=std::string::npos);
     assert(rows[3].find("stage=reregistered")!=std::string::npos);
     assert(rows[3].find("result=00000001")!=std::string::npos);
-    assert(rows.back().find("attempt=8")!=std::string::npos);
+    assert(rows.back().find("attempt=10")!=std::string::npos); // late failures are never hidden by success budget
 #else
     assert(rows.empty());
 #endif

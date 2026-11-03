@@ -1,9 +1,14 @@
-# Stock-value equipment (local beta2 trial)
+# Stock-value equipment
 
 `stock.equipment.v1` registers a private weapon or armor identity while keeping
 Majesty's stock buying, research, ranks, bonuses, numeric display, and save
-attributes. This is a beta2 1.5.2.28 test feature, not a claim of public-branch
-or completed in-game validation. Unverified executables fail closed.
+attributes. The current runtime supports Steam public 1.5.2.24, Steam beta2
+1.5.2.28 and GOG 1.5.2.28 through independently guarded profiles in
+`runtime/FeatureParityProfiles.h` and `runtime/EquipmentRuntime.cpp`.
+`tests/test_feature_parity_profiles.py` checks native registration, presenter,
+resource acquisition and cleanup evidence against all three fixtures. These
+static checks do not establish a particular mod's in-game acceptance.
+Unverified executables fail closed.
 
 Add one record per equipment identity to schema-3 `runtime_features`:
 

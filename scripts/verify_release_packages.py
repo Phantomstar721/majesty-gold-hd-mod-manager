@@ -74,7 +74,8 @@ def main():
                     runtime_feature_registry=features,controller_registry=controller.registry,
                     has_source_exploration=c.exploration_selected((item.inventory,)),
                     has_spell_origin=c.spell_origin_selected((item.inventory,)),
-                    has_projectile_interception=selected((item.inventory,)))
+                    has_attack_observation=selected((item.inventory,)),
+                    has_native_impact=selected((item.inventory,)))
                 unavailable = unsupported_runtime_capabilities(detect_majesty_branch(exe), capabilities)
                 if issues or unavailable:
                     row.setdefault('profileErrors', {})[branch] = '; '.join([i.message for i in issues] + list(unavailable))

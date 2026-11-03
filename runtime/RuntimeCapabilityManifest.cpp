@@ -22,6 +22,7 @@ constexpr const char* kSupportedCapabilities[] = {
     kMapFogQuery,
     kMovementQuery,
     kNativeTiming,
+    kMessageFlagControls,
     kEquipment,
     kKingdomResearch,
     kHeroInfo,
@@ -31,6 +32,7 @@ constexpr const char* kSupportedCapabilities[] = {
     kSpellOrigin,
     kAttackObservation,
     kProjectileInterception,
+    kCheckedPlacement,
 };
 
 void SetError(std::string* error, const char* message) {

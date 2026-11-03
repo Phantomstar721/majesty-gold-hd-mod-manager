@@ -9,6 +9,8 @@ subscribed to through Steam Workshop.
 It also combines compatible Merge mods and supplies the game-side support
 needed by custom buildings, panels, and other advanced features.
 
+Current release: **0.3.11**. [What changed](release/v0.3.11.md).
+
 ## Features
 
 - Finds local and Steam Workshop mods and downloaded quests automatically.
@@ -31,6 +33,11 @@ needed by custom buildings, panels, and other advanced features.
 - Supports reusable list, research, reward, and recruitment panels, including
   single-panel layouts at lower resolutions.
 - Supports custom ability names, icons, and hover descriptions in hero panels.
+- Supports registered custom-hero combat and travel abilities, timed effects,
+  employment, research queues, and persistent item/status displays.
+- Keeps bounded failure evidence and offers **Save Support Report**, without
+  continuous tracing or automatic uploads.
+- Shows **Manager version** and **Game executable version** separately.
 - Leaves subscribed mods and downloaded quests unchanged.
 - Installs and manages the supported Majesty quality-of-life patches.
 - Supports both maintained Steam versions and GOG Gold HD 1.5.2.28. See
@@ -74,10 +81,19 @@ downloading any updated mods, reopen the Manager and choose
 **Prepare Selected Mods** (or **Prepare Again**) to refresh your generated
 package before launching.
 
-See the [0.3.10 release notes](release/v0.3.10.md) for conflict review and art
-composition updates, and the [sound naming guidance](docs/sound-resource-preferences.md)
+See the [0.3.11 release notes](release/v0.3.11.md) for runtime and reporting
+updates, and the [sound naming guidance](docs/sound-resource-preferences.md)
 for authors. Compatibility checks refresh automatically when
 relevant inputs change; **Rescan Content** remains available for a manual refresh.
+
+## Reporting a problem
+
+Choose **Save Support Report** after a failure and share that ZIP with the
+steps you took. It contains bounded runtime logs, the first recorded failure,
+launch-time versions and mod identities, and recent Manager errors. It does not
+include saves, mod binaries or full memory dumps. Review it before sharing:
+local paths and mod names may identify your account. Nothing is sent automatically.
+See [support-report limits](docs/bounded-support-reporting.md).
 
 ## Content tabs
 

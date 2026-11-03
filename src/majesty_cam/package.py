@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .inventory_items import InventoryDeathDropExclusion, TYPE as INVENTORY_DEATH_TYPE, parse as parse_inventory_death, mapping as inventory_death_mapping
+
 from dataclasses import dataclass
 import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -10,7 +12,7 @@ import xml.etree.ElementTree as ET
 from .runtime_capabilities import is_runtime_capability_name
 from .potion_policy import PotionPolicy, TYPE as POTION_POLICY_TYPE, parse_feature as parse_potion_policy, feature_mapping as potion_policy_mapping
 from .equipment import StockEquipment, EQUIPMENT_FEATURE_TYPE, parse_equipment, equipment_mapping
-from .hero_info import HeroInfoRow, HERO_INFO_TYPE, parse_hero_info, hero_info_mapping
+from .hero_info import HeroInfoRow, HERO_INFO_TYPE, SAVED_ATTRIBUTE_ROW_TYPE, INVENTORY_ITEM_DISPLAY_TYPE, parse_hero_info, hero_info_mapping
 from .movement_scale import (OverlayMovementScale, MOVEMENT_SCALE_TYPE,
                              parse_movement_scale, movement_scale_mapping)
 from .kingdom_research import (KingdomResearch, KINGDOM_RESEARCH_TYPE,
@@ -19,7 +21,7 @@ from .shared_features import (
     SHARED_FEATURE_TYPES, SharedFeature, StockGameplayEventObserver,
     StockActivityDuration, parse_shared_feature, shared_feature_mapping,
 )
-from .typed_providers import (TypedBooleanProvider, TypedBooleanDispatch,
+from .typed_providers import (TypedBooleanProvider, TypedBooleanDispatch, OptionalBooleanDispatch,
     FEATURE_TYPES as TYPED_PROVIDER_TYPES, FEATURE_CLASSES as TYPED_PROVIDER_CLASSES,
     parse_feature as parse_typed_provider, feature_mapping as typed_provider_mapping)
 from .spell_policy import (SpellPolicyProvider, DirectProjectileImpact, SpecialSpell, SpellPolicyDiscovery,
@@ -27,12 +29,20 @@ from .spell_policy import (SpellPolicyProvider, DirectProjectileImpact, SpecialS
     parse_feature as parse_spell_policy, feature_mapping as spell_policy_mapping)
 from .spell_origin import (SpellOrigin, FEATURE_TYPE as SPELL_ORIGIN_TYPE,
     parse_feature as parse_spell_origin, feature_mapping as spell_origin_mapping)
-from .source_context import (SourceContextDispatch, FEATURE_TYPE as SOURCE_CONTEXT_TYPE,
-    parse_feature as parse_source_context, feature_mapping as source_context_mapping)
-from .damage_contributions import (DamageContribution, FEATURE_TYPE as DAMAGE_CONTRIBUTION_TYPE,
-    parse_feature as parse_damage_contribution, feature_mapping as damage_contribution_mapping)
 from .native_impact import (ProjectileInterception, FEATURE_TYPE as NATIVE_IMPACT_TYPE,
     parse_feature as parse_native_impact, feature_mapping as native_impact_mapping)
+from .damage_contributions import (DamageContribution, FEATURE_TYPE as DAMAGE_CONTRIBUTION_TYPE,
+    parse_feature as parse_damage_contribution, feature_mapping as damage_contribution_mapping)
+from .hero_combat_policy import (HeroCombatPolicy, TYPE as HERO_COMBAT_POLICY_TYPE,
+    parse_feature as parse_hero_combat_policy, feature_mapping as hero_combat_policy_mapping)
+from .checked_placement import (CheckedPlacement, FEATURE_TYPE as CHECKED_PLACEMENT_TYPE,
+    PRESENTED_FEATURE_TYPE as PRESENTED_PLACEMENT_TYPE,
+    LEARNED_FEATURE_TYPE as LEARNED_PLACEMENT_TYPE,
+    parse_feature as parse_checked_placement, feature_mapping as checked_placement_mapping)
+from .attack_observation import (AttackObservation, FEATURE_TYPE as ATTACK_OBSERVATION_TYPE,
+    parse_feature as parse_attack_observation, feature_mapping as attack_observation_mapping)
+from .source_context import (SourceContextDispatch, FEATURE_TYPE as SOURCE_CONTEXT_TYPE,
+    parse_feature as parse_source_context, feature_mapping as source_context_mapping)
 from .gpl_features import (
     GplFeature,
     GplFeatureError,
@@ -49,6 +59,7 @@ from .gpl_features import (
 from .runtime_features import (
     EnchantmentRowFeature,
     NameGeneratorFeature,
+    MessageFlagControlsFeature,
     MapFogQueryFeature,
     MovementQueryFeature,
     NativeTimingFeature,
@@ -215,7 +226,7 @@ class CustomBuildingDefinition:
 # Backward-compatible descriptive alias for the schema's AP78-specific record
 # name; the runtime module intentionally uses the reusable shorter class name.
 Ap78EnchantmentRowFeature = EnchantmentRowFeature
-PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature, GplFeature, SharedFeature, StockEquipment, KingdomResearch, TypedBooleanProvider, TypedBooleanDispatch, SpellPolicyProvider, DirectProjectileImpact, SpecialSpell, SpellPolicyDiscovery, SpellOrigin, SourceContextDispatch, PotionPolicy, ProjectileInterception, DamageContribution]
+PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature, GplFeature, SharedFeature, StockEquipment, KingdomResearch, TypedBooleanProvider, TypedBooleanDispatch, OptionalBooleanDispatch, SpellPolicyProvider, DirectProjectileImpact, SpecialSpell, SpellPolicyDiscovery, SpellOrigin, SourceContextDispatch, PotionPolicy, AttackObservation, CheckedPlacement, ProjectileInterception, DamageContribution, HeroCombatPolicy]
 
 
 @dataclass(frozen=True)
@@ -583,6 +594,10 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 name_part_ids=(tables[0], tables[1], tables[2], tables[3]),
             )
             feature_key = (feature_type, generator_id.casefold())
+        elif feature_type == "stock.message-flag-controls.v1":
+            _require_exact_fields(raw_feature, {"type"}, context)
+            feature = MessageFlagControlsFeature()
+            feature_key = (feature_type, "shared")
         elif feature_type == "stock.map-fog-query.v1":
             _require_exact_fields(raw_feature, {"type"}, context)
             feature = MapFogQueryFeature()
@@ -623,7 +638,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 display_text=display_text,
             )
             feature_key = (feature_type, overlay_id.casefold())
-        elif feature_type in (HERO_INFO_TYPE, "stock.inventory-item-display.v1"):
+        elif feature_type in (HERO_INFO_TYPE, SAVED_ATTRIBUTE_ROW_TYPE, INVENTORY_ITEM_DISPLAY_TYPE):
             try:
                 feature = parse_hero_info(raw_feature)
             except ValueError as exc:
@@ -647,9 +662,27 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             except ValueError as exc:
                 raise PackageFormatError(f"{context}: {exc}") from exc
             feature_key = (feature_type, feature.feature_key)
-        elif feature_type == NATIVE_IMPACT_TYPE:
+        elif feature_type == SOURCE_CONTEXT_TYPE:
             try:
-                feature = parse_native_impact(raw_feature)
+                feature = parse_source_context(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context} is invalid: {exc}") from exc
+            feature_key = (feature_type, feature.feature_key.casefold())
+        elif feature_type in (CHECKED_PLACEMENT_TYPE, PRESENTED_PLACEMENT_TYPE, LEARNED_PLACEMENT_TYPE):
+            try:
+                feature = parse_checked_placement(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context} is invalid: {exc}") from exc
+            feature_key = (feature_type, feature.feature_key.casefold())
+        elif feature_type == ATTACK_OBSERVATION_TYPE:
+            try:
+                feature = parse_attack_observation(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context} is invalid: {exc}") from exc
+            feature_key = (feature_type, feature.feature_key.casefold())
+        elif feature_type == HERO_COMBAT_POLICY_TYPE:
+            try:
+                feature = parse_hero_combat_policy(raw_feature)
             except ValueError as exc:
                 raise PackageFormatError(f"{context} is invalid: {exc}") from exc
             feature_key = (feature_type, feature.feature_key.casefold())
@@ -659,9 +692,9 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             except ValueError as exc:
                 raise PackageFormatError(f"{context} is invalid: {exc}") from exc
             feature_key = (feature_type, feature.feature_key.casefold())
-        elif feature_type == SOURCE_CONTEXT_TYPE:
+        elif feature_type == NATIVE_IMPACT_TYPE:
             try:
-                feature = parse_source_context(raw_feature)
+                feature = parse_native_impact(raw_feature)
             except ValueError as exc:
                 raise PackageFormatError(f"{context} is invalid: {exc}") from exc
             feature_key = (feature_type, feature.feature_key.casefold())
@@ -686,6 +719,12 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         elif feature_type in SHARED_FEATURE_TYPES:
             try:
                 feature = parse_shared_feature(raw_feature)
+            except ValueError as exc:
+                raise PackageFormatError(f"{context} is invalid: {exc}") from exc
+            feature_key = (feature_type, feature.feature_key.casefold())
+        elif feature_type == INVENTORY_DEATH_TYPE:
+            try:
+                feature = parse_inventory_death(raw_feature)
             except ValueError as exc:
                 raise PackageFormatError(f"{context} is invalid: {exc}") from exc
             feature_key = (feature_type, feature.feature_key.casefold())
@@ -733,6 +772,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 "stock.ap69-sovereign-target-action.v2",
                 "stock.ap69-sovereign-target-action.v3",
                 "stock.ap92-sovereign-toolbar-action.v1",
+                "stock.ap69-attack-bounty-action.v1",
                 "stock.ap41-fl00-hostile-monster-flag.v1",
             }:
                 local_identity = str(mapping["action_key"])
@@ -740,6 +780,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
                 "stock.ap10-ap69-secondary-panel.v1",
                 "stock.mx04-mx05-occupant-action-panel.v1",
                 "stock.mx05-live-agent-list-panel.v1",
+                "stock.building-employment.v1",
                 "stock.mx05-data-record-list-panel.v1",
                 "stock.mx09-ap41-reward-panel.v1",
                 "stock.ap17-upgrade-research-gate.v1",
@@ -759,7 +800,8 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             if feature_type not in ("stock.mx22-building-open-toggle.v1", "stock.mx22-building-open-toggle.v2", "stock.mx22-building-open-toggle.v3"):
                 feature_key = (
                     feature_type,
-                    str(mapping["panel_key"]).casefold(),
+                    str(mapping["feature_key"] if feature_type == "stock.building-employment.v1"
+                        else mapping["panel_key"]).casefold(),
                     local_identity.casefold(),
                 )
         if feature_key in seen_feature_keys:
@@ -769,7 +811,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         seen_feature_keys.add(feature_key)
         if schema_version == 2 and not isinstance(feature, PotionPolicy):
             raise PackageFormatError("legacy v2 runtime_features only accepts source-only potion policies")
-        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature, HeroInfoRow, OverlayMovementScale)):
+        if isinstance(feature, (NameGeneratorFeature, EnchantmentRowFeature, MessageFlagControlsFeature, MapFogQueryFeature, MovementQueryFeature, NativeTimingFeature, HeroInfoRow, OverlayMovementScale)):
             try:
                 normalize_runtime_features((feature,))
             except ValueError as exc:
@@ -1251,6 +1293,8 @@ def mod_definition_mapping(definition: ModDefinition) -> dict:
 
 
 def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
+    if isinstance(feature, HeroCombatPolicy):
+        return hero_combat_policy_mapping(feature)
     if isinstance(feature, OverlayMovementScale):
         return movement_scale_mapping(feature)
     if isinstance(feature, HeroInfoRow):
@@ -1263,6 +1307,8 @@ def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
         return {"type": "stock.map-fog-query.v1"}
     if isinstance(feature, MovementQueryFeature):
         return {"type": "stock.movement-query.v1"}
+    if isinstance(feature, MessageFlagControlsFeature):
+        return {"type": "stock.message-flag-controls.v1"}
     if isinstance(feature, NativeTimingFeature):
         return {"type": "stock.native-timing.v1", "spell_ids": list(feature.spell_ids),
                 "effector_ids": list(feature.effector_ids)}
@@ -1286,12 +1332,18 @@ def _runtime_feature_mapping(feature: PackageRuntimeFeature) -> dict:
         return typed_provider_mapping(feature)
     if isinstance(feature, SPELL_POLICY_CLASSES):
         return spell_policy_mapping(feature)
-    if isinstance(feature, SpellOrigin):
-        return spell_origin_mapping(feature)
     if isinstance(feature, ProjectileInterception):
         return native_impact_mapping(feature)
+    if isinstance(feature, InventoryDeathDropExclusion):
+        return inventory_death_mapping(feature)
     if isinstance(feature, DamageContribution):
         return damage_contribution_mapping(feature)
+    if isinstance(feature, SpellOrigin):
+        return spell_origin_mapping(feature)
+    if isinstance(feature, CheckedPlacement):
+        return checked_placement_mapping(feature)
+    if isinstance(feature, AttackObservation):
+        return attack_observation_mapping(feature)
     if isinstance(feature, SourceContextDispatch):
         return source_context_mapping(feature)
     if isinstance(

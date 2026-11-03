@@ -164,7 +164,7 @@ try {
         "runtime feature registry contains trailing bytes", "FindEnchantmentRow"
     ) "Runtime feature registry contract"
     Assert-ContainsAny @($controllerSource, $controllerHeader) @(
-        "kRegistryVersion = 21", "kMaximumRecordCount = 256",
+        "kRegistryVersion = 22", "kMaximumRecordCount = 256",
         "kMaximumPanelCount = 32", "kMaximumRegistryBytes = 512u * 1024u",
         "ParseRegistry", "FindPanelByParentDialog", "FindPanelByChildDialog",
         "FindRewardPanelByParentDialog", "FindHostileMonsterFlagByMode",
@@ -380,7 +380,7 @@ try {
         @{ Condition = "ap10Ap69ControllerRecipes || kingdomResearch"; Calls = @(
             "ValidateStockResearchRoute()", "InstallPrivateResearchDescriptorRegistry()",
             "InstallResearchCompletionBridge()", "InstallResearchCompletionNameClone()") },
-        @{ Condition = "kingdomResearch"; Calls = @("InstallKingdomResearchGate()") },
+        @{ Condition = "kingdomResearch || !g_stockControllerRegistry.researchRows.empty()"; Calls = @("InstallKingdomResearchGate()") },
         @{ Condition = "ap10Ap69ControllerRecipes"; Calls = @(
             "InstallPrivateSpellDescriptorResolver()", "InstallPrivateSovereignSpellRoute()",
             "InstallPrivateRageRoute()", "InstallGameUpdateRefreshBridge()") },
@@ -466,8 +466,8 @@ try {
     Assert-ContainsAny @($runtimeSource) @(
         "dispatchSlot[-1] != 0x00002009u", "dispatchSlot[1] != 0x0000200Bu",
         "g_stockResearchCompletion", "&ResearchCompletionBridge",
-        "CaptureBuildingActivity(context)", "RestoreBuildingActivity(context, liveActivity)",
-        "CaptureSubmittedResearch(activityBeforeUpdate)"
+        "CaptureBuildingActivity(context)", "ReadPackedAttributeValue(context, kCurrentResearchAttributeId)",
+        "CaptureSubmittedResearch()"
     ) "Stock AP99 completion lifecycle"
 
     $childSetup = Get-SourceSpan $runtimeSource `
@@ -487,11 +487,11 @@ try {
         "void ClearSecondaryPanelControllerOwnedState()"
     Assert-Ordered $childEvent @(
         "g_stockAp69Event(controller, argument1, argument2, argument3, argument4);",
-        "UpdateSecondaryPanelPresentation(",
         "if (stockResearchRefresh)",
         "RefreshTimedRageRows(value);",
         "RefreshPrivateResearchRows(value);",
-        "RefreshPrivateActionRows(value, true);"
+        "RefreshPrivateActionRows(value, true);",
+        "UpdateSecondaryPanelPresentation("
     ) "AP69 child event refresh"
     $parentSetup = Get-SourceSpan $runtimeSource `
         "void __fastcall ParentPanelControllerSetup(" `
@@ -502,7 +502,7 @@ try {
         "ApplyUpgradeResearchGate("
     ) "AP10 parent setup"
     $parentActivity = Get-SourceSpan $runtimeSource `
-        "void __fastcall ParentPanelControllerActivity(" `
+        "void __fastcall ParentPanelControllerActivity(void* controller, void*) {" `
         "void __fastcall ParentPanelControllerEvent("
     Assert-Ordered $parentActivity @(
         "g_stockParentActivity(controller);",
@@ -720,28 +720,30 @@ try {
         "int BeginPrivateResearch(" `
         "int HandleRageCommandAction("
     Assert-Ordered $researchBegin @(
-        "CaptureBuildingActivity(context)", "ClearBuildingActivity(context);",
+        "PrivateResearchIsActive()",
         "canSubmitResearch(", "g_researchOwner.pending = true;",
         "submitResearchCommand(commandOwner, context, row.actionControlId);",
-        "CaptureSubmittedResearch(liveActivity)",
-        "RestoreBuildingActivity(context, liveActivity);"
+        "CaptureSubmittedResearch()"
     ) "AP99 private submission"
     $researchCapture = Get-SourceSpan $runtimeSource `
         "bool CaptureSubmittedResearch(" `
-        "void StageResearchForStockCompletion()"
+        "void __cdecl ResearchCompletionBridge("
     Assert-Ordered $researchCapture @(
         "CaptureBuildingActivity(g_researchOwner.context)",
-        "RestoreBuildingActivity(", "g_researchOwner.pending = false;",
-        "g_researchOwner.active = true;"
+        "g_researchOwner = {};"
     ) "AP99 queued tuple capture"
     $researchCompletion = Get-SourceSpan $runtimeSource `
         "void __cdecl ResearchCompletionBridge(" `
         "void __fastcall GameUpdateRefreshBridge("
     Assert-Ordered $researchCompletion @(
-        "CaptureBuildingActivity(context)", "StageResearchForStockCompletion();",
+        "FindResearchByCommand(",
         "g_stockResearchCompletion(", "CaptureBuildingActivity(context)",
-        "RestoreBuildingActivity(context, liveActivity);", "g_researchOwner = {};"
+        "g_researchOwner = {};"
     ) "AP99 event 0x2009 completion handoff"
+    if ($runtimeSource.Contains("StageResearchForStockCompletion") -or
+        $runtimeSource.Contains("RestoreBuildingActivity(")) {
+        throw "Private research must retain Majesty's saved activity tuple."
+    }
     $researchRegistration = Get-SourceSpan $runtimeSource `
         "bool RegisterPrivateResearchDescriptors()" `
         "bool InstallPrivateResearchDescriptorRegistry()"

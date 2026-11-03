@@ -26,6 +26,7 @@ def main():
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
     from majesty_cam.package import load_package
     from majesty_cam.compose import inventory_package, SelectedMod, resolve_runtime_feature_registry, _parse_inventory_gpl_sources
+    from majesty_cam.inventory_items import bindings
     from majesty_cam.hero_info import hero_info_mapping
     from majesty_cam.runtime_features import encode_runtime_feature_registry, decode_runtime_feature_registry
     from majesty_cam.manager.preflight import catalog_merge_preflight
@@ -36,6 +37,7 @@ def main():
     if issues:
         raise ValueError(f"candidate admission failed: {issues}")
     inventory = inventory_package(SelectedMod("candidate", package))
+    exclusions = bindings((inventory,), {"candidate": _parse_inventory_gpl_sources(inventory)})
     registry = resolve_runtime_feature_registry((inventory,))
     encoded = encode_runtime_feature_registry(registry)
     decoded = decode_runtime_feature_registry(encoded)
@@ -47,7 +49,7 @@ def main():
         loader.verify_source()
         loader.verify_data(args.application)
     receipt = dict(package=str(args.package.resolve()), application=str(args.application.resolve()) if args.application else None,
-        inventory_rows=rows, 
+        inventory_rows=rows, death_drop_exclusions=exclusions,
         registry_version=struct.unpack_from("<I", encoded, 4)[0], registry_sha256=hashlib.sha256(encoded).hexdigest(),
         package_files={p.relative_to(args.package).as_posix():hashlib.sha256(p.read_bytes()).hexdigest()
                        for p in sorted(args.package.rglob("*")) if p.is_file()},

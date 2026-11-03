@@ -19,7 +19,8 @@ profile and consumed native code, not unrelated executable changes.
   grouped Standard review and cycle rejection, sound preferences, periodic damage
   call routing, source recovery, generated-event review, and the fixed
   reported Standard-component combination in both preference directions.
-  Development-only art packages are excluded.
+  The promoted custom-hero feature fixtures and current local candidate are also
+  covered; no diagnostic compile switches are enabled.
 - Development: actual installed guilds plus the local development package,
   every native profile test, placement/art/scoped-output and private lifecycle
   fixtures. MAJESTY_DEVELOPMENT_PACKAGE overrides the local development package

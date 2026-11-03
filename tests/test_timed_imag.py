@@ -50,3 +50,4 @@ class TimedImagTests(unittest.TestCase):
         self.assertEqual([r.offset for r in parsed.references],list(range(136,185,8)))
         struct.pack_into('<H',data,118,2)
         with self.assertRaises(UnsupportedImagShapeError):parse_best_imag_tile_references(bytes(data),tile_count=900)
+

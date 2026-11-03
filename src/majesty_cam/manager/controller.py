@@ -29,6 +29,7 @@ from .build import (
     _order_standard_ids,
     read_managed_build,
     _require_current_plan_sources,
+    _plan_source_metadata_signature,
     refresh_standard_script_inputs,
 )
 from .catalog import Catalog, CatalogKind, scan_catalog
@@ -462,6 +463,20 @@ class ManagerController:
 
     def build(self, *, progress=None, script_conflict_resolver=None,
               review_scripts=False) -> tuple[ManagerBuildResult, ControllerSnapshot]:
+        # Deployment can replace a selected package after the catalog was opened.
+        # Refresh derived registries and conflict candidates before review, not
+        # after composition has begun. Unchanged inputs keep the cached plan.
+        if self.plan.source_metadata_signature and (
+            _plan_source_metadata_signature(
+                self.plan.selected_merge,
+                game_path=self.paths.game_path,
+                stock_compose_inputs=self.plan.stock_compose_inputs,
+                compatibility_file_inputs=self.plan.compatibility_file_inputs,
+            ) != self.plan.source_metadata_signature
+        ):
+            if progress:
+                progress("Refreshing changed preparation inputs")
+            self._replan()
         self._discard_stale_script_preferences()
         snapshot = self.snapshot()
         if not snapshot.can_build:
@@ -601,6 +616,9 @@ class ManagerController:
                     controller_registry,
                     resolve_stock_controller_registry((), {}),
                 )
+            from .support_report import record_launch
+            record_launch(self.paths, active_ids,
+                          {e.content_id: e.display_name for e in self.catalog.entries})
             result = launch_majesty(
                 self.paths,
                 active_ids,

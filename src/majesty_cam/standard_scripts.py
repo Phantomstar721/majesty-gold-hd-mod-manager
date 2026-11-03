@@ -121,8 +121,9 @@ class StandardScripts:
 def read(entry):
     """Snapshot declared files once; defer semantic parsing until composition.
 
-    No project discovery or compiler work belongs in selection/plan refresh.
-    Bytecode indexing and source parsing are deferred until composition.
+    Recover a shipped matching compiler project when the manifest omits Source
+    rows. Compilation, bytecode indexing and parsing remain deferred until
+    composition; recovered sources must still reproduce the loaded bytecode.
     """
     root = entry.package_root.resolve()
     package = None

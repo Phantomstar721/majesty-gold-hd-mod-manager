@@ -27,6 +27,27 @@ def decision(order, tail='a=1; b=2;'):
 
 
 class InstructionMergeTests(unittest.TestCase):
+    def test_explicit_class_preambles_keep_opaque_inner_guards(self):
+        base = function('a=1; b=2;')
+        marker = 'if ($HasAttribute("PrivateMarker",unit)) if (unit\'s "PrivateMarker") begin $PrivateTask(unit); return; end'
+        callback = 'if ($PrivateReaction(unit)) return;'
+        # Unrelated-looking names are not proof: both may apply to one actor.
+        with self.assertRaises(FunctionMergeError):
+            merge_function(base, {'one': function(marker+' a=1; b=2;'),
+                                  'two': function(callback+' a=1; b=2;')})
+        variants = {
+            'one': function('if (unit\'s "title" == "PrivateClassA") '+marker+' a=1; b=2;'),
+            'two': function('if (unit\'s "title" == "PrivateClassB") '+callback+' a=1; b=2;'),
+        }
+        result = merge_function(base, variants)
+        reversed_result = merge_function(base, dict(reversed(list(variants.items()))))
+        self.assertEqual(structure(result), structure(reversed_result))
+        body = structure(result)[2]
+        self.assertEqual(body[1:], structure(base)[2])
+        tokens = _tokens(result)
+        for call in ('$hasattribute', '$privatetask', '$privatereaction'):
+            self.assertEqual(tokens.count(call), 1)
+
     def test_stock_postfix_operators_survive_rendered_merge_as_single_tokens(self):
         base = function('a=1; b=2; (unit\'s "Count")++; (unit\'s "Other")--;')
         merged = merge_function(base, {

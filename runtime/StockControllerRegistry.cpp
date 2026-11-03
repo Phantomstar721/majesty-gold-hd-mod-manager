@@ -338,6 +338,7 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
     std::map<std::string, const SecondaryPanelRecord*> panels;
     std::set<std::uint32_t> childDialogs;
     std::set<std::uint32_t> buildingFamilies;
+    std::map<std::uint32_t, std::uint32_t> familyParents;
     std::set<std::pair<std::uint32_t, std::uint32_t> > parentCommands;
     std::map<std::string, std::map<std::uint32_t, int> > controls;
     for (std::vector<SecondaryPanelRecord>::const_iterator item =
@@ -354,12 +355,14 @@ bool ValidateComposition(const Registry& registry, std::string* error) {
         }
         if (!panels.insert(std::make_pair(item->panelKey, &*item)).second ||
             !childDialogs.insert(item->childDialogId).second ||
-            !buildingFamilies.insert(item->buildingFamilyId).second ||
+            (familyParents.count(item->buildingFamilyId) && familyParents[item->buildingFamilyId] != item->parentDialogId) ||
             !parentCommands.insert(std::make_pair(
                 item->parentDialogId, item->openCommandId)).second) {
             return Fail(error, "MMCR secondary panel identity is duplicated");
         }
         controls[item->panelKey] = std::map<std::uint32_t, int>();
+        buildingFamilies.insert(item->buildingFamilyId);
+        familyParents[item->buildingFamilyId] = item->parentDialogId;
     }
     std::set<std::string> rewardPanelKeys;
     for (const auto& item : registry.rewardPanels) {
@@ -715,6 +718,9 @@ const SecondaryPanelRecord* Registry::FindPanelByChildDialog(
 
 const SecondaryPanelRecord* Registry::FindPanelByParentDialog(
     std::uint32_t parentDialogId) const {
+    // AP10's built-in Research command remains the canonical parent route.
+    for (const auto& item : panels)
+        if (item.parentDialogId == parentDialogId && item.openCommandId == 0x1F49u) return &item;
     for (std::vector<SecondaryPanelRecord>::const_iterator item = panels.begin();
          item != panels.end(); ++item) {
         if (item->parentDialogId == parentDialogId) return &*item;
@@ -939,6 +945,38 @@ bool ParseRegistry(
             (!parsed.panels.empty() && parsed.panels.back().panelKey >= item.panelKey)) {
             return Fail(error, "MMCR secondary panel record is invalid or noncanonical");
         }
+        if (version >= 26) {
+            std::uint32_t present = 0;
+            if (!reader.ReadU32(&item.requiredLevel) || item.requiredLevel < 1 || item.requiredLevel > 3 ||
+                !reader.ReadU32(&present) || present > 1 ||
+                (present && !reader.ReadSymbol(&item.eligibilityCallbackSymbol)))
+                return Fail(error, "MMCR secondary panel eligibility is invalid");
+        }
+        if (version >= 27) {
+            std::uint32_t count = 0;
+            if (!reader.ReadU32(&count) || count > 16) return Fail(error, "MMCR panel commands overflow");
+            for (std::uint32_t n=0; n<count; ++n) {
+                PanelCommandRecord command = {};
+                if (!reader.ReadU32(&command.controlId) || command.controlId <= 0x22CE || command.controlId > 65535 ||
+                    !reader.ReadSymbol(&command.callbackSymbol) || !reader.ReadSymbol(&command.quoteSymbol) ||
+                    !reader.ReadSymbol(&command.commitSymbol) || !reader.ReadSymbol(&command.ownerSymbol)) return Fail(error, "MMCR panel command invalid");
+                for (const auto& prior : item.commands)
+                    if (prior.controlId == command.controlId) return Fail(error, "MMCR panel command collision");
+                for (const auto& panel : parsed.panels) for (const auto& prior : panel.commands)
+                    if (prior.controlId == command.controlId) return Fail(error, "MMCR panel command collision");
+                item.commands.push_back(std::move(command));
+            }
+        }
+        if(version>=30) {
+            if(!reader.ReadU32(&item.cooldownDurationMs) || item.cooldownDurationMs>0x7FFFFFFFu)
+                return Fail(error,"MMCR cooldown duration invalid");
+            if(item.cooldownDurationMs && (!reader.ReadSymbol(&item.cooldownRemainingCallbackSymbol) ||
+                !reader.ReadU32(&item.cooldownProgressControlId) || !reader.ReadU32(&item.cooldownTextControlId) ||
+                !item.cooldownProgressControlId || item.cooldownProgressControlId>65535 ||
+                !item.cooldownTextControlId || item.cooldownTextControlId>65535 ||
+                item.cooldownProgressControlId==item.cooldownTextControlId))
+                return Fail(error,"MMCR cooldown display invalid");
+        }
         parsed.panels.push_back(std::move(item));
     }
     for (std::uint32_t index = 0; index < counts[1]; ++index) {
@@ -977,6 +1015,24 @@ bool ParseRegistry(
             !reader.ReadU32(&item.iconControlId) ||
             !reader.ReadText(&item.completionText)) {
             return Fail(error, "MMCR AP99 research row is truncated or invalid");
+        }
+        if (version >= 28) {
+            if (!reader.ReadU32(&item.chargeMs)) return Fail(error, "MMCR queued action is truncated");
+            if (item.chargeMs) {
+                if (item.chargeMs > 1000000 || item.price != 0 ||
+                    !reader.ReadSymbol(&item.readinessCallbackSymbol) ||
+                    !reader.ReadSymbol(&item.completionCallbackSymbol))
+                    return Fail(error, "MMCR queued action contract is invalid");
+                if (version >= 29) {
+                    std::uint32_t present=0;
+                    if (!reader.ReadU32(&present) || present>1 || (present &&
+                        (!reader.ReadSymbol(&item.quoteCallbackSymbol) ||
+                         !reader.ReadSymbol(&item.startCallbackSymbol))))
+                        return Fail(error, "MMCR queued start transaction is invalid");
+                }
+                if (!reader.ReadSymbol(&item.savedActionSymbol))
+                    return Fail(error, "MMCR queued action adapter is invalid");
+            }
         }
         const std::uint32_t ids[] = {
             item.actionControlId, item.priceControlId, item.progressControlId,

@@ -6,7 +6,7 @@
 class RegistrationDiagnostic {
 public:
     explicit RegistrationDiagnostic(void (*writer)(const char*)) : writer_(writer) {
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded registration evidence is always available
         static std::atomic<unsigned> attempts{0};
         attempt_=++attempts;
 #endif
@@ -18,11 +18,11 @@ public:
         Stage("entry",build,flags,thread); Emit(owner);
     }
     bool Accept(const char* name) { Stage(name); success_=true; return true; }
-    ~RegistrationDiagnostic() { Emit(success_?1u:0u); }
+    ~RegistrationDiagnostic() { Emit(success_?1u:0u,true); }
 private:
-    void Emit(unsigned result) {
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
-        if(writer_ && attempt_<=8) {
+    void Emit(unsigned result,bool final=false) {
+#if 1 // bounded registration evidence is always available
+        if(writer_ && (attempt_<=8 || (final && !success_))) {
             char line[256]{};
             std::snprintf(line,sizeof(line),"RegistrationDiagnostic/v1 attempt=%u stage=%s a=%08x b=%08x c=%08x result=%08x",
                 attempt_,stage_,a_,b_,c_,result);

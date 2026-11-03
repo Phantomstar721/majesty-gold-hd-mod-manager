@@ -1,4 +1,5 @@
 // Run actual x86 AP78 adapters with stock-shaped list/hero memory.
+#include "SavedAttributeFixture.h"
 namespace {
 unsigned inventoryGateNode = 0, inventoryGateEcx = 0, inventoryGateEbx = 0;
 __declspec(naked) void InventoryTestVisible() {
@@ -197,8 +198,10 @@ const MajestyStringView* heroLastAssignment = nullptr;
 std::string heroAssignedText;
 bool heroRejectAppend = false;
 unsigned heroUnit[0x180/4] = {};
+int heroHitPoints=10;
 void* __fastcall HeroTestSelected(void*, void*) { return heroUnit; }
 int __fastcall HeroTestAttribute(void*, void*, unsigned key, unsigned) {
+    if(key==0x00555041)return heroHitPoints;
     assert(key == 0x0B565041); return static_cast<int>(heroUnit[0]);
 }
 std::string HeroTestCopyString(const void* text) {
@@ -291,6 +294,82 @@ __declspec(naked) void HeroTestFinishEffect(void*, int, void*) {
         ret
     }
 }
+unsigned char savedAgent[0x44]={};
+std::uint32_t savedInteger[3]={0,1,1};
+int savedRequiredCalls=0,savedReferences=0,savedReferenceEnds=0;
+bool savedPresent=true,savedResolved=true,savedComponentPresent=true;
+std::uint32_t SavedTestComponent(void* unit){assert(unit==heroUnit);return savedComponentPresent ? 77 : 0;}
+void SavedTestReference(void* output,std::uint32_t handle){
+    assert(handle==77);++savedReferences;
+    static_cast<std::uint32_t*>(output)[3]=savedResolved ? reinterpret_cast<std::uintptr_t>(savedAgent) : 0;
+}
+void SavedTestReferenceEnd(void*){++savedReferenceEnds;}
+bool SavedTestExists(void* agent,const MajestyStringView* key){
+    assert(agent==savedAgent && key->capacityFlags==0 && key->length==9);
+    assert(std::strcmp(key->data,"WHP_Salts")==0);return savedPresent;
+}
+void* SavedTestRequired(void* agent,const MajestyStringView* key){
+    assert(savedPresent && agent==savedAgent && std::strcmp(key->data,"WHP_Salts")==0);
+    ++savedRequiredCalls;return savedInteger;
+}
+void RunSavedAttributeRowTests(void* list){
+    const auto component=g_savedComponent;const auto reference=g_savedReference;
+    const auto referenceEnd=g_savedReferenceEnd;const auto exists=g_savedExists;const auto required=g_savedRequired;
+    g_savedComponent=&SavedTestComponent;g_savedReference=&SavedTestReference;
+    g_savedReferenceEnd=&SavedTestReferenceEnd;g_savedExists=&SavedTestExists;g_savedRequired=&SavedTestRequired;
+    MajestyRuntimeFeatures::Registry parsed;std::string error;
+    assert(MajestyRuntimeFeatures::ParseRegistry(kSavedAttributeFixture,sizeof(kSavedAttributeFixture),&parsed,&error));
+    assert(parsed.heroInfoRows.size()==2 && parsed.heroInfoRows[1].kind==4 && parsed.heroInfoRows[1].attributeSymbol=="WHP_Salts");
+    std::vector<std::uint8_t> categorized(kSavedAttributeFixture,kSavedAttributeFixture+sizeof(kSavedAttributeFixture));
+    categorized[4]=11;
+    categorized.insert(categorized.end(),{1,0,0,0});
+    assert(MajestyRuntimeFeatures::ParseRegistry(categorized.data(),categorized.size(),&parsed,&error));
+    assert(parsed.heroInfoRows[1].listCategory==1);
+    for(unsigned size=0;size<categorized.size();++size)
+        assert(!MajestyRuntimeFeatures::ParseRegistry(categorized.data(),size,&parsed,&error));
+    categorized[categorized.size()-4]=2;
+    assert(!MajestyRuntimeFeatures::ParseRegistry(categorized.data(),categorized.size(),&parsed,&error));
+    for(unsigned size=0;size<sizeof(kSavedAttributeFixture);++size)
+        assert(!MajestyRuntimeFeatures::ParseRegistry(kSavedAttributeFixture,size,&parsed,&error));
+    assert(MajestyRuntimeFeatures::ParseRegistry(kSavedAttributeFixture,sizeof(kSavedAttributeFixture),&parsed,&error));
+    g_runtimeFeatureRegistry.heroInfoRows=parsed.heroInfoRows;
+    heroUnit[0x7C/4]=0x3030485A; // No owned Character declaration for this hero.
+    const auto before=std::vector<unsigned>(heroUnit,heroUnit+sizeof(heroUnit)/sizeof(unsigned));
+    const auto agentBefore=std::vector<unsigned char>(savedAgent,savedAgent+sizeof(savedAgent));
+    auto refresh=[list](){heroLabels.clear();heroTips.clear();AppendHeroPassives(nullptr,list);};
+    refresh();assert(heroLabels.size()==1 && heroLabels[0]=="Silver Salts" && heroTips[0]=="Carried dose");
+    savedInteger[2]=0;refresh();assert(heroLabels.empty()); // consumed dose; ordinary refresh
+    savedInteger[2]=0xFFFFFFFF;refresh();assert(heroLabels.empty());
+    savedInteger[2]=1;savedInteger[1]=6;refresh();assert(heroLabels.empty()); // bool is not integer
+    savedInteger[1]=2;refresh();assert(heroLabels.empty()); // float is not integer
+    savedInteger[1]=1;savedPresent=false;
+    const int reads=savedRequiredCalls;refresh();assert(heroLabels.empty() && savedRequiredCalls==reads);
+    savedPresent=true;savedAgent[0x38]=1;refresh();assert(heroLabels.empty() && savedRequiredCalls==reads);
+    savedAgent[0x38]=0;savedResolved=false;refresh();assert(heroLabels.empty() && savedRequiredCalls==reads);
+    savedResolved=true;savedComponentPresent=false;refresh();assert(heroLabels.empty() && savedRequiredCalls==reads);
+    savedComponentPresent=true;heroHitPoints=0;refresh();assert(heroLabels.empty() && savedRequiredCalls==reads);
+    heroHitPoints=10;heroUnit[0x74/4]=0x10;refresh();assert(heroLabels.empty() && savedRequiredCalls==reads);
+    heroUnit[0x74/4]=0;refresh();assert(heroLabels.size()==1); // reopened/restored state is read anew
+    // Saved ownership can target the lower list without creating an effector
+    // or a learned action. Preserve legacy passive and spell routing.
+    g_runtimeFeatureRegistry.heroInfoRows[1].listCategory=1;
+    refresh();assert(heroLabels.empty());
+    alignas(4) unsigned char lowerList[0x80]{};
+    std::memcpy(lowerList,list,sizeof(void*));
+    const auto expectedList=heroExpectedList;heroExpectedList=lowerList;
+    auto lowerRefresh=[&](){heroLabels.clear();heroTips.clear();AppendHeroAttributeEffects(nullptr,lowerList);};
+    lowerRefresh();assert(heroLabels.size()==1 && heroLabels[0]=="Silver Salts");
+    assert(*reinterpret_cast<unsigned*>(lowerList+0x50)==26 && *reinterpret_cast<unsigned*>(lowerList+0x58)==28);
+    savedInteger[2]=0;lowerRefresh();assert(heroLabels.empty());
+    savedInteger[2]=1;savedPresent=false;lowerRefresh();assert(heroLabels.empty());
+    savedPresent=true;lowerRefresh();assert(heroLabels.size()==1);
+    heroExpectedList=expectedList;
+    assert(savedReferences==savedReferenceEnds && heroConstructed==heroDestroyed);
+    assert(std::equal(before.begin(),before.end(),heroUnit));
+    assert(std::equal(agentBefore.begin(),agentBefore.end(),savedAgent));
+    g_savedComponent=component;g_savedReference=reference;g_savedReferenceEnd=referenceEnd;
+    g_savedExists=exists;g_savedRequired=required;
+}
 int inventoryMessageCount=0;
 int __fastcall InventoryTestMenuMessage(void*,void*,unsigned control,unsigned message,unsigned row,unsigned data) {
     assert(control==0x232D);++inventoryMessageCount;
@@ -346,7 +425,6 @@ void RunInventoryItemRowTests() {
     }
     g_buildProfile=saved;
 }
-
 void RunHeroInfoRuntimeTests() {
     const auto savedBase = g_imageBase;
     const auto* savedProfile = g_buildProfile;
@@ -472,6 +550,7 @@ void RunHeroInfoRuntimeTests() {
     heroLabels.clear(); heroTips.clear();
     AppendHeroPassives(nullptr, &list);
     assert(heroLabels.empty());
+    RunSavedAttributeRowTests(&list);
     RunInventoryItemRowTests();
     g_runtimeFeatureRegistry = std::move(savedRegistry);
     g_heroSpellRow = g_heroEffectRow = nullptr;

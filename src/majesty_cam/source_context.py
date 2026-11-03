@@ -9,6 +9,8 @@ from .spell_policy import signature
 
 FEATURE_TYPE = "stock.source-context-dispatch.v1"
 _SYMBOL = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
+# Generated source-stripping endpoints with an explicit source-adapter contract.
+# This does not authorize overriding arbitrary Manager symbols.
 GENERATED_TARGETS = {'mm_damage_periodicplayerspellattack': ('agent','integer','integer')}
 
 
@@ -26,7 +28,7 @@ def parse_feature(value):
         raise ValueError("source-context dispatch requires its exact versioned fields")
     for key in ("feature_key", "target_symbol", "callback_symbol"):
         name = value[key]
-        allowed_generated = key == 'target_symbol' and isinstance(name, str) and name.casefold() in GENERATED_TARGETS
+        allowed_generated = key == 'target_symbol' and isinstance(name,str) and name.casefold() in GENERATED_TARGETS
         if not isinstance(name, str) or not _SYMBOL.fullmatch(name) or (name.casefold().startswith("mm_") and not allowed_generated):
             raise ValueError(f"source-context {key} must be an unreserved bounded identifier")
     args = value["parameter_types"]

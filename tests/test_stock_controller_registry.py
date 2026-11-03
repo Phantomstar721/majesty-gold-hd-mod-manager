@@ -34,6 +34,56 @@ from majesty_cam.stock_controller_registry import (
 
 
 class StockControllerRegistryTests(unittest.TestCase):
+    def test_secondary_panel_gate_roundtrip_and_rejection(self):
+        from majesty_cam.stock_controller_features import parse_controller_feature, controller_feature_mapping
+        from majesty_cam.action_callback_bridge import bridge_symbol
+        first = StockAp10Ap69SecondaryPanel('page', 'Forge', 'RSP1', 'FRG', 31720,
+                    required_level=3, eligibility_callback_symbol='Forge_Eligible')
+        self.assertEqual(parse_controller_feature(controller_feature_mapping(first)), first)
+        ids = {'page': (int.from_bytes(b'FRG1','little'), int.from_bytes(b'RSP1','little'))}
+        registry = resolve_stock_controller_registry((first,), ids)
+        payload = encode_stock_controller_registry(registry)
+        self.assertEqual(int.from_bytes(payload[4:8], 'little'), 26)
+        self.assertEqual(decode_stock_controller_registry(payload), registry)
+        self.assertEqual(registry.panels[0].eligibility_callback_symbol, bridge_symbol('Forge_Eligible'))
+        with self.assertRaises(ValueError):
+            parse_controller_feature({**controller_feature_mapping(first), 'required_level': 4})
+        for length in (65, len(payload)-1):
+            with self.assertRaises(ValueError): decode_stock_controller_registry(payload[:length])
+
+    def test_research_siblings_share_only_the_same_parent_family(self):
+        from majesty_cam.stock_controller_features import StockAp10Ap69SecondaryPanel
+        first=StockAp10Ap69SecondaryPanel('research','Forge','RSP1','FRG',8009)
+        second=replace(first,panel_key='fittings',source_dialog_id='RSP2',open_command_id=32010)
+        ids={'research':(0x31425041,0x31505352),'fittings':(0x31425041,0x32505352)}
+        registry=resolve_stock_controller_registry((first,second),ids)
+        self.assertEqual(decode_stock_controller_registry(encode_stock_controller_registry(registry)),registry)
+        with self.assertRaises(ValueError):
+            resolve_stock_controller_registry((first,replace(second,parent_building='Other')),ids)
+        changed=replace(registry,panels=(registry.panels[0],replace(registry.panels[1],parent_dialog_id=0x32425041)))
+        with self.assertRaises(ValueError):encode_stock_controller_registry(changed)
+
+    def test_paired_action_roundtrip_preserves_two_agent_scope(self):
+        panel = StockMx05LiveAgentListPanel(
+            'hire', 'Forge', 'FH01', 8100, 'Count', 'Row', 'Revision',
+            None, None, None, None, 'Cost', 'Hire', action_agent_scope='parent-and-selected-row')
+        registry = resolve_stock_controller_registry(
+            (panel,), {'hire': (int.from_bytes(b'FH00','little'), int.from_bytes(b'FH01','little'))},
+            list_text_ids={'hire': LiveAgentListTextIds(0,0,0)})
+        row = registry.live_agent_lists[0]
+        self.assertTrue(row.action_uses_pair)
+        self.assertFalse(row.action_uses_parent)
+        from majesty_cam.action_callback_bridge import bridge_symbol
+        self.assertEqual(row.action_callback_symbol, bridge_symbol('Hire', paired=True))
+        payload = encode_stock_controller_registry(registry)
+        self.assertEqual(struct.unpack_from('<I', payload, 4)[0], 23)
+        self.assertEqual(decode_stock_controller_registry(payload), registry)
+        downgraded = payload[:4] + struct.pack('<I',22) + payload[8:]
+        with self.assertRaises(ControllerRegistryError):
+            decode_stock_controller_registry(downgraded)
+        with self.assertRaises(ControllerRegistryError):
+            encode_stock_controller_registry(replace(registry, live_agent_lists=(replace(row, action_uses_parent=True),)))
+
     def test_mixed_live_and_data_lists_share_key_order_and_command_allocation(self) -> None:
         def options(prefix):
             return dict(

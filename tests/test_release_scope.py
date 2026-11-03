@@ -12,27 +12,22 @@ class ReleaseScopeTests(unittest.TestCase):
         self.assertIn("ValidateMovementQuery()", text)
         self.assertIn("ValidateNativeTiming()", text)
 
-    def test_development_features_are_not_in_production_sources(self):
+    def test_full_generic_runtime_is_in_production_sources(self):
         for path in ("runtime/AttackObservationRuntime.cpp", "runtime/CheckedPlacementRuntime.cpp",
                      "runtime/EffectSequence.cpp", "src/majesty_cam/paired_accuracy.py",
                      "runtime/SavedAttributeRuntime.inl"):
-            self.assertFalse((ROOT / path).exists(), "Development source entered release: " + path)
+            self.assertTrue((ROOT / path).is_file(), "Missing supported source: " + path)
         from majesty_cam.manager.capabilities import DERIVED_RUNTIME_CAPABILITIES
-        self.assertIn("manager.projectile-interception.v1", DERIVED_RUNTIME_CAPABILITIES)
-        from majesty_cam.package import parse_mod_definition, PackageFormatError
-        from majesty_cam.attack_observation_proof import encode, Proof
-        with self.assertRaises(ValueError):
-            encode(Proof(object(), ()))
-        for feature in ('stock.attack-projectile-observation.v1', 'stock.checked-placement.v1'):
-            with self.assertRaises(PackageFormatError):
-                parse_mod_definition({'schema_version': 3,
-                    'mod_id': '{00000000-0000-0000-0000-000000000001}',
-                    'internal_name': 'Test', 'display_name': 'Test', 'custom_buildings': [],
-                    'runtime_features': [{'type': feature}]})
-        runtime = (ROOT / 'runtime/NativeImpactRuntime.cpp').read_text()
-        for excluded in ('CAM_ATTACK_DIAGNOSTIC', 'MajestyCheckedPlacement', 'AttackSettled', 'ShotPending', 'life.Query('):
-            self.assertNotIn(excluded, runtime)
-        self.assertNotIn("manager.checked-placement.v1", DERIVED_RUNTIME_CAPABILITIES)
+        for feature in ("manager.projectile-interception.v1", "manager.checked-placement.v1"):
+            self.assertIn(feature, DERIVED_RUNTIME_CAPABILITIES)
+        script = (ROOT / 'scripts/Build-Runtime.ps1').read_text()
+        source_list = script.split('$runtimeSources = @(', 1)[1].split('$runtimeLibraries', 1)[0]
+        self.assertIn('"AttackObservationRuntime.cpp"', source_list)
+        self.assertIn('"CheckedPlacementRuntime.cpp"', source_list)
+        self.assertNotIn('"NativeImpactRuntime.cpp"', source_list)
+        wrapper = (ROOT / 'scripts/Build-ModManagerExe.ps1').read_text()
+        for flag in ('-AttackDiagnostic', '-EmploymentDiagnostic', '-SiegeCrashDiagnostic', '-PlacementDiagnostic'):
+            self.assertNotIn(flag, wrapper)
 
     def test_unknown_builds_still_fail_runtime_profile_selection(self):
         text = (ROOT / "runtime/MapQueryRuntime.cpp").read_text()

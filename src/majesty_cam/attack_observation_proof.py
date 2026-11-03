@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import hashlib
 import struct
 
+from .attack_observation import exports, feature_mapping, parse_feature
 from .bcd import definition_keys
 from .gpl import DefinitionKind
 
@@ -72,14 +73,15 @@ def validate_output(proof, targets):
 
 def build_proof(bindings, baseline_bytes, emitted_bytes, optional_bytes=(), *, extra_protected_names=(), shared_only=False, required_functions=(), protected_functions=()):
     bindings = tuple(bindings)
-    if bindings or not shared_only:
-        raise ValueError("release proof supports shared projectile interception only")
-    feature = None
+    if len(bindings) != 1 and not (shared_only and not bindings):
+        raise ValueError("attack observation v1 requires exactly one declared actor binding")
+    feature = bindings[0].feature if bindings else None
+    if feature is not None:feature_mapping(feature)
     baseline_bytes = tuple(baseline_bytes)
     if len(baseline_bytes) != len(BASELINES):
         raise ValueError("attack observation requires all six native baseline archives")
     # Reject malformed/opaque archives, even if their digest would be stable.
-    aliases = set()
+    aliases = {name.casefold() for name, _ in exports(feature)} if feature else set()
     aliases |= {n.casefold() for n in extra_protected_names}
     for data in baseline_bytes:
         if aliases.intersection(name for _,name in definition_keys(data)):
@@ -90,16 +92,19 @@ def build_proof(bindings, baseline_bytes, emitted_bytes, optional_bytes=(), *, e
     keys = tuple(definition_keys(data) for data in outputs)
     output_keys = frozenset().union(*keys)
     needed = {(DefinitionKind.FUNCTION, n.casefold()) for n in required_functions}
+    if feature:needed |= {(DefinitionKind.FUNCTION, feature.release_callback_symbol.casefold()), (DefinitionKind.FUNCTION, 'make_attack')}
     effective_keys = (keys[0],) if len(keys)==1 else (keys[0]|keys[1], keys[0]|keys[2])
     if any(not needed <= effective for effective in effective_keys):
         raise ValueError("compiled observer output is missing its effective callbacks")
-    aliases = set()
+    aliases = {name.casefold() for name, _ in exports(feature)} if feature else set()
     if any(name in aliases for _, name in output_keys):
         raise ValueError("compiled output defines a native observer alias")
     # Protect the observation contract, not every unrelated definition that
     # happens to share a compiled file with it (quest constants, hero trees...).
     emitted_names = {name for _,name in output_keys}
     protected_names = (STOCK_COMBAT_NAMES & emitted_names) | aliases | {n.casefold() for n in extra_protected_names}
+    if feature:
+        protected_names |= {feature.release_callback_symbol.casefold()}
     protected_names |= {n.casefold() for n in required_functions}
     protected_names |= {n.casefold() for n in protected_functions}
     payloads = [*baseline_bytes, *outputs]
@@ -116,9 +121,7 @@ def build_proof(bindings, baseline_bytes, emitted_bytes, optional_bytes=(), *, e
 
 
 def encode(proof):
-    if proof.feature is not None:
-        raise ValueError("private actor proofs are excluded from this release")
-    value = None
+    value = feature_mapping(proof.feature) if proof.feature else None
     if (not (9 if proof.scoped else 7) <= len(proof.digests) <= MAX_FILES or
             any(not isinstance(d, bytes) or len(d) != 32 for d in proof.digests) or
             len(set(proof.digests)) != len(proof.digests)):
@@ -147,7 +150,7 @@ def decode(data):
     if not isinstance(data, bytes) or not 12 <= len(data) <= 1048576:
         raise ValueError("observer proof size is invalid")
     magic, version, count = struct.unpack_from("<4sII", data)
-    if magic != b"MMOB" or version not in (3,4,7,8) or not (9 if version%2==0 else 7) <= count <= MAX_FILES:
+    if magic != b"MMOB" or version not in range(1,9) or not (9 if version%2==0 else 7) <= count <= MAX_FILES:
         raise ValueError("observer proof header is invalid")
     value = {"type": "stock.attack-projectile-observation.v1"}
     pos = 12
@@ -180,7 +183,7 @@ def decode(data):
             except UnicodeError as exc: raise ValueError('invalid protected definition') from exc
             pos+=size
     if pos!=len(data): raise ValueError('trailing observer proof data')
-    result = Proof(None,digests,base_version in (2,4),tuple(names))
+    result = Proof(parse_feature(value) if base_version<3 else None,digests,base_version in (2,4),tuple(names))
     if encode(result) != data:
         raise ValueError("observer proof is not canonical")
     return result

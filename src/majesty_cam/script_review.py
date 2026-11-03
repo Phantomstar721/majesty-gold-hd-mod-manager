@@ -123,6 +123,8 @@ class ScriptConflict:
     candidates: tuple[ScriptCandidate, ...]
     compatibility_groups: tuple[tuple[str, ...], ...] = ()
     fixed_preferences: tuple[tuple[str, str], ...] = ()
+    # Generated definitions can supply their own bounded composition proof.
+    # Ownership and preference selection remain the ordinary mod-pair policy.
     combine_candidates: object = field(default=None, compare=False, repr=False)
 
     @cached_property
@@ -237,9 +239,9 @@ def _decline_helper_proof(name):
 def _combine(conflict, owners):
     if hasattr(conflict, 'combine'):
         return conflict.combine(owners)
+    candidates = _candidate_map(conflict)
     if conflict.combine_candidates is not None:
         return conflict.combine_candidates(tuple(owners))
-    candidates = _candidate_map(conflict)
     items = tuple(candidates[owner].item for owner in owners)
     if not items:
         raise FunctionMergeError('no mod definition remains')

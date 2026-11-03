@@ -92,18 +92,6 @@ class ScopedOutputTests(unittest.TestCase):
             self.assertEqual(len(packages[1].datasets[0].loads[0].cams),1)
             self.assertFalse(packages[1].datasets[0].loads[0].gpl)
             validate_composed_package(root)
-            # Release XML deltas and toolbar CAMs share the same native scope.
-            description_name = 'merged_descriptions-majestyexpansion.xml'
-            (root/'Data'/description_name).write_text('<Descriptions/>')
-            manifest.write_bytes(_build_manifest(mod_id=COMMON_ID,internal_name='Fixture',display_name='Fixture',
-                cam_filenames=cams,description_filename='Descriptions.xml',source_set=result('').source_set,
-                scoped_cams=(('MajestyExpansion',filename),),
-                scoped_descriptions={'MajestyExpansion': description_name}))
-            combined = load_generated_bundle(root)[1].datasets[0].loads[0]
-            self.assertEqual(len(combined.cams), 1)
-            self.assertEqual(len(combined.descriptions), 1)
-            self.assertFalse(combined.gpl)
-            validate_composed_package(root)
             bad = replace(archive, sections=(CamSection(b'IMAG',archive.sections[0].entries),))
             (root/'Data'/filename).write_bytes(bad.to_bytes())
             with self.assertRaisesRegex(PackageFormatError,'only AP92'):

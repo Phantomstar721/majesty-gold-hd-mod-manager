@@ -162,6 +162,9 @@ Source-composed shared services are also available:
 `stock.gameplay-event-observer.v1` reports actual stock potion consumption,
 attack-flag completion, reward-flag credit, caravan delivery and completed
 tournament participation, plus combat and exploration XP award boundaries.
+Its opt-in `status-applied` event reports committed stock plague application to
+`(agent Recipient, string Status)` consumers; see
+[status application ordering and coverage](status-applied-event.md).
 Attack completion is independent of recipient payout. XP observers receive the
 original award before the recipient-level divisor, not bonus-adjusted XP.
 `stock.activity-duration.v1` measures a mod-defined activity using one shared
@@ -723,11 +726,13 @@ binary registry is
 strictly bounded and fingerprinted in both the manager sentinel and merge
 report. This runtime path also covers non-panel consumers that use the common
 stock AITX resolver, such as advisor flags and local chat messages. `QITM`
-remains an unresolved limitation for legacy private numeric items. New
-Merge-ready content should author custom carried items through Majesty's named
-inventory-item path rather than adding numeric `QITM` rows. The manager does
-not silently migrate numeric items because doing so would change the native
-item panel and would not migrate items already stored in saved games.
+remains an unresolved limitation for private numeric items. The SDK's named
+inventory-item path supplies native membership and avoids allocating a numeric
+QITM index, but that alone does not certify the native Items panel's icon,
+label and hover bindings. Do not treat this recommendation as a verified
+quest-independent display contract. See [inventory contract limits](private-inventory-contract.md).
+The manager does not silently migrate numeric items because doing so would
+change saved identities and would not migrate items already stored in saves.
 
 The current report and build plan fingerprint the complete stock composition
 input set: the five required stock CAMs, the optional MX main/interface art
@@ -1082,3 +1087,16 @@ build-failure diagnostics rather than a persistent red catalog row. In either
 case no new partial package is published or projected into the Active Mods
 file; any prior generated package remains stale and manager Launch stays
 disabled.
+# Current-source conflict handling
+
+Historical whole-source reviewed bundles no longer participate in Prepare.
+Their per-function input fingerprints are not checked against installed mods,
+and their prewritten functions are not forced into generated output. Current
+mod source goes through normal semantic merging; unresolved overlapping edits
+use the existing preferred-mod review. An update, added function, comment change,
+or mismatch with a historical bundle is not a merge conflict or Prepare error.
+Legacy bundle metadata remains readable for internal historical fixtures only.
+
+This does not remove validation of malformed inputs, unsupported runtime
+capabilities, or files changing during an active Prepare transaction. Those
+checks protect the actual inputs/output, not a historical mod revision.

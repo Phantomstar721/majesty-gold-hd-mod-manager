@@ -49,13 +49,14 @@ class InventoryDisplayTests(unittest.TestCase):
         value = self.declaration();value["attribute_symbol"] = "Dose"
         with self.assertRaises(ValueError): parse_hero_info(value)
 
-    def test_rejects_development_and_duplicate_item(self):
+    def test_combines_with_saved_attribute_and_rejects_duplicate_item(self):
         dose = parse_hero_info(self.declaration())
-        with self.assertRaises(ValueError):
-            parse_hero_info(dict(type="stock.ap78-saved-attribute-row.v1", feature_key="saved",
-                attribute_symbol="Existing", display_text="Saved", tooltip_text="Owned", image_id="DI02", image_set=1019))
+        attribute = parse_hero_info(dict(type="stock.ap78-saved-attribute-row.v1", feature_key="saved",
+            attribute_symbol="Existing", display_text="Saved", tooltip_text="Already owned", image_id="DI02", image_set=1019))
+        decoded = decode_runtime_feature_registry(encode_runtime_feature_registry((dose, attribute)))
+        self.assertEqual({r.kind for r in decoded.hero_info_rows}, {"inventory", "attribute"})
         with self.assertRaisesRegex(ValueError, "duplicate"):
             encode_runtime_feature_registry((dose, replace(dose, feature_key="other")))
 
-if __name__ == "__main__": unittest.main()
 
+if __name__ == "__main__": unittest.main()

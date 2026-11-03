@@ -58,7 +58,7 @@ Word acceptedWorld=0;
 void (*logger)(const char*)=nullptr;
 unsigned effectiveReason=1;
 void Trace(const char*,unsigned=0,unsigned=0,unsigned=0) {}
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
 static thread_local const char* diagnosticBoundary="outside-hook";
 struct DiagnosticBoundary {
     const char* previous=diagnosticBoundary;
@@ -105,7 +105,7 @@ void DiagnosticPath(const char* path) {
 }
 #endif
 void Fault(const char* reason,unsigned a=0,unsigned b=0,const char* boundary=nullptr) {
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
     if(fault.exchange(true))return;
     if(!logger)return;
     char line[768]{};
@@ -141,13 +141,13 @@ template<class T> bool Read(Word p,unsigned offset,T& out) { return p && p<=UINT
 template<class T> T Value(const void* p,unsigned offset) { T out{}; if (!Read(static_cast<Word>(reinterpret_cast<std::uintptr_t>(p)),offset,out)) Fault("first-fault/read",static_cast<Word>(reinterpret_cast<std::uintptr_t>(p)),offset); return out; }
 bool Owner(const char* boundary=nullptr) { if (GetCurrentThreadId()!=ownerThread) { Fault("first-fault/thread",ownerThread,GetCurrentThreadId(),boundary); return false; } return true; }
 struct Guard {
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
     DiagnosticBoundary scope;
 #endif
     bool active;
     int exceptions=std::uncaught_exceptions();
     explicit Guard(const char* name) :
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
         scope(name),
 #endif
         active(Owner(name)) { if (active) { life.EnterOperation(); } }
@@ -175,7 +175,7 @@ HANDLE LockNativePath(const void* nativeString) {
     if (flags&0x01000000) {
         std::vector<wchar_t> path(length+1);
         if (!memory.Read(data,path.data(),(length+1)*sizeof(wchar_t)) || path.back()!=0) return INVALID_HANDLE_VALUE;
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
         char bounded[512]{};
         if(WideCharToMultiByte(CP_UTF8,0,path.data(),-1,bounded,sizeof(bounded),nullptr,nullptr))DiagnosticPath(bounded);
         else DiagnosticPath("[path exceeds diagnostic limit or conversion failed]");
@@ -185,30 +185,30 @@ HANDLE LockNativePath(const void* nativeString) {
     }
     std::vector<char> path(length+1);
     if (!memory.Read(data,path.data(),length+1) || path.back()!=0) return INVALID_HANDLE_VALUE;
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
     DiagnosticPath(path.data());
     if(BcdDiagnostic::current)BcdDiagnostic::current->openAttempted=1;
 #endif
     return CreateFileA(path.data(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
 }
 bool __stdcall Bcd(const void* filename) {
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
     BcdDiagnostic diagnostic;
     diagnostic.category=categoryFile?1u:0u;
 #endif
     Guard guard("Bcd");
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
     if(guard.active){diagnostic.ready=loadProof.Ready()?1u:0u;diagnostic.before=loadProof.DiagnosticState();}
     diagnostic.phase="open";
 #endif
     HANDLE file=LockNativePath(filename);
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
     diagnostic.openError=file==INVALID_HANDLE_VALUE && diagnostic.openAttempted?GetLastError():0;
 #endif
     unsigned char digest[32]{};
     const bool digested=file!=INVALID_HANDLE_VALUE && Digest(file,digest);
     int index=digested ? packageProof.Find(digest) : -1;
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
     diagnostic.rawIndex=index;std::memcpy(diagnostic.digest,digest,32);
     diagnostic.hashed=digested?1u:0u;
     diagnostic.phase=file==INVALID_HANDLE_VALUE?"open-failed":digested?"hashed":"digest-failed";
@@ -227,7 +227,7 @@ bool __stdcall Bcd(const void* filename) {
         const bool baseline=index>=0&&index<6;
         bool admitted=parsed;
         if(parsed && categoryFile) {
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
             const MajestyBcdOwnership::Key* rejected=nullptr;const char* reason="batch-admitted";
             admitted=batchOwnership.Admit(definitions,packageProof.protectedNames,generated,baseline,&rejected,&reason);
             diagnostic.phase=reason;
@@ -243,7 +243,7 @@ bool __stdcall Bcd(const void* filename) {
             for(const auto& key:definitions)
                 if(packageProof.protectedNames.count(MajestyBcdOwnership::Lower(key.second))) {
                     admitted=false;
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
                     diagnostic.phase="protected-definition-outside-batch";
                     if(!diagnostic.conflict[0])std::snprintf(diagnostic.conflict,sizeof(diagnostic.conflict),"%u:%s",key.first,key.second.c_str());
 #endif
@@ -260,7 +260,7 @@ bool __stdcall Bcd(const void* filename) {
             if(index<0)index=-2;
         }
     }
-    #if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+    #if 1 // bounded first-fault evidence is part of normal support
     diagnostic.finalIndex=index;diagnostic.parsed=parsed?1u:0u;
     if(file!=INVALID_HANDLE_VALUE && !parsed && !packageProof.protectedNames.empty())diagnostic.phase="definitions-unreadable";
     #endif
@@ -273,7 +273,7 @@ bool __stdcall Bcd(const void* filename) {
     try { result=reinterpret_cast<bool (__stdcall*)(const void*)>(original[10])(filename); }
     catch (...) { if (file!=INVALID_HANDLE_VALUE) CloseHandle(file); Fault("first-fault/bcd-exception",static_cast<unsigned>(index)); throw; }
     if (file!=INVALID_HANDLE_VALUE) CloseHandle(file);
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
     diagnostic.nativeResult=result?1:0;
 #endif
     if (guard.active && !loadProof.Complete(index,result)) Fault("first-fault/bcd-complete",static_cast<unsigned>(index),result);
@@ -300,7 +300,7 @@ void __stdcall BeforeBcdPostload() {
     // across linking/catalog release or an unrecognized postload caller.
     batchOwnership.Reset();batchReceiver=nullptr;
     if(categoryFile)Fault("first-fault/postload-during-file",previousReceiver,0,"BeforeBcdPostload");
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // bounded first-fault evidence is part of normal support
     if(!fault)diagnosticHistory.Add("FirstFault/v3 history postload-reset");
 #endif
 }

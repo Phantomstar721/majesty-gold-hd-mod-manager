@@ -1413,6 +1413,10 @@ if _PYSIDE_IMPORT_ERROR is None:
                 self._create_desktop_shortcut
             )
             nav.addWidget(self.desktop_shortcut_button)
+            self.support_report_button = QPushButton("Save Support Report")
+            self.support_report_button.setToolTip("Save bounded logs and launch details to a ZIP. May include local paths and mod names; nothing is uploaded.")
+            self.support_report_button.clicked.connect(self._save_support_report)
+            nav.addWidget(self.support_report_button)
             self.selection_note = QLabel("Scanning installed content…")
             self.selection_note.setObjectName("selectionNote")
             nav.addWidget(self.selection_note)
@@ -1523,6 +1527,20 @@ if _PYSIDE_IMPORT_ERROR is None:
 
         def _startup_scan(self) -> None:
             self._start_scan(force_refresh=False)
+
+        @Slot()
+        def _save_support_report(self) -> None:
+            from .support_report import export_report
+            selected, _ = QFileDialog.getSaveFileName(self, "Save Support Report",
+                "Majesty-Support-Report.zip", "ZIP report (*.zip)")
+            if not selected:
+                return
+            try:
+                export_report(self.controller.paths, selected)
+            except (OSError, ValueError) as exc:
+                QMessageBox.warning(self, "Support report", str(exc))
+            else:
+                QMessageBox.information(self, "Support report", "Report saved. You can review the ZIP before sharing it. It contains logs, local paths and mod names, but no saves or game binaries.")
 
         @Slot()
         def _choose_game_executable(self) -> None:
@@ -1953,6 +1971,8 @@ if _PYSIDE_IMPORT_ERROR is None:
 
         @Slot(str, str)
         def _task_failed(self, message: str, details: str) -> None:
+            from .support_report import record_error
+            record_error(self.controller.paths, message, details)
             self.build_state.setText(f"{self._task_name} failed")
             dialog = QMessageBox(self)
             dialog.setIcon(QMessageBox.Icon.Critical)

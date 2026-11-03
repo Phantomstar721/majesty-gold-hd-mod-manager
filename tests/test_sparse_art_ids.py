@@ -113,6 +113,38 @@ class SparseArtIdTests(unittest.TestCase):
         section = keyed(b'TILE', ((0, b'a'), (1, b'b')))
         self.assertEqual(normalize_art_slots(CamArchive((section,))).sections[0].entries, section.entries)
 
+    def test_external_overlay_palette_identity_survives_collision(self):
+        # An ID-keyed palette needs an ID, not merely the same ordinal.
+        # Twelve independent animation TILEs must all follow its relocation.
+        stock = _archive((_image(b'BASE', 300, 0),), (_tile(0, marker=7),), palette=b'SPLT')
+        lineage = StockArtLineage('main', (Path('stock.cam'),), (stock,), stock)
+        with TemporaryDirectory() as tmp:
+            providers, analyses = [], []
+            for owner, color in (('first', b'\x18\x05\x04'), ('second', b'\xff\x20\x14')):
+                palette = bytes(12) + color + bytes(1017)
+                path = Path(tmp) / (owner + '.cam')
+                images = tuple(_image((owner[0] + str(i).zfill(3)).encode(), 300, 20000+i)
+                               for i in range(12))
+                archive = CamArchive((CamSection(b'IMAG', images),
+                    keyed(b'TILE', ((20000+i, _tile(561, marker=23+i)) for i in range(12))),
+                    keyed(b'SPLT', ((561, palette),))))
+                write_cam(archive, path)
+                item, = collapse_art_archives(Path(tmp), (path,), owner=owner, lineages=(lineage,))
+                providers.append((SimpleNamespace(selected=SimpleNamespace(alias=owner)), path, item.archive))
+                analyses.append(item.analysis)
+            result = _compose_art_domain('main', 'main', stock, providers, analyses,
+                                         fallthrough_ancestors=(stock,))
+            tiles = _section(result.archive, b'TILE').entries
+            palettes = _section(result.archive, b'SPLT').entries
+            for image in _section(result.archive, b'IMAG').entries:
+                if image.name[:1] not in (b'f', b's'):
+                    continue
+                ref, = parse_stock_imag_tile_references(image.data, tile_count=len(tiles)).references
+                tile = tiles[ref.tile_index]
+                palette_ref = parse_tile_palette_reference(tile.data, tile_index=ref.tile_index)
+                expected = b'\x18\x05\x04' if image.name[:1] == b'f' else b'\xff\x20\x14'
+                self.assertEqual(palettes[palette_ref.palette_index].data[12:15], expected)
+
     def test_compact_eighteen_record_table_preserves_high_ids(self):
         section = keyed(b'TILE', ((20000 + i, bytes((i,))) for i in range(18)))
         result = normalize_art_slots(CamArchive((section,))).sections[0]

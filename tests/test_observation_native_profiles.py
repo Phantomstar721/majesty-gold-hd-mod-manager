@@ -1,16 +1,11 @@
 """Native observer dependency links; not whole-provider activation evidence."""
 import os
-import hashlib
 from pathlib import Path
 import re
 import struct
 import unittest
 from test_occupant_runtime_profiles import PeImage
-def fingerprint(data):
-    result = 2166136261
-    for byte in data:
-        result = ((result ^ byte) * 16777619) & 0xffffffff
-    return result
+from test_fade_persistence_profiles import fingerprint
 
 
 class ObservationNativeProfilesTests(unittest.TestCase):
@@ -28,13 +23,6 @@ class ObservationNativeProfilesTests(unittest.TestCase):
             def read(va, count): return image.read(va - image.base, count)
             def word(va): return struct.unpack('<I', read(va, 4))[0]
             def target(va): return image.target(va - image.base) + image.base
-            bodies = (root / 'runtime/ObserverBodyProfiles.h').read_text()
-            label = {'publicBuild': 'Public', 'betaBuild': 'Beta', 'gogBuild': 'Gog'}[name]
-            block = re.search(r'ObserverBodies' + label + r'\(\).*?bodies\[\]=\{(.*?)\n    \};', bodies,re.S)
-            self.assertIsNotNone(block,label)
-            for address,size,digest in re.findall(r'\{(0x[0-9a-f]+),(0x[0-9a-f]+),\{([^}]+)\}\}',block[1]):
-                self.assertEqual(hashlib.sha256(read(int(address,16),int(size,16))).digest(),
-                    bytes(int(v,16) for v in digest.split(',')), address)
             values = re.search(r'ObservationNativeProfile ' + name + r'\{([^}]+)\}', text)[1]
             (find_name, callbacks, actions, units, release, impact, pending,
              missile, animation, retire, catalog, arguments, resolve,

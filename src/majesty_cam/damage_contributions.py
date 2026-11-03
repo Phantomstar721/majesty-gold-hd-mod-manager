@@ -15,7 +15,7 @@ SIGNATURES = {
         'weapon_pre_armor', 'weapon_armor', 'weapon_blocked', 'weapon_flat_reduce', 'weapon_percent_reduce')},
     'weapon_building_full': (('agent', 'agent'), 'boolean'),
     'weapon_final': (W, ''),
-    **{phase: (S, 'integer') for phase in ('spell_bonus', 'spell_flat_reduce', 'spell_percent_reduce')},
+    **{phase: (S, 'integer') for phase in ('spell_bonus', 'spell_flat_reduce', 'spell_percent_reduce', 'spell_damage_scale')},
     'spell_final': (S, ''),
     'after_hp': (('agent', 'agent', 'integer'), ''),
 }
@@ -210,9 +210,10 @@ def compose(result,features,stock_loader, *, reviewed_weapon=False, weapon_featu
     direct=spell('spell_flat_reduce')+'\n'+spell('spell_percent_reduce')
     final=spell('spell_final',notify=True)
     if direct.strip():direct+='\nif (dmg < 0) dmg = 0;'
-    if final:direct+='\nif (dmg > 0) begin '+final+' end'
     if after:calculation.local('MM_Damage_BeforeHP')
     calculation.once(hp,before=('if (MM_Damage_Direct) begin '+direct+' end\n' if direct.strip() else '')+
+                     (spell('spell_damage_scale')+'\nif (dmg < 0) dmg = 0;\n' if callbacks('spell_damage_scale') else '')+
+                     ('if (MM_Damage_Direct && dmg > 0) begin '+final+' end\n' if final else '')+
                      ('if (MM_Damage_Direct && dmg > 0) '+before if before else ''),
                      after=('if (MM_Damage_Direct && dmg > 0) begin '+after+' end' if after else ''))
     calculation.body=(*calculation.body,*_nodes('return dmg;'))

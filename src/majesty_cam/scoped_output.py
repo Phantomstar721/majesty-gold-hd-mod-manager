@@ -64,22 +64,31 @@ def partition(base, expansion):
     return ScriptBundle(subset(base, (i for key, i in left.items() if key in common)), patches)
 
 
-def complete_observer_patches(bundle, callback_names):
-    """Move existing common callbacks into both real scoped compiler outputs."""
-    if len(bundle.patches) != 1:
+def complete_observer_patches(bundle, callback_names, *, required_scopes=()):
+    """Preserve both effective views while giving each a real completion BCD.
+
+    A partially scoped bundle has no native file-completion event for the view
+    without a patch. Move the shared, already emitted release callback into both
+    dataset patches. This changes placement only, never its code or ownership;
+    no empty bytecode or fabricated definition is introduced.
+    """
+    if set(required_scopes) - set(SCOPES):
+        raise ValueError('unsupported observer completion scope')
+    if len(bundle.patches) == 2 or (not bundle.patches and not required_scopes):
         return bundle
-    names = {name.casefold() for name in callback_names}
-    common = source_items(bundle.common.source_set)
-    moved = tuple(item for item in common if item.kind.value == 'function' and item.normalized_name in names)
-    if {item.normalized_name for item in moved} != names:
+    names={name.casefold() for name in callback_names}
+    common=source_items(bundle.common.source_set)
+    moved=tuple(item for item in common if item.kind.value=='function' and item.normalized_name in names)
+    if {item.normalized_name for item in moved}!=names:
         raise ValueError('observer release callbacks must be shared before completing dataset patches')
-    keys = {item.key for item in moved}
-    patches = dict(bundle.patches)
-    def subset(result, items):
-        return replace(result, source_set=SemanticMergeResult(tuple(items),()).emit_project_source_set())
+    keys={item.key for item in moved}
+    patches=dict(bundle.patches)
+    def subset(result,items):
+        return replace(result,source_set=SemanticMergeResult(tuple(items),()).emit_project_source_set())
     return ScriptBundle(subset(bundle.common,(item for item in common if item.key not in keys)),
         tuple((scope,subset(patches.get(scope,bundle.common),
-            (*source_items(patches[scope].source_set),*moved) if scope in patches else moved)) for scope in SCOPES))
+            (*source_items(patches[scope].source_set),*moved) if scope in patches else moved))
+            for scope in SCOPES))
 
 
 def audit_scope_dependencies(result, providers, stock):
@@ -145,9 +154,9 @@ def load_generated_bundle(root, *, manifest_path=None):
             if not _same_mod_id(metadata.mod_id, scoped_mod_id(definition.mod_id, scope)):
                 raise PackageFormatError('generated patch ID does not match its common profile and scope')
             load = metadata.datasets[0].loads[0]
-            if (not load.directives or len(load.gpl) > 1 or len(load.descriptions) > 1 or len(load.cams) > 1
-                    or any(not isinstance(d, (GplLoad, DescriptionsLoad, CamLoad)) for d in load.directives)):
-                raise PackageFormatError('generated dataset patch may contain one GPL, XML and toolbar CAM load')
+            if (not load.directives or len(load.gpl)>1 or len(load.descriptions)>1 or len(load.cams)>1 or
+                    any(not isinstance(d, (GplLoad, DescriptionsLoad, CamLoad)) for d in load.directives)):
+                raise PackageFormatError('generated dataset patch may contain one Description, toolbar CAM and GPL load')
             for path in load.cams:
                 if path.relative_path.replace('\\', '/') != f'Data/merged_toolbar-{scope}.cam':
                     raise PackageFormatError('generated toolbar CAM is not owned by its scope')
@@ -156,9 +165,9 @@ def load_generated_bundle(root, *, manifest_path=None):
                 if (tuple(s.extension for s in archive.sections) != (b'SMNU', b'STRT') or
                         any(len(s.entries) != 1 or s.entries[0].name[:4] != b'AP92' for s in archive.sections)):
                     raise PackageFormatError('generated toolbar CAM must contain only AP92 panel and help')
-            for description in load.descriptions:
-                if description.relative_path.replace('\\', '/') != f'Data/merged_descriptions-{scope.casefold()}.xml':
-                    raise PackageFormatError('generated XML target is not owned by its scope')
+            for path in load.descriptions:
+                if path.relative_path.replace('\\', '/').casefold() != f'Data/merged_descriptions-{scope}.xml'.casefold():
+                    raise PackageFormatError('generated Description file is not owned by its scope')
         scopes.append(scope)
         load = metadata.datasets[0].loads[0]
         if len(load.gpl) > 1:

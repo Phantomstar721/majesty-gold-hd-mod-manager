@@ -263,6 +263,73 @@ bool ExpectInvalid(
 }  // namespace
 
 int main() {
+    {
+        std::vector<unsigned char> gated = {'M','M','C','R'};
+        AppendU32(&gated, 26);
+        for (int i=0;i<14;++i) AppendU32(&gated, i==0 ? 1u : 0u);
+        AppendPanel(&gated, "gated", "CGAL", "CGPL", "CGA", 31720);
+        const auto levelOffset = gated.size();
+        AppendU32(&gated, 3); AppendU32(&gated, 1);
+        AppendString(&gated, "MM_FixtureGate");
+        MajestyStockControllers::Registry decoded;
+        std::string error;
+        if (!MajestyStockControllers::ParseRegistry(gated.data(), gated.size(), &decoded, &error) ||
+            decoded.panels.size()!=1 || decoded.panels[0].requiredLevel!=3 ||
+            decoded.panels[0].eligibilityCallbackSymbol!="MM_FixtureGate") return 90;
+        auto commands = gated;
+        commands[4] = 27;
+        AppendU32(&commands, 1);
+        AppendU32(&commands, 31904);
+        AppendString(&commands, "TryAction");
+        AppendString(&commands, "MM_CommandQuote");
+        AppendString(&commands, "MM_CommandCommit");
+        AppendString(&commands, "MM_CommandOwner");
+        if (!MajestyStockControllers::ParseRegistry(commands.data(), commands.size(), &decoded, &error) ||
+            decoded.panels[0].commands.size()!=1 ||
+            decoded.panels[0].commands[0].CommandId()!=0x30000u+31904u) return 93;
+        for (std::size_t n=0; n<commands.size(); ++n)
+            if (MajestyStockControllers::ParseRegistry(commands.data(), n, &decoded, &error)) return 94;
+        auto cooldown=commands;cooldown[4]=30;
+        AppendU32(&cooldown,300000);AppendString(&cooldown,"Remaining");
+        AppendU32(&cooldown,31920);AppendU32(&cooldown,31921);
+        if(!MajestyStockControllers::ParseRegistry(cooldown.data(),cooldown.size(),&decoded,&error) ||
+            decoded.panels[0].cooldownDurationMs!=300000 || decoded.panels[0].cooldownTextControlId!=31921) return 100;
+        for(std::size_t n=0;n<cooldown.size();++n)
+            if(MajestyStockControllers::ParseRegistry(cooldown.data(),n,&decoded,&error)) return 101;
+        std::vector<unsigned char> charged={'M','M','C','R'};
+        AppendU32(&charged,28);
+        for(int i=0;i<14;++i) AppendU32(&charged,(i==0 || i==2) ? 1u : 0u);
+        AppendPanel(&charged,"brewing","CGAL","CGPL","CGA",31720);
+        AppendU32(&charged,3);AppendU32(&charged,0);AppendU32(&charged,0);
+        AppendResearch(&charged,"purge",31900,5000,3,0,31901,31902,0,"Purge",5000);
+        const auto chargeOffset=charged.size();
+        AppendU32(&charged,30000);
+        AppendString(&charged,"Ready");AppendString(&charged,"Complete");
+        AppendString(&charged,"MM_QA_Fixture");
+        if(!MajestyStockControllers::ParseRegistry(charged.data(),charged.size(),&decoded,&error) ||
+            decoded.researchRows[0].chargeMs!=30000 || decoded.researchRows[0].price!=0) return 95;
+        for(std::size_t n=0;n<charged.size();++n)
+            if(MajestyStockControllers::ParseRegistry(charged.data(),n,&decoded,&error)) return 96;
+        auto prepaid=charged;prepaid[4]=29;
+        std::vector<unsigned char> transaction;
+        AppendU32(&transaction,1);AppendString(&transaction,"CanPay");AppendString(&transaction,"Pay");
+        // Presence and transaction callbacks precede saved adapter identity.
+        const auto identityOffset=prepaid.size()-(4+std::strlen("MM_QA_Fixture"));
+        prepaid.insert(prepaid.begin()+identityOffset,transaction.begin(),transaction.end());
+        if(!MajestyStockControllers::ParseRegistry(prepaid.data(),prepaid.size(),&decoded,&error) ||
+            decoded.researchRows[0].startCallbackSymbol!="Pay" ||
+            decoded.researchRows[0].quoteCallbackSymbol!="CanPay") return 98;
+        for(std::size_t n=0;n<prepaid.size();++n)
+            if(MajestyStockControllers::ParseRegistry(prepaid.data(),n,&decoded,&error)) return 99;
+        const unsigned invalidCharge=1000001;
+        std::memcpy(charged.data()+chargeOffset,&invalidCharge,4);
+        if(MajestyStockControllers::ParseRegistry(charged.data(),charged.size(),&decoded,&error)) return 97;
+        gated[levelOffset] = 4;
+        if (MajestyStockControllers::ParseRegistry(gated.data(), gated.size(), &decoded, &error)) return 91;
+        gated[levelOffset] = 3;
+        gated.pop_back();
+        if (MajestyStockControllers::ParseRegistry(gated.data(), gated.size(), &decoded, &error)) return 92;
+    }
     const std::vector<unsigned char> valid = LegacyProfile();
     std::uint32_t wireHash = 2166136261u;
     for (std::vector<unsigned char>::const_iterator byte = valid.begin();
@@ -827,6 +894,28 @@ int main() {
         if (MajestyStockControllers::ParseRegistry(
                 quests.data(), size, &registry, &error)) return 42;
     }
+    auto pair = quests;
+    pair[4] = 23;
+    pair.insert(pair.begin() + 56, 4, 0); // v23 recruitment-section count
+    pair[pair.size()-4] = 2; // Building/Hero scope, never parent-only
+    AppendU32(&pair, 0); // live agents, not data records
+    AppendU32(&pair, 1); // admission callback present
+    AppendString(&pair, "MM_Hire_Admit");
+    AppendU32(&pair, 1);
+    AppendU32(&pair, 8009);
+    if (!MajestyStockControllers::ParseRegistry(pair.data(), pair.size(), &registry, &error) ||
+        !registry.liveAgentLists[0].actionUsesPair || registry.liveAgentLists[0].actionUsesParent ||
+        registry.liveAgentLists[0].admissionCallbackSymbol != "MM_Hire_Admit" ||
+        registry.liveAgentLists[0].gatedControlIds != std::vector<std::uint32_t>{8009}) return 80;
+    for (std::size_t size=0; size<pair.size(); ++size)
+        if (MajestyStockControllers::ParseRegistry(pair.data(), size, &registry, &error)) return 81;
+    auto invalidPair = pair;
+    const std::uint32_t upgrade = 0x1F47;
+    std::memcpy(invalidPair.data()+invalidPair.size()-4, &upgrade, 4);
+    if (!ExpectInvalid(invalidPair, "employment primary gate")) return 82;
+    invalidPair = pair;
+    invalidPair[4] = 22;
+    if (MajestyStockControllers::ParseRegistry(invalidPair.data(), invalidPair.size(), &registry, &error)) return 83;
     auto recruitment = Header(0, 0, 0, 0, 0, 0, 0);
     recruitment[4] = 17;
     AppendU32(&recruitment, 0); // occupant panels

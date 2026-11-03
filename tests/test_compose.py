@@ -1944,23 +1944,28 @@ class ControllerComposeTests(unittest.TestCase):
             inventory.resources = tuple(
                 item for item in inventory.resources if item.key != b"XTRA"
             )
-            inventory.selected.package.definition = ModDefinition(
-                schema_version=3,
-                mod_id=definition.mod_id,
-                internal_name=definition.internal_name,
-                display_name=definition.display_name,
-                custom_buildings=(
-                    CustomBuildingDefinition(
-                        local_name="FixtureGuild",
-                        dialog_id=None,
-                        controller_base="AP07",
-                        panel_resource_template="AP10",
-                    ),
-                ),
-                runtime_features=definition.runtime_features,
-            )
-            with self.assertRaisesRegex(ComposeError, "requires parent building"):
-                resolve_controller_registry((inventory,))
+            # AP02 is a valid primary controller, but its 13-slot lifecycle
+            # cannot consume the AP10 secondary-panel recipe (17 slots).
+            # A resource-only change must not silently opt it into that ABI.
+            for controller, template in (("AP07", "AP10"), ("AP02", "AP02")):
+                with self.subTest(controller=controller, template=template):
+                    inventory.selected.package.definition = ModDefinition(
+                        schema_version=3,
+                        mod_id=definition.mod_id,
+                        internal_name=definition.internal_name,
+                        display_name=definition.display_name,
+                        custom_buildings=(
+                            CustomBuildingDefinition(
+                                local_name="FixtureGuild",
+                                dialog_id=None,
+                                controller_base=controller,
+                                panel_resource_template=template,
+                            ),
+                        ),
+                        runtime_features=definition.runtime_features,
+                    )
+                    with self.assertRaisesRegex(ComposeError, "requires parent building"):
+                        resolve_controller_registry((inventory,))
 
     def test_controller_family_cannot_override_a_stock_description(self):
         with TemporaryDirectory() as tmp:

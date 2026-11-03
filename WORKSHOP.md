@@ -1,3 +1,10 @@
+Version 0.3.11 adds shared custom-hero and ability support, research queues,
+cooldown displays, and bounded automatic failure reporting. It also corrects a
+repeat-registration check when restarting quests. Existing packages remain
+supported on Steam Default 1.5.2.24, Steam beta2 1.5.2.28 and GOG 1.5.2.28.
+Use Save Support Report after a failure; reports stay local until you share them.
+Close the game and Manager before updating, then Prepare Again.
+
 Majesty Mod Manager makes it easy to organize and launch all of the Majesty Gold
 HD mods and quests you have installed or subscribed to.
 

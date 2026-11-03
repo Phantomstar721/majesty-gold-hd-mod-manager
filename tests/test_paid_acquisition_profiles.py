@@ -38,3 +38,4 @@ class PaidAcquisitionProfiles(unittest.TestCase):
                 # The original mode in ESI reaches the predicate, not Sp12.
                 self.assertEqual(image.read(unit+35, 2), bytes.fromhex('8bc6'))
                 self.assertEqual(image.read(unit+4, 7), bytes.fromhex('6a046830000080'))
+

@@ -61,7 +61,7 @@ bool ParsePackageProof(const unsigned char* bytes,std::size_t size,PackageProof&
         cursor+=4; return true;
     };
     std::uint32_t version=0,count=0;
-    if (!word(version) || (version!=3 && version!=4 && version!=7 && version!=8) || !word(count) || count<((version%2==0)?9u:7u) || count>256) return false;
+    if (!word(version) || version<1 || version>8 || !word(count) || count<((version%2==0)?9u:7u) || count>256) return false;
     const auto baseVersion=(version-1)%4+1;
     PackageProof result;
     result.scoped=baseVersion==2||baseVersion==4;

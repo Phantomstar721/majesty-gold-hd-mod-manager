@@ -6,7 +6,7 @@ import unittest
 
 from majesty_cam.potion_policy import (parse_feature, feature_mapping, Plan, Action, POTIONS,
     compose, prepare_descriptions)
-from majesty_cam.private_phantom_policy import POLICY
+from majesty_cam.potion_policy import TYPE
 from majesty_cam.gpl import parse_gpl, SemanticMergeResult, DefinitionKind
 from majesty_cam.gameplay_events import add_gameplay_event_observers, EVENT_FUNCTIONS
 from majesty_cam.compose import _load_stock_gameplay_event_items, compile_gpl, _load_effective_stock_descriptions
@@ -14,8 +14,61 @@ from majesty_cam.descriptions import merge_descriptions
 
 GAME = Path('C:/Program Files (x86)/Steam/steamapps/common/Majesty HD')
 
+# Authored input fixture: packaged checks must not import the source-only
+# private-package authoring utility (which is not an application dependency).
+POLICY = {
+    "type": TYPE, "feature_key": "phantom-bazaar-policy", "hero_title": "Phantom",
+    "potions": {"speed": True, "fire-balm": False, "strength": True,
+                "regeneration": False, "invisibility": True, "shapeshift": True},
+    "shapeshift": {"preset": "medusa"}, "private_actions": {},
+}
+
 
 class PotionPolicyTests(unittest.TestCase):
+    def test_original_and_expansion_description_finalization_stay_separate(self):
+        from majesty_cam.description_composition import prepare_description_views
+        from majesty_cam.script_review import ScriptReviewSession
+        views = {scope: {k:v[0] for k,v in _load_effective_stock_descriptions(GAME,scope).items()}
+                 for scope in ('majesty', 'majestyexpansion')}
+        plans = {}
+        def finalize(results):
+            for scope in results:
+                results[scope], plans[scope] = prepare_descriptions(
+                    results[scope], views[scope], (parse_feature(POLICY),))
+            return results
+        common, patches, _ = prepare_description_views(
+            GAME, (), (), ScriptReviewSession(), None, stock_views=views,
+            finalize_views=finalize, dialog_resolutions=())
+        self.assertFalse(common.document.records)
+        self.assertNotIn('majesty', patches)
+        self.assertEqual(plans['majesty'], Plan())
+        self.assertEqual(len(plans['majestyexpansion'].actions), 6)
+        self.assertEqual(len(patches['majestyexpansion'].document.records), 6)
+        empty = SemanticMergeResult((), ())
+        def forbidden_loader(*args):
+            self.fail('Original dataset must not import expansion potion scripts')
+        result, _ = compose(empty, plans['majesty'], forbidden_loader, {})
+        self.assertIs(result, empty)
+
+    def test_absent_private_action_still_errors_in_original(self):
+        policy = copy.deepcopy(POLICY)
+        policy['private_actions'] = {'speed': 'PrivateSpeed'}
+        stock = {k:v[0] for k,v in _load_effective_stock_descriptions(GAME,'Majesty').items()}
+        with self.assertRaisesRegex(ValueError, 'potion action definitions missing: privatespeed'):
+            prepare_descriptions(merge_descriptions(b'<Descriptions/>',()), stock,
+                                 (parse_feature(policy),))
+
+    def test_mod_loaded_stock_action_is_processed_without_importing_other_actions(self):
+        stock = {k:v[0] for k,v in _load_effective_stock_descriptions(GAME).items()}
+        action = next(r for k,r in stock.items() if k[0]=='Action'
+                      and r.to_element().get('Name')=='Speed_Tonic')
+        from majesty_cam.descriptions import parse_descriptions
+        result = merge_descriptions(b'<Descriptions/>', ())
+        result = replace(result, document=parse_descriptions(b'<Descriptions>'+action.payload+b'</Descriptions>'))
+        updated, plan = prepare_descriptions(result, {}, (parse_feature(POLICY),))
+        self.assertEqual([a.name for a in plan.actions], ['Speed_Tonic'])
+        self.assertEqual(len(updated.document.records), 1)
+
     def test_schema_round_trip_and_reject_invalid(self):
         self.assertEqual(feature_mapping(parse_feature(POLICY)), POLICY)
         for field, value in (("hero_title", 'Bad"Injection'), ("potions", {"speed": True}),

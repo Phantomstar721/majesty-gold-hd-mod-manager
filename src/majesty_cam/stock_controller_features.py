@@ -118,6 +118,13 @@ class StockAp10Ap69SecondaryPanel:
     building_family_id: str
     open_command_id: int
     type: str = "stock.ap10-ap69-secondary-panel.v1"
+    required_level: int = 1
+    eligibility_callback_symbol: str = ""
+    commands: tuple = ()
+    cooldown_remaining_callback_symbol: str = ""
+    cooldown_duration_ms: int = 0
+    cooldown_progress_control_id: int = 0
+    cooldown_text_control_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -282,6 +289,11 @@ class StockAp99ResearchRow:
     icon_control_id: int
     completion_text: str
     type: str = "stock.ap99-research-row.v1"
+    charge_ms: int = 0
+    readiness_callback_symbol: str = ""
+    completion_callback_symbol: str = ""
+    quote_callback_symbol: str = ""
+    start_callback_symbol: str = ""
 
 
 @dataclass(frozen=True)
@@ -431,6 +443,7 @@ _FEATURE_TYPES = {
     "stock.ap69-sovereign-target-action.v1": StockAp69SovereignTargetAction,
     "stock.ap69-sovereign-target-action.v2": StockAp69SourceTargetAction,
     "stock.ap69-sovereign-target-action.v3": StockAp69PaidSourceTargetAction,
+    "stock.ap69-attack-bounty-action.v1": StockAp69AttackBountyAction,
 }
 
 _FEATURE_ORDER = {name: index for index, name in enumerate(_FEATURE_TYPES)}
@@ -608,6 +621,12 @@ def parse_controller_feature(value: Mapping[str, object]) -> ControllerFeature:
     if not isinstance(value, Mapping):
         raise ControllerFeatureError("controller feature must be an object")
     feature_type = value.get("type")
+    if feature_type == "stock.building-employment.v1":
+        from .building_employment import parse_feature
+        try:
+            return _validate_feature(parse_feature(dict(value)))
+        except ValueError as exc:
+            raise ControllerFeatureError(str(exc)) from exc
     if not isinstance(feature_type, str) or feature_type not in _FEATURE_TYPES:
         raise ControllerFeatureError(
             f"unsupported controller feature type: {feature_type!r}"
@@ -628,6 +647,11 @@ def parse_controller_feature(value: Mapping[str, object]) -> ControllerFeature:
         }
         if issubclass(cls, StockMx05LiveAgentListPanel) else set()
     )
+    if cls is StockAp10Ap69SecondaryPanel:
+        optional |= {"required_level", "eligibility_callback_symbol", "commands"}
+        optional |= {"cooldown_remaining_callback_symbol", "cooldown_duration_ms", "cooldown_progress_control_id", "cooldown_text_control_id"}
+    if cls is StockAp99ResearchRow:
+        optional |= {"charge_ms", "readiness_callback_symbol", "completion_callback_symbol", "quote_callback_symbol", "start_callback_symbol"}
     if not expected - optional <= actual or actual - expected:
         missing = sorted((expected - optional) - actual)
         unknown = sorted(actual - expected)
@@ -640,6 +664,9 @@ def parse_controller_feature(value: Mapping[str, object]) -> ControllerFeature:
             "controller feature fields are invalid: " + "; ".join(details)
         )
     arguments = dict(value)
+    if cls is StockAp10Ap69SecondaryPanel:
+        from .panel_commands import parse_commands
+        arguments['commands'] = parse_commands(arguments.get('commands', ()))
     if cls is StockMx05DataRecordListPanel:
         arguments["row_agent_id_callback_symbol"] = arguments.pop("row_key_callback_symbol")
     if cls is StockAp17UpgradeResearchGate:
@@ -701,7 +728,12 @@ def controller_feature_mapping(feature: ControllerFeature) -> dict:
     """Return the exact JSON-ready mapping for one validated record."""
 
     feature = _validate_feature(feature)
+    from .building_employment import BuildingEmployment, feature_mapping as employment_mapping
+    if isinstance(feature, BuildingEmployment):
+        return employment_mapping(feature)
     value = asdict(feature)
+    if isinstance(feature, StockAp10Ap69SecondaryPanel):
+        value['commands'] = list(value['commands'])
     if isinstance(feature, StockAp69PaidSourceTargetAction):
         value.pop("resource_key")
         value.pop("resource_cost")
@@ -828,6 +860,19 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
         _fourcc(feature.source_dialog_id, "source_dialog_id")
         _family_id(feature.building_family_id, "building_family_id")
         _control(feature.open_command_id, "open_command_id")
+        _level(feature.required_level)
+        if feature.eligibility_callback_symbol:
+            _gpl_symbol(feature.eligibility_callback_symbol)
+        from .panel_commands import parse_commands
+        parse_commands(feature.commands)
+        if any((feature.cooldown_remaining_callback_symbol, feature.cooldown_duration_ms,
+                feature.cooldown_progress_control_id, feature.cooldown_text_control_id)):
+            _gpl_symbol(feature.cooldown_remaining_callback_symbol)
+            if feature.cooldown_remaining_callback_symbol.casefold().startswith('mm_'):
+                raise ControllerFeatureError('cooldown query must be package-owned')
+            if type(feature.cooldown_duration_ms) is not int or not 1 <= feature.cooldown_duration_ms <= 2147483647:
+                raise ControllerFeatureError('invalid cooldown display duration')
+            _distinct_controls('cooldown display',feature.cooldown_progress_control_id,feature.cooldown_text_control_id)
     elif isinstance(feature, (StockMx09Ap41RewardPanel, StockMx04Mx05OccupantActionPanel,
                               StockMx05LiveAgentListPanel)):
         _logical(feature.parent_building, "parent_building")
@@ -856,9 +901,9 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
                 raise ControllerFeatureError(
                     "focus_selected_row_on_click must be true or false"
                 )
-            if feature.action_agent_scope not in {"selected-row", "parent"}:
+            if feature.action_agent_scope not in {"selected-row", "parent", "parent-and-selected-row"}:
                 raise ControllerFeatureError(
-                    "action_agent_scope must be 'selected-row' or 'parent'"
+                    "action_agent_scope must be 'selected-row', 'parent' or 'parent-and-selected-row'"
                 )
             paired_value_fields = (
                 feature.row_value_callback_symbol is not None,
@@ -931,6 +976,7 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
                 and feature.row_text is None
                 and not feature.row_variants
                 and feature.row_value_callback_symbol is None
+                and feature.action_agent_scope != "parent-and-selected-row"
             ):
                 raise ControllerFeatureError(
                     "a live-agent list must customize at least one of row_title_text, "
@@ -1003,6 +1049,29 @@ def _validate_feature(feature: ControllerFeature) -> ControllerFeature:
         _control(feature.active_display_control_id, "active_display_control_id")
         _optional_control(feature.icon_control_id, "icon_control_id")
         _bounded_cp1252(feature.completion_text, "completion_text")
+        if feature.charge_ms or feature.readiness_callback_symbol or feature.completion_callback_symbol or feature.quote_callback_symbol or feature.start_callback_symbol:
+            if type(feature.charge_ms) is not int or not 1 <= feature.charge_ms <= 1000000 or feature.price != 0:
+                raise ControllerFeatureError("queued building actions require charge_ms 1..1000000 and price 0")
+            _gpl_symbol(feature.readiness_callback_symbol)
+            _gpl_symbol(feature.completion_callback_symbol)
+            if bool(feature.quote_callback_symbol) != bool(feature.start_callback_symbol):
+                raise ControllerFeatureError("queued action quote and start callbacks must be supplied together")
+            for callback in (feature.quote_callback_symbol, feature.start_callback_symbol):
+                if callback: _gpl_symbol(callback)
+            if any(s.casefold().startswith('mm_') for s in (feature.readiness_callback_symbol, feature.completion_callback_symbol, feature.quote_callback_symbol, feature.start_callback_symbol)):
+                raise ControllerFeatureError("queued action callbacks must be package-owned")
+        # The native AP99 presenter addresses companions arithmetically; the
+        # declaration does not install a remapping layer for those lookups.
+        if feature.price_control_id != feature.action_control_id + 1000:
+            raise ControllerFeatureError(
+                "AP99 price_control_id must equal action_control_id + 1000 "
+                "for stock price updates and row visibility"
+            )
+        if feature.icon_control_id not in (0, feature.action_control_id + 500):
+            raise ControllerFeatureError(
+                "AP99 icon_control_id must be 0 or action_control_id + 500 "
+                "for stock row visibility"
+            )
         _distinct_controls(
             "AP99 research row",
             feature.action_control_id,
@@ -1212,6 +1281,15 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
     _unique_field(panel_records, "source_dialog_id", "source dialog ID")
     parent_commands = set()
     for panel in panel_records:
+        if isinstance(panel,StockAp10Ap69SecondaryPanel) and panel.cooldown_duration_ms:
+            cooldown_controls={panel.cooldown_progress_control_id,panel.cooldown_text_control_id}
+            used={command.control_id for command in panel.commands}
+            for recipe in features:
+                if recipe is panel or getattr(recipe,'panel_key',None)!=panel.panel_key: continue
+                used.update(value for name,value in vars(recipe).items()
+                            if name.endswith('_control_id') and isinstance(value,int) and value)
+            if cooldown_controls & used:
+                raise ControllerFeatureError('cooldown display controls overlap another panel recipe')
         key = (panel.parent_building, panel.open_command_id)
         if key in parent_commands:
             raise ControllerFeatureError(
@@ -1224,6 +1302,8 @@ def _validate_composition(features: Sequence[ControllerFeature]) -> None:
                 first.building_family_id.startswith(second.building_family_id)
                 or second.building_family_id.startswith(first.building_family_id)
             ):
+                if first.building_family_id == second.building_family_id and first.parent_building == second.parent_building:
+                    continue
                 raise ControllerFeatureError(
                     "secondary-panel building family prefixes overlap"
                 )

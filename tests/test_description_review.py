@@ -20,6 +20,56 @@ def conflict(*values, base=None):
 
 
 class DescriptionReviewTests(unittest.TestCase):
+    def test_development_scoped_records_keep_preferences_and_generated_fields(self):
+        from dataclasses import dataclass, replace
+        from majesty_cam.descriptions import serialize_descriptions
+        from test_scoped_descriptions import xml
+        @dataclass
+        class Inventory:
+            selected: object
+            descriptions: tuple
+            scoped_descriptions: tuple
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shared, original, expansion = (root / name for name in ('any.xml', 'original.xml', 'expansion.xml'))
+            shared.write_text(xml('any_spell', 'PRIV', 200))
+            original.write_text(xml('original_spell', 'PRIV', 100))
+            expansion.write_text(xml('expansion_spell', 'PRIV', 300))
+            package = NS(mod_id='patch', metadata=NS(display_name='Patch'), datasets=(),
+                         definition=NS(schema_version=3, custom_buildings=(), runtime_features=()))
+            inventory = Inventory(NS(alias='patch', package=package), (shared,),
+                                  (('Majesty', original), ('MajestyExpansion', expansion)))
+            native = NS(name='Provider', package=NS(mod_id='provider'), description_payloads=(
+                ('majesty', xml('original_spell', 'OTHR', 400).encode()),
+                ('majestyexpansion', xml('expansion_spell', 'OTHR', 400).encode())))
+            def finalize(views):
+                results = {}
+                for scope, result in views.items():
+                    document = parse_descriptions(result.payload.replace(b'</Game>', b'<Extra value="1"/></Game>'))
+                    results[scope] = replace(result, document=document, payload=serialize_descriptions(document))
+                return results
+            for winner, image in (('patch', 'PRIV'), ('provider', 'OTHR')):
+                review = ScriptReviewSession()
+                common, patches, _ = prepare_description_views(root, (inventory,), (native,), review,
+                    lambda conflicts: {p.identity: winner for p in group_conflicts(conflicts)},
+                    finalize_views=finalize, stock_views={'majesty':{}, 'majestyexpansion':{}}, dialog_resolutions=())
+                self.assertFalse(common.document.records)
+                for scope, spell in (('majesty', 'original_spell'), ('majestyexpansion', 'expansion_spell')):
+                    hero = patches[scope].document.records[0].to_element()
+                    self.assertEqual(hero.find('Engine/ImageIDBase').get('value'), image)
+                    self.assertEqual(hero.find('Game/Spell').get('value'), spell)
+                    self.assertEqual(hero.find('Game/Extra').get('value'), '1')
+
+    def test_scoped_description_plans_reach_each_script_view(self):
+        from majesty_cam.compose import prepare_gpl_bundle
+        from test_scoped_output import result, function
+        plans = {'majesty': {'spell_policy_plan': 'original'},
+                 'majestyexpansion': {'spell_policy_plan': 'expansion'}}
+        with patch('majesty_cam.dataset_dependencies.load_dataset_symbols', return_value={}), patch(
+                'majesty_cam.compose.prepare_final_gpl_resources', return_value=result(function('Shared'))) as prepare:
+            prepare_gpl_bundle(Path('.'), (), description_plans=plans)
+        self.assertEqual([c.kwargs['spell_policy_plan'] for c in prepare.call_args_list], ['original', 'expansion'])
+
     def test_native_container_comments_do_not_change_records(self):
         from majesty_cam.descriptions import DescriptionFormatError
         plain = b'<Majesty>' + record(10).payload + b'</Majesty>'

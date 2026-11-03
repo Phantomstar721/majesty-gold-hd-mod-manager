@@ -28,6 +28,18 @@ native/projectile action bindings remain native. Whole-impact guards prevent
 secondary effects leaking through an intercepted hit. The explicit consumer
 declarations below are optional alternatives, not prerequisites for discovery.
 
+Checked-placement v1/v2 declarations register their departure action as a
+special spell through their verified stock Teleport contract. No provider-side
+action-name entry is required. With suppression selected, composition routes
+direct Begin calls through a generated integer-returning admission function and
+guards the original release before its first effect. The admission function
+returns zero without native dispatch when suppressed; otherwise it forwards the
+native result. Calls must use the declared native ABI with three local arguments.
+The XML, native aliases, movement callback, arrival action and cleanup are
+unchanged. Placement validation accepts only that exact generated release guard
+and still validates the complete original stock clone. Without a suppression
+provider neither guard is emitted. Contradictory explicit exemptions are errors.
+
 ## Provider
 
 ```json

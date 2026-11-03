@@ -8,7 +8,8 @@
 #include <cstdio>
 static HMODULE FixtureModuleHandle(LPCWSTR) { return reinterpret_cast<HMODULE>(0x400000); }
 #define GetModuleHandleW FixtureModuleHandle
-#include "../runtime/NativeImpactRuntime.cpp"
+#include "../runtime/AuditedBeta2.cpp"
+#include "../runtime/AttackObservationRuntime.cpp"
 #undef GetModuleHandleW
 extern "C" unsigned char GogFixtureBytes[0x500000];
 
@@ -125,7 +126,7 @@ int main(int argc,char** argv) {
     }
     // First-time late installation remains refused, even after the correction.
     installed=false;assert(!MajestyAttackObservation::InstallRuntime(0x400000,&RegisterFixture,&Log));
-#if defined(MAJESTY_REGISTRATION_DIAGNOSTIC)
+#if 1 // first-fault evidence is required in the ordinary release
     // Full ring keeps only the most recent sixteen script-load records.
     for(unsigned i=0;i<40;++i){char row[80]{};std::snprintf(row,sizeof(row),"history-test-%u",i);diagnosticHistory.Add(row);}
     auto historyStart=logRows.size();diagnosticHistory.Dump(&Log);

@@ -9,7 +9,8 @@ from ..cam import read_cam
 from .runtime_profiles import require_supported_runtime
 from ..exploration_events import selected as exploration_selected, require_supported_profile as require_exploration_profile
 from ..spell_origin import selected as spell_origin_selected
-from ..native_impact import selected as native_impact_selected, require_exact_profile as require_impact_profile
+from ..checked_placement import declared as checked_placement_declared
+from ..attack_observation import declared as attack_observation_declared, require_exact_profile as require_attack_observation_profile
 from ..gpl import find_foreach_return_violations
 from ..compose import (
     ComposeError,
@@ -311,7 +312,7 @@ def prepared_catalog_merge_preflight(
     prepared: PreparedMergeMod, *, game_path: Path, executable: Path | None = None
 ) -> tuple[CatalogIssue, ...]:
     """Run catalog checks while preserving an already prepared package."""
-    executable = executable or game_path / 'MajestyHD.exe'
+    executable = executable or game_path / "MajestyHD.exe"
 
     issues = [
         CatalogIssue(
@@ -349,8 +350,11 @@ def prepared_catalog_merge_preflight(
 
     try:
         inventory = prepared.inventory or inventory_package(prepared.selected_mod)
+        from ..native_impact import selected as native_impact_selected, require_exact_profile as require_impact_profile
         if native_impact_selected((inventory,)):
             require_impact_profile(executable)
+        if attack_observation_declared(getattr(prepared.package,"definition",None)) or checked_placement_declared(getattr(prepared.package,"definition",None)):
+            require_attack_observation_profile(executable)
         validate_gpl_feature_evidence((inventory,), game_path=game_path)
         runtime_features = resolve_runtime_feature_registry(
             (inventory,),
@@ -358,7 +362,7 @@ def prepared_catalog_merge_preflight(
         )
         if exploration_selected((inventory,)) or spell_origin_selected((inventory,)):
             require_exploration_profile(executable)
-        if runtime_features.equipment or runtime_features.kingdom_research or runtime_features.hero_info_rows or runtime_features.movement_scales:
+        if runtime_features.message_flag_controls or runtime_features.equipment or runtime_features.kingdom_research or runtime_features.hero_info_rows or runtime_features.movement_scales:
             require_supported_runtime(executable)
         dialogs = resolve_building_dialogs((inventory,))
         controller = resolve_controller_registry(

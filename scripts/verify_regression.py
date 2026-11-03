@@ -17,12 +17,32 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT / "tests")]
 sys.dont_write_bytecode = True
 
 COMMON = (
-    "test_imag_v5", "test_timed_imag",
+    "test_imag_v5", "test_timed_imag", "test_support_report",
     "test_feature_parity_profiles", "test_native_impact_profiles",
     "test_impact_compatible_image", "test_manager_build", "test_startup_cache",
     "test_stock_input_cache", "test_regression_gate",
 )
 DEVELOPMENT = (
+    "test_message_flag_controls", "test_message_flag_profiles",
+    "test_queued_building_action", "test_panel_commands",
+    "test_status_applied_event",
+    "test_inventory_items", "test_inventory_display",
+    "test_potion_policy.PotionPolicyTests.test_original_and_expansion_description_finalization_stay_separate",
+    "test_potion_policy.PotionPolicyTests.test_absent_private_action_still_errors_in_original",
+    "test_potion_policy.PotionPolicyTests.test_mod_loaded_stock_action_is_processed_without_importing_other_actions",
+    "test_art", "test_compose", "test_damage_contributions", "test_hero_combat_policy", "test_description_review",
+    "test_event_review", "test_sound_review",
+    "test_sparse_art_ids", "test_standard_project_recovery",
+    "test_standard_review", "test_manager_app", "test_script_review_dialog",
+    "test_bounty_action", "test_sovereign_source_target",
+    "test_compact_sovereign_toolbar",
+    "test_building_employment", "test_employment_visitors_profiles",
+    "test_stock_controller_registry", "test_stock_controller_features",
+    "test_breach_native_profiles", "test_prepare_parsing_cost",
+    "test_regression_packages",
+    "test_merge_port_packages",
+    "test_observer_scoped_output",
+    "test_placement_final_validation",
     "test_checked_placement", "test_placement_art", "test_scoped_descriptions",
     "test_paid_acquisition_profiles", "test_fade_persistence_profiles",
     "test_checked_relocation_profiles", "test_dawnfall_load_profiles",
@@ -30,15 +50,9 @@ DEVELOPMENT = (
     "test_observer_body_profiles", "test_attack_observation_profiles",
     "test_placement_binding_profiles", "test_dawnfall_draw_profiles",
     "test_dawnfall_action_profiles", "test_cosmetic_action_profiles",
+    "test_travel_cast_profiles",
 )
-RELEASE = (
-    "test_compact_sovereign_toolbar", "test_compact_toolbar_profiles", "test_paid_acquisition_profiles", "test_breach_native_profiles", "test_manager_compatibility", "test_scoped_output",
-    "test_inventory_display",
-    "test_standard_review",
-    "test_sound_review",
-    "test_release_scope", "test_description_review", "test_sparse_art_ids",
-    "test_standard_project_recovery", "test_event_review",
-)
+RELEASE = DEVELOPMENT + ("test_release_scope", "test_release_merge_literals",)
 
 def normalized(code):
     """Ignore relocated filenames, not constants, bytecode, or line information."""
@@ -149,7 +163,7 @@ def test_inputs():
     return {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
             for folder in ("src", "runtime", "profiles", "tests", "scripts", "release")
             for p in sorted((ROOT / folder).rglob("*"))
-            if p.is_file() and p.suffix in (".py", ".cpp", ".h", ".json", ".gpl", ".ps1")}
+            if p.is_file() and p.suffix in (".py", ".cpp", ".h", ".inl", ".json", ".gpl", ".ps1")}
 
 def main():
     parser = argparse.ArgumentParser()
@@ -219,3 +233,4 @@ if __name__ == "__main__":
     except (ValueError, RuntimeError, OSError, ImportError) as exc:
         print("Regression gate blocked: " + str(exc), file=sys.stderr)
         raise SystemExit(1)
+

@@ -8,6 +8,8 @@ param(
     [switch]$ExplorationTests,
     [switch]$FeatureTests,
     [switch]$RegistrationTests,
+    [switch]$AttackObservationTests,
+    [switch]$CheckedPlacementTests,
     [switch]$RegistrationDiagnostic
 )
 
@@ -132,13 +134,23 @@ if ($SiegeCrashDiagnostic) {
 $runtimeSources = @(
     (Join-Path $sourceRoot "BooleanRuntime.cpp"),
     (Join-Path $sourceRoot "NativeImpactRegistry.cpp"),
-    (Join-Path $sourceRoot "NativeImpactRuntime.cpp"),
+    (Join-Path $sourceRoot "AuditedBeta2.cpp"),
+    (Join-Path $sourceRoot "CheckedPlacement.cpp")
+    (Join-Path $sourceRoot "CheckedNativeState.cpp")
+    (Join-Path $sourceRoot "CheckedPlacementNative.cpp")
+    (Join-Path $sourceRoot "CheckedPlacementRuntime.cpp")
+    (Join-Path $sourceRoot "CheckedPlacementProof.cpp"),
+    (Join-Path $sourceRoot "CheckedCast.cpp"),
+    (Join-Path $sourceRoot "CheckedCastWindows.cpp"),
+    (Join-Path $sourceRoot "CheckedRelocation.cpp"),
+    (Join-Path $sourceRoot "CheckedRelocationWindows.cpp"),
+    (Join-Path $sourceRoot "PaidSourceTargetCommand.cpp"),
     (Join-Path $sourceRoot "AttackObservation.cpp"),
     (Join-Path $sourceRoot "AttackObservationProof.cpp"),
+    (Join-Path $sourceRoot "AttackObservationRuntime.cpp"),
     (Join-Path $sourceRoot "EquipmentRuntime.cpp"),
     (Join-Path $sourceRoot "BoundedMapQuery.cpp"),
     (Join-Path $sourceRoot "MapQueryRuntime.cpp"),
-    (Join-Path $sourceRoot "PaidSourceTargetCommand.cpp"),
     (Join-Path $sourceRoot "MajestyModManagerRuntime.cpp"),
     (Join-Path $sourceRoot "ControllerLifecycleRegistry.cpp"),
     (Join-Path $sourceRoot "FreestyleCamRuntime.cpp"),
@@ -165,9 +177,40 @@ if ($LASTEXITCODE -ne 0) { throw "Runtime launcher build failed with exit code $
 
 $fixtureNames = @()
 if ($ExplorationTests) { $fixtureNames += "ExplorationNativeTests" }
-if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests"; $fixtureNames += "NativeImpactReleaseTests"; $fixtureNames += "RegistrationDiagnosticTests" }
+if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests"; $fixtureNames += "ObserverReregistrationTests", "PlacementReregistrationTests"; $fixtureNames += "RegistrationDiagnosticTests", "BoundedRuntimeLogTests" }
 if ($FeatureTests) { $fixtureNames += "PaidSourceTargetCommandTests", "PanelLifecycleRuntimeTests" }
 if ($RegistrationTests) { $fixtureNames += "SharedRegistrationRuntimeTests"; $fixtureNames += "NativeRegistrationLifecycleTests" }
+if ($AttackObservationTests) {
+    & $compiler /nologo /W4 /O2 /EHsc @commonIncludes `
+        (Join-Path $sourceRoot "NativeImpactRegistry.cpp") `
+        (Join-Path $sourceRoot "AttackObservation.cpp") `
+        (Join-Path $sourceRoot "AttackObservationProof.cpp") `
+        (Join-Path $repoRoot "tests\AttackObservationTests.cpp") `
+        "/Fo$output\" "/Fe:$output\AttackObservationTests.exe" /link @commonLibPaths
+    if ($LASTEXITCODE -ne 0) { throw "Attack observation fixture build failed" }
+    & (Join-Path $output "AttackObservationTests.exe")
+    if ($LASTEXITCODE -ne 0) { throw "Attack observation fixture failed" }
+}
+if ($CheckedPlacementTests) {
+    & $compiler /nologo /W4 /O2 /EHsc @commonIncludes `
+        (Join-Path $sourceRoot "CheckedPlacement.cpp") `
+        (Join-Path $sourceRoot "CheckedNativeState.cpp") `
+        (Join-Path $sourceRoot "CheckedPlacementProof.cpp") `
+        (Join-Path $sourceRoot "CheckedCast.cpp") `
+        (Join-Path $sourceRoot "CheckedRelocation.cpp") `
+        (Join-Path $repoRoot "tests\CheckedPlacementTests.cpp") `
+        "/Fo$output\" "/Fe:$output\CheckedPlacementTests.exe" /link @commonLibPaths
+    if ($LASTEXITCODE -ne 0) { throw "Checked placement fixture build failed" }
+    & (Join-Path $output "CheckedPlacementTests.exe")
+    if ($LASTEXITCODE -ne 0) { throw "Checked placement fixture failed" }
+    & $compiler /nologo /W4 /O2 /EHsc @commonIncludes `
+        (Join-Path $sourceRoot "CheckedPlacement.cpp") `
+        (Join-Path $repoRoot "tests\CosmeticActionCleanupTests.cpp") `
+        "/Fo$output\" "/Fe:$output\CosmeticActionCleanupTests.exe" /link @commonLibPaths
+    if ($LASTEXITCODE -ne 0) { throw "Cosmetic placement fixture build failed" }
+    & (Join-Path $output "CosmeticActionCleanupTests.exe")
+    if ($LASTEXITCODE -ne 0) { throw "Cosmetic placement fixture failed" }
+}
 foreach ($fixtureName in $fixtureNames) {
     $fixtureLinkOptions = @()
     $fixtureArguments = @()
@@ -178,9 +221,17 @@ foreach ($fixtureName in $fixtureNames) {
         $fixtureArguments = @($env:MAJESTY_PUBLIC_EXE, $env:MAJESTY_BETA2_EXE, $env:MAJESTY_GOG_EXE)
     }
     $fixtureSources = @($runtimeSources | Where-Object { [IO.Path]::GetFileName($_) -ne "MajestyModManagerRuntime.cpp" })
+    if ($fixtureName -in @("ObserverReregistrationTests", "NativeRegistrationLifecycleTests")) {
+        $fixtureSources = @($fixtureSources | Where-Object { [IO.Path]::GetFileName($_) -notin @("AttackObservationRuntime.cpp", "BooleanRuntime.cpp") })
+    }
+    if ($fixtureName -eq "ObserverReregistrationTests") {
+        $fixtureSources += (Join-Path $sourceRoot "BooleanRuntime.cpp")
+    }
+    if ($fixtureName -eq "PlacementReregistrationTests") {
+        $fixtureSources = @($fixtureSources | Where-Object { [IO.Path]::GetFileName($_) -ne "CheckedPlacementRuntime.cpp" })
+    }
     if ($fixtureName -eq "NativeRegistrationLifecycleTests") {
-        $fixtureSources = @("AttackObservation.cpp", "AttackObservationProof.cpp", "NativeImpactRegistry.cpp") |
-            ForEach-Object { Join-Path $sourceRoot $_ }
+        $fixtureSources = @($fixtureSources | Where-Object { [IO.Path]::GetFileName($_) -ne "AuditedBeta2.cpp" })
     }
     if ($RegistrationTests -and $fixedImageFixture) {
         $fixtureSources += (Join-Path $repoRoot "tests\GogFixtureMemory.cpp")
@@ -222,13 +273,13 @@ foreach ($fixtureName in $fixtureNames) {
         if ($LASTEXITCODE -ne 0) { throw "$fixtureName failed" }
     }
     if ($fixtureName -eq "RegistrationDiagnosticTests") {
-        # Prove the normal release build cannot emit these diagnostics.
+        # Prove the normal release build retains bounded registration evidence.
         & $compiler /nologo /W4 /O2 /EHsc @commonIncludes `
             (Join-Path $repoRoot "tests\RegistrationDiagnosticTests.cpp") `
             "/Fo$output\RegistrationDiagnosticDisabled.obj" "/Fe:$output\RegistrationDiagnosticDisabled.exe" /link @commonLibPaths
         if ($LASTEXITCODE -ne 0) { throw "Disabled registration diagnostic fixture build failed" }
         & (Join-Path $output "RegistrationDiagnosticDisabled.exe")
-        if ($LASTEXITCODE -ne 0) { throw "Disabled registration diagnostic emitted output" }
+        if ($LASTEXITCODE -ne 0) { throw "Normal registration evidence fixture failed" }
     }
 }
 

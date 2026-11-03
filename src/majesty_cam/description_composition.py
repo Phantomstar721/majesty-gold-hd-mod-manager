@@ -32,7 +32,7 @@ def subset(result, keys):
                    selections=tuple(s for s in result.selections if s.key in keys))
 
 
-def prepare_description_views(game_path, inventories, inputs, review, resolver, **kwargs):
+def prepare_description_views(game_path, inventories, inputs, review, resolver, *, finalize_views=None, stock_views=None, **kwargs):
     from .compose import merge_description_resources, _load_effective_stock_descriptions
     scopes = ('majesty', 'majestyexpansion')
     native = {scope: native_descriptions(inputs, scope) for scope in scopes}
@@ -43,7 +43,8 @@ def prepare_description_views(game_path, inventories, inputs, review, resolver, 
 
     def run(scope):
         variants, names = native[scope]
-        stock = {k: v[0] for k, v in _load_effective_stock_descriptions(game_path, scope).items()}
+        stock = (stock_views[scope] if stock_views is not None else
+                 {k: v[0] for k, v in _load_effective_stock_descriptions(game_path, scope).items()})
         available = set(stock) | {r.key for _, doc in variants for r in doc.records}
 
         def resolve(conflict):
@@ -58,7 +59,10 @@ def prepare_description_views(game_path, inventories, inputs, review, resolver, 
             # it cannot leave this function before every choice is resolved.
             return chosen if chosen is not None else candidates[0].item
 
-        return merge_description_resources(inventories, external_variants=variants,
+        from .scoped_descriptions import inventory_view
+        scoped = tuple(inventory_view(i, 'Majesty' if scope == 'majesty' else 'MajestyExpansion')
+                       if getattr(i, 'scoped_descriptions', ()) else i for i in inventories)
+        return merge_description_resources(scoped, external_variants=variants,
             conflict_resolver=resolve, stock_records=stock,
             excluded_keys=external_keys - available, **kwargs)
 
@@ -71,6 +75,8 @@ def prepare_description_views(game_path, inventories, inputs, review, resolver, 
             raise ScriptReviewCancelled('Mod preferences cancelled; your last completed setup is unchanged.')
         review.apply(decisions)
         views = {scope: run(scope) for scope in scopes}
+    if finalize_views is not None:
+        views = finalize_views(views)
     left, right = (views[s] for s in scopes)
     common_keys = {k for k, record in left.document.index.items()
                    if k in right.document.index and record._fingerprint == right.document.index[k]._fingerprint}

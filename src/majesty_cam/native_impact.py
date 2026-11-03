@@ -9,7 +9,6 @@ from .spell_policy import signature
 
 FEATURE_TYPE = 'stock.projectile-interception.v1'
 CAPABILITY = 'manager.projectile-interception.v1'
-OBSERVATION_CAPABILITY = 'manager.attack-projectile-observation.v1'
 RELATIVE_PATH = 'DataMX/majesty_mod_manager_projectile_interception.bin'
 _NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}\Z')
 _DESCRIPTION = re.compile(r'[\x20-\x7e]{1,128}\Z')

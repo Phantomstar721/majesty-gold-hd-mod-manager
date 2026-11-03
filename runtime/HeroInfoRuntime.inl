@@ -1,3 +1,5 @@
+#include "SavedAttributeRuntime.inl"
+
 // AP78 presentation adapters. Stock owns list refresh, hit testing, hover,
 // string/image copies and destruction. No game behavior or timer is added.
 using HeroInfoRecord = MajestyRuntimeFeatures::HeroInfoRecord;
@@ -17,13 +19,14 @@ HeroImageOp g_heroImageType = nullptr, g_heroImageId = nullptr,
 HeroImageLife g_heroImageCtor = nullptr, g_heroImageDtor = nullptr;
 HeroSelected g_heroSelected = nullptr;
 std::uintptr_t g_heroPassiveResume = 0;
+std::uintptr_t g_heroAttributeEffectResume = 0;
 
 bool HeroEffectRowsSelected() {
     return std::any_of(g_runtimeFeatureRegistry.heroInfoRows.begin(),
         g_runtimeFeatureRegistry.heroInfoRows.end(), [](const HeroInfoRecord& r) { return r.kind == 2; });
 }
 bool ValidateHeroInfoProfile() {
-    return g_buildProfile && MajestyFeatureParity::Validate(
+    return g_buildProfile && ValidateSavedAttributeProfile() && MajestyFeatureParity::Validate(
         g_imageBase,g_buildProfile->buildId,MajestyFeatureParity::Feature::HeroInfo);
 }
 std::uintptr_t g_inventorySpellContinue = 0, g_inventorySpellSkip = 0;
@@ -137,30 +140,33 @@ __declspec(naked) void HeroEffectFinishHook() {
         jmp dword ptr [g_heroImageDtor]
     }
 }
+void AppendHeroInfoRow(void* list,const HeroInfoRecord* row) {
+    const auto text = HeroInfoString(row->displayText);
+    const int index = g_heroAppend(list, -1, &text);
+    if (index < 0) return;
+    alignas(4) unsigned char image[0x6C] = {};
+    g_heroImageCtor(image);
+    g_heroImageType(image, 1);
+    g_heroImageId(image, row->imageId);
+    g_heroImageSet(image, row->imageSet);
+    g_heroImageFrame(image, 0);
+    *reinterpret_cast<std::uint32_t*>(image+0x1C) = 0;
+    g_heroImageFlags(image, 9);
+    HeroRowMessage(list, 0x24, static_cast<unsigned>(index), image);
+    g_heroImageDtor(image);
+    HeroRowTooltip(list, index, row);
+}
 void __stdcall AppendHeroPassives(void* controller, void* list) {
-    auto* unit = static_cast<unsigned char*>(g_heroSelected(controller));
-    if (!unit) return;
-    const auto subject = *reinterpret_cast<const std::uint32_t*>(unit+0x7C);
-    const auto* row = g_runtimeFeatureRegistry.FindHeroInfo(3, subject);
-    if (!row) return;
-    const int level = ReadPackedAttributeValue(unit, 0x0B565041u);
-    const auto* end = g_runtimeFeatureRegistry.heroInfoRows.data()+g_runtimeFeatureRegistry.heroInfoRows.size();
-    for (; row != end && row->kind == 3 && row->subjectId == subject; ++row) {
-        if (level < static_cast<int>(row->unlockLevel)) continue;
-        const auto text = HeroInfoString(row->displayText);
-        const int index = g_heroAppend(list, -1, &text);
-        if (index < 0) continue;
-        alignas(4) unsigned char image[0x6C] = {};
-        g_heroImageCtor(image);
-        g_heroImageType(image, 1);
-        g_heroImageId(image, row->imageId);
-        g_heroImageSet(image, row->imageSet);
-        g_heroImageFrame(image, 0);
-        *reinterpret_cast<std::uint32_t*>(image+0x1C) = 0;
-        g_heroImageFlags(image, 9);
-        HeroRowMessage(list, 0x24, static_cast<unsigned>(index), image);
-        g_heroImageDtor(image);
-        HeroRowTooltip(list, index, row);
+    auto* unit=static_cast<unsigned char*>(g_heroSelected(controller));
+    if(!unit)return;
+    const auto subject=*reinterpret_cast<const std::uint32_t*>(unit+0x7C);
+    const int level=g_runtimeFeatureRegistry.FindHeroInfo(3,subject)
+        ? ReadPackedAttributeValue(unit,0x0B565041u) : 0;
+    for(const auto& row:g_runtimeFeatureRegistry.heroInfoRows) {
+        if(row.kind==3 && row.subjectId==subject && level>=static_cast<int>(row.unlockLevel))
+            AppendHeroInfoRow(list,&row);
+        else if(row.kind==4 && row.listCategory==0 && SavedAttributePositive(unit,row.attributeSymbol))
+            AppendHeroInfoRow(list,&row);
     }
 }
 __declspec(naked) void HeroPassivesHook() {
@@ -175,6 +181,33 @@ __declspec(naked) void HeroPassivesHook() {
         popfd
         mov ecx, dword ptr [esi+24h]
         jmp dword ptr [g_heroPassiveResume]
+    }
+}
+void __stdcall AppendHeroAttributeEffects(void* controller, void* list) {
+    auto* unit=g_heroSelected(controller);
+    if(!unit || !list)return;
+    for(const auto& row:g_runtimeFeatureRegistry.heroInfoRows) {
+        if(row.kind!=4 || row.listCategory!=1 || !SavedAttributePositive(unit,row.attributeSymbol))continue;
+        // Literal stock lower-list geometry, also needed when its attached
+        // effector collection is empty and stock skips that initialization.
+        auto* bytes=static_cast<unsigned char*>(list);
+        *reinterpret_cast<unsigned*>(bytes+0x50)=26;
+        *reinterpret_cast<unsigned*>(bytes+0x58)=28;
+        AppendHeroInfoRow(list,&row);
+    }
+}
+__declspec(naked) void HeroAttributeEffectsHook() {
+    __asm {
+        pushfd
+        pushad
+        push ebx
+        push ebp
+        call AppendHeroAttributeEffects
+        popad
+        popfd
+        mov ecx, dword ptr [ebp+24h]
+        mov eax, dword ptr [ecx]
+        jmp dword ptr [g_heroAttributeEffectResume]
     }
 }
 #include "InventoryItemDisplay.inl"
@@ -192,11 +225,15 @@ bool InstallHeroInfo() {
     g_heroImageFlags = reinterpret_cast<HeroImageOp>(g_imageBase+ParityRva(ParitySite::ImageFlags));
     g_heroSelected = reinterpret_cast<HeroSelected>(g_imageBase+ParityRva(ParitySite::HeroSelected));
     g_heroPassiveResume = g_imageBase+ParityRva(ParitySite::HeroLearned)+0x483;
+    g_heroAttributeEffectResume = g_imageBase+ParityRva(ParitySite::HeroEffects)+0x887;
     // A failed install stops before Majesty resumes; never continue partially.
     return InstallInventoryItemDisplay() && WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x216, reinterpret_cast<void*>(&HeroSpellAppendHook), 0xE8) &&
         WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x24B, reinterpret_cast<void*>(&HeroSpellImage), 0xE8) &&
         WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x28D, reinterpret_cast<void*>(&HeroSpellFinishHook), 0xE8) &&
         WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroLearned)+0x47C, reinterpret_cast<void*>(&HeroPassivesHook), 0xE9, 7) &&
         WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroEffects)+0x7EF, reinterpret_cast<void*>(&HeroEffectImage), 0xE8) &&
-        WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroEffects)+0x832, reinterpret_cast<void*>(&HeroEffectFinishHook), 0xE8);
+        WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroEffects)+0x832, reinterpret_cast<void*>(&HeroEffectFinishHook), 0xE8) &&
+        (std::none_of(g_runtimeFeatureRegistry.heroInfoRows.begin(),g_runtimeFeatureRegistry.heroInfoRows.end(),
+            [](const HeroInfoRecord& row){return row.kind==4 && row.listCategory==1;}) ||
+         WriteOccupantBranch(g_imageBase+ParityRva(ParitySite::HeroEffects)+0x882, reinterpret_cast<void*>(&HeroAttributeEffectsHook), 0xE9));
 }

@@ -74,3 +74,4 @@ class GateTests(unittest.TestCase):
                     'majesty_cam.manager.qol_service.detect_majesty_branch', return_value=BETA2_BRANCH):
                 with self.assertRaisesRegex(ValueError, 'Wrong executable profile for PUBLIC'):
                     gate.fixture_evidence()
+

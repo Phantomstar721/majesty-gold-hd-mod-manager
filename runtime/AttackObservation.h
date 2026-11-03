@@ -60,7 +60,8 @@ public:
     void EnterOperation();
     void LeaveOperation();
     void BeginWorldTeardown(); // Invalidate BEFORE the direct bulk-retirement path.
-    void IdentityIncoherent(); // AL1 from catalog unlink is NOT retirement proof.
+    void IdentityIncoherent(const char* reason="identity-invalidated"); // Static reason only; no retained game pointer.
+    const char* Failure() const { return failure_; }
     RetirementToken BeginRetirement(Address copiedPointer, std::uint32_t copiedId);
     void EndRetirement(RetirementToken token, bool normalConcreteReturn);
     Capture Query(const Memory&, const Profile&, Address actor, std::uint32_t id) const;
@@ -73,7 +74,8 @@ public:
     bool SnapshotCurrent(const Memory&,const Profile&,std::uint64_t generation,std::uint64_t revision) const;
 private:
     bool AttachWorld(const Memory&, const Profile&, bool accepted, Address world, Address catalog);
-    void Invalidate();
+    void Invalidate(const char* reason="identity-invalidated");
+    const char* failure_{"never-attached"};
     std::uint64_t generation_{}, serial_{}, revision_{};
     Address world_{}, catalog_{};
     unsigned depth_{};

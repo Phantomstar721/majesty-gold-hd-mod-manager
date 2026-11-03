@@ -48,6 +48,14 @@ class FeatureParityProfileTests(unittest.TestCase):
         self.assertEqual(image.read(sites["HeroLearned"]+0xD9,9),bytes.fromhex("3858140F84B0010000"))
         call("HeroEffects",0x7EF,"ImageSet")
         call("HeroEffects",0x832,"ImageDtor")
+        # Common tail is reached even with no attached effects. EBX=list,
+        # EBP=controller; five replayed bytes precede stock refresh/scroll.
+        self.assertEqual(image.read(sites["HeroEffects"]+0x882,5),bytes.fromhex("8B4D248B01"))
+        branch=sites["HeroEffects"]+0x6D
+        self.assertEqual(image.read(branch,2),b'\x0f\x84')
+        self.assertEqual(branch+6+struct.unpack('<i',image.read(branch+2,4))[0],sites["HeroEffects"]+0x882)
+        self.assertEqual(image.read(sites["HeroEffects"]+0xB3,7),bytes.fromhex("C743501A000000"))
+        self.assertEqual(image.read(sites["HeroEffects"]+0xBA,7),bytes.fromhex("C743581C000000"))
         call("MoveExecute",0xCA,"MoveVector")
         self.assertEqual(image.read(sites["MoveExecute"]+0xB2,6),bytes.fromhex("8B0385C07E72"))
         self.assertEqual(pointer("ResearchSlot"),sites["ResearchExecute"])
@@ -59,9 +67,11 @@ class FeatureParityProfileTests(unittest.TestCase):
     def test_public(self): self.verify("MAJESTY_PUBLIC_EXE",1)
     def test_gog(self): self.verify("MAJESTY_GOG_EXE",2)
 
-    def test_all_derived_capabilities_have_version_parity(self):
+    def test_unfinished_capabilities_retain_guards_until_port_is_complete(self):
         from majesty_cam.manager.capabilities import DERIVED_RUNTIME_CAPABILITIES
-        from majesty_cam.manager.runtime_profiles import unsupported_runtime_capabilities
+        from majesty_cam.manager.runtime_profiles import unsupported_runtime_capabilities, EXACT_BETA2_CAPABILITIES
         from majesty_cam.manager.qol_service import PUBLIC_BRANCH,BETA2_BRANCH,GOG_BRANCH
         for branch in (PUBLIC_BRANCH,BETA2_BRANCH,GOG_BRANCH):
-            self.assertEqual(unsupported_runtime_capabilities(branch,DERIVED_RUNTIME_CAPABILITIES),())
+            expected=() if branch==BETA2_BRANCH else tuple(sorted(EXACT_BETA2_CAPABILITIES))
+            self.assertEqual(unsupported_runtime_capabilities(branch,DERIVED_RUNTIME_CAPABILITIES),expected)
+            self.assertEqual(unsupported_runtime_capabilities(branch,DERIVED_RUNTIME_CAPABILITIES-EXACT_BETA2_CAPABILITIES),())

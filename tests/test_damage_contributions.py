@@ -272,6 +272,28 @@ end'''
             self.assertEqual(events,[('roll',20),('bonus',True,None),*([('flat',12),('percent',10),('final',5)] if direct else []),
                                      ('hp',-5 if direct else -12),*([('after',100)] if direct else [])])
 
+    def test_damage_scale_follows_armor_and_direct_reductions_for_both_routes(self):
+        phases=('spell_flat_reduce','spell_damage_scale','spell_final','after_hp')
+        for scope in self.stock:
+            result,_=self.build(scope,phases)
+            items=[i for i in result.items if i.normalized_name=='mm_damage_spell' or i.normalized_name.startswith('contributor')]
+            for direct in (True,False):
+                for scaled in (4,-3):
+                    vm=SamplerHarness(executable_source(items));events=[]
+                    defender=Agent();defender.fields={'subtype':'hero','attrib_armor_magic_bonus':2,'attrib_hp':100}
+                    vm.calls.update({'randomnumber':lambda n:9,'getattribute':lambda a,k:a[k],
+                        'contributor0':lambda s,a,d,n:events.append(('direct',n)) or n-2,
+                        'contributor1':lambda s,a,d,n:events.append(('scale',n)) or scaled,
+                        'contributor2':lambda s,a,d,n:events.append(('final',n)),
+                        'contributor3':lambda a,d,h:events.append(('after',h)),
+                        'adjustattribute':lambda a,k,n:events.append(('hp',n))})
+                    amount=vm.call('mm_damage_spell',None,None,defender,20,1,0,direct)
+                    self.assertEqual(amount,max(0,scaled))
+                    self.assertEqual(events, [*([('direct',8)] if direct else []),
+                        ('scale',6 if direct else 8),
+                        *([('final',scaled)] if direct and scaled>0 else []),
+                        ('hp',-max(0,scaled)), *([('after',100)] if direct and scaled>0 else [])])
+
     def test_multiple_providers_compose_flat_then_percentage_with_one_debit(self):
         # Source-owned eligibility helpers are stubs; actual emitted calculation,
         # phase ordering, per-provider local state, and HP ownership execute here.

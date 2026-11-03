@@ -361,8 +361,19 @@ int main() {
     if(MajestyRuntimeFeatures::ParseRegistry(invalidInventory.data(),invalidInventory.size(),&registry,&error)) return 50;
     invalidInventory=inventory;invalidInventory[4]=11;
     if(MajestyRuntimeFeatures::ParseRegistry(invalidInventory.data(),invalidInventory.size(),&registry,&error)) return 51;
-    invalidInventory=inventory;invalidInventory[24]=4;
-    if(MajestyRuntimeFeatures::ParseRegistry(invalidInventory.data(),invalidInventory.size(),&registry,&error)) return 52;
+    auto message = Header(13, 0, 0);
+    AppendU32(&message, 256);
+    if (!MajestyRuntimeFeatures::ParseRegistry(message.data(), message.size(), &registry, &error) ||
+        !registry.messageFlagControls) return 52;
+    for (std::size_t size=0; size<message.size(); ++size)
+        if (MajestyRuntimeFeatures::ParseRegistry(message.data(), size, &registry, &error) ||
+            registry.messageFlagControls) return 53;
+    for (auto version : {1u, 2u, 12u, 14u}) {
+        auto bad=message; bad[4]=static_cast<unsigned char>(version);
+        if (MajestyRuntimeFeatures::ParseRegistry(bad.data(), bad.size(), &registry, &error)) return 54;
+    }
+    message[17]=0;
+    if (MajestyRuntimeFeatures::ParseRegistry(message.data(), message.size(), &registry, &error)) return 55;
     std::puts("Runtime feature registry parser tests passed.");
     return 0;
 }
