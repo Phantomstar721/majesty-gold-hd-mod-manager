@@ -91,8 +91,18 @@ class NativeImpactTests(unittest.TestCase):
         self.assertEqual(decode_proof(encode_proof(proof)),proof)
         with self.assertRaises(ValueError):build_proof((),baseline,output)
         with self.assertRaises(ValueError):build_proof((),baseline,output,shared_only=True,required_functions=('Missing',))
+        original=compiled((DefinitionKind.FUNCTION,'Fire_Ball_Hit'))
+        proof=build_proof((),baseline,output,(original,),shared_only=True,
+                         required_functions=('Deflect',))
+        self.assertNotIn('fire_ball_hit',proof.protected_names)
+        self.assertIn('deflect',proof.protected_names)
+        expansion=compiled((DefinitionKind.FUNCTION,'Fire_Ball_Hit'),(DefinitionKind.FUNCTION,'ExpansionOnly'))
+        for outputs in ((output, original, expansion),
+                        compiled((DefinitionKind.FUNCTION,'Deflect'),(DefinitionKind.FUNCTION,'Fire_Ball_Hit'))):
+            proof=build_proof((),baseline,outputs,(original,),shared_only=True,
+                              required_functions=('Deflect',))
+            self.assertEqual(proof.protected_names,('deflect',))
         with self.assertRaisesRegex(ValueError,'protected'):
-            build_proof((),baseline,output,(compiled((DefinitionKind.FUNCTION,'Fire_Ball_Hit')),),
-                        shared_only=True,protected_functions=('Fire_Ball_Hit',))
+            build_proof((),baseline,output,(output,),shared_only=True,required_functions=('Deflect',))
 
 if __name__ == '__main__':unittest.main()

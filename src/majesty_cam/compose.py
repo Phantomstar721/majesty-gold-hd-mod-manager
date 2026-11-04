@@ -8551,8 +8551,9 @@ def compose_package(
                                          tuple((data_directory / ("Merged.bcd" if scope=="Any" else f"Merged-{scope}.bcd")).read_bytes()
                                                for scope,_ in script_bundle.outputs),
                                          shared_only=bool(native_bindings),
-                                         required_functions=tuple(f.callback_symbol for f in native_features),
-                                         protected_functions=tuple(b.script for b in native_bindings),
+                                         required_functions=(tuple(f.callback_symbol for f in native_features)
+                                             + tuple(name for binding in placement_bindings for name in
+                                                 (binding.feature.release_callback_symbol, binding.feature.movement_callback_symbol))),
                                          extra_protected_names=tuple(name for binding in placement_bindings
                                              for name,_ in placement_exports(binding.feature)))
             proof_path = staging / RELATIVE_PATH

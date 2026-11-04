@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from majesty_cam.attack_observation import validate_bindings
 from majesty_cam.attack_observation_proof import (build_proof, encode, decode,
-    from_composed_output, BASELINES, BASELINE_SHA256, PUBLIC_BASELINE_SHA256, STOCK_COMBAT_NAMES,
+    from_composed_output, BASELINES, BASELINE_SHA256, PUBLIC_BASELINE_SHA256,
     audited_baseline, validate_output)
 from majesty_cam.descriptions import parse_descriptions
 from majesty_cam.gpl import parse_gpl, DefinitionKind as Kind
@@ -90,8 +90,38 @@ class ProofTests(unittest.TestCase):
         proof=build_proof(self.bindings,self.baseline,self.output,(optional,))
         self.assertNotIn('gettohit',proof.protected_names)
         changed=compiled((Kind.FUNCTION,"Released"),(Kind.FUNCTION,"make_attack"),(Kind.FUNCTION,"gettohit"))
+        proof=build_proof(self.bindings,self.baseline,changed,(optional,))
+        self.assertNotIn('gettohit',proof.protected_names)
+
+    def test_ownership_is_contract_based_not_combat_name_or_dataset_union(self):
+        common=compiled((Kind.FUNCTION,'Deflect'))
+        base=compiled((Kind.FUNCTION,'attack_object'),(Kind.FUNCTION,'hit'))
+        expansion=compiled((Kind.FUNCTION,'exp_value'),(Kind.FUNCTION,'damage_dispatch'))
+        optional=compiled((Kind.FUNCTION,'attack_object'),(Kind.FUNCTION,'Infectious_Cloud_Hit'),
+                          (Kind.FUNCTION,'hit'),(Kind.FUNCTION,'damage_dispatch'))
+        for patches in ((base,expansion),(expansion,base)):
+            proof=build_proof((),self.baseline,(common,*patches),(optional,),
+                              shared_only=True,required_functions=('Deflect',))
+            self.assertEqual(proof.protected_names,('deflect',))
+            self.assertEqual(decode(encode(proof)),proof)
+        # A real native dependency missing from either effective mode fails
+        # at generation, rather than falsely claiming it exists at runtime.
+        for patches in ((base,common),(common,base)):
+            with self.assertRaisesRegex(ValueError,'effective callbacks'):
+                build_proof((),self.baseline,(expansion,*patches),shared_only=True,
+                            required_functions=('Deflect',))
+
+    def test_required_callbacks_remain_protected_in_both_modes(self):
+        common=compiled((Kind.FUNCTION,'SharedOther'))
+        base=compiled((Kind.FUNCTION,'Deflect'),(Kind.FUNCTION,'BaseOnly'))
+        expansion=compiled((Kind.FUNCTION,'Deflect'),(Kind.FUNCTION,'ExpansionOnly'))
+        proof=build_proof((),self.baseline,(common,base,expansion),shared_only=True,
+                          required_functions=('Deflect',))
+        self.assertEqual(proof.protected_names,('deflect',))
         with self.assertRaisesRegex(ValueError,'overrides'):
-            build_proof(self.bindings,self.baseline,changed,(optional,))
+            build_proof((),self.baseline,(common,base,expansion),
+                        (compiled((Kind.FUNCTION,'Deflect')),),shared_only=True,
+                        required_functions=('Deflect',))
 
     def test_unrelated_baseline_override_is_allowed_but_still_hash_pinned(self):
         # A quest can replace an unrelated baseline entry point. Its actual
@@ -161,3 +191,13 @@ class ProofTests(unittest.TestCase):
         baseline=(optional,*self.baseline[1:])
         with self.assertRaisesRegex(ValueError,"baseline"):
             build_proof(self.bindings,baseline,self.output,extra_protected_names=(alias,))
+        for kind in (Kind.FUNCTION,Kind.PROTOTYPE):
+            emitted=compiled((Kind.FUNCTION,'Released'),(Kind.FUNCTION,'make_attack'),(kind,alias))
+            with self.assertRaisesRegex(ValueError,'native observer alias'):
+                build_proof(self.bindings,self.baseline,emitted,extra_protected_names=(alias,))
+
+    def test_iterator_contract_inputs_survive_repeated_use(self):
+        proof=build_proof((),self.baseline,compiled((Kind.FUNCTION,'Provider')),
+                          shared_only=True,required_functions=iter(('Provider',)),
+                          extra_protected_names=iter(('NativeCommit',)))
+        self.assertEqual(proof.protected_names,('nativecommit','provider'))

@@ -36,12 +36,6 @@ PUBLIC_BASELINE_SHA256 = (
     "308294eb59e05d620dde6b4f2691d8c312d10f7fd4dab76b3dfecd0cbc1b987f",
 )
 MAX_FILES = 256
-# Stock combat definitions eligible for protection when actually composed.
-# Declared native aliases and directly required callbacks are also protected.
-# Unrelated baseline quest entry points do not own this observation boundary.
-STOCK_COMBAT_NAMES = frozenset(("make_attack", "hit", "gettohit", "gettoavoid",
-    "notvalid", "notvalid_attacker", "damage_dispatch", "attack_end", "exp_value",
-    "attack_object", "rogues_guild_birth"))
 _FIELDS = ("feature_key", "api_prefix", "actor", "action", "projectile", "release_callback_symbol")
 
 
@@ -71,8 +65,10 @@ def validate_output(proof, targets):
         raise ValueError("observer proof does not match its actual ordered compiled output")
 
 
-def build_proof(bindings, baseline_bytes, emitted_bytes, optional_bytes=(), *, extra_protected_names=(), shared_only=False, required_functions=(), protected_functions=()):
+def build_proof(bindings, baseline_bytes, emitted_bytes, optional_bytes=(), *, extra_protected_names=(), shared_only=False, required_functions=()):
     bindings = tuple(bindings)
+    extra_protected_names = tuple(extra_protected_names)
+    required_functions = tuple(required_functions)
     if len(bindings) != 1 and not (shared_only and not bindings):
         raise ValueError("attack observation v1 requires exactly one declared actor binding")
     feature = bindings[0].feature if bindings else None
@@ -96,17 +92,13 @@ def build_proof(bindings, baseline_bytes, emitted_bytes, optional_bytes=(), *, e
     effective_keys = (keys[0],) if len(keys)==1 else (keys[0]|keys[1], keys[0]|keys[2])
     if any(not needed <= effective for effective in effective_keys):
         raise ValueError("compiled observer output is missing its effective callbacks")
-    aliases = {name.casefold() for name, _ in exports(feature)} if feature else set()
     if any(name in aliases for _, name in output_keys):
         raise ValueError("compiled output defines a native observer alias")
-    # Protect the observation contract, not every unrelated definition that
-    # happens to share a compiled file with it (quest constants, hero trees...).
-    emitted_names = {name for _,name in output_keys}
-    protected_names = (STOCK_COMBAT_NAMES & emitted_names) | aliases | {n.casefold() for n in extra_protected_names}
-    if feature:
-        protected_names |= {feature.release_callback_symbol.casefold()}
-    protected_names |= {n.casefold() for n in required_functions}
-    protected_names |= {n.casefold() for n in protected_functions}
+    # Ownership follows the native contract, never a list of combat names or
+    # everything present in a generated file. Each required function above is
+    # proven in BOTH effective datasets. Descriptor hit callbacks execute via
+    # the game's original dispatch and retain ordinary native precedence.
+    protected_names = aliases | {name for _, name in needed}
     payloads = [*baseline_bytes, *outputs]
     for data in optional_bytes:
         keys = definition_keys(data)
@@ -189,14 +181,14 @@ def decode(data):
     return result
 
 
-def from_composed_output(game_path, bindings, emitted_bytes, *, extra_protected_names=(), shared_only=False, required_functions=(), protected_functions=()):
+def from_composed_output(game_path, bindings, emitted_bytes, *, extra_protected_names=(), shared_only=False, required_functions=()):
     """Read-only handoff after compilation; never composes a Manager profile."""
     from pathlib import Path
     root = Path(game_path)
     baseline = tuple((root / path).read_bytes() for path in BASELINES)
     if not audited_baseline(hashlib.sha256(data).hexdigest() for data in baseline):
         raise ValueError("attack observation native baseline archives differ from the audited profile")
-    options = dict(extra_protected_names=extra_protected_names, shared_only=shared_only, required_functions=required_functions, protected_functions=protected_functions)
+    options = dict(extra_protected_names=tuple(extra_protected_names), shared_only=shared_only, required_functions=tuple(required_functions))
     proof = build_proof(bindings, baseline, emitted_bytes, **options)
     optional = []
     required_paths = {(root / path).resolve() for path in BASELINES}

@@ -130,8 +130,7 @@ def main():
                         row['modPreferences'] = review.decisions
                         if bindings:
                             proof = from_composed_output(args.game,(),outputs,shared_only=True,
-                                required_functions=tuple(f.callback_symbol for f in features),
-                                protected_functions=tuple(b.script for b in bindings))
+                                required_functions=tuple(f.callback_symbol for f in features))
                             row['interceptionRegistrySha256'] = hashlib.sha256(encode_impact(bindings,encode_proof(proof))).hexdigest()
                     except Exception as exc:
                         row['error'] = str(exc)

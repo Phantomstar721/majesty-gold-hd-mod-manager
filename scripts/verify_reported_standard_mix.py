@@ -69,7 +69,7 @@ def main():
                     outputs.append(compiled.target.read_bytes())
         if bindings:
             proof=from_composed_output(game,(),outputs,shared_only=True,
-                required_functions=tuple(f.callback_symbol for f in features),protected_functions=tuple(b.script for b in bindings))
+                required_functions=tuple(f.callback_symbol for f in features))
             encode_impact(bindings,encode_proof(proof))
         report.append({'preferredOrder':order,'decisions':review.decisions,'standards':[s.name for s in standards]})
     (ROOT/'local/reported-standard-regression.json').write_text(json.dumps(report,indent=2))
