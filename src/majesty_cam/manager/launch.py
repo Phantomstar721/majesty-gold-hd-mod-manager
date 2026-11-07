@@ -29,6 +29,7 @@ from ..stock_controller_registry import (
     ControllerRegistryError,
     decode_stock_controller_registry,
 )
+from .quest_dataset import configure_launch
 from .paths import ManagerPaths
 from .catalog import CatalogEntry, CatalogKind, CatalogSource, IssueSeverity
 from .profile_lock import (
@@ -245,6 +246,10 @@ def launch_majesty(
                 ).ensure_required()
             except Exception as exc:
                 raise ManagerLaunchError(str(exc)) from exc
+        try:
+            configure_launch(paths, environment)
+        except (OSError, ValueError, SyntaxError) as exc:
+            raise ManagerLaunchError(f"Could not configure expansion quest content: {exc}") from exc
         write_remembered_mods(paths.remembered_path, ordered)
 
         command = [

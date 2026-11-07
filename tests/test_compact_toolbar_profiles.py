@@ -34,6 +34,16 @@ class CompactToolbarProfiles(unittest.TestCase):
                 self.assertEqual(image.read(address, len(geometry)), geometry)
                 table, slots, event_hash, setup_hash = rows[index]
                 slots = [int(v, 16) for v in slots.split(",")]
+                setup = bytearray(image.read(slots[1], 0x89))
+                branch = (0xbcc02, 0xbd642, 0xbdc42)[index] - slots[1]
+                self.assertEqual(setup[branch:branch+2], bytes.fromhex("7418"))
+                self.assertEqual(setup[branch+7:branch+9], bytes.fromhex("7411"))
+                setup[branch:branch+2] = setup[branch+7:branch+9] = bytes.fromhex("9090")
+                result = 2166136261
+                for byte in setup:
+                    result = ((result ^ byte) * 16777619) & 0xffffffff
+                fixed = re.search(r"expansionSetupHashes\[\]=\{([^}]+)", header)[1]
+                self.assertEqual(result, int(fixed.split(",")[index], 16))
                 # The original compact hover's last direct call owns the helper.
                 hover = image.read(slots[2], 0x45)
                 self.assertEqual(hover[0x34], 0xe8)

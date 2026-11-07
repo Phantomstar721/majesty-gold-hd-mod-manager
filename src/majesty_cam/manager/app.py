@@ -837,12 +837,14 @@ if _PYSIDE_IMPORT_ERROR is None:
                 )
                 bar.addWidget(self.clear_button)
             else:
-                quest_note = QLabel("CHOOSE IN MAJESTY")
-                quest_note.setObjectName("neutralBadge")
-                quest_note.setToolTip(
-                    "Choose quests from Majesty's quest screen after you launch."
-                )
-                bar.addWidget(quest_note)
+                self.expansion_quests = QCheckBox("Play all quests with expansion content")
+                quest_option = QVBoxLayout()
+                quest_option.setSpacing(2)
+                quest_option.addWidget(self.expansion_quests)
+                credit = QLabel("(Credit to mikmak300)")
+                credit.setObjectName("sectionDescription")
+                quest_option.addWidget(credit)
+                bar.addLayout(quest_option)
             layout.addWidget(toolbar)
 
             self.scroll = QScrollArea()
@@ -1440,6 +1442,10 @@ if _PYSIDE_IMPORT_ERROR is None:
                 catalog_page.selection_changed.connect(self._selection_changed)
                 catalog_page.steam_requested.connect(self.steam_requested.emit)
                 catalog_page.conflicts_requested.connect(self._show_conflicts)
+                if kind is CatalogKind.QUEST:
+                    from .quest_dataset import enabled
+                    catalog_page.expansion_quests.setChecked(enabled(self.controller.paths))
+                    catalog_page.expansion_quests.clicked.connect(self._set_expansion_quests)
                 self.pages[kind] = catalog_page
                 self.tabs.addTab(catalog_page, label)
             self.qol_page = _QolPage()
@@ -1607,6 +1613,15 @@ if _PYSIDE_IMPORT_ERROR is None:
             self._refresh_installations(choices)
             self.install_path.setFullText(str(self.controller.paths.game_path))
             self._scan_finished(snapshot)
+
+        @Slot(bool)
+        def _set_expansion_quests(self, checked: bool) -> None:
+            from .quest_dataset import enabled, set_enabled
+            try:
+                set_enabled(self.controller.paths, checked)
+            except OSError as exc:
+                self.pages[CatalogKind.QUEST].expansion_quests.setChecked(enabled(self.controller.paths))
+                self._show_interaction_error("Could not save quest setting", exc)
 
         @Slot()
         def _open_game_folder(self) -> None:

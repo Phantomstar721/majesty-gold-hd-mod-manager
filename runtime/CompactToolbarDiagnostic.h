@@ -27,6 +27,8 @@ constexpr Profile profiles[]={
  {0x3577ec,{0xbd100,0xbd5e0,0xbd160,0xbd1b0,0x547b0,0x547c0,0x54790,0x687e0,0xbd590},0x0ce9dbe5,0x6990b9af},
  {0x356944,{0xbd700,0xbdbe0,0xbd760,0xbd7b0,0x546d0,0x546e0,0x546b0,0x68700,0xbdb90},0x06f607e5,0x170021dc}
 };
+// FNV of the full 0x89-byte AP92 setup after the two Abode branches are disabled.
+constexpr unsigned expansionSetupHashes[]={0x04306734,0x02000280,0xe1c9d693};
 inline unsigned Hash(const unsigned char* p,unsigned count) {
     unsigned hash=2166136261u;
     for(unsigned i=0;i<count;++i)hash=(hash^p[i])*16777619u;

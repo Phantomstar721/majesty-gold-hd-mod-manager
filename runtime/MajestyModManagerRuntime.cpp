@@ -6822,6 +6822,7 @@ bool InstallPrivateRewardFlagModeRegistry() {
     return true;
 }
 
+bool g_expansionQuestContentInstalled = false;
 #include "CompactSovereignToolbar.inl"
 
 extern "C" void __stdcall CaptureSecondaryController(
@@ -7713,6 +7714,89 @@ bool InstallSecondaryControllerHook() {
 #include "GogStandardMods.inl"
 #include "GogWorkshopQuests.inl"
 
+using ComposeQuestDataset = void* (__cdecl*)(void*, unsigned);
+using LookupQuestDataset = void* (__thiscall*)(void*, unsigned);
+ComposeQuestDataset g_composeQuestDataset = nullptr;
+LookupQuestDataset g_lookupQuestDataset = nullptr;
+
+unsigned ExpansionQuestBase(unsigned requested) {
+    return requested == 0x006C6552 ? 0x406C6552 : requested;
+}
+
+void* __cdecl ComposeExpansionQuest(void* output, unsigned requested) {
+    return g_composeQuestDataset(output, ExpansionQuestBase(requested));
+}
+
+void* __fastcall LookupExpansionQuest(void* owner, void*, unsigned requested) {
+    return g_lookupQuestDataset(owner, ExpansionQuestBase(requested));
+}
+
+// Called while the game's main thread is suspended. Any failure terminates
+// this launch before stock can consume a partial dataset configuration.
+bool InstallExpansionQuestContent() {
+    wchar_t enabled[2] = {};
+    DWORD length = GetEnvironmentVariableW(L"MAJESTY_MANAGER_EXPANSION_QUESTS", enabled, 2);
+    if (!length) return GetLastError() == ERROR_ENVVAR_NOT_FOUND;
+    if (length != 1 || enabled[0] != L'1') return false;
+
+    struct Sites {
+        const MajestyBuildProfile* profile;
+        DWORD selectedCompose, directLookup, baseOnlyCompose, compose, lookup, bar;
+    };
+    static const Sites sites[] = {
+        {&kPublicBuildProfile, 0x12618C, 0x1261C6, 0x126244, 0x125F40, 0xEF2C0, 0xBCC02},
+        {&kBeta2BuildProfile,  0x13AA4C, 0x13AA86, 0x13AB04, 0x13A800, 0xEF880, 0xBD642},
+        {&kGogBuildProfile,    0x139D4C, 0x139D86, 0x139E04, 0x139B00, 0xF0030, 0xBDC42},
+    };
+    for (const auto& site : sites) {
+        if (site.profile != g_buildProfile) continue;
+        auto bar = reinterpret_cast<unsigned char*>(g_imageBase + site.bar);
+        // Both release-type comparisons skip the stock hide-overlay call (ID 9600).
+        static constexpr unsigned char stock[] = {
+            0x3d,0x52,0x65,0x6c,0x00,0x74,0x18,0x3d,0x52,0x65,0x6c,0x02,0x74,0x11,
+            0x8b,0x4b,0x24,0x8b,0x01,0x8b,0x50,0x20,0x6a,0x00,0x68,0x80,0x25,0x00,0x00,0xff,0xd2
+        };
+        unsigned char fixed[sizeof(stock)];
+        std::memcpy(fixed, stock, sizeof(stock));
+        fixed[5] = fixed[6] = fixed[12] = fixed[13] = 0x90;
+        if (std::memcmp(bar-5, stock, sizeof(stock)) && std::memcmp(bar-5, fixed, sizeof(fixed))) return false;
+
+        // Redirect only quest consumers. The mod's own declared dataset and
+        // the stock dataset-definition loader must retain their original IDs.
+        struct Call { DWORD site, target; std::uintptr_t replacement; };
+        const Call calls[] = {
+            {site.selectedCompose, site.compose, reinterpret_cast<std::uintptr_t>(&ComposeExpansionQuest)},
+            {site.baseOnlyCompose, site.compose, reinterpret_cast<std::uintptr_t>(&ComposeExpansionQuest)},
+            {site.directLookup, site.lookup, reinterpret_cast<std::uintptr_t>(&LookupExpansionQuest)},
+        };
+        for (const auto& call : calls) {
+            const auto code = reinterpret_cast<const unsigned char*>(g_imageBase + call.site);
+            DWORD displacement;
+            std::memcpy(&displacement, code+1, sizeof(displacement));
+            if (code[0] != 0xE8 || call.site + 5 + displacement != call.target) return false;
+        }
+        auto write = [](void* target, const void* data, size_t size, DWORD protection) {
+            DWORD previous, ignored;
+            if (!VirtualProtect(target, size, protection, &previous)) return false;
+            std::memcpy(target, data, size);
+            return VirtualProtect(target, size, previous, &ignored) != FALSE;
+        };
+        g_composeQuestDataset = reinterpret_cast<ComposeQuestDataset>(g_imageBase + site.compose);
+        g_lookupQuestDataset = reinterpret_cast<LookupQuestDataset>(g_imageBase + site.lookup);
+        for (const auto& call : calls) {
+            const auto address = g_imageBase + call.site;
+            const DWORD displacement = static_cast<DWORD>(call.replacement - (address + 5));
+            if (!write(reinterpret_cast<void*>(address+1), &displacement, sizeof(displacement), PAGE_EXECUTE_READWRITE) ||
+                !FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(address), 5)) return false;
+        }
+        g_expansionQuestContentInstalled =
+               write(bar, fixed+5, 9, PAGE_EXECUTE_READWRITE) &&
+               FlushInstructionCache(GetCurrentProcess(), bar, 9);
+        return g_expansionQuestContentInstalled;
+    }
+    return false;
+}
+
 DWORD WINAPI InitializeRuntime(void*) {
     g_imageBase = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
     const CapabilityManifestState capabilityManifest =
@@ -7795,6 +7879,9 @@ DWORD WINAPI InitializeRuntime(void*) {
     if (!SelectMajestyBuildProfile() || !ValidateMajestyBuildProfile()) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: the executable does not match every declared runtime capability profile.");
+    }
+    if (!InstallExpansionQuestContent()) {
+        StopUnsafeManagerRuntimeLaunch("Expansion quest content: quest dataset calls or Sorcerer's Abode spell bar do not match the selected game build.");
     }
     if (!InstallGogStandardMods()) {
         StopGogStandardModLaunch(

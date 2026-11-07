@@ -113,7 +113,8 @@ bool Capture(unsigned value) {
     if(reinterpret_cast<std::uintptr_t>(stock)!=g_imageBase+p.table)return true;
     for(unsigned i=0;i<9;++i)
         if(reinterpret_cast<std::uintptr_t>(stock[i])!=g_imageBase+p.slots[i])return false;
-    if(MajestyCompactDiagnostic::Hash(reinterpret_cast<unsigned char*>(stock[1]),0x89)!=p.setupHash||
+    const auto expectedSetup = g_expansionQuestContentInstalled ? MajestyCompactDiagnostic::expansionSetupHashes[index] : p.setupHash;
+    if(MajestyCompactDiagnostic::Hash(reinterpret_cast<unsigned char*>(stock[1]),0x89)!=expectedSetup||
        MajestyCompactDiagnostic::Hash(reinterpret_cast<unsigned char*>(stock[8]),0x43)!=p.eventHash||
        MajestyCompactDiagnostic::Hash(reinterpret_cast<unsigned char*>(g_imageBase+queryRvas[index]),0x146)!=queryHashes[index]||
        MajestyCompactDiagnostic::Hash(reinterpret_cast<unsigned char*>(g_imageBase+helpRvas[index]),0xf0)!=helpHashes[index])return false;

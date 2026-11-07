@@ -155,7 +155,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
         steam = Path("Z:/Steam/MajestyHD.exe").resolve()
         gog = Path("Z:/GOG/MajestyHD.exe").resolve()
         controller = SimpleNamespace(
-            paths=SimpleNamespace(game_path=steam.parent, game_executable=steam),
+            paths=SimpleNamespace(game_path=steam.parent, game_executable=steam, profile_path=steam.parent / "profile.json"),
             detected_installations=lambda: ((steam, BETA2_BRANCH), (gog, GOG_BRANCH)),
             scan=Mock(return_value=_snapshot_with_required_qol("installed", "installed")),
         )
@@ -203,7 +203,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
         started, release = threading.Event(), threading.Event()
         worker_threads = []
         controller = SimpleNamespace(
-            paths=SimpleNamespace(game_path=steam.parent, game_executable=steam),
+            paths=SimpleNamespace(game_path=steam.parent, game_executable=steam, profile_path=steam.parent / "profile.json"),
             detected_installations=lambda: ((steam, BETA2_BRANCH), (gog, GOG_BRANCH)),
             scan=Mock(side_effect=OSError("fixture scan failed")),
         )
@@ -251,7 +251,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
             window.close()
 
     def test_combination_blocker_remains_clickable_and_opens_reason_without_building(self):
-        controller = SimpleNamespace(paths=SimpleNamespace(game_path=Path("Z:/missing-majesty")))
+        controller = SimpleNamespace(paths=SimpleNamespace(game_path=Path("Z:/missing-majesty"), profile_path=Path("Z:/missing-majesty/profile.json")))
         with patch.object(manager_app.QTimer, "singleShot"):
             window = manager_app.ManagerWindow(controller)
         base = _snapshot_with_required_qol("installed", "installed")
@@ -283,7 +283,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
         window.close()
 
     def test_mixed_conflicts_and_other_issues_do_not_hide_review(self):
-        controller = SimpleNamespace(paths=SimpleNamespace(game_path=Path("Z:/missing-majesty")))
+        controller = SimpleNamespace(paths=SimpleNamespace(game_path=Path("Z:/missing-majesty"), profile_path=Path("Z:/missing-majesty/profile.json")))
         with patch.object(manager_app.QTimer, "singleShot"):
             window = manager_app.ManagerWindow(controller)
         base = _snapshot_with_required_qol("installed", "installed")
@@ -606,7 +606,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
         ready = _snapshot_with_required_qol("installed", "installed")
         missing = _snapshot_with_required_qol("available", "installed")
         controller = SimpleNamespace(
-            paths=SimpleNamespace(game_path=Path("Z:/missing-majesty")),
+            paths=SimpleNamespace(game_path=Path("Z:/missing-majesty"), profile_path=Path("Z:/missing-majesty/profile.json")),
             change_qol=Mock(return_value=missing),
         )
         with patch.object(manager_app.QTimer, "singleShot"):
@@ -630,7 +630,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
         steam = Path("Z:/Steam/MajestyHD.exe").resolve()
         gog = Path("Z:/GOG/MajestyHD.exe").resolve()
         controller = SimpleNamespace(
-            paths=SimpleNamespace(game_path=steam.parent, game_executable=steam),
+            paths=SimpleNamespace(game_path=steam.parent, game_executable=steam, profile_path=steam.parent / "profile.json"),
             detected_installations=lambda: ((steam, BETA2_BRANCH), (gog, GOG_BRANCH)),
         )
         def select(executable, *, replan=True):
