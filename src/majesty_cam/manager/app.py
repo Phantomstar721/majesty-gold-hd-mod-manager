@@ -1708,7 +1708,9 @@ if _PYSIDE_IMPORT_ERROR is None:
             self._refresh_installations(choices)
             self.install_path.setFullText(str(self.controller.paths.game_path))
             from .quest_dataset import enabled
+            blocked = self.expansion_quests.blockSignals(True)
             self.expansion_quests.setChecked(enabled(self.controller.paths))
+            self.expansion_quests.blockSignals(blocked)
             self._scan_finished(snapshot)
 
         @Slot(bool)
@@ -2059,11 +2061,22 @@ if _PYSIDE_IMPORT_ERROR is None:
                     return
                 identity = picker.currentData()
                 dialog.accept()
+                self.prepared_cache.clear()
+                self.blocked_cache.clear()
                 def action(progress):
                     progress("Loading saved profile")
                     snapshot = self.controller.activate_profile(identity, progress=progress)
                     return snapshot, self.controller.detected_installations()
-                self._run_task("Loading profile", action, self._installation_changed)
+                def failed(message, details):
+                    # Activation may have restored a different setup before a
+                    # scan failed. Do not keep launch enabled from the old one.
+                    self.snapshot = None
+                    self._initial_qol_check_complete = False
+                    self._refresh_installations()
+                    self.install_path.setFullText(str(self.controller.paths.game_path))
+                    self._task_failed(message, details)
+                self._run_task("Loading profile", action, self._installation_finished,
+                               failure=failed)
 
             def save_new():
                 try:
@@ -2544,7 +2557,9 @@ if _PYSIDE_IMPORT_ERROR is None:
                 )
             )
             classic = getattr(getattr(self.controller, "profile", None), "classic_launch", False)
+            blocked = self.classic_launch.blockSignals(True)
             self.classic_launch.setChecked(classic)
+            self.classic_launch.blockSignals(blocked)
             self.launch_button.setText("Classic Launch" if classic else "Launch Majesty")
             self.launch_button.setEnabled((snapshot.can_classic_launch if classic else snapshot.can_launch) and required_qol_ready)
             from .presets import Presets

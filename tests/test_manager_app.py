@@ -728,6 +728,106 @@ class ManagerAppLayoutTests(unittest.TestCase):
         )
         window.close()
 
+    def test_profile_picker_click_switches_to_chosen_saved_setup(self):
+        from majesty_cam.manager.profile import ManagerProfile
+        from majesty_cam.manager.presets import Presets
+        from majesty_cam.manager.quest_dataset import enabled
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            paths = SimpleNamespace(game_path=root/"Game", profile_path=root/"profile.json",
+                                    merged_output_root=root/"Mods/Merged")
+            store = Presets(paths)
+            first = store.save(ManagerProfile(classic_launch=False, expansion_content=False), name="Regular")
+            second = store.save(ManagerProfile(classic_launch=True, expansion_content=True), name="Classic")
+            store.activate(first)
+            controller = SimpleNamespace(paths=paths, profile=ManagerProfile(),
+                                         detected_installations=lambda: ())
+            snapshot = _snapshot_with_required_qol("installed", "installed")
+            selected = [second]
+            def activate(identity, *, progress):
+                self.assertEqual(identity, selected[0])
+                controller.profile = Presets(paths).activate(identity)
+                return snapshot
+            controller.activate_profile = Mock(side_effect=activate)
+            controller._save_selection_state = Mock()
+            with patch.object(manager_app.QTimer, "singleShot"):
+                window = manager_app.ManagerWindow(controller)
+            window.snapshot = snapshot
+            window._render_snapshot(snapshot)
+            window.prepared_cache["old"] = object()
+            window.blocked_cache["old"] = object()
+            def choose(dialog):
+                picker = dialog.findChild(manager_app.QComboBox)
+                picker.setCurrentIndex(picker.findData(selected[0]))
+                button = next(b for b in dialog.findChildren(manager_app.QPushButton)
+                              if b.text() == "Use selected profile")
+                button.click()
+                return manager_app.QDialog.DialogCode.Accepted
+            def run(name, action, finished, **kwargs):
+                finished(action(lambda _: None))
+            # Qt reports slot failures through excepthook instead of raising to
+            # button.click(); assert it remains empty as well as checking state.
+            with patch.object(manager_app.QDialog, "exec", choose), \
+                 patch.object(window, "_confirm_profile_edits", return_value=True), \
+                 patch.object(window, "_run_task", side_effect=run) as task, \
+                 patch("sys.excepthook") as slot_error:
+                window._choose_profile()
+                task.assert_called_once()
+                slot_error.assert_not_called()
+            controller.activate_profile.assert_called_once()
+            self.assertEqual(Presets(paths).state["active"], second)
+            self.assertEqual(window.profile_button.toolTip(), "Profile (Classic)")
+            self.assertTrue(window.classic_launch.isChecked())
+            self.assertTrue(window.expansion_quests.isChecked())
+            self.assertTrue(enabled(paths))
+            self.assertFalse(window.prepared_cache)
+            self.assertFalse(window.blocked_cache)
+            controller._save_selection_state.assert_not_called()
+            self.assertIs(window.snapshot, snapshot)
+            selected[0] = first
+            with patch.object(manager_app.QDialog, "exec", choose), \
+                 patch.object(window, "_confirm_profile_edits", return_value=True), \
+                 patch.object(window, "_run_task", side_effect=run), \
+                 patch("sys.excepthook") as slot_error:
+                window._choose_profile()
+                slot_error.assert_not_called()
+            self.assertEqual(Presets(paths).state["active"], first)
+            self.assertEqual(window.profile_button.toolTip(), "Profile (Regular)")
+            self.assertFalse(window.classic_launch.isChecked())
+            self.assertFalse(window.expansion_quests.isChecked())
+            controller._save_selection_state.assert_not_called()
+            window.close()
+
+    def test_failed_profile_scan_does_not_leave_old_launch_snapshot(self):
+        from majesty_cam.manager.profile import ManagerProfile
+        from majesty_cam.manager.presets import Presets
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            paths = SimpleNamespace(game_path=root/"Game", profile_path=root/"profile.json")
+            Presets(paths).save(ManagerProfile(), name="Saved")
+            controller = SimpleNamespace(paths=paths, profile=ManagerProfile(),
+                                         detected_installations=lambda: ())
+            with patch.object(manager_app.QTimer, "singleShot"):
+                window = manager_app.ManagerWindow(controller)
+            window.snapshot = _snapshot_with_required_qol("installed", "installed")
+            def choose(dialog):
+                next(b for b in dialog.findChildren(manager_app.QPushButton)
+                     if b.text() == "Use selected profile").click()
+                return manager_app.QDialog.DialogCode.Accepted
+            with patch.object(manager_app.QDialog, "exec", choose), \
+                 patch.object(window, "_confirm_profile_edits", return_value=True), \
+                 patch.object(window, "_run_task") as task:
+                window._choose_profile()
+            with patch.object(window, "_task_failed") as report:
+                window._set_busy(True, "Loading profile")
+                task.call_args.kwargs["failure"]("scan failed", "fixture")
+                report.assert_called_once_with("scan failed", "fixture")
+                window._set_busy(False)
+            self.assertIsNone(window.snapshot)
+            self.assertFalse(window.launch_button.isEnabled())
+            self.assertFalse(window.build_button.isEnabled())
+            window.close()
+
     def test_history_button_opens_history_and_shares_update_indicator(self):
         from majesty_cam.manager.profile import ManagerProfile
         from majesty_cam.manager.catalog_changes import MANAGER_CHANGE_KEY

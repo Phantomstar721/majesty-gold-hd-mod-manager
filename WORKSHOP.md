@@ -3,6 +3,7 @@ merge, up to five named setup profiles, and a global expansion-content toggle
 that includes original Majesty quests. New mods stay disabled until selected.
 Gold indicators highlight new or updated content, and History shows brief patch
 summaries beneath the Manager version.
+Fixes Use selected profile so saved setups and their launch settings restore correctly.
 
 Version 0.3.11 added shared custom-hero and ability support, research queues,
 cooldown displays, and bounded automatic failure reporting. It also corrects a
