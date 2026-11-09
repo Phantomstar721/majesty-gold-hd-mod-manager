@@ -29,9 +29,11 @@ multi-mod choices are shown as provisional instead of silently resolved.
 A Standard mod remains independently enabled and classified as Standard. Its
 normal `.mmxml` GPL `Target` and ordered `Source` children register the editable
 source. No dummy CAM, per-behavior replacement table, or conversion to Merge is
-required. This path uses explicit manifest sources, not recursive project-file
-discovery. The older loader's project-recovery option is not used by the new
-selection/Prepare integration.
+required. Explicit manifest sources take precedence. When they are absent the
+Manager looks for a matching compiler project under the manifest directory,
+skipping nested mod and quest components. A single-component manifest can
+also use its sole differently named project. Recovered sources must reproduce
+the target bytecode before the Manager can use them to combine scripts.
 
 An optional matching `mod-definition.json` can declare
 `stock.hero-quest-participant.v1` for private hero trees. Replacements of stock

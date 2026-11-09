@@ -59,7 +59,7 @@ from .stock_controller_features import (
 
 
 CONTROLLER_REGISTRY_MAGIC = b"MMCR"
-CONTROLLER_REGISTRY_VERSION = 25
+CONTROLLER_REGISTRY_VERSION = 30
 STOCK_CONTROLLER_RUNTIME_CAPABILITY = "stock.controller-recipes.v1"
 CONTROLLER_REGISTRY_ENVIRONMENT = "MAJESTY_MOD_MANAGER_CONTROLLERS"
 CONTROLLER_REGISTRY_RELATIVE_PATH = Path(
@@ -105,6 +105,13 @@ class ResolvedSecondaryPanelRecord:
     child_dialog_id: int
     building_family_id: str
     open_command_id: int
+    required_level: int = 1
+    eligibility_callback_symbol: str = ""
+    commands: tuple = ()
+    cooldown_remaining_callback_symbol: str = ""
+    cooldown_duration_ms: int = 0
+    cooldown_progress_control_id: int = 0
+    cooldown_text_control_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -300,6 +307,10 @@ def resolve_stock_controller_registry(
             panels.append(ResolvedSecondaryPanelRecord(
                 item.panel_key, parent, child, item.building_family_id,
                 item.open_command_id,
+                item.required_level, bridge_symbol(item.eligibility_callback_symbol) if item.eligibility_callback_symbol else "",
+                item.commands,
+                item.cooldown_remaining_callback_symbol, item.cooldown_duration_ms,
+                item.cooldown_progress_control_id, item.cooldown_text_control_id,
             ))
         elif isinstance(item, StockMx04Mx05OccupantActionPanel):
             occupant_panels.append(ResolvedOccupantActionPanelRecord(
@@ -372,7 +383,7 @@ def resolve_stock_controller_registry(
                 item.row_variant_callback_symbol, text_ids.row_variants,
                 item.row_value_callback_symbol,
                 text_ids.row_value_suffix_intent_id, item.action_cost_callback_symbol,
-                bridge_symbol(item.action_callback_symbol),
+                bridge_symbol(item.action_callback_symbol, paired=item.action_agent_scope == "parent-and-selected-row"),
                 (occupant_parent_bases or {}).get(item.panel_key, "AP08"),
                 item.stay_on_panel_after_action,
                 item.focus_selected_row_on_click,
@@ -583,8 +594,8 @@ def encode_stock_controller_registry(registry: ResolvedControllerRegistry) -> by
         version = 16
     source_target = any(isinstance(item, StockAp69SourceTargetAction) for item in registry.sovereign_target_actions)
     paired = any(item.action_uses_pair for item in registry.live_agent_lists)
-    if registry.toolbar_actions:
-        version = 25
+    if registry.toolbar_actions or any(r.charge_ms for r in registry.research_rows) or any(p.required_level != 1 or p.eligibility_callback_symbol or p.commands or p.cooldown_duration_ms for p in registry.panels):
+        version = 30 if any(p.cooldown_duration_ms for p in registry.panels) else 29 if any(r.start_callback_symbol for r in registry.research_rows) else 28 if any(r.charge_ms for r in registry.research_rows) else 27 if any(p.commands for p in registry.panels) else 26 if any(p.required_level != 1 or p.eligibility_callback_symbol for p in registry.panels) else 25
         sections += (registry.occupant_action_panels, registry.building_open_toggles,
                      registry.live_agent_lists, registry.private_recruitments, registry.toolbar_actions)
         writer.data += _TOOLBAR_HEADER.pack(
@@ -689,11 +700,11 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
             "MMCR v13 live-agent lists lack the row-focus policy; "
             "rebuild with the current Manager"
         )
-    if version == 25:
+    if version in (25, 26, 27, 28, 29, 30):
         if len(payload) < _TOOLBAR_HEADER.size:
             raise ControllerRegistryError("MMCR v25 header is truncated")
         magic, version, *counts = _TOOLBAR_HEADER.unpack_from(payload)
-        if not counts[13]:
+        if version == 25 and not counts[13]:
             raise ControllerRegistryError("MMCR v25 requires toolbar actions")
     elif version in (17, 18, 19, 20, 21, 22, 23, 24):
         if len(payload) < _RECRUITMENT_HEADER.size:
@@ -731,7 +742,7 @@ def decode_stock_controller_registry(payload: bytes) -> ResolvedControllerRegist
         raise ControllerRegistryError("MMCR panel count is outside bounds")
 
     reader = _Reader(payload)
-    if version == 25:
+    if version in (25, 26, 27, 28, 29, 30):
         reader.cursor = _TOOLBAR_HEADER.size
     elif version in (17, 18, 19, 20, 21, 22, 23, 24):
         reader.cursor = _RECRUITMENT_HEADER.size
@@ -809,6 +820,26 @@ def _encode_feature(writer: _Writer, feature: object, version: int) -> None:
         writer.u32(feature.child_dialog_id)
         writer.family(feature.building_family_id)
         writer.u32(feature.open_command_id)
+        if version >= 26:
+            writer.u32(feature.required_level)
+            writer.u32(bool(feature.eligibility_callback_symbol))
+            if feature.eligibility_callback_symbol:
+                writer.symbol(feature.eligibility_callback_symbol)
+        if version >= 27:
+            writer.u32(len(feature.commands))
+            for command in feature.commands:
+                from .panel_commands import adapter_symbol
+                writer.u32(command.control_id)
+                writer.symbol(command.callback_symbol)
+                writer.symbol(adapter_symbol(command.callback_symbol, False))
+                writer.symbol(adapter_symbol(command.callback_symbol, True))
+                writer.symbol(adapter_symbol(command.callback_symbol, None))
+        if version >= 30:
+            writer.u32(feature.cooldown_duration_ms)
+            if feature.cooldown_duration_ms:
+                writer.symbol(feature.cooldown_remaining_callback_symbol)
+                writer.u32(feature.cooldown_progress_control_id)
+                writer.u32(feature.cooldown_text_control_id)
     elif isinstance(feature, StockAp22ResourceMeter):
         writer.logical(feature.resource_key)
         writer.fourcc(feature.attribute_id)
@@ -830,6 +861,18 @@ def _encode_feature(writer: _Writer, feature: object, version: int) -> None:
         ):
             writer.u32(value)
         writer.text(feature.completion_text)
+        if version >= 28:
+            writer.u32(feature.charge_ms)
+            if feature.charge_ms:
+                from .queued_building_action import symbol
+                writer.symbol(feature.readiness_callback_symbol)
+                writer.symbol(feature.completion_callback_symbol)
+                if version >= 29:
+                    writer.u32(bool(feature.start_callback_symbol))
+                    if feature.start_callback_symbol:
+                        writer.symbol(feature.quote_callback_symbol)
+                        writer.symbol(feature.start_callback_symbol)
+                writer.symbol(symbol(feature))
     elif isinstance(feature, ResolvedUpgradeGateRecord):
         writer.u32(feature.upgrade_control_id)
         writer.u32(feature.upgrade_price_control_id)
@@ -1108,10 +1151,39 @@ def _decode_feature(
             admission_symbol, gated,
         )
     if kind is StockAp10Ap69SecondaryPanel:
-        return ResolvedSecondaryPanelRecord(
+        item = ResolvedSecondaryPanelRecord(
             panel, reader.u32("parent_dialog_id"), reader.u32("child_dialog_id"),
             reader.family("building_family_id"), reader.u32("open_command_id"),
         )
+        if version >= 26:
+            level = reader.u32("required_level")
+            present = reader.u32("eligibility_present")
+            if present not in (0, 1):
+                raise ControllerRegistryError("invalid panel eligibility presence")
+            item = replace(item, required_level=level,
+                           eligibility_callback_symbol=reader.symbol("eligibility_callback_symbol") if present else "")
+        if version >= 27:
+            from .panel_commands import PanelCommand
+            count = reader.u32('panel command count')
+            if count > 16: raise ControllerRegistryError('too many panel commands')
+            from .panel_commands import adapter_symbol
+            commands = []
+            for _ in range(count):
+                command = PanelCommand(reader.u32('control_id'), reader.symbol('callback_symbol'))
+                if (reader.symbol('quote') != adapter_symbol(command.callback_symbol, False) or
+                    reader.symbol('commit') != adapter_symbol(command.callback_symbol, True) or
+                    reader.symbol('owner') != adapter_symbol(command.callback_symbol, None)):
+                    raise ControllerRegistryError('invalid panel command adapters')
+                commands.append(command)
+            item = replace(item, commands=tuple(commands))
+        if version >= 30:
+            duration=reader.u32('cooldown_duration_ms')
+            if duration:
+                item=replace(item,cooldown_duration_ms=duration,
+                    cooldown_remaining_callback_symbol=reader.symbol('cooldown_remaining_callback_symbol'),
+                    cooldown_progress_control_id=reader.u32('cooldown_progress_control_id'),
+                    cooldown_text_control_id=reader.u32('cooldown_text_control_id'))
+        return item
     if kind is StockAp22ResourceMeter:
         return StockAp22ResourceMeter(
             panel, reader.logical("resource_key"), reader.fourcc("attribute_id"),
@@ -1121,7 +1193,24 @@ def _decode_feature(
     if kind is StockAp99ResearchRow:
         recipe = reader.logical("recipe_key")
         values = [reader.u32("AP99 field") for _ in range(9)]
-        return StockAp99ResearchRow(panel, recipe, *values, reader.text("completion_text"))
+        row = StockAp99ResearchRow(panel, recipe, *values, reader.text("completion_text"))
+        if version >= 28:
+            charge = reader.u32('charge_ms')
+            if charge:
+                row = replace(row, charge_ms=charge,
+                              readiness_callback_symbol=reader.symbol('readiness_callback_symbol'),
+                              completion_callback_symbol=reader.symbol('completion_callback_symbol'))
+                if version >= 29:
+                    present = reader.u32('start callback present')
+                    if present not in (0, 1):
+                        raise ControllerRegistryError('invalid start callback presence')
+                    if present:
+                        row = replace(row, quote_callback_symbol=reader.symbol('quote_callback_symbol'),
+                                      start_callback_symbol=reader.symbol('start_callback_symbol'))
+                from .queued_building_action import symbol
+                if reader.symbol('saved_action_symbol') != symbol(row):
+                    raise ControllerRegistryError('invalid saved queued-action adapter')
+        return row
     if kind is StockAp17UpgradeResearchGate:
         upgrade = reader.u32("upgrade_control_id")
         price = reader.u32("upgrade_price_control_id")
@@ -1242,9 +1331,10 @@ def _validate_resolved_registry(
 
     panels = {}
     child_dialogs = set()
-    families = set()
+    families = {}
     parent_commands = set()
     author_features = []
+    panel_command_ids = set()
     for item in registry.panels:
         if not isinstance(item, ResolvedSecondaryPanelRecord):
             raise ControllerRegistryError("MMCR panel record type is invalid")
@@ -1254,21 +1344,35 @@ def _validate_resolved_registry(
         _resolved_dialog_id(item.child_dialog_id, "child_dialog_id")
         if item.child_dialog_id in child_dialogs:
             raise ControllerRegistryError("MMCR child dialog ID is duplicated")
-        if item.building_family_id in families:
+        if item.building_family_id in families and families[item.building_family_id] != item.parent_dialog_id:
             raise ControllerRegistryError("MMCR building family ID is duplicated")
         parent_command = (item.parent_dialog_id, item.open_command_id)
         if parent_command in parent_commands:
             raise ControllerRegistryError("MMCR parent dialog command is duplicated")
         child_dialogs.add(item.child_dialog_id)
-        families.add(item.building_family_id)
+        families[item.building_family_id] = item.parent_dialog_id
         parent_commands.add(parent_command)
         panels[item.panel_key] = item
+        for command in item.commands:
+            if command.control_id in panel_command_ids or command.control_id == item.open_command_id:
+                raise ControllerRegistryError('duplicate panel command identity')
+            panel_command_ids.add(command.control_id)
+            for existing in (*registry.research_rows, *registry.timed_rage_actions,
+                             *registry.rage_command_actions, *registry.sovereign_target_actions):
+                if existing.panel_key == item.panel_key and command.control_id in (
+                        getattr(existing, 'action_control_id', 0), getattr(existing, 'visual_control_id', 0),
+                        getattr(existing, 'icon_control_id', 0), getattr(existing, 'price_control_id', 0),
+                        getattr(existing, 'progress_control_id', 0), getattr(existing, 'active_display_control_id', 0)):
+                    raise ControllerRegistryError('panel command overlaps another control')
         author_features.append(StockAp10Ap69SecondaryPanel(
             panel_key=item.panel_key,
             parent_building=_resolved_parent_key(item.parent_dialog_id),
             source_dialog_id=_unpack_fourcc(item.child_dialog_id),
             building_family_id=item.building_family_id,
             open_command_id=item.open_command_id,
+            required_level=item.required_level,
+            eligibility_callback_symbol=item.eligibility_callback_symbol,
+            commands=item.commands,
         ))
     for item in registry.upgrade_gates:
         if not isinstance(item, ResolvedUpgradeGateRecord):

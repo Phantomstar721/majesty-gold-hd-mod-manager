@@ -136,18 +136,19 @@ class ManagerAppLayoutTests(unittest.TestCase):
                            selections={first.content_id: True, second.content_id: True})
         controller = SimpleNamespace(order=(first.content_id, second.content_id),
                                      standard_conflict_winners={},
-                                     set_standard_conflict_winner=Mock(return_value=snapshot))
+                                     set_standard_conflict_winners=Mock(return_value=snapshot))
         window = SimpleNamespace(snapshot=snapshot, controller=controller, _render_snapshot=Mock())
-        with patch.object(manager_app, "_ConflictChoiceDialog") as dialog:
+        from majesty_cam.script_review import pair_key
+        with patch('majesty_cam.manager.script_review_dialog.ScriptReviewDialog') as dialog:
             dialog.return_value.exec.return_value = manager_app.QDialog.DialogCode.Rejected
             self.assertFalse(manager_app.ManagerWindow._resolve_selected_conflicts(window))
-            controller.set_standard_conflict_winner.assert_not_called()
+            controller.set_standard_conflict_winners.assert_not_called()
             window._render_snapshot.assert_not_called()
             dialog.return_value.exec.return_value = manager_app.QDialog.DialogCode.Accepted
-            dialog.return_value.winner = second.content_id
+            dialog.return_value.decisions = {pair_key(first.content_id, second.content_id): second.content_id}
             self.assertTrue(manager_app.ManagerWindow._resolve_selected_conflicts(window))
-        controller.set_standard_conflict_winner.assert_called_once_with(
-            first.content_id, second.content_id, second.content_id)
+        controller.set_standard_conflict_winners.assert_called_once_with(
+            {'|'.join(sorted((first.content_id, second.content_id))): second.content_id})
         window._render_snapshot.assert_called_once_with(snapshot)
 
     def test_detected_installation_switch_rescans_and_recovers_from_invalid_choice(self):
@@ -483,9 +484,19 @@ class ManagerAppLayoutTests(unittest.TestCase):
             label.text(): label
             for label in window.findChildren(QLabel)
             if label.text()
-            in {"MAJESTY GOLD HD", "GAME VERSION", "GAME INSTALL"}
+            in {"MAJESTY GOLD HD", "GAME EXE VERSION", "GAME INSTALL"}
         }
         self.assertEqual(len(header_labels), 3)
+        self.assertEqual(window.manager_version.text(), f"Manager version: {manager_app.MANAGER_VERSION}")
+        self.assertIn(manager_app.MANAGER_VERSION, window.windowTitle())
+        for branch, version in (("Steam Default", "1.5.2.24"), ("Steam beta2", "1.5.2.28"), ("GOG", "1.5.2.28")):
+            window._render_game_build(SimpleNamespace(game_build=SimpleNamespace(display_name=branch, version=version)))
+            self.assertEqual(window.game_build.text(), f"{branch}  ·  {version}")
+            self.assertIn("MajestyHD.exe", window.game_build.toolTip())
+            self.assertEqual(window.manager_version.text(), f"Manager version: {manager_app.MANAGER_VERSION}")
+        window._render_game_build(SimpleNamespace(game_build=None))
+        self.assertEqual(window.game_build.text(), "Unsupported build")
+        self.assertEqual(window.manager_version.text(), f"Manager version: {manager_app.MANAGER_VERSION}")
         self.assertEqual(
             {label.height() for label in header_labels.values()}, {14}
         )
@@ -716,6 +727,36 @@ class ManagerAppLayoutTests(unittest.TestCase):
             "The manager could not check the installed game helpers.",
         )
         window.close()
+
+    def test_history_button_opens_history_and_shares_update_indicator(self):
+        from majesty_cam.manager.profile import ManagerProfile
+        from majesty_cam.manager.catalog_changes import MANAGER_CHANGE_KEY
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            controller = SimpleNamespace(
+                paths=SimpleNamespace(game_path=root/"Game", profile_path=root/"profile.json"),
+                profile=ManagerProfile())
+            with patch.object(manager_app.QTimer, "singleShot"):
+                window = manager_app.ManagerWindow(controller)
+            snapshot = _snapshot_with_required_qol("installed", "installed")
+            window._render_snapshot(replace(snapshot, changes={MANAGER_CHANGE_KEY: "UPDATED"}))
+            window.resize(1200, 850)
+            window.show()
+            self.application.processEvents()
+            self.assertEqual(window.history_button.text(), "History")
+            self.assertFalse(window.history_button.icon().isNull())
+            self.assertGreater(window.history_button.y(), window.manager_version.y())
+            with patch.object(manager_app._HistoryDialog, "exec") as opened:
+                window.history_button.click()
+                opened.assert_called_once()
+            dialog = manager_app._HistoryDialog(window)
+            headings = dialog.findChildren(manager_app.QLabel, "historyVersion")
+            self.assertEqual([label.text() for label in headings],
+                             [version for version, _ in manager_app.PATCH_HISTORY])
+            window._render_snapshot(replace(snapshot, changes={}))
+            self.assertTrue(window.history_button.icon().isNull())
+            dialog.close()
+            window.close()
 
     def test_changes_use_tab_dot_and_compact_metadata_pill(self):
         from PySide6.QtWidgets import QLabel, QTabBar

@@ -13,9 +13,11 @@ from ..compose import (
     ComposeError,
     ScopedSemanticResolution,
     compose_package,
+    _derive_runtime_capabilities,
     discover_private_activity_texts,
     discover_selected_private_activity_texts,
     inventory_package,
+    _parse_inventory_gpl_sources,
     resolve_building_dialogs,
     resolve_controller_registry,
     resolve_runtime_feature_registry,
@@ -25,8 +27,11 @@ from ..compose import (
     validate_composed_package,
 )
 from ..gameplay_events import event_stock_paths
-from ..exploration_events import selected as exploration_selected, CAPABILITY as EXPLORATION_CAPABILITY, require_supported_profile as require_exploration_profile
-from ..spell_origin import selected as spell_origin_selected, CAPABILITY as SPELL_ORIGIN_CAPABILITY
+from ..exploration_events import selected as exploration_selected, require_supported_profile as require_exploration_profile
+from ..spell_origin import selected as spell_origin_selected
+from ..checked_placement import selected as checked_placement_selected
+from ..attack_observation import selected as attack_observation_selected, require_exact_profile as require_observation_profile
+from ..native_impact import selected as native_impact_selected
 from ..gpl import (
     DefinitionKind,
     SemanticItem,
@@ -59,9 +64,6 @@ from ..runtime_features import (
     encode_runtime_feature_registry,
 )
 from ..inventory_spell_display import CAPABILITY as INVENTORY_DISPLAY_CAPABILITY
-from ..stock_controller_features import (
-    LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY,
-)
 from ..stock_controller_registry import (
     CONTROLLER_REGISTRY_RELATIVE_PATH,
     STOCK_CONTROLLER_RUNTIME_CAPABILITY,
@@ -84,7 +86,7 @@ from ..script_review import ScriptReviewSession, ScriptReviewCancelled, validate
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
-PLAN_SCHEMA_VERSION = 24
+PLAN_SCHEMA_VERSION = 28
 STANDARD_SELECTION_ISSUE_CODES = frozenset(
     {
         "mutually_exclusive_mods",
@@ -496,7 +498,14 @@ def create_build_plan(
     selected_ids = {item.content_id for item in prepared}
     aliases_by_id = {item.content_id: item.alias for item in prepared}
     for combination in registry.combination_resolutions:
-        if not set(combination.required_mod_ids).issubset(selected_ids):
+        # Retired whole-source reviewed bundles are not current merge evidence.
+        # Do not fingerprint mod functions or force their historical replacement
+        # bodies into the merge. Current inputs follow normal semantic merging
+        # and, where necessary, the user's preferred-mod conflict review.
+        if combination.source_sha256 is not None:
+            continue
+        if (not set(combination.required_mod_ids).issubset(selected_ids) or
+                set(combination.excluded_mod_ids) & selected_ids):
             continue
         try:
             source_key = str(combination.source_path.resolve(strict=True))
@@ -606,6 +615,9 @@ def create_build_plan(
     ):
         try:
             inventories = _prepared_inventories(prepared)
+            if native_impact_selected(inventories):
+                from ..native_impact import require_exact_profile
+                require_exact_profile(game_path / "MajestyHD.exe" if game_path else None)
             validate_gpl_feature_evidence(inventories, game_path=game_path)
             runtime_feature_registry = resolve_runtime_feature_registry(
                 inventories,
@@ -613,6 +625,8 @@ def create_build_plan(
             )
             if exploration_selected(inventories) or spell_origin_selected(inventories):
                 require_exploration_profile(game_path / "MajestyHD.exe" if game_path else None)
+            if attack_observation_selected(inventories) or checked_placement_selected(inventories):
+                require_observation_profile(game_path / "MajestyHD.exe" if game_path else None)
             if runtime_feature_registry.equipment or runtime_feature_registry.kingdom_research or runtime_feature_registry.hero_info_rows or runtime_feature_registry.movement_scales:
                 if game_path is None:
                     raise ValueError("Selected runtime features require an audited game installation")
@@ -632,22 +646,24 @@ def create_build_plan(
                     controller_panels=controller_result.panels,
                     controller_toggles=controller_result.toggles,
                     runtime_feature_registry=runtime_feature_registry,
+                    defer_external_buildings=True,
                 )
-            capabilities = set(
-                derive_feature_runtime_capabilities(
-                    capabilities, runtime_feature_registry
-                )
+            # Use composition's complete derivation, rather than a second list
+            # that can omit newly added evidence-owned capabilities. Planning
+            # uses validated declarations; composition must subsequently prove
+            # the actual bindings and the final handoff still requires equality.
+            planned_capabilities, _ = _derive_runtime_capabilities(
+                tuple(sorted(capabilities)),
+                has_private_activity_text=bool(controller_result.private_texts),
+                runtime_feature_registry=runtime_feature_registry,
+                controller_registry=controller_registry,
+                has_source_exploration=exploration_selected(inventories),
+                has_spell_origin=spell_origin_selected(inventories),
+                has_attack_observation=attack_observation_selected(inventories) or native_impact_selected(inventories),
+                has_native_impact=native_impact_selected(inventories),
+                has_checked_placement=checked_placement_selected(inventories),
             )
-            capabilities.discard(LEGACY_ALCHEMIST_CONTROLLER_CAPABILITY)
-            capabilities.discard(EXPLORATION_CAPABILITY)
-            if exploration_selected(inventories):
-                capabilities.add(EXPLORATION_CAPABILITY)
-            capabilities.discard(SPELL_ORIGIN_CAPABILITY)
-            if spell_origin_selected(inventories):
-                capabilities.add(SPELL_ORIGIN_CAPABILITY)
-            capabilities.discard(STOCK_CONTROLLER_RUNTIME_CAPABILITY)
-            if _controller_record_count(controller_registry):
-                capabilities.add(STOCK_CONTROLLER_RUNTIME_CAPABILITY)
+            capabilities = set(planned_capabilities)
         except (ComposeError, OSError, ValueError) as exc:
             issues.append(
                 BuildIssue(
@@ -1485,6 +1501,7 @@ def _plan_fingerprint(
                     resolution.item.text.encode("cp1252")
                 ).hexdigest(),
                 sorted(resolution.participant_owners),
+                resolution.source_component,
             )
             for (kind, name), resolution in semantic_resolutions.items()
         ),

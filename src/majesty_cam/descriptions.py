@@ -178,7 +178,7 @@ def parse_descriptions(
         raise DescriptionFormatError(
             f"{source} root must be Majesty or Descriptions, got {root.tag!r}"
         )
-    if root.text and root.text.strip():
+    if _has_container_content(root.text):
         raise DescriptionFormatError(
             f"{source} has unexpected text directly inside {root.tag}"
         )
@@ -187,7 +187,7 @@ def parse_descriptions(
     records = []
     seen: set = set()
     for child in root:
-        if child.tail and child.tail.strip():
+        if _has_container_content(child.tail):
             raise DescriptionFormatError(
                 f"{source} has unexpected text between top-level elements"
             )
@@ -215,6 +215,14 @@ def parse_descriptions(
         records=tuple(records),
         source=source,
     )
+
+
+def _has_container_content(text):
+    # Native loading selects Description children, not inter-record text.
+    # Accept conventional line comments in those container slots only; never
+    # strip inside XML attributes, URLs, or a Description's authored payload.
+    return any(line.strip() and not line.lstrip().startswith('//')
+               for line in (text or '').splitlines())
 
 
 def merge_descriptions(

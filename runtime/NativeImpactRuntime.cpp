@@ -1,0 +1,623 @@
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <bcrypt.h>
+#include <intrin.h>
+#include <atomic>
+#include <cstring>
+#include <cstdio>
+#include <exception>
+#include <string>
+#include <vector>
+#include "NativeImpactRuntime.h"
+#include "AttackObservation.h"
+#include "AttackObservationWindows.h"
+#include "AttackObservationProof.h"
+#include "BcdDefinitionOwnership.h"
+#include "AttackObservationBaseline.h"
+#include "AttackObservationContext.h"
+#include "WorldAttachmentProfiles.h"
+#include "AttackObservationNativeProfiles.h"
+#include "BooleanRuntime.h"
+#include "NativeImpactProfiles.h"
+#include "NativeImpactRegistry.h"
+#include "NativeImpactCompletion.h"
+#include "PairedOccupantLookupProfiles.h"
+#include "RegistrationDiagnostic.h"
+
+namespace {
+using namespace MajestyAttackObservation;
+using Word=std::uint32_t;
+Lifecycle life;
+Profile profile;
+struct ProcessMemory final: Memory {
+    bool Read(Address address,void* output,std::size_t bytes) const override {
+        SIZE_T copied=0;
+        return address && bytes<=UINT32_MAX-address && ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<const void*>(address),output,bytes,&copied) && copied==bytes;
+    }
+};
+ProcessMemory memory;
+PackageProof packageProof;
+LoadProof loadProof;
+bool prepared=false;
+MajestyBuildId preparedBuild{}; // used only after successful preparation
+unsigned char preparedProofDigest[32]{};
+bool RegisterBindings(std::uintptr_t,RegisterProcedure);
+DWORD ownerThread=0;
+std::atomic<bool> fault{false};
+bool installed=false;
+const WorldAttachmentProfile* attachmentProfile=nullptr;
+const ObservationNativeProfile* nativeProfile=nullptr;
+void* original[kObservationHookCount]{};
+MajestyBcdOwnership::BatchOwnership batchOwnership;
+bool categoryFile=false;
+void* batchReceiver=nullptr;
+
+int acceptedStatus=-1;
+Word acceptedWorld=0;
+void (*logger)(const char*)=nullptr;
+unsigned effectiveReason=1;
+void Trace(const char*,unsigned=0,unsigned=0,unsigned=0) {}
+#if 1 // bounded first-fault evidence is part of normal support
+static thread_local const char* diagnosticBoundary="outside-hook";
+struct DiagnosticBoundary {
+    const char* previous=diagnosticBoundary;
+    explicit DiagnosticBoundary(const char* name) { diagnosticBoundary=name; }
+    ~DiagnosticBoundary() { diagnosticBoundary=previous; }
+};
+struct DiagnosticHistory {
+    char rows[16][768]{};
+    unsigned count=0;
+    void Add(const char* row) { std::snprintf(rows[count++%16],768,"%s",row); }
+    void Dump(void (*writer)(const char*)) const {
+        const unsigned begin=count>16?count-16:0;
+        for(unsigned i=begin;i<count;++i)writer(rows[i%16]);
+    }
+};
+static thread_local DiagnosticHistory diagnosticHistory;
+struct BcdDiagnostic {
+    static thread_local BcdDiagnostic* current;
+    BcdDiagnostic* previous=current;
+    char path[512]{};
+    unsigned char digest[32]{};
+    int rawIndex=-99,finalIndex=-99;
+    unsigned openError=0,parsed=0,category=0,ready=0,openAttempted=0,hashed=0;
+    const char* phase="entry";
+    char conflict[160]{};
+    int nativeResult=-1;
+    LoadProof::State before{};
+    BcdDiagnostic() { current=this; }
+    ~BcdDiagnostic() {
+        if(!fault) {
+            char row[768]{};
+            std::snprintf(row,sizeof(row),"FirstFault/v3 history raw=%d classified=%d result=%d phase=%s category=%u path=%s",rawIndex,finalIndex,nativeResult,phase,category,path);
+            diagnosticHistory.Add(row);
+        }
+        current=previous;
+    }
+};
+thread_local BcdDiagnostic* BcdDiagnostic::current=nullptr;
+void DiagnosticPath(const char* path) {
+    if(!BcdDiagnostic::current)return;
+    auto& out=BcdDiagnostic::current->path;
+    std::snprintf(out,sizeof(out),"%.511s",path);
+    for(auto& c:out)if(c && static_cast<unsigned char>(c)<32)c='?';
+}
+#endif
+void Fault(const char* reason,unsigned a=0,unsigned b=0,const char* boundary=nullptr) {
+#if 1 // bounded first-fault evidence is part of normal support
+    if(fault.exchange(true))return;
+    if(!logger)return;
+    char line[768]{};
+    std::snprintf(line,sizeof(line),"FirstFault/v3 reason=%s boundary=%s a=%08x b=%08x thread=%08x owner=%08x build=%u",reason,boundary?boundary:diagnosticBoundary,a,b,GetCurrentThreadId(),ownerThread,static_cast<unsigned>(preparedBuild));
+    logger(line);
+    if(GetCurrentThreadId()==ownerThread) {
+        const auto s=loadProof.DiagnosticState();
+        std::snprintf(line,sizeof(line),"FirstFault/v3 proof started=%08x completed=%u finished=%08x depth=%u top=%d fault=%u scoped=%u category=%u receiver=%p",s.started,s.completed,s.finished,s.depth,s.top,s.fault,s.scoped,categoryFile,batchReceiver);
+        logger(line);
+        // Expected hashes identify the exact generated output as well as stock inputs.
+        for(unsigned i=0;i<packageProof.digests.size() && i<9;++i) {
+            char hex[65]{};for(unsigned j=0;j<32;++j)std::snprintf(hex+2*j,3,"%02x",packageProof.digests[i][j]);
+            std::snprintf(line,sizeof(line),"FirstFault/v3 expected index=%u sha256=%s",i,hex);logger(line);
+        }
+    }
+    diagnosticHistory.Dump(logger);
+    if(const auto* context=BcdDiagnostic::current) {
+        std::snprintf(line,sizeof(line),"FirstFault/v3 bcd raw=%d classified=%d parsed=%u category=%u readyBefore=%u openAttempted=%u openError=%u hashed=%u result=%d phase=%s conflict=%s",context->rawIndex,context->finalIndex,context->parsed,context->category,context->ready,context->openAttempted,context->openError,context->hashed,context->nativeResult,context->phase,context->conflict);
+        logger(line);
+        const auto& s=context->before;
+        std::snprintf(line,sizeof(line),"FirstFault/v3 proofBefore started=%08x completed=%u finished=%08x depth=%u top=%d fault=%u scoped=%u",s.started,s.completed,s.finished,s.depth,s.top,s.fault,s.scoped);logger(line);
+        char hex[65]{};
+        for(unsigned i=0;i<32;++i)std::snprintf(hex+2*i,3,"%02x",context->digest[i]);
+        std::snprintf(line,sizeof(line),"FirstFault/v3 bcd sha256=%s path=%s",hex,context->path);
+        logger(line);
+    }
+#else
+    (void)reason;(void)a;(void)b;(void)boundary;
+    fault=true;
+#endif
+}
+template<class T> bool Read(Word p,unsigned offset,T& out) { return p && p<=UINT32_MAX-offset && memory.Read(p+offset,&out,sizeof(out)); }
+template<class T> T Value(const void* p,unsigned offset) { T out{}; if (!Read(static_cast<Word>(reinterpret_cast<std::uintptr_t>(p)),offset,out)) Fault("first-fault/read",static_cast<Word>(reinterpret_cast<std::uintptr_t>(p)),offset); return out; }
+bool Owner(const char* boundary=nullptr) { if (GetCurrentThreadId()!=ownerThread) { Fault("first-fault/thread",ownerThread,GetCurrentThreadId(),boundary); return false; } return true; }
+struct Guard {
+#if 1 // bounded first-fault evidence is part of normal support
+    DiagnosticBoundary scope;
+#endif
+    bool active;
+    int exceptions=std::uncaught_exceptions();
+    explicit Guard(const char* name) :
+#if 1 // bounded first-fault evidence is part of normal support
+        scope(name),
+#endif
+        active(Owner(name)) { if (active) { life.EnterOperation(); } }
+    ~Guard() { if (active) {
+        const bool normal=std::uncaught_exceptions()==exceptions;
+        if (!normal) { Fault("first-fault/unwind"); life.IdentityIncoherent(); }
+        life.LeaveOperation();
+    } }
+};
+bool Digest(HANDLE file,unsigned char (&digest)[32]) {
+    BCRYPT_ALG_HANDLE algorithm=nullptr; BCRYPT_HASH_HANDLE hash=nullptr;
+    bool ok=BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0)>=0;
+    if (ok) ok=BCryptCreateHash(algorithm,&hash,nullptr,0,nullptr,0,0)>=0;
+    unsigned char buffer[65536]; DWORD count=0;
+    while (ok) { if (!ReadFile(file,buffer,sizeof(buffer),&count,nullptr)) { ok=false; break; } if (!count) break; ok=BCryptHashData(hash,buffer,count,0)>=0; }
+    if (ok) ok=BCryptFinishHash(hash,digest,32,0)>=0;
+    if (hash) BCryptDestroyHash(hash); if (algorithm) BCryptCloseAlgorithmProvider(algorithm,0);
+    return ok;
+}
+HANDLE LockNativePath(const void* nativeString) {
+    const auto data=Value<Word>(nativeString,0),flags=Value<Word>(nativeString,4),length=Value<Word>(nativeString,8);
+    if (!data || !length || length>32767) return INVALID_HANDLE_VALUE;
+    // The stock constructor tests native-string byte+7 mask1 (bit0) and calls
+    // narrow/wide open imports with that exact data pointer, not an archive VFS.
+    if (flags&0x01000000) {
+        std::vector<wchar_t> path(length+1);
+        if (!memory.Read(data,path.data(),(length+1)*sizeof(wchar_t)) || path.back()!=0) return INVALID_HANDLE_VALUE;
+#if 1 // bounded first-fault evidence is part of normal support
+        char bounded[512]{};
+        if(WideCharToMultiByte(CP_UTF8,0,path.data(),-1,bounded,sizeof(bounded),nullptr,nullptr))DiagnosticPath(bounded);
+        else DiagnosticPath("[path exceeds diagnostic limit or conversion failed]");
+        if(BcdDiagnostic::current)BcdDiagnostic::current->openAttempted=1;
+#endif
+        return CreateFileW(path.data(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    }
+    std::vector<char> path(length+1);
+    if (!memory.Read(data,path.data(),length+1) || path.back()!=0) return INVALID_HANDLE_VALUE;
+#if 1 // bounded first-fault evidence is part of normal support
+    DiagnosticPath(path.data());
+    if(BcdDiagnostic::current)BcdDiagnostic::current->openAttempted=1;
+#endif
+    return CreateFileA(path.data(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+}
+bool __stdcall Bcd(const void* filename) {
+#if 1 // bounded first-fault evidence is part of normal support
+    BcdDiagnostic diagnostic;
+    diagnostic.category=categoryFile?1u:0u;
+#endif
+    Guard guard("Bcd");
+#if 1 // bounded first-fault evidence is part of normal support
+    if(guard.active){diagnostic.ready=loadProof.Ready()?1u:0u;diagnostic.before=loadProof.DiagnosticState();}
+    diagnostic.phase="open";
+#endif
+    HANDLE file=LockNativePath(filename);
+#if 1 // bounded first-fault evidence is part of normal support
+    diagnostic.openError=file==INVALID_HANDLE_VALUE && diagnostic.openAttempted?GetLastError():0;
+#endif
+    unsigned char digest[32]{};
+    const bool digested=file!=INVALID_HANDLE_VALUE && Digest(file,digest);
+    int index=digested ? packageProof.Find(digest) : -1;
+#if 1 // bounded first-fault evidence is part of normal support
+    diagnostic.rawIndex=index;std::memcpy(diagnostic.digest,digest,32);
+    diagnostic.hashed=digested?1u:0u;
+    diagnostic.phase=file==INVALID_HANDLE_VALUE?"open-failed":digested?"hashed":"digest-failed";
+#endif
+    MajestyBcdOwnership::Definitions definitions;
+    bool parsed=false;
+    if(file!=INVALID_HANDLE_VALUE && !packageProof.protectedNames.empty()) {
+        LARGE_INTEGER size{},zero{};DWORD count=0;
+        if(GetFileSizeEx(file,&size)&&size.QuadPart>=4&&size.QuadPart<=64*1024*1024&&
+           SetFilePointerEx(file,zero,nullptr,FILE_BEGIN)) {
+            std::vector<unsigned char> bytes(static_cast<std::size_t>(size.QuadPart));
+            parsed=ReadFile(file,bytes.data(),static_cast<DWORD>(bytes.size()),&count,nullptr)&&
+               count==bytes.size()&&MajestyBcdOwnership::ReadDefinitions(bytes.data(),bytes.size(),definitions);
+        }
+        const bool generated=index>=6&&index<(packageProof.scoped?9:7);
+        const bool baseline=index>=0&&index<6;
+        bool admitted=parsed;
+        if(parsed && categoryFile) {
+#if 1 // bounded first-fault evidence is part of normal support
+            const MajestyBcdOwnership::Key* rejected=nullptr;const char* reason="batch-admitted";
+            admitted=batchOwnership.Admit(definitions,packageProof.protectedNames,generated,baseline,&rejected,&reason);
+            diagnostic.phase=reason;
+            if(rejected)std::snprintf(diagnostic.conflict,sizeof(diagnostic.conflict),"%u:%s",rejected->first,rejected->second.c_str());
+#else
+            admitted=batchOwnership.Admit(definitions,packageProof.protectedNames,generated,baseline);
+#endif
+        }
+        else if(parsed && !baseline) {
+            // Outside the reviewed batch route no earlier declaration proves
+            // shadowing. Only genuinely non-overlapping optional files qualify.
+            admitted=!generated;
+            for(const auto& key:definitions)
+                if(packageProof.protectedNames.count(MajestyBcdOwnership::Lower(key.second))) {
+                    admitted=false;
+#if 1 // bounded first-fault evidence is part of normal support
+                    diagnostic.phase="protected-definition-outside-batch";
+                    if(!diagnostic.conflict[0])std::snprintf(diagnostic.conflict,sizeof(diagnostic.conflict),"%u:%s",key.first,key.second.c_str());
+#endif
+                }
+        }
+        if(!admitted)index=-1;
+        else {
+            // Trailing stock entries in this same reverse list do not replace
+            // the generated winners; unchanged callbacks retain audited stock
+            // owners. Classify them as admitted baseline continuations,
+            // not a new baseline reload. Postload discards this evidence.
+            index=batchOwnership.ContinuationIndex(index,categoryFile,loadProof.Ready(),
+                                                    definitions,packageProof.protectedNames);
+            if(index<0)index=-2;
+        }
+    }
+    #if 1 // bounded first-fault evidence is part of normal support
+    diagnostic.finalIndex=index;diagnostic.parsed=parsed?1u:0u;
+    if(file!=INVALID_HANDLE_VALUE && !parsed && !packageProof.protectedNames.empty())diagnostic.phase="definitions-unreadable";
+    #endif
+    if (guard.active) {
+        // Invalidate before native registration, not after it has changed tables.
+        life.IdentityIncoherent();profile.effectivePackage=false;
+        if (!loadProof.Begin(index)) Fault("first-fault/bcd-begin",static_cast<unsigned>(index));
+    }
+    bool result=false;
+    try { result=reinterpret_cast<bool (__stdcall*)(const void*)>(original[10])(filename); }
+    catch (...) { if (file!=INVALID_HANDLE_VALUE) CloseHandle(file); Fault("first-fault/bcd-exception",static_cast<unsigned>(index)); throw; }
+    if (file!=INVALID_HANDLE_VALUE) CloseHandle(file);
+#if 1 // bounded first-fault evidence is part of normal support
+    diagnostic.nativeResult=result?1:0;
+#endif
+    if (guard.active && !loadProof.Complete(index,result)) Fault("first-fault/bcd-complete",static_cast<unsigned>(index),result);
+    if(guard.active && result && parsed && categoryFile && index!=-1)
+        batchOwnership.Complete(definitions,packageProof.protectedNames,index>=6&&index<(packageProof.scoped?9:7));
+    return result;
+}
+bool __fastcall BcdFilename(void* self,void*,const void* filename) {
+    const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    Guard guard("BcdFilename");
+    const bool previous=categoryFile;
+    categoryFile=guard.active && caller==Category1FileReturnFor(preparedBuild);
+    if(categoryFile) {
+        if(previous || (batchReceiver && batchReceiver!=self))Fault("first-fault/bcd-batch-reentry",static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(self)),previous?1u:0u);
+        batchReceiver=self;
+    }
+    struct RestoreRoute { bool previous; ~RestoreRoute(){ categoryFile=previous; } } restore{previous};
+    return reinterpret_cast<bool (__thiscall*)(void*,const void*)>(original[12])(self,filename);
+}
+void __stdcall BeforeBcdPostload() {
+    if(!Owner("BeforeBcdPostload"))return;
+    const auto previousReceiver=static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(batchReceiver));
+    // The full reverse list has now ended. Do not borrow publication evidence
+    // across linking/catalog release or an unrecognized postload caller.
+    batchOwnership.Reset();batchReceiver=nullptr;
+    if(categoryFile)Fault("first-fault/postload-during-file",previousReceiver,0,"BeforeBcdPostload");
+#if 1 // bounded first-fault evidence is part of normal support
+    if(!fault)diagnosticHistory.Add("FirstFault/v3 history postload-reset");
+#endif
+}
+__declspec(naked) void BcdPostload() {
+    __asm {
+        pushfd
+        pushad
+        call BeforeBcdPostload
+        popad
+        popfd
+        jmp dword ptr [original + 52]
+    }
+}
+Word Find(Word global,const char* name) {
+    Word catalog=0;
+    if (!Read(global,0,catalog) || !catalog) return 0;
+    using FindName=void* (__thiscall*)(void*,const char*);
+    return static_cast<Word>(reinterpret_cast<std::uintptr_t>(reinterpret_cast<FindName>(nativeProfile->findName)(reinterpret_cast<void*>(catalog),name)));
+}
+bool Callback(unsigned id,Word expected) {
+    using Registry=void* (__cdecl*)(); using FindCallback=void* (__thiscall*)(void*,unsigned);
+    void* registry=reinterpret_cast<Registry>(nativeProfile->callbacks)();
+    if (!registry) return false;
+    Word table=Value<Word>(registry,0),lookup=0;
+    if (!Read(table,4,lookup) || !lookup) return false;
+    return reinterpret_cast<std::uintptr_t>(reinterpret_cast<FindCallback>(lookup)(registry,id))==expected;
+}
+#include "NativeImpactRuntime.inl"
+bool Effective() {
+    effectiveReason=1;
+    if (!Owner("Effective") || fault || !loadProof.Ready() || !ImpactGate()) return false;
+    effectiveReason=0;
+    return packageProof.actor.empty() && impactPrepared && Callback(0x100A,nativeProfile->impactCallback);
+}
+bool Gate() {
+    profile.effectivePackage=Effective();
+    static unsigned previous=~0u;
+    if (previous!=effectiveReason) { Trace("effective(reason,loaded,fault)",effectiveReason,loadProof.Ready()?1u:0u,fault?1u:0u); previous=effectiveReason; }
+    return profile.effectivePackage;
+}
+Word __fastcall Dispatch(void* self,void*,Word a,Word b,Word c) {
+    Guard guard("Dispatch");
+    struct RestoreImpact {
+        TerminalMissileContext previous;
+        ~RestoreImpact(){nativeImpactContext=previous;}
+    } restore{nativeImpactContext};
+    nativeImpactContext=guard.active&&impactPrepared?CaptureTerminalMissile(
+        [](Word p,unsigned offset,Word& out){return Read(p,offset,out);},
+        static_cast<Word>(reinterpret_cast<std::uintptr_t>(self)),a,c,nativeProfile->missileTable,life.Generation()):TerminalMissileContext{};
+    return reinterpret_cast<Word (__thiscall*)(void*,Word,Word,Word)>(original[0])(self,a,b,c);
+}
+void __fastcall Unlink(void* self,void*,Word order) {
+    Guard guard("Unlink");
+    reinterpret_cast<void (__thiscall*)(void*,Word)>(original[1])(self,order);
+}
+void __fastcall UnitRetire(void* self,void*) {
+    Guard guard("UnitRetire");
+    const bool owner=guard.active; const Word pointer=static_cast<Word>(reinterpret_cast<std::uintptr_t>(self));
+    Word id=0; const bool published=owner && Read(pointer,0x70,id) && id;
+    RetirementToken token{};
+    if (published) token=life.BeginRetirement(pointer,id); else if (owner) life.EnterOperation();
+    reinterpret_cast<void (__thiscall*)(void*)>(original[2])(self);
+    if (published) life.EndRetirement(token,true); else if (owner) life.LeaveOperation();
+}
+void __fastcall StackDestroy(void* self,void*,Word channel) {
+    Guard guard("StackDestroy");
+    reinterpret_cast<void (__thiscall*)(void*,Word)>(original[3])(self,channel);
+}
+Word __cdecl Emit(Word world,Word unit,Word stack,Word order,Word event) {
+    Guard guard("Emit");
+    return reinterpret_cast<Word (__cdecl*)(Word,Word,Word,Word,Word)>(original[4])(world,unit,stack,order,event);
+}
+Word __fastcall Submit(void* self,void*,Word channel,Word order) {
+    Guard guard("Submit");
+    const Word result=reinterpret_cast<Word (__thiscall*)(void*,Word,Word)>(original[5])(self,channel,order);
+    return result;
+}
+void __fastcall WorldDestroy(void* self,void*) {
+    Guard guard("WorldDestroy");
+    const bool owner=guard.active; if (owner) life.BeginWorldTeardown();
+    if (owner) Trace("world-teardown");
+    reinterpret_cast<void (__thiscall*)(void*)>(original[6])(self);
+    if (owner) life.LeaveOperation();
+}
+void __fastcall Attach(void* self,void*,Word world,Word mode) {
+    const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    if (Owner("Attach-entry")) {
+        life.IdentityIncoherent();
+    }
+    { Guard guard("Attach"); reinterpret_cast<void (__thiscall*)(void*,Word,Word)>(original[7])(self,world,mode); }
+    const auto route=attachmentProfile ? attachmentProfile->Classify(caller,mode,world,acceptedStatus,acceptedWorld) : AttachmentRoute::None;
+    if (Owner("Attach-return") && route!=AttachmentRoute::None && Gate()) {
+        using Catalog=void* (__thiscall*)(void*,unsigned);
+        const Word catalog=static_cast<Word>(reinterpret_cast<std::uintptr_t>(reinterpret_cast<Catalog>(nativeProfile->worldCatalog)(reinterpret_cast<void*>(world),3)));
+        const bool attached=route==AttachmentRoute::Saved ?
+            life.Attach(memory,profile,acceptedStatus,static_cast<int>(mode),world,catalog) :
+            life.AttachCreated(memory,profile,static_cast<int>(mode),world,catalog);
+        Trace("attach(mode,accepted,generation)",mode,attached?1u:0u,static_cast<unsigned>(life.Generation()));
+    } else life.IdentityIncoherent();
+    acceptedStatus=-1; acceptedWorld=0;
+}
+int __fastcall Load(void* self,void*,Word filename,Word output) {
+    if (Owner("Load-entry")) { life.IdentityIncoherent(); acceptedStatus=-1; acceptedWorld=0; }
+    Guard guard("Load");
+    const int status=reinterpret_cast<int (__thiscall*)(void*,Word,Word)>(original[8])(self,filename,output);
+    if (guard.active) { acceptedStatus=status; if (!Read(output,0,acceptedWorld)) acceptedWorld=0; Trace("load(status,nonnull)",static_cast<unsigned>(status),acceptedWorld?1u:0u); }
+    return status;
+}
+Word __fastcall Spawn(void* self,void*,Word a,Word b,Word c,Word d,Word x,Word y,Word z,Word h,Word flags) {
+    Guard guard("Spawn");
+    const auto result=reinterpret_cast<Word (__thiscall*)(void*,Word,Word,Word,Word,Word,Word,Word,Word,Word)>(original[9])(self,a,b,c,d,x,y,z,h,flags);
+    // Constructor/failure-cleanup certification is explicitly paused. Do not
+    // infer readiness from a failed spawn or attempt replacement cleanup.
+    if (!result && guard.active) { life.IdentityIncoherent(); Trace("spawn-failed-readiness-invalidated"); }
+    return result;
+}
+Word __fastcall Restore(void* self,void*,Word stream) {
+    Guard guard("Restore");
+    return reinterpret_cast<Word (__thiscall*)(void*,Word)>(original[11])(self,stream);
+}
+void* targets[]={reinterpret_cast<void*>(&Dispatch),reinterpret_cast<void*>(&Unlink),reinterpret_cast<void*>(&UnitRetire),reinterpret_cast<void*>(&StackDestroy),reinterpret_cast<void*>(&Emit),reinterpret_cast<void*>(&Submit),reinterpret_cast<void*>(&WorldDestroy),reinterpret_cast<void*>(&Attach),reinterpret_cast<void*>(&Load),reinterpret_cast<void*>(&Spawn),reinterpret_cast<void*>(&Bcd),reinterpret_cast<void*>(&Restore),reinterpret_cast<void*>(&BcdFilename),reinterpret_cast<void*>(&BcdPostload)};
+bool Patch(const HookWindow& window,const void* target,bool restore) {
+    auto* site=reinterpret_cast<unsigned char*>(window.address); DWORD previous=0;
+    if (!VirtualProtect(site,window.count,PAGE_EXECUTE_READWRITE,&previous)) return false;
+    if (restore) std::memcpy(site,window.bytes,window.count);
+    else {
+        site[0]=0xE9; const auto delta=static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(target)-window.address-5);
+        std::memcpy(site+1,&delta,4); std::memset(site+5,0x90,window.count-5);
+    }
+    FlushInstructionCache(GetCurrentProcess(),site,window.count);
+    DWORD ignored=0; return VirtualProtect(site,window.count,previous,&ignored)!=0;
+}
+bool RegisterBindings(std::uintptr_t base,RegisterProcedure) {
+    return base==0x400000 && nativeProfile && packageProof.actor.empty() && impactPrepared;
+}
+
+bool AuditedStartup(MajestyBuildId build,RegistrationDiagnostic* diagnostic=nullptr) {
+    const auto stage=[&](const char* name,Word a=0,Word b=0,Word c=0) {
+        if(diagnostic)diagnostic->Stage(name,a,b,c);
+    };
+    const auto* p=ObservationNativeFor(build);
+    stage("startup-profile-or-image",static_cast<Word>(build),static_cast<Word>(reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr))));
+    if(!p || reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr))!=0x400000)return false;
+    static bool certified=false; static MajestyBuildId certifiedBuild{};
+    stage("startup-certified-build",static_cast<Word>(certifiedBuild),static_cast<Word>(build));
+    if(certified && certifiedBuild!=build)return false;
+    if(!certified) {
+        stage("startup-observer-bodies",static_cast<Word>(build));
+        if(!MajestyBooleanRuntime::GuardBodies(ObserverBodiesFor(build),ObserverBodyCount))return false;
+        certified=true; certifiedBuild=build;
+    }
+    Word runtime{},attached{},current{};
+    stage("startup-runtime-read",p->runtimeGlobal);
+    if(!Read(p->runtimeGlobal,0,runtime))return false;
+    if(!runtime)return true;
+    stage("startup-attached-read",runtime);
+    if(!Read(runtime,4,attached))return false;
+    stage("startup-current-read",runtime,attached);
+    if(!Read(runtime,0x10,current))return false;
+    stage("startup-world-present",runtime,attached,current);
+    return !attached && !current;
+}
+}
+bool MajestyAttackObservation::PrepareRuntime(const wchar_t* manifest,MajestyBuildId build,bool interception) {
+    if (prepared || !manifest || !AuditedStartup(build)) return false;
+    const std::wstring path(manifest);
+    const auto slash=path.find_last_of(L"\\/");
+    if (slash==std::wstring::npos) return false;
+    const auto proofPath=path.substr(0,slash+1)+L"majesty_mod_manager_attack_observation.bin";
+    HANDLE file=CreateFileW(proofPath.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if (file==INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER size{};DWORD read=0;
+    bool ok=GetFileSizeEx(file,&size) && size.QuadPart>=12 && size.QuadPart<=1048576;
+    std::vector<unsigned char> bytes(ok?static_cast<std::size_t>(size.QuadPart):0);
+    if (ok) ok=ReadFile(file,bytes.data(),static_cast<DWORD>(bytes.size()),&read,nullptr) && read==bytes.size();
+    if(ok)ok=SetFilePointer(file,0,nullptr,FILE_BEGIN)!=INVALID_SET_FILE_POINTER&&Digest(file,preparedProofDigest);
+    CloseHandle(file);
+    if (!ok || !ParsePackageProof(bytes.data(),bytes.size(),packageProof)) return false;
+    const unsigned char* baseline[6]{};
+    for(unsigned i=0;i<6;++i)baseline[i]=packageProof.digests[i].data();
+    if(!KnownBaselineBundle(baseline))return false;
+    if(interception&&!PrepareImpactPolicy(manifest,build))return false;
+    if(!packageProof.actor.empty() || !packageProof.apiPrefix.empty() || !impactPrepared)return false;
+    loadProof=LoadProof(packageProof.scoped);
+    preparedBuild=build;prepared=true;return true;
+}
+
+bool MajestyAttackObservation::InstallRuntime(std::uintptr_t base,RegisterProcedure registration,void (*writer)(const char*)) {
+    logger=writer;
+    RegistrationDiagnostic diagnostic(writer);
+    diagnostic.Begin(static_cast<unsigned>(preparedBuild),(prepared?1u:0u)|(installed?2u:0u)|(fault?4u:0u),GetCurrentThreadId(),ownerThread);
+    diagnostic.Stage("admission",static_cast<Word>(base),registration?1u:0u,prepared?1u:0u);
+    if (!prepared || !registration || base!=0x400000) {
+        Trace("registration-admission-rejected"); return false;
+    }
+    // Stock rebuilds its GPL registration table more than once. Hooks belong
+    // to this process, callbacks to each table. Do not hash our own patched
+    // entries as stock or allocate/install a second set of trampolines.
+    if (installed) {
+        diagnostic.Stage("reregistration-profile",static_cast<unsigned>(preparedBuild));
+        if(nativeProfile!=ObservationNativeFor(preparedBuild))return false;
+        diagnostic.Stage("reregistration-state",fault?1u:0u,GetCurrentThreadId(),ownerThread);
+        if (fault || GetCurrentThreadId()!=ownerThread) {
+            Trace("registration-state-rejected"); return false;
+        }
+        diagnostic.Stage("reregistration-bindings",nativeProfile?1u:0u,packageProof.actor.empty()?1u:0u,impactPrepared?1u:0u);
+        const bool ok=RegisterBindings(base,registration);
+        if(ok)Trace("bindings-reregistered");
+        return ok?diagnostic.Accept("reregistered"):false;
+    }
+    // This check authorizes first-time hook installation only. A later stock
+    // table rebuild does not install hooks and may occur with a world present.
+    if(!AuditedStartup(preparedBuild,&diagnostic))return false;
+    // Require the complete stock creator and its nonnull caller before
+    // admitting the new-world route.
+    attachmentProfile=WorldAttachmentFor(preparedBuild);
+    nativeProfile=ObservationNativeFor(preparedBuild);
+    const auto* hookWindows=ObservationHooksFor(preparedBuild);
+    const auto guardedBody=[&](Word address,unsigned size,Word expected) {
+        diagnostic.Stage("body-read",address,size,expected);
+        std::vector<unsigned char> bytes(size);
+        if (!memory.Read(address,bytes.data(),bytes.size())) return false;
+        Word hash=2166136261u;
+        for (auto byte:bytes) hash=(hash^byte)*16777619u;
+        diagnostic.Stage("body-hash",address,hash,expected);
+        return hash==expected;
+    };
+    diagnostic.Stage("attachment-profiles",attachmentProfile?1u:0u,nativeProfile?1u:0u,hookWindows?1u:0u);
+    if (!attachmentProfile || !nativeProfile || !hookWindows)return false;
+    diagnostic.Stage("attachment-window",hookWindows[7].address,attachmentProfile->attach);
+    if(hookWindows[7].address!=attachmentProfile->attach)return false;
+    if (!guardedBody(attachmentProfile->attach,0x108,attachmentProfile->attachHash) ||
+        !guardedBody(attachmentProfile->creationReturn2-0x22,0x22,attachmentProfile->creationHash2) ||
+        !guardedBody(attachmentProfile->creationReturn3-0x21,0x21,attachmentProfile->creationHash3) ||
+        !guardedBody(attachmentProfile->builder,0x575,attachmentProfile->builderHash) ||
+        !guardedBody(attachmentProfile->createdReturn-0x3F,0x4D,attachmentProfile->callerHash)) return false;
+    // Reuse the independently verified stock service binding. GS_Level uses
+    // AllUnitsList as well as GE_AllUnitsList; their primary receivers share
+    // both lookup and enumeration methods (no receiver adjustment).
+    const unsigned serviceIndex=static_cast<unsigned>(preparedBuild);
+    diagnostic.Stage("service-profile",serviceIndex,nativeProfile->allUnitsTable);
+    if(serviceIndex>=3 || nativeProfile->allUnitsTable!=
+        base+MajestyPairedOccupantAction::LookupProfiles[serviceIndex].serviceVtable)return false;
+    const Word stockAllUnits=static_cast<Word>(base+MajestyPairedOccupantAction::AllUnitsTables[serviceIndex]);
+    for(unsigned slot:{0x28u,0x30u}) {
+        Word engineMethod=0,stockMethod=0;
+        diagnostic.Stage("service-engine-read",slot,nativeProfile->allUnitsTable);
+        if(!Read(nativeProfile->allUnitsTable,slot,engineMethod)||!engineMethod)return false;
+        diagnostic.Stage("service-stock-read",slot,stockAllUnits);
+        if(!Read(stockAllUnits,slot,stockMethod))return false;
+        diagnostic.Stage("service-method-mismatch",slot,engineMethod,stockMethod);
+        if(stockMethod!=engineMethod)return false;
+    }
+    unsigned char categoryCall[5]{};
+    const Word categoryReturn=Category1FileReturnFor(preparedBuild);
+    std::int32_t relative=0;
+    diagnostic.Stage("category-call-read",categoryReturn);
+    if(!categoryReturn||!memory.Read(categoryReturn-5,categoryCall,sizeof(categoryCall)))return false;
+    diagnostic.Stage("category-call-opcode",categoryReturn,categoryCall[0]);
+    if(categoryCall[0]!=0xE8)return false;
+    std::memcpy(&relative,categoryCall+1,4);
+    diagnostic.Stage("category-call-target",categoryReturn+relative,hookWindows[12].address);
+    if(categoryReturn+relative!=hookWindows[12].address)return false;
+    // Any installation failure is fatal at the owning registration boundary.
+    // No readiness before every hook and loaded-output guard has succeeded.
+    diagnostic.Stage("initial-bindings",nativeProfile?1u:0u,packageProof.actor.empty()?1u:0u,impactPrepared?1u:0u);
+    if (!RegisterBindings(base,registration)) return false;
+    ownerThread=GetCurrentThreadId();
+    diagnostic.Stage("boolean-owner-thread",ownerThread);
+    if(impactPrepared&&!MajestyBooleanRuntime::BindOwnerThread())return false;
+    Word runtime=0,attached=0,current=0;
+    diagnostic.Stage("late-runtime-read",nativeProfile->runtimeGlobal);
+    if(!Read(nativeProfile->runtimeGlobal,0,runtime))return false;
+    if(runtime) {
+        diagnostic.Stage("late-attached-read",runtime);
+        if(!Read(runtime,4,attached))return false;
+        diagnostic.Stage("late-current-read",runtime,attached);
+        if(!Read(runtime,0x10,current))return false;
+        diagnostic.Stage("late-world-present",runtime,attached,current);
+        if(attached || current)return false;
+    }
+    // All windows checked before ANY write. Only whole nonrelative entry
+    // instructions are copied. No stopped-thread patching or midgame attach.
+    for (unsigned i=0;i<kObservationHookCount;++i) {
+        const auto& window=hookWindows[i];
+        diagnostic.Stage("hook-window",i,window.address,window.count);
+        if (std::memcmp(reinterpret_cast<const void*>(window.address),window.bytes,window.count)) { Trace("hook-window-rejected",window.address); return false; }
+    }
+    auto* trampolines=static_cast<unsigned char*>(VirtualAlloc(nullptr,kObservationHookCount*32,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE));
+    if (!trampolines) { diagnostic.Stage("trampoline-allocation",GetLastError()); return false; }
+    for (unsigned i=0;i<kObservationHookCount;++i) {
+        const auto& w=hookWindows[i]; auto* code=trampolines+i*32;
+        std::memcpy(code,w.bytes,w.count); code[w.count]=0xE9;
+        const auto delta=static_cast<std::int32_t>(w.address+w.count-reinterpret_cast<std::uintptr_t>(code+w.count)-5);
+        std::memcpy(code+w.count+1,&delta,4); original[i]=code;
+    }
+    DWORD previous=0;
+    if (!VirtualProtect(trampolines,kObservationHookCount*32,PAGE_EXECUTE_READ,&previous)) { diagnostic.Stage("trampoline-protection",GetLastError()); VirtualFree(trampolines,0,MEM_RELEASE); return false; }
+    FlushInstructionCache(GetCurrentProcess(),trampolines,kObservationHookCount*32);
+    unsigned changed=0;
+    for (;changed<kObservationHookCount;++changed) if (!Patch(hookWindows[changed],targets[changed],false)) break;
+    if (changed!=kObservationHookCount) {
+        const DWORD patchError=GetLastError();
+        // Include the failed site: it might already have been written before
+        // restoring its protection failed. Keep executable storage alive if
+        // rollback fails; readiness remains disabled either way.
+        bool restored=true;
+        for (unsigned i=0;i<=changed && i<kObservationHookCount;++i) restored=Patch(hookWindows[i],nullptr,true)&&restored;
+        if (restored) VirtualFree(trampolines,0,MEM_RELEASE);
+        diagnostic.Stage("hook-patch-rollback",changed,patchError,restored?1u:0u);
+        Fault("first-fault/install-rollback"); return false;
+    }
+    profile.imageBase=0x400000; profile.runtimeGlobal=nativeProfile->runtimeGlobal; profile.allUnitsVtable=nativeProfile->allUnitsTable;
+    profile.stockAllUnitsVtable=stockAllUnits;
+    profile.impactGlobal=nativeProfile->impactGlobal; profile.impactFunction=nativeProfile->impactFunction;
+    profile.exactExecutable=profile.lifecycleBound=true;
+    installed=true;
+    Trace("hooks-installed",kObservationHookCount);
+    return diagnostic.Accept("installed");
+}

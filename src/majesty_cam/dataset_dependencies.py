@@ -90,7 +90,7 @@ class DestinationSources:
                 for item in (self._load(name.casefold()),)}
 
 
-def stock_dependency_paths(game_path: Path) -> tuple[Path, ...]:
+def stock_dependency_paths(game_path: Path, *, include_data: bool = False) -> tuple[Path, ...]:
     """Explicit project inputs only: no recursive scan or compiler invocation."""
     paths = [_BASE_MANIFEST, _EXPANSION_MANIFEST]
     for pair in STOCK_GPL_RUNTIME_PAIRS:
@@ -98,7 +98,7 @@ def stock_dependency_paths(game_path: Path) -> tuple[Path, ...]:
         paths.append(project)
         for role, relative in _project_rows(str(_require_safe_file(game_path, project)),
                                             (game_path / project).read_bytes()):
-            if role == 'source':
+            if role == 'source' or include_data and role == 'data':
                 paths.append(project.parent / relative)
     return tuple(dict.fromkeys(paths))
 

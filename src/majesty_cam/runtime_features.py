@@ -30,6 +30,7 @@ NAME_GENERATOR_RUNTIME_CAPABILITY = "stock.name-generator.v1"
 ENCHANTMENT_ROW_RUNTIME_CAPABILITY = "stock.ap78-enchantment-row.v1"
 MAP_QUERY_RUNTIME_CAPABILITY = "stock.map-fog-query.v1"
 MOVEMENT_QUERY_RUNTIME_CAPABILITY = "stock.movement-query.v1"
+MESSAGE_FLAG_CONTROLS_CAPABILITY = "stock.message-flag-controls.v1"
 NATIVE_TIMING_RUNTIME_CAPABILITY = "stock.native-timing.v1"
 
 _MAGIC = b"MMFR"
@@ -81,6 +82,11 @@ class MovementQueryFeature:
 
 
 @dataclass(frozen=True)
+class MessageFlagControlsFeature:
+    """Stock HUD message suppression and dismissal controls."""
+
+
+@dataclass(frozen=True)
 class NativeTimingFeature:
     """Stock clock/base periods, declared effects and learned-spell cooldowns."""
 
@@ -89,7 +95,7 @@ class NativeTimingFeature:
 
 
 RuntimeFeature = Union[NameGeneratorFeature, EnchantmentRowFeature, MapFogQueryFeature,
-                       MovementQueryFeature, NativeTimingFeature, EquipmentRegistration,
+                       MovementQueryFeature, MessageFlagControlsFeature, NativeTimingFeature, EquipmentRegistration,
                        KingdomResearchRegistration, HeroInfoRow, OverlayMovementScale]
 
 
@@ -105,10 +111,11 @@ class RuntimeFeatureRegistry:
     hero_info_rows: tuple[HeroInfoRow, ...] = ()
     movement_scales: tuple[OverlayMovementScale, ...] = ()
     hidden_inventory_actions: tuple[str, ...] = ()
+    message_flag_controls: bool = False
 
     @property
     def features(self) -> tuple[RuntimeFeature, ...]:
-        return (*self.name_generators, *self.enchantment_rows, *self.equipment, *self.kingdom_research, *self.hero_info_rows, *self.movement_scales,
+        return (*((MessageFlagControlsFeature(),) if self.message_flag_controls else ()), *self.name_generators, *self.enchantment_rows, *self.equipment, *self.kingdom_research, *self.hero_info_rows, *self.movement_scales,
                 *((MapFogQueryFeature(),) if self.map_fog_query else ()),
                 *((MovementQueryFeature(),) if self.movement_query else ()),
                 *((self.native_timing,) if self.native_timing is not None else ()))
@@ -182,6 +189,7 @@ def normalize_runtime_features(
     expanded = [*features, *legacy_runtime_features(legacy_capabilities)]
     names: dict[int, NameGeneratorFeature] = {}
     rows: dict[int, EnchantmentRowFeature] = {}
+    message_flag_controls = False
     map_fog_query = False
     movement_query = False
     timing = False
@@ -256,7 +264,7 @@ def normalize_runtime_features(
                     raise ValueError("conflicting hero information row")
                 continue
             subject = (feature.kind, feature.subject_id)
-            if feature.kind != "passive" and subject in info_subjects:
+            if feature.kind not in ("passive", "attribute") and subject in info_subjects:
                 raise ValueError("duplicate hero information subject")
             info_subjects.add(subject)
             info[key] = feature
@@ -275,6 +283,8 @@ def normalize_runtime_features(
             if feature.equipment_id in equipment:
                 raise ValueError("duplicate or colliding equipment identity")
             equipment[feature.equipment_id] = feature
+        elif isinstance(feature, MessageFlagControlsFeature):
+            message_flag_controls = True
         elif isinstance(feature, MapFogQueryFeature):
             map_fog_query = True
         elif isinstance(feature, MovementQueryFeature):
@@ -318,6 +328,7 @@ def normalize_runtime_features(
     return RuntimeFeatureRegistry(
         name_generators=tuple(names[key] for key in sorted(names)),
         enchantment_rows=tuple(rows[key] for key in sorted(rows)),
+        message_flag_controls=message_flag_controls,
         map_fog_query=map_fog_query,
         movement_query=movement_query,
         equipment=tuple(equipment[key] for key in sorted(equipment)),
@@ -397,6 +408,9 @@ def derive_feature_runtime_capabilities(
     effective.discard(ENCHANTMENT_ROW_RUNTIME_CAPABILITY)
     effective.discard(MAP_QUERY_RUNTIME_CAPABILITY)
     effective.discard(MOVEMENT_QUERY_RUNTIME_CAPABILITY)
+    effective.discard(MESSAGE_FLAG_CONTROLS_CAPABILITY)
+    if registry.message_flag_controls:
+        effective.add(MESSAGE_FLAG_CONTROLS_CAPABILITY)
     effective.discard(NATIVE_TIMING_RUNTIME_CAPABILITY)
     effective.discard(EQUIPMENT_FEATURE_TYPE)
     effective.discard(KINGDOM_RESEARCH_TYPE)
@@ -454,13 +468,13 @@ def encode_runtime_feature_registry(
     chunks = [
         _HEADER.pack(
             _MAGIC,
-            9 if registry.hidden_inventory_actions else 8 if registry.movement_scales else 7 if registry.hero_info_rows else 6 if visual_research else 5 if registry.kingdom_research else 4 if registry.equipment else 3 if registry.native_timing is not None else
+            13 if registry.message_flag_controls else 12 if any(r.kind == "inventory" for r in registry.hero_info_rows) else 11 if any(r.list_category == "enchantments" for r in registry.hero_info_rows) else 10 if any(r.kind == "attribute" for r in registry.hero_info_rows) else 9 if registry.hidden_inventory_actions else 8 if registry.movement_scales else 7 if registry.hero_info_rows else 6 if visual_research else 5 if registry.kingdom_research else 4 if registry.equipment else 3 if registry.native_timing is not None else
             2 if registry.map_fog_query or registry.movement_query else _VERSION,
             len(registry.name_generators),
             len(registry.enchantment_rows),
         )
     ]
-    if registry.hidden_inventory_actions or registry.movement_scales or registry.hero_info_rows or registry.kingdom_research or registry.equipment or registry.map_fog_query or registry.movement_query or registry.native_timing is not None:
+    if registry.message_flag_controls or registry.hidden_inventory_actions or registry.movement_scales or registry.hero_info_rows or registry.kingdom_research or registry.equipment or registry.map_fog_query or registry.movement_query or registry.native_timing is not None:
         chunks.append(struct.pack("<I", int(registry.map_fog_query) |
                                   (int(registry.movement_query) << 1) |
                                   (int(registry.native_timing is not None) << 2) |
@@ -468,7 +482,8 @@ def encode_runtime_feature_registry(
                                   (int(bool(registry.kingdom_research)) << 4) |
                                   (int(bool(registry.hero_info_rows)) << 5) |
                                   (int(bool(registry.movement_scales)) << 6) |
-                                  (int(bool(registry.hidden_inventory_actions)) << 7)))
+                                  (int(bool(registry.hidden_inventory_actions)) << 7) |
+                                  (int(registry.message_flag_controls) << 8)))
     for feature in registry.name_generators:
         chunks.append(
             _NAME_GENERATOR.pack(
@@ -507,7 +522,7 @@ def encode_runtime_feature_registry(
                 item.gold_bonus_percent, item.experience_bonus_percent,
                 item.progress_control_id, item.active_display_control_id, len(text)))
             chunks.append(text)
-            if visual_research or registry.hero_info_rows or registry.movement_scales or registry.hidden_inventory_actions:
+            if registry.message_flag_controls or visual_research or registry.hero_info_rows or registry.movement_scales or registry.hidden_inventory_actions:
                 effector = item.active_effector.encode("ascii")
                 chunks.extend((struct.pack("<I", len(effector)), effector))
     if registry.hero_info_rows:
@@ -515,9 +530,14 @@ def encode_runtime_feature_registry(
         for row in registry.hero_info_rows:
             key, label, tooltip = row.feature_key.encode("ascii"), _display_text_bytes(row.display_text), _display_text_bytes(row.tooltip_text)
             chunks.append(struct.pack("<8I", HERO_INFO_KINDS.index(row.kind) + 1,
-                _fourcc_u32(row.subject_id), row.unlock_level, _fourcc_u32(row.image_id),
+                int(row.subject_id) if row.kind == "inventory" else _fourcc_u32(row.subject_id), row.unlock_level, _fourcc_u32(row.image_id),
                 row.image_set, len(key), len(label), len(tooltip)))
             chunks.extend((key, label, tooltip))
+            if row.kind == "attribute":
+                attribute = row.attribute_symbol.encode("ascii")
+                chunks.extend((struct.pack("<I", len(attribute)), attribute))
+                if registry.message_flag_controls or any(r.list_category == "enchantments" or r.kind == "inventory" for r in registry.hero_info_rows):
+                    chunks.append(struct.pack("<I", int(row.list_category == "enchantments")))
     if registry.movement_scales:
         chunks.append(struct.pack("<I", len(registry.movement_scales)))
         chunks.extend(struct.pack("<II", _fourcc_u32(item.overlay_id), item.percent)
@@ -545,7 +565,7 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
     magic, version, name_count, row_count = _HEADER.unpack_from(payload)
     if magic != _MAGIC:
         raise ValueError("runtime feature registry magic is invalid")
-    if version not in (1, 2, 3, 4, 5, 6, 7, 8, 9):
+    if version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
         raise ValueError(f"unsupported runtime feature registry version: {version}")
     if name_count > _MAX_NAME_GENERATORS:
         raise ValueError(
@@ -562,10 +582,10 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
     if len(payload) < header_size:
         raise ValueError("runtime feature registry flags are truncated")
     flags = struct.unpack_from("<I", payload, _HEADER.size)[0] if version >= 2 else 0
-    if (flags & ~(255 if version == 9 else 127 if version == 8 else 63 if version == 7 else 31 if version >= 5 else 15 if version == 4 else 7 if version == 3 else 3)
+    if (flags & ~(511 if version == 13 else 255 if version >= 9 else 127 if version == 8 else 63 if version == 7 else 31 if version >= 5 else 15 if version == 4 else 7 if version == 3 else 3)
             or (version == 3 and not flags & 4) or (version == 4 and not flags & 8)
             or (version in (5, 6) and not flags & 16) or (version == 7 and not flags & 32)
-            or (version == 8 and not flags & 64) or (version == 9 and not flags & 128)):
+            or (10 <= version <= 12 and not flags & 32) or (version == 13 and not flags & 256) or (version == 8 and not flags & 64) or (version == 9 and not flags & 128)):
         raise ValueError("runtime feature registry has unsupported flags")
     minimum_size = (
         header_size
@@ -715,17 +735,35 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
                 raise ValueError("hero information record is truncated")
             kind, subject, level, image, image_set, nk, nl, nt = struct.unpack_from("<8I", payload, offset)
             offset += 32
-            if not (1 <= kind <= 3 and 1 <= nk <= 64 and 1 <= nl <= 512 and 1 <= nt <= 512) or offset + nk + nl + nt > len(payload):
+            if not (1 <= kind <= (5 if version >= 12 else 4 if version >= 10 else 3) and 1 <= nk <= 64 and 1 <= nl <= 512 and 1 <= nt <= 512) or offset + nk + nl + nt > len(payload):
                 raise ValueError("hero information fields are invalid or truncated")
             key = payload[offset:offset+nk].decode("ascii")
             label = payload[offset+nk:offset+nk+nl].decode("cp1252")
             tooltip = payload[offset+nk+nl:offset+nk+nl+nt].decode("cp1252")
             offset += nk + nl + nt
-            row = HeroInfoRow(key, HERO_INFO_KINDS[kind-1], _u32_fourcc(subject), level,
+            row = HeroInfoRow(key, HERO_INFO_KINDS[kind-1], str(subject) if kind == 5 else _u32_fourcc(subject), level,
                               label, tooltip, _u32_fourcc(image), image_set)
+            if kind == 4:
+                if offset + 4 > len(payload): raise ValueError("saved attribute is truncated")
+                length = struct.unpack_from("<I", payload, offset)[0]; offset += 4
+                if not 1 <= length <= 64 or offset + length > len(payload):
+                    raise ValueError("saved attribute is invalid or truncated")
+                row = replace(row, attribute_symbol=payload[offset:offset+length].decode("ascii"))
+                offset += length
+                if version >= 11:
+                    if offset + 4 > len(payload): raise ValueError("saved attribute category is truncated")
+                    category = struct.unpack_from("<I", payload, offset)[0]; offset += 4
+                    if category > 1: raise ValueError("saved attribute category is invalid")
+                    row = replace(row, list_category=("spells", "enchantments")[category])
             if info and row.sort_key <= info[-1].sort_key:
                 raise ValueError("hero information rows must be sorted and unique")
             info.append(row)
+    if version == 10 and not any(row.kind == "attribute" for row in info):
+        raise ValueError("MMFR10 requires a saved attribute row")
+    if version == 11 and not any(row.list_category == "enchantments" for row in info):
+        raise ValueError("MMFR11 requires a lower-list saved attribute row")
+    if version == 12 and not any(row.kind == "inventory" for row in info):
+        raise ValueError("MMFR12 requires an inventory display row")
     scales = []
     if flags & 64:
         if offset + 4 > len(payload):
@@ -758,6 +796,7 @@ def decode_runtime_feature_registry(payload: bytes) -> RuntimeFeatureRegistry:
     if offset != len(payload):
         raise ValueError("runtime feature registry has trailing bytes")
     return replace(normalize_runtime_features((*names, *rows, *equipment, *research, *info, *scales,
+        *((MessageFlagControlsFeature(),) if flags & 256 else ()),
         *((MapFogQueryFeature(),) if flags & 1 else ()),
         *((MovementQueryFeature(),) if flags & 2 else ()), *timing_features)), hidden_inventory_actions=hidden)
 
@@ -801,6 +840,8 @@ __all__ = [
     "MapFogQueryFeature",
     "MovementQueryFeature",
     "MOVEMENT_QUERY_RUNTIME_CAPABILITY",
+    "MessageFlagControlsFeature",
+    "MESSAGE_FLAG_CONTROLS_CAPABILITY",
     "NativeTimingFeature",
     "NATIVE_TIMING_RUNTIME_CAPABILITY",
     "MAP_QUERY_RUNTIME_CAPABILITY",

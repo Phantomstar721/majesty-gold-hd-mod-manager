@@ -29,6 +29,7 @@ from .build import (
     _order_standard_ids,
     read_managed_build,
     _require_current_plan_sources,
+    _plan_source_metadata_signature,
     refresh_standard_script_inputs,
 )
 from .catalog import Catalog, CatalogKind, scan_catalog
@@ -67,6 +68,7 @@ from .qol_service import (
 from .startup_cache import (
     StartupCache,
     catalog_input_signature,
+    game_preflight_signature,
     metadata_signature,
     merge_preflight_signature,
     qol_input_signature,
@@ -199,6 +201,7 @@ class ManagerController:
             self._prepared_merge_cache.clear()
         cache = StartupCache.load(self.paths.startup_cache_path)
         preflight_ids: set[str] = set()
+        game_signature = game_preflight_signature(self.paths.game_path)
 
         def inspect_merge(
             content_id: str, display_name: str, package_root: Path
@@ -210,6 +213,7 @@ class ManagerController:
                 source_root=package_root,
                 registry=self.registry,
                 game_path=self.paths.game_path,
+                game_signature=game_signature,
             )
             if not force_refresh:
                 cached = cache.get_preflight(content_id, signature)
@@ -229,6 +233,7 @@ class ManagerController:
             return issues
 
         catalog_signature = catalog_input_signature(
+            game_signature=game_signature,
             local_mods_root=self.paths.local_mods_root,
             local_quests_root=self.paths.local_quests_root,
             workshop_roots=self.paths.workshop_roots,
@@ -442,6 +447,21 @@ class ManagerController:
         self.profile = profile
         self._prepared_merge_cache = prepared
 
+    def set_standard_conflict_winners(self, choices) -> ControllerSnapshot:
+        """Validate and save one complete choice set, never intermediate cycles."""
+        from .standard_review import validate_native_choices
+        combined = dict(self.standard_conflict_winners)
+        for pair, winner in choices.items():
+            parts = pair.split('|')
+            if len(parts) != 2 or standard_conflict_pair_key(*parts) != pair or winner not in parts:
+                raise ValueError('Invalid Standard mod preference.')
+            combined[pair] = winner
+        validate_native_choices(self.snapshot().catalog, self.snapshot().selections, combined)
+        self.standard_conflict_winners = combined
+        self._refresh_standard_plan()
+        self._save_selection_state()
+        return self.snapshot()
+
     def set_standard_conflict_winner(
         self,
         left_id: str,
@@ -461,6 +481,20 @@ class ManagerController:
 
     def build(self, *, progress=None, script_conflict_resolver=None,
               review_scripts=False) -> tuple[ManagerBuildResult, ControllerSnapshot]:
+        # Deployment can replace a selected package after the catalog was opened.
+        # Refresh derived registries and conflict candidates before review, not
+        # after composition has begun. Unchanged inputs keep the cached plan.
+        if self.plan.source_metadata_signature and (
+            _plan_source_metadata_signature(
+                self.plan.selected_merge,
+                game_path=self.paths.game_path,
+                stock_compose_inputs=self.plan.stock_compose_inputs,
+                compatibility_file_inputs=self.plan.compatibility_file_inputs,
+            ) != self.plan.source_metadata_signature
+        ):
+            if progress:
+                progress("Refreshing changed preparation inputs")
+            self._replan()
         self._discard_stale_script_preferences()
         snapshot = self.snapshot()
         if not snapshot.can_build:
@@ -610,6 +644,9 @@ class ManagerController:
                     controller_registry,
                     resolve_stock_controller_registry((), {}),
                 )
+            from .support_report import record_launch
+            record_launch(self.paths, active_ids,
+                          {e.content_id: e.display_name for e in self.catalog.entries})
             result = launch_majesty(
                 self.paths,
                 active_ids,

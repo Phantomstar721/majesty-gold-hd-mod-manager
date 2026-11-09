@@ -666,8 +666,7 @@ class SemanticMergeTests(unittest.TestCase):
 
         emitted = result.emit_project_source_set().gpl_text
         self.assertIn(
-            "WhatItem != #MarketItem_Market3_Item &&\n"
-            "        WhatItem != #PrivateNumericItem)",
+            "WhatItem != #MarketItem_Market3_Item && WhatItem != #PrivateNumericItem)",
             emitted,
         )
         self.assertLess(

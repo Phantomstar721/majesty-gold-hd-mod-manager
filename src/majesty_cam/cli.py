@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sys
 
@@ -19,6 +20,22 @@ def main(argv: list[str] | None = None) -> int:
 
     verify_parser = subcommands.add_parser("verify", help="Verify read/write identity for a CAM archive")
     verify_parser.add_argument("cam", type=Path)
+
+    output_parser = subcommands.add_parser("validate-output", help="Read-only validation of a composed package")
+    output_parser.add_argument("root", type=Path)
+    output_parser.add_argument("--presentation-contract", type=Path)
+    snapshot_parser = subcommands.add_parser("presentation-snapshot", help="Record explicit presentation expectations from a reviewed composed package")
+    snapshot_parser.add_argument("root", type=Path)
+    snapshot_parser.add_argument("--image", action="append", default=[], help="Required profile/sprite/icon IMAG ID; repeat for each image")
+    snapshot_parser.add_argument("--panel", action="append", help="Stable panel key; default: all registered panels")
+    snapshot_parser.add_argument("--output", required=True, type=Path)
+
+    delivery_parser = subcommands.add_parser("delivery-intake", help="Validate an explicit delivery manifest and create a separate review receipt")
+    delivery_parser.add_argument("manifest", type=Path)
+    delivery_parser.add_argument("incoming", type=Path)
+    delivery_parser.add_argument("--output", required=True, type=Path)
+    delivery_parser.add_argument("--package", type=Path, help="Optional existing package for XML/WAVE mapping checks")
+    delivery_parser.add_argument("--normalize-wav", action="store_true", help="Remove WAV metadata only; preserve original and PCM bytes")
 
     unpack_parser = subcommands.add_parser("unpack", help="Unpack a CAM archive to a folder")
     unpack_parser.add_argument("cam", type=Path)
@@ -59,6 +76,29 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "delivery-intake":
+            from .delivery_intake import intake
+            report = intake(args.manifest, args.incoming, args.output, package=args.package, normalize_wav=args.normalize_wav)
+            print(json.dumps({"checkpoint": report["checkpoint"], **{key: len(value) for key, value in report["summary"].items()},
+                              "invalid": len(report["invalid"]), "awaiting_asset_approval": len(report["awaiting_asset_approval"]),
+                              "specification_pending": len(report["specification_pending"]),
+                              "receipt": str(args.output / "readiness.json")}, indent=2))
+            return 1 if report['invalid'] else 0
+        if args.command in ("validate-output", "presentation-snapshot"):
+            from .compose import validate_composed_package
+            from .guild_checks import presentation_snapshot
+            if args.command == "validate-output":
+                expected = json.loads(args.presentation_contract.read_text(encoding="utf-8")) if args.presentation_contract else None
+                print(json.dumps(validate_composed_package(args.root, presentation_contract=expected), indent=2))
+            else:
+                validate_composed_package(args.root)
+                contract = presentation_snapshot(args.root, args.image, args.panel)
+                # A new reviewed baseline is deliberate; never overwrite an existing one.
+                with args.output.open("x", encoding="utf-8") as target:
+                    json.dump(contract, target, indent=2)
+                    target.write("\n")
+                print(str(args.output))
+            return 0
         if args.command == "list":
             return _list(args.cam)
         if args.command == "verify":

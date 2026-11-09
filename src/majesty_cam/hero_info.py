@@ -4,7 +4,9 @@ import re
 import struct
 
 HERO_INFO_TYPE = "stock.ap78-info-row.v1"
-HERO_INFO_KINDS = ("spell", "enchantment", "passive")
+HERO_INFO_KINDS = ("spell", "enchantment", "passive", "attribute", "inventory")
+INVENTORY_ITEM_DISPLAY_TYPE = "stock.inventory-item-display.v1"
+SAVED_ATTRIBUTE_ROW_TYPE = "stock.ap78-saved-attribute-row.v1"
 MAX_HERO_INFO_ROWS = 1024
 
 
@@ -34,22 +36,48 @@ class HeroInfoRow:
     tooltip_text: str
     image_id: str
     image_set: int
+    attribute_symbol: str = ""
+    list_category: str = "spells"
 
     @property
     def sort_key(self):
         return (HERO_INFO_KINDS.index(self.kind) + 1,
-                int.from_bytes(self.subject_id.encode("ascii"), "little"), self.feature_key)
+                int(self.subject_id) if self.kind == "inventory" else int.from_bytes(self.subject_id.encode("ascii"), "little"), self.feature_key)
 
 
 def parse_hero_info(value):
     from .runtime_features import _fourcc_bytes, _display_text_bytes
-    fields = set(HeroInfoRow.__dataclass_fields__)
+    if value.get("type") == INVENTORY_ITEM_DISPLAY_TYPE:
+        fields = {"type", "feature_key", "item_id", "display_text", "tooltip_text", "image_id", "image_set"}
+        if set(value) != fields or type(value.get("item_id")) is not int or not 0 <= value["item_id"] <= 127:
+            raise ValueError("inventory display requires exactly feature_key, item_id (0..127), display_text, tooltip_text, image_id, image_set")
+        base = parse_hero_info(dict(type=HERO_INFO_TYPE, feature_key=value["feature_key"], kind="passive",
+            subject_id="----", unlock_level=1, display_text=value["display_text"],
+            tooltip_text=value["tooltip_text"], image_id=value["image_id"], image_set=value["image_set"]))
+        return HeroInfoRow(base.feature_key, "inventory", str(value["item_id"]), 0,
+                           base.display_text, base.tooltip_text, base.image_id, base.image_set)
+    if value.get("type") == SAVED_ATTRIBUTE_ROW_TYPE:
+        expected = {"type", "feature_key", "attribute_symbol", "display_text", "tooltip_text", "image_id", "image_set"}
+        if set(value) not in (expected, expected | {"list_category"}):
+            raise ValueError("saved-attribute row requires exactly " + ", ".join(sorted(expected)))
+        category = value.get("list_category", "spells")
+        if category not in ("spells", "enchantments"):
+            raise ValueError("saved-attribute list_category must be spells or enchantments")
+        name = value["attribute_symbol"]
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name):
+            raise ValueError("attribute_symbol must be a bounded GPL identifier")
+        base = parse_hero_info(dict(type=HERO_INFO_TYPE, feature_key=value["feature_key"], kind="passive",
+            subject_id="----", unlock_level=1, display_text=value["display_text"],
+            tooltip_text=value["tooltip_text"], image_id=value["image_id"], image_set=value["image_set"]))
+        return HeroInfoRow(base.feature_key, "attribute", "----", 0, base.display_text,
+                           base.tooltip_text, base.image_id, base.image_set, name, category)
+    fields = set(HeroInfoRow.__dataclass_fields__) - {"attribute_symbol", "list_category"}
     if set(value) != fields | {"type"} or value.get("type") != HERO_INFO_TYPE:
         raise ValueError("hero information row requires exactly " + ", ".join(sorted(fields)))
     if not isinstance(value["feature_key"], str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", value["feature_key"]):
         raise ValueError("hero information feature_key must be a lowercase logical key")
     kind = value["kind"]
-    if kind not in HERO_INFO_KINDS:
+    if kind not in HERO_INFO_KINDS[:3]:
         raise ValueError("hero information kind must be spell, enchantment or passive")
     for name in ("subject_id", "image_id"):
         _fourcc_bytes(value[name])
@@ -66,7 +94,26 @@ def parse_hero_info(value):
 
 
 def hero_info_mapping(row):
+    if row.kind == "inventory":
+        value = dict(type=INVENTORY_ITEM_DISPLAY_TYPE, feature_key=row.feature_key,
+            item_id=int(row.subject_id), display_text=row.display_text, tooltip_text=row.tooltip_text,
+            image_id=row.image_id, image_set=row.image_set)
+        if row.unlock_level != 0 or row.attribute_symbol or row.list_category != "spells":
+            raise ValueError("inventory display cannot declare level, saved attribute or effect category")
+        parse_hero_info(value)
+        return value
     value = dict(type=HERO_INFO_TYPE, **asdict(row))
+    if row.kind == "attribute":
+        if row.subject_id != "----" or row.unlock_level != 0:
+            raise ValueError("saved-attribute rows apply to the current living hero without a subject claim")
+        value["type"] = SAVED_ATTRIBUTE_ROW_TYPE
+        for key in ("kind", "subject_id", "unlock_level"): value.pop(key)
+        if row.list_category == "spells": value.pop("list_category")
+    else:
+        if value.pop("list_category") != "spells":
+            raise ValueError("legacy hero rows cannot declare a list category")
+        if value.pop("attribute_symbol"):
+            raise ValueError("legacy hero rows cannot declare a saved attribute")
     parse_hero_info(value)
     return value
 
@@ -74,18 +121,19 @@ def hero_info_mapping(row):
 def validate_hero_info_evidence(inventory, row):
     from .compose import _parse_description_file, _split_imag_sets
     hero_info_mapping(row)
-    type_name, subtype = {"spell": ("Action", "Standard"),
-                          "enchantment": ("Unit", "Overlay"),
-                          "passive": ("Unit", "Character")}[row.kind]
-    matches = [record.to_element() for path in inventory.descriptions
-               for record in _parse_description_file(path).records
-               if record.key == (type_name, row.subject_id)]
-    if len(matches) != 1 or matches[0].get("subType") != subtype:
-        raise ValueError(f"hero information {row.subject_id} needs one owned {type_name}/{subtype} Description")
-    if row.kind == "spell":
-        flags = matches[0].findall("./Game/Flags")
-        if len(flags) != 1 or "IsSpell" not in re.split(r"[\s|,]+", flags[0].get("value", "")):
-            raise ValueError("hero spell row must identify an actual IsSpell Action")
+    if row.kind not in ("attribute", "inventory"):
+        type_name, subtype = {"spell": ("Action", "Standard"),
+                              "enchantment": ("Unit", "Overlay"),
+                              "passive": ("Unit", "Character")}[row.kind]
+        matches = [record.to_element() for path in inventory.descriptions
+                   for record in _parse_description_file(path).records
+                   if record.key == (type_name, row.subject_id)]
+        if len(matches) != 1 or matches[0].get("subType") != subtype:
+            raise ValueError(f"hero information {row.subject_id} needs one owned {type_name}/{subtype} Description")
+        if row.kind == "spell":
+            flags = matches[0].findall("./Game/Flags")
+            if len(flags) != 1 or "IsSpell" not in re.split(r"[\s|,]+", flags[0].get("value", "")):
+                raise ValueError("hero spell row must identify an actual IsSpell Action")
     images = [r for r in inventory.resources if r.section == b"IMAG" and r.key == row.image_id.encode("ascii")]
     if len(images) != 1:
         raise ValueError(f"hero information requires exactly one owned IMAG/{row.image_id}")
@@ -105,7 +153,7 @@ def validate_hero_info_evidence(inventory, row):
     if not tiles or len({r.section_order for r in tiles}) != 1:
         raise ValueError("hero information IMAG needs one TILE table in its own archive")
     tile = [r.entry.data for r in tiles if r.entry_order == index]
-    side = 25 if row.kind == "enchantment" else 24
+    side = 25 if row.kind == "enchantment" or row.list_category == "enchantments" else 24
     if len(tile) != 1 or len(tile[0]) != 1058 + side * side:
         raise ValueError(f"hero information icon must use stock {side}x{side} indexed TILE storage")
     fields = struct.unpack_from("<10H", tile[0])

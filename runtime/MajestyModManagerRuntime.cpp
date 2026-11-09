@@ -29,14 +29,22 @@
 #include "FreestyleCamRuntime.h"
 #include "IntentTextRegistry.h"
 #include "MapQueryRuntime.h"
+#include "ResearchCompletionAttributes.h"
 #include "EquipmentRuntime.h"
 #include "RuntimeCapabilityManifest.h"
+#include "AttackObservationRuntime.h"
+#include "BooleanRuntime.h"
+#include "CheckedPlacementRuntime.h"
 #include "RuntimeFeatureRegistry.h"
 #include "StockBuildingControllerCatalog.h"
 #include "StockControllerRegistry.h"
 #include "PrivateRecruitment.h"
 #include "PaidSourceTargetCommand.h"
 #include "PaidSourceTargetProfiles.h"
+#include "SavedAttributeProfiles.h"
+#include "PairedOccupantAction.h"
+#include "PairedOccupantProfiles.h"
+#include "PairedOccupantLookupProfiles.h"
 
 namespace {
 
@@ -412,9 +420,20 @@ bool g_questBoardPopulationRequested = false;
 bool g_activeQuestBoardFaulted = false;
 constexpr std::uint32_t kMx05DialogId = 0x3530584D;
 bool ValidateOccupantPanelProfile();
+bool HasPanelCommands();
+bool HasCooldownDisplays();
+bool SetControllerControlText(std::uint32_t,std::uint32_t,const char*);
+bool (*g_cooldownTextSetter)(std::uint32_t,std::uint32_t,const char*)=&SetControllerControlText;
+bool HasQueuedBuildingActions();
+bool KingdomResearchHasStockOrder(void*, std::uint32_t);
+bool StockResearchOrderPresent(void*);
+bool (*g_researchOrderPresent)(void*) = &StockResearchOrderPresent;
+std::uint32_t QueuedActionStatus(const MajestyStockControllers::ResearchRowRecord&, void*, int);
 bool ValidateSelectedParentControllerProfiles();
 bool ValidateQuestBoardProfile();
+bool PrepareProjectileBoolean();
 bool ValidateKingdomResearchProfile();
+bool ValidatePrivateResearchExecutionProfile();
 bool ValidateHeroInfoProfile();
 bool ValidateMovementScaleProfile();
 bool HeroEffectRowsSelected();
@@ -662,10 +681,7 @@ struct BuildingActivitySnapshot {
 struct ResearchOwner {
     unsigned char* context;
     const MajestyStockControllers::ResearchRowRecord* record;
-    DWORD startedAt;
-    DWORD duration;
     bool pending;
-    bool active;
 };
 
 ResearchOwner g_researchOwner = {};
@@ -692,44 +708,27 @@ ControllerControl g_stockQuestBoardSharedControl = nullptr;
 ControllerActivity g_stockParentActivity = nullptr;
 GameUpdate g_stockGameUpdate = nullptr;
 
-void WriteLog(const char* message) {
-    char modulePath[MAX_PATH] = {};
-    if (!GetModuleFileNameA(g_runtimeModule, modulePath, MAX_PATH)) {
-        return;
-    }
-    char* separator = std::strrchr(modulePath, '\\');
-    if (separator != nullptr) {
-        separator[1] = '\0';
-    }
-    strcat_s(modulePath, "MajestyBuildingRuntime.log");
-    FILE* stream = nullptr;
-    if (fopen_s(&stream, modulePath, "a") != 0 || stream == nullptr) {
-        return;
-    }
-    SYSTEMTIME now = {};
-    GetLocalTime(&now);
-    std::fprintf(
-        stream,
-        "%04u-%02u-%02u %02u:%02u:%02u.%03u %s\n",
-        now.wYear,
-        now.wMonth,
-        now.wDay,
-        now.wHour,
-        now.wMinute,
-        now.wSecond,
-        now.wMilliseconds,
-        message);
-    std::fclose(stream);
+#include "BoundedRuntimeLog.h"
+void WriteSupportLog(const char* message,bool failure=false) {
+    char modulePath[MAX_PATH]{};
+    const auto length=GetModuleFileNameA(g_runtimeModule,modulePath,MAX_PATH);
+    if(!length||length>=MAX_PATH)return;
+    char* separator=std::strrchr(modulePath,'\\');
+    if(!separator)return;
+    if(static_cast<unsigned>(separator-modulePath)+27>=MAX_PATH)return;
+    separator[1]='\0';strcat_s(modulePath,"MajestyBuildingRuntime.log");
+    MajestySupportLog::Write(modulePath,message,failure);
 }
+void WriteLog(const char* message) { WriteSupportLog(message); }
 
 __declspec(noreturn) void StopUnsafeManagerRuntimeLaunch(const char* reason) {
-    WriteLog(reason);
+    WriteSupportLog(reason,true);
     MessageBoxW(
         nullptr,
         L"Majesty Mod Manager could not safely install its required runtime support. "
-        L"Majesty will close before loading a game. Rebuild the selected mods in the Mod "
-        L"Manager; if the problem continues, review MajestyBuildingRuntime.log beside the "
-        L"runtime DLL.",
+        L"Majesty must close. Open the Mod Manager and choose Save Support Report "
+        L"to collect the recorded failure. You do not need to reproduce it again "
+        L"before saving the report.",
         L"Majesty Mod Manager",
         MB_OK | MB_ICONERROR);
     TerminateProcess(GetCurrentProcess(), 0x4D4D5458u);
@@ -790,6 +789,8 @@ bool IsCanonicalAbsolutePath(const wchar_t* path) {
         length < sizeof(resolved) / sizeof(resolved[0]) &&
         _wcsicmp(path, resolved) == 0;
 }
+
+bool SelectMajestyBuildProfile();
 
 CapabilityManifestState LoadRuntimeCapabilityManifest() {
     wchar_t manifestPath[32768] = {};
@@ -873,6 +874,29 @@ CapabilityManifestState LoadRuntimeCapabilityManifest() {
             "Manager capability manifest rejected before hook installation: %s.",
             parseError.c_str());
         WriteLog(message);
+        return CapabilityManifestState::Invalid;
+    }
+    // Proof preparation verifies this selected build's native bodies. Select
+    // the read-only profile before any consumer, not later during hook install.
+    // Absent/invalid manifests still return above without touching hooks.
+    if (!SelectMajestyBuildProfile()) {
+        WriteLog("Manager capability manifest rejected: executable profile selection failed.");
+        return CapabilityManifestState::Invalid;
+    }
+    const bool intercept=manifest.Has(MajestyRuntimeCapabilities::kProjectileInterception);
+    if(intercept && (!manifest.Has(MajestyRuntimeCapabilities::kAttackObservation)||!PrepareProjectileBoolean())) {
+        WriteLog("Projectile interception rejected: typed Boolean runtime unavailable.");
+        return CapabilityManifestState::Invalid;
+    }
+    if (manifest.Has(MajestyRuntimeCapabilities::kAttackObservation) &&
+        (!g_buildProfile||!MajestyAttackObservation::PrepareRuntime(manifestPath,g_buildProfile->buildId,intercept))) {
+        WriteLog("Attack observation rejected: exact executable or composed-output proof unavailable.");
+        return CapabilityManifestState::Invalid;
+    }
+    if (manifest.Has(MajestyRuntimeCapabilities::kCheckedPlacement) &&
+        (!manifest.Has(MajestyRuntimeCapabilities::kAttackObservation) ||
+         !g_buildProfile||!MajestyCheckedPlacement::PrepareRuntime(manifestPath,g_buildProfile->buildId))) {
+        WriteLog("Checked placement rejected: shared observer or composed-output proof unavailable.");
         return CapabilityManifestState::Invalid;
     }
     g_runtimeCapabilities = std::move(manifest);
@@ -1697,6 +1721,7 @@ bool ValidateMajestyBuildProfile() {
                 capability != MajestyRuntimeCapabilities::kGenericControllerRecipes &&
                 capability != MajestyRuntimeCapabilities::kMapFogQuery &&
                 capability != MajestyRuntimeCapabilities::kMovementQuery &&
+                capability != MajestyRuntimeCapabilities::kMessageFlagControls &&
                 capability != MajestyRuntimeCapabilities::kNativeTiming &&
                 capability != MajestyRuntimeCapabilities::kSourceExploration &&
                 capability != MajestyRuntimeCapabilities::kSpellOrigin &&
@@ -1713,13 +1738,13 @@ bool ValidateMajestyBuildProfile() {
     }
     if ((!g_runtimeFeatureRegistry.heroInfoRows.empty() || !g_runtimeFeatureRegistry.hiddenInventoryActions.empty()) && !ValidateHeroInfoProfile()) return false;
     if (!g_runtimeFeatureRegistry.movementScales.empty() && !ValidateMovementScaleProfile()) return false;
-    if (!g_runtimeFeatureRegistry.kingdomResearch.empty() && !ValidateKingdomResearchProfile()) return false;
-    if (!g_stockControllerRegistry.occupantActionPanels.empty() ||
+    if ((!g_runtimeFeatureRegistry.kingdomResearch.empty() || HasQueuedBuildingActions()) && !ValidateKingdomResearchProfile()) return false;
+    if (HasPanelCommands() || !g_stockControllerRegistry.occupantActionPanels.empty() ||
         !g_stockControllerRegistry.liveAgentLists.empty()) {
         if (!ValidateOccupantPanelProfile()) return false;
     }
     if (!ValidateSelectedParentControllerProfiles()) return false;
-    if ((!g_stockControllerRegistry.liveAgentLists.empty() || HasSourceTargetActions() ||
+    if ((HasCooldownDisplays() || HasPanelCommands() || HasQueuedBuildingActions() || !g_stockControllerRegistry.liveAgentLists.empty() || HasSourceTargetActions() ||
          std::any_of(g_stockControllerRegistry.buildingOpenToggles.begin(),
                      g_stockControllerRegistry.buildingOpenToggles.end(),
                      [](const MajestyStockControllers::BuildingOpenToggleRecord& item) {
@@ -2018,7 +2043,127 @@ PrivateToggleCache& PanelToggleCache(std::uint32_t controller, std::uint32_t han
     return cache;
 }
 
+bool EmploymentCommandAllowed(void* building, std::uint32_t parentDialog, std::uint32_t command) {
+    for (const auto& record : g_stockControllerRegistry.liveAgentLists) {
+        if (record.parentDialogId != parentDialog || record.admissionCallbackSymbol.empty()) continue;
+        if (command != record.openCommandId &&
+            std::find(record.gatedControlIds.begin(), record.gatedControlIds.end(), command) == record.gatedControlIds.end()) continue;
+        std::uint32_t admitted = 0;
+        if (!building || !EvaluateIndependentToggle(record.admissionCallbackSymbol.c_str(),
+                building, static_cast<int>(command), &admitted) || admitted != 1) return false;
+    }
+    return true;
+}
+std::uint32_t EmploymentPrimaryDialog(std::uint32_t controller) {
+    if (!controller || controller != static_cast<std::uint32_t>(g_parentController)) return 0;
+    if (g_parentQuestBoard) return g_parentQuestBoard->parentDialogId;
+    if (g_parentPanelRecord) return g_parentPanelRecord->parentDialogId;
+    if (g_parentOccupantPanel) return g_parentOccupantPanel->parentDialogId;
+    return 0;
+}
+bool EmploymentControlAllowed(std::uint32_t controller, std::uint32_t command) {
+    const auto dialog = EmploymentPrimaryDialog(controller);
+    if (!dialog) return true;
+    return EmploymentCommandAllowed(NativePanelContext(controller), dialog, command);
+}
+void RefreshEmploymentControls(std::uint32_t controller) {
+    const auto dialog = EmploymentPrimaryDialog(controller);
+    if (!dialog) return;
+    for (const auto& record : g_stockControllerRegistry.liveAgentLists) {
+        if (record.parentDialogId != dialog || record.admissionCallbackSymbol.empty()) continue;
+        auto* building = NativePanelContext(controller);
+        // Optional literal stock Visitors command. Keep separate stock controls
+        // (and their text/help bindings), as in the MX22 mutually-exclusive
+        // action presenter. Dispatch falls through to the native AP91 opener.
+        if (std::find(record.gatedControlIds.begin(), record.gatedControlIds.end(),
+                0x1F55u) != record.gatedControlIds.end()) {
+            const bool visitors = EmploymentCommandAllowed(building, dialog, 0x1F55u);
+            SetControllerControlVisible(controller, record.openCommandId, !visitors);
+            SetControllerControlVisible(controller, 0x1F55u, visitors);
+        }
+        // These are private navigation openers, never priced research actions.
+        // Restore their availability as well as disabling them; stock has no
+        // metadata for an arbitrary private opener. Child research rows retain
+        // all stock affordability/activity/level checks.
+        SendControllerMessage(controller, record.openCommandId, 0x0A,
+            EmploymentCommandAllowed(building, dialog, record.openCommandId) ? 0u : 1u, 0);
+        for (auto id : record.gatedControlIds)
+            SendControllerMessage(controller, id, 0x0A,
+                EmploymentCommandAllowed(building, dialog, id) ? 0u : 1u, 0);
+    }
+}
+bool IsResearchPage(const MajestyStockControllers::SecondaryPanelRecord& panel) {
+    return std::any_of(g_stockControllerRegistry.researchRows.begin(),
+        g_stockControllerRegistry.researchRows.end(), [&](const MajestyStockControllers::ResearchRowRecord& row) {
+            return row.panelKey == panel.panelKey;
+        });
+}
+int SelectedBuildingLevel(const void*);
+bool EvaluatePanelEligibility(const char*, void*);
+int ReadPanelCooldown(const char*,void*);
+int SubmitPanelCommand(std::uint32_t, const MajestyStockControllers::PanelCommandRecord&);
+bool HasCooldownDisplays() {
+    return std::any_of(g_stockControllerRegistry.panels.begin(),g_stockControllerRegistry.panels.end(),
+        [](const MajestyStockControllers::SecondaryPanelRecord& p){return p.cooldownDurationMs!=0;});
+}
+bool HasPanelCommands() {
+    return std::any_of(g_stockControllerRegistry.panels.begin(), g_stockControllerRegistry.panels.end(),
+        [](const MajestyStockControllers::SecondaryPanelRecord& p) { return !p.commands.empty(); });
+}
+bool HasQueuedBuildingActions() {
+    return std::any_of(g_stockControllerRegistry.researchRows.begin(), g_stockControllerRegistry.researchRows.end(),
+        [](const MajestyStockControllers::ResearchRowRecord& row) { return row.chargeMs != 0; });
+}
+bool SecondaryPanelAllowed(void* building, const MajestyStockControllers::SecondaryPanelRecord& panel) {
+    if (!building) return false;
+    if (!EmploymentCommandAllowed(building, panel.parentDialogId, panel.openCommandId)) return false;
+    // Legacy pages keep their existing admission. Explicit gates use this
+    // child's own resolved context, never the current world selection.
+    if (panel.requiredLevel == 1 && panel.eligibilityCallbackSymbol.empty() && panel.commands.empty()) return true;
+    if (((*reinterpret_cast<const std::uint32_t*>(static_cast<const unsigned char*>(building)+0x7C)) & 0xFFFFFFu) !=
+         (panel.buildingFamilyId & 0xFFFFFFu) ||
+        SelectedBuildingLevel(building) < static_cast<int>(panel.requiredLevel) ||
+        ReadPackedAttributeValue(building, 0x01425041u, 0) != 1 ||
+        ReadPackedAttributeValue(building, 0x02425041u, 0) != 1) return false;
+    return panel.eligibilityCallbackSymbol.empty() ||
+        EvaluatePanelEligibility(panel.eligibilityCallbackSymbol.c_str(), building);
+}
+void RefreshResearchParentOpeners(std::uint32_t controller) {
+    const auto dialog = EmploymentPrimaryDialog(controller);
+    if (!dialog) return;
+    auto* building = NativePanelContext(controller);
+    for (const auto& panel : g_stockControllerRegistry.panels) {
+        if (panel.parentDialogId != dialog || (!IsResearchPage(panel) && panel.commands.empty() &&
+            panel.requiredLevel == 1 && panel.eligibilityCallbackSymbol.empty())) continue;
+        // Visibility and enabled state are separate stock control operations.
+        // Reapply after native presenters, which do not know private siblings.
+        SetControllerControlVisible(controller, panel.openCommandId, true);
+        SendControllerMessage(controller, panel.openCommandId, 0x0A,
+            !SecondaryPanelAllowed(building, panel) ? 1u : 0u, 0);
+    }
+}
+void RefreshPanelCommands(std::uint32_t controller) {
+    if (!g_activePanelRecord || controller != static_cast<std::uint32_t>(g_childController)) return;
+    void* building = NativePanelContext(controller);
+    for (const auto& command : g_activePanelRecord->commands) {
+        SetControllerControlVisible(controller, command.controlId, true);
+        const bool enabled = SecondaryPanelAllowed(building, *g_activePanelRecord) &&
+            EvaluatePanelEligibility(command.quoteSymbol.c_str(), building);
+        SendControllerMessage(controller, command.controlId, 0x0A, enabled ? 0u : 1u, 0);
+    }
+}
+bool ResearchParentCommandAllowed(std::uint32_t controller, std::uint32_t command) {
+    const auto dialog = EmploymentPrimaryDialog(controller);
+    // AP10's visual Research control translates to its ordinary command.
+    if (command == 0x1F44u) command = 0x1F49u;
+    const auto* panel = g_stockControllerRegistry.FindPanelByParentCommand(dialog, command);
+    if (!panel) return true;
+    auto* building = NativePanelContext(controller);
+    return SecondaryPanelAllowed(building, *panel);
+}
 void RefreshBuildingOpenToggle(std::uint32_t controller) {
+    RefreshEmploymentControls(controller);
+    RefreshResearchParentOpeners(controller);
     bool present = false;
     ForEachPanelToggle(controller, [&](const MajestyStockControllers::BuildingOpenToggleRecord&) { present = true; });
     if (!present) return;
@@ -2128,32 +2273,18 @@ BuildingActivitySnapshot CaptureBuildingActivity(void* context) {
     return snapshot;
 }
 
-void RestoreBuildingActivity(
-    void* context, const BuildingActivitySnapshot& snapshot) {
-    WritePackedAttributeValue(
-        context, kCurrentResearchAttributeId, snapshot.command);
-    WritePackedAttributeValue(
-        context, kResearchStartedAtAttributeId, snapshot.startedAt);
-    WritePackedAttributeValue(
-        context, kResearchDurationAttributeId, snapshot.duration);
-}
-
-void ClearBuildingActivity(void* context) {
-    const BuildingActivitySnapshot empty = {};
-    RestoreBuildingActivity(context, empty);
-}
-
 bool PrivateResearchIsActive() {
-    return g_researchOwner.pending ||
-        g_researchOwner.active;
+    auto* context = ActivePanelContext();
+    return context && ((g_researchOwner.pending && g_researchOwner.context == context) ||
+        ReadPackedAttributeValue(context, kResearchDurationAttributeId) != 0);
 }
 
 bool PrivateResearchMatches(
     const void* context,
     const MajestyStockControllers::ResearchRowRecord* record) {
-    return g_researchOwner.active &&
-        g_researchOwner.context == context &&
-        g_researchOwner.record == record;
+    return context && record && ReadPackedAttributeValue(
+        const_cast<void*>(context), kCurrentResearchAttributeId) ==
+            static_cast<int>(record->actionControlId);
 }
 
 int SelectedBuildingLevel(const void* context) {
@@ -2260,7 +2391,7 @@ void RefreshPrivateResearchRows(std::uint32_t controller) {
     for (const auto& row : g_stockControllerRegistry.researchRows) {
         if (g_activePanelRecord != nullptr &&
             row.panelKey == g_activePanelRecord->panelKey) {
-            refreshSingleResearchRow(panel, context, row.actionControlId);
+            if (!row.chargeMs) refreshSingleResearchRow(panel, context, row.actionControlId);
         }
     }
 }
@@ -2333,6 +2464,7 @@ bool CompletionTemplateIsComplete(
 
 void RefreshPrivateActionRows(
     std::uint32_t controller, bool runStockPresenter) {
+    RefreshPanelCommands(controller);
     if (controller == 0 || g_activePanelRecord == nullptr) {
         return;
     }
@@ -2413,10 +2545,11 @@ void UpdateResearchPresentations(std::uint32_t controller) {
             SetControllerControlVisible(controller, row.activeDisplayControlId, true);
             SetControllerControlVisible(controller, row.progressControlId, true);
             const DWORD now = SimulationClock();
-            const DWORD elapsed = now > g_researchOwner.startedAt
-                ? now - g_researchOwner.startedAt : 0;
+            const DWORD started = static_cast<DWORD>(ReadPackedAttributeValue(context, kResearchStartedAtAttributeId));
+            const DWORD duration = static_cast<DWORD>(ReadPackedAttributeValue(context, kResearchDurationAttributeId));
+            const DWORD elapsed = now > started ? now - started : 0;
             std::uint32_t progress[4] = {
-                7, elapsed, 0, g_researchOwner.duration};
+                7, elapsed, 0, duration};
             SendControllerMessage(
                 controller, row.progressControlId, 0x29, 0,
                 reinterpret_cast<std::uint32_t>(progress));
@@ -2425,7 +2558,26 @@ void UpdateResearchPresentations(std::uint32_t controller) {
         } else {
             SetControllerControlVisible(controller, row.progressControlId, false);
             SetControllerControlVisible(controller, row.activeDisplayControlId, false);
+            if (row.chargeMs) {
+                SetControllerControlVisible(controller, row.actionControlId, true);
+                SetControllerControlVisible(controller, row.priceControlId, false);
+                SetControllerControlVisible(controller, row.iconControlId, true);
+                const bool available = !PrivateResearchIsActive() &&
+                    SecondaryPanelAllowed(context, *g_activePanelRecord) &&
+                    QueuedActionStatus(row, context, 0) == 0;
+                SendControllerMessage(controller, row.actionControlId, 0x0A, available ? 0 : 1, 0);
+                continue;
+            }
             if (PrivateResearchIsActive()) {
+                // Stock AP99 hides every other recipe while researching. Keep
+                // its item and icon browsable instead, without publishing an
+                // uncomputed/stale quote (the stock presenter skips that path).
+                // The active recipe above retains its native progress face.
+                SetControllerControlVisible(controller, row.actionControlId, true);
+                SetControllerControlVisible(controller, row.iconControlId, true);
+                SetControllerControlVisible(controller, row.priceControlId, false);
+            }
+            if (PrivateResearchIsActive() || !SecondaryPanelAllowed(context, *g_activePanelRecord)) {
                 SendControllerMessage(
                     controller, row.actionControlId, 0x0A, 1, 0);
             }
@@ -2512,6 +2664,29 @@ int StockCurrentPlayerGold() {
     return getPlayerData(player, kPlayerGoldDataId);
 }
 
+void CooldownCaption(int remaining,char* text,std::size_t capacity) {
+    if(remaining<0) std::snprintf(text,capacity,"Recharge unavailable");
+    else if(!remaining) std::snprintf(text,capacity,"Recharge complete");
+    else {
+        const auto hours=(static_cast<unsigned>(remaining)+2499u)/2500u;
+        std::snprintf(text,capacity,"Recharge: %ud %uh",hours/24u,hours%24u);
+    }
+}
+void UpdateCooldownDisplay(std::uint32_t controller,void* context) {
+    if(!g_activePanelRecord || !g_activePanelRecord->cooldownDurationMs) return;
+    const auto& p=*g_activePanelRecord;
+    const auto remaining=ReadPanelCooldown(p.cooldownRemainingCallbackSymbol.c_str(),context);
+    char caption[80]={};CooldownCaption(remaining,caption,sizeof(caption));
+    g_cooldownTextSetter(controller,p.cooldownTextControlId,caption);
+    SetControllerControlVisible(controller,p.cooldownTextControlId,true);
+    SetControllerControlVisible(controller,p.cooldownProgressControlId,remaining>0);
+    if(remaining>0) {
+        const auto bounded=(std::min)(static_cast<unsigned>(remaining),p.cooldownDurationMs);
+        std::uint32_t progress[4]={7,p.cooldownDurationMs-bounded,0,p.cooldownDurationMs};
+        SendControllerMessage(controller,p.cooldownProgressControlId,0x29,0,reinterpret_cast<std::uint32_t>(progress));
+        SendControllerMessage(controller,p.cooldownProgressControlId,0x08,0,0);
+    }
+}
 void UpdateSecondaryPanelPresentation(std::uint32_t controller) {
     if (controller == 0 ||
         controller != static_cast<std::uint32_t>(
@@ -2523,6 +2698,7 @@ void UpdateSecondaryPanelPresentation(std::uint32_t controller) {
         return;
     }
     UpdateResearchPresentations(controller);
+    UpdateCooldownDisplay(controller,context);
     UpdateResourceMeters(controller);
     RefreshPrivateActionRows(controller, false);
     const DWORD now = SimulationClock();
@@ -2570,8 +2746,7 @@ void UpdateSecondaryPanelPresentation(std::uint32_t controller) {
     }
 }
 
-bool CaptureSubmittedResearch(
-    const BuildingActivitySnapshot& activityToRestore) {
+bool CaptureSubmittedResearch() {
     if (!g_researchOwner.pending ||
         g_researchOwner.context == nullptr) {
         return false;
@@ -2584,40 +2759,30 @@ bool CaptureSubmittedResearch(
         return false;
     }
 
-    RestoreBuildingActivity(
-        g_researchOwner.context, activityToRestore);
-    g_researchOwner.startedAt =
-        static_cast<DWORD>(submitted.startedAt);
-    g_researchOwner.duration =
-        static_cast<DWORD>(submitted.duration);
-    g_researchOwner.pending = false;
-    g_researchOwner.active = true;
-
-    char trace[192] = {};
-    sprintf_s(
-        trace,
-        "Captured queued private research 0x%08X tuple %u/%u and restored AP10 activity.",
-        g_researchOwner.record->actionControlId,
-        g_researchOwner.startedAt,
-        g_researchOwner.duration);
-    WriteLog(trace);
+    // The stock tuple is the saved authority. Never move accepted research
+    // into DLL memory or restore an earlier recruitment tuple over it.
+    g_researchOwner = {};
     return true;
 }
 
-void StageResearchForStockCompletion() {
-    unsigned char* context = g_researchOwner.context;
-    WritePackedAttributeValue(
-        context,
-        kCurrentResearchAttributeId,
-        static_cast<int>(g_researchOwner.record->actionControlId));
-    WritePackedAttributeValue(
-        context,
-        kResearchStartedAtAttributeId,
-        static_cast<int>(g_researchOwner.startedAt));
-    WritePackedAttributeValue(
-        context,
-        kResearchDurationAttributeId,
-        static_cast<int>(g_researchOwner.duration));
+bool RegisterPrivateResearchDescriptors();
+
+bool EnsurePrivateResearchCompletionDescriptor(
+    const MajestyStockControllers::ResearchRowRecord* record) {
+    if (!record || !g_resolveResearchDescriptorTrampoline) return false;
+    using Resolve = const std::uint32_t* (__cdecl*)(std::uint32_t);
+    const auto resolve = reinterpret_cast<Resolve>(g_resolveResearchDescriptorTrampoline);
+    const auto matches = [&]() {
+        const auto* state = FindPrivateResearchDescriptor(record);
+        return state && state->descriptor &&
+            resolve(record->actionControlId) == state->descriptor;
+    };
+    if (matches()) return true;
+    // Restored research can finish before any AP69 panel is opened. The stock
+    // resolver initializes its own templates lazily; use the same guarded
+    // registration as panel setup, including all-absent registry rebuilds.
+    // Never adopt an occupied/mixed private registry or stale borrowed pointer.
+    return RegisterPrivateResearchDescriptors() && matches();
 }
 
 void __cdecl ResearchCompletionBridge(
@@ -2627,35 +2792,38 @@ void __cdecl ResearchCompletionBridge(
     std::uint32_t eventArgument,
     std::uint32_t eventType) {
     if (CompleteKingdomResearch(commandOwner, context, eventRecord, eventArgument, eventType)) return;
-    const bool privateResearchCompletion =
-        eventType == 2 &&
-        g_researchOwner.active &&
-        g_researchOwner.context == context;
+    const auto* record = context ? g_stockControllerRegistry.FindResearchByCommand(
+        static_cast<std::uint32_t>(ReadPackedAttributeValue(context, kCurrentResearchAttributeId))) : nullptr;
+    const auto* panel = record ? g_stockControllerRegistry.FindPanelByKey(record->panelKey) : nullptr;
+    const bool privateResearchCompletion = (eventType == 1 || eventType == 2) && panel &&
+        ((*reinterpret_cast<const std::uint32_t*>(static_cast<const unsigned char*>(context)+0x7C) & 0xFFFFFFu) ==
+         (panel->buildingFamilyId & 0xFFFFFFu));
     if (!privateResearchCompletion) {
         g_stockResearchCompletion(
             commandOwner, context, eventRecord, eventArgument, eventType);
         return;
     }
 
-    // Stock event 0x2009 is the authoritative Blacksmith completion boundary.
-    // The private owner keeps AP10 recruitment in the building's packed tuple,
-    // so publish AP99's captured tuple only for this literal stock callback.
-    // This avoids predicting the event from elapsed time and preserves the
-    // original descriptor lookup, attribute write, alert, and cleanup order.
-    const BuildingActivitySnapshot liveActivity =
-        CaptureBuildingActivity(context);
-    StageResearchForStockCompletion();
+    if (record->chargeMs) {
+        // Native stock stack still delivers success then cancellation/unlink.
+        // Clear the saved activity before the user callback; never set an
+        // AP99 research completion bit for a repeatable action.
+        WritePackedAttributeValue(context, kCurrentResearchAttributeId, 0);
+        WritePackedAttributeValue(context, kResearchDurationAttributeId, 0);
+        if (g_researchOwner.context == context && g_researchOwner.record == record) g_researchOwner = {};
+        const auto flags = *reinterpret_cast<const std::uint32_t*>(static_cast<unsigned char*>(context)+0x74);
+        if (!(flags & 4u)) QueuedActionStatus(*record, context, eventType == 2 ? 2 : 3);
+        InterlockedExchange(&g_researchCompletedThisUpdate, 1);
+        return;
+    }
 
-    using ResolveResearchDescriptor = const std::uint32_t* (__cdecl*)(
-        std::uint32_t);
-    auto resolveResearchDescriptor = reinterpret_cast<ResolveResearchDescriptor>(
-        g_resolveResearchDescriptorTrampoline);
-    const std::uint32_t recipe = g_researchOwner.record->actionControlId;
-    const auto* state = FindPrivateResearchDescriptor(g_researchOwner.record);
-    const auto* expectedDescriptor = state == nullptr
-        ? nullptr : state->descriptor;
-    if (resolveResearchDescriptor(recipe) != expectedDescriptor) {
-        RestoreBuildingActivity(context, liveActivity);
+    // Stock event 0x2009 consumes the saved building tuple directly, including
+    // after a reload. No process-local activity is staged or restored here.
+
+    const std::uint32_t recipe = record->actionControlId;
+    // Reason 1 is stock order cancellation, including world teardown after
+    // descriptor destruction. Stock never resolves a descriptor on that path.
+    if (eventType == 2 && !EnsurePrivateResearchCompletionDescriptor(record)) {
         StopUnsafeManagerRuntimeLaunch(
             "Private research completion found that AP99 lost its manager descriptor registration.");
     }
@@ -2663,10 +2831,15 @@ void __cdecl ResearchCompletionBridge(
     InterlockedExchange(&g_researchCompletionStaged, 1);
     g_stockResearchCompletion(
         commandOwner, context, eventRecord, eventArgument, eventType);
+    if (eventType == 1) {
+        // Same cancellation adapter as kingdom research: stock owns order
+        // retirement; clear only this declared activity, with no refund.
+        WritePackedAttributeValue(context, kCurrentResearchAttributeId, 0);
+        WritePackedAttributeValue(context, kResearchDurationAttributeId, 0);
+    }
     const BuildingActivitySnapshot stockResult =
         CaptureBuildingActivity(context);
     const bool completed = stockResult.command != static_cast<int>(recipe);
-    RestoreBuildingActivity(context, liveActivity);
     if (!completed) {
         InterlockedExchange(&g_researchCompletionStaged, 0);
         WriteLog(
@@ -2674,7 +2847,8 @@ void __cdecl ResearchCompletionBridge(
         return;
     }
 
-    g_researchOwner = {};
+    if (g_researchOwner.context == context && g_researchOwner.record == record)
+        g_researchOwner = {};
     InterlockedExchange(&g_researchCompletedThisUpdate, 1);
     char trace[128] = {};
     sprintf_s(
@@ -2688,6 +2862,7 @@ void ExplorationStepBegin();
 void ExplorationStepEnd();
 void ExplorationWorldReady();
 void ExplorationOwnerChanging(void* unit);
+void __fastcall ParentPanelControllerActivity(void* controller, void*);
 
 void __fastcall GameUpdateRefreshBridge(void* gameState, void*) {
     // This call site is Majesty's stock state-3 update dispatch. Run the
@@ -2695,24 +2870,22 @@ void __fastcall GameUpdateRefreshBridge(void* gameState, void*) {
     // refresh the live secondary row on that same main/UI thread. The private
     // research owner also advances here so it uses the stock
     // simulation clock and never introduces a timer or worker thread.
-    BuildingActivitySnapshot activityBeforeUpdate = {};
     const bool researchSubmissionPending =
         g_researchOwner.pending &&
         g_researchOwner.context != nullptr;
-    if (researchSubmissionPending) {
-        activityBeforeUpdate = CaptureBuildingActivity(
-            g_researchOwner.context);
-    }
 
     ExplorationStepBegin();
     g_stockGameUpdate(gameState);
     ExplorationStepEnd();
-    if (researchSubmissionPending &&
-        CaptureSubmittedResearch(activityBeforeUpdate) &&
-        InterlockedCompareExchange(&g_secondaryPanelActive, 0, 0) != 0) {
-        const auto controller = static_cast<std::uint32_t>(
-            InterlockedCompareExchange(&g_childController, 0, 0));
-        RefreshPrivateResearchRows(controller);
+    if (researchSubmissionPending) {
+        const bool submitted = CaptureSubmittedResearch();
+        if (submitted && InterlockedCompareExchange(&g_secondaryPanelActive, 0, 0) != 0) {
+            const auto controller = static_cast<std::uint32_t>(
+                InterlockedCompareExchange(&g_childController, 0, 0));
+            RefreshPrivateResearchRows(controller);
+        }
+        // Reconcile both successful admission and a rejected queued request.
+        RefreshResearchParentOpeners(static_cast<std::uint32_t>(g_parentController));
     }
     if (InterlockedExchange(
             &g_researchCompletedThisUpdate, 0) != 0) {
@@ -2722,6 +2895,10 @@ void __fastcall GameUpdateRefreshBridge(void* gameState, void*) {
             RefreshPrivateResearchRows(controller);
         }
         InterlockedExchange(&g_researchCompletionStaged, 0);
+        const auto parent = static_cast<std::uint32_t>(
+            InterlockedCompareExchange(&g_parentController, 0, 0));
+        if (parent != 0 && g_parentPanelRecord != nullptr)
+            ParentPanelControllerActivity(reinterpret_cast<void*>(parent), nullptr);
         // Event 0x2009 has already completed and refreshed the private rows in
         // this update. Resume ordinary AP69 presentation on the next update.
         return;
@@ -2864,28 +3041,37 @@ int BeginPrivateResearch(
     }
     if (PrivateResearchIsActive()) {
         UpdateSecondaryPanelPresentation(controller);
-        WriteLog("Private research rejected: the stock-shaped singleton owner is already active.");
+        WriteLog("Private research rejected: a submission is pending or this building is busy.");
+        return 0;
+    }
+
+    // Stock AP99 row refresh disables completed research, but its click gate
+    // checks affordability only. A delivered private control command must repeat
+    // that same nonzero completion-attribute check before touching AP10 state.
+    const auto* research = FindPrivateResearchDescriptor(&row);
+    if (research == nullptr || research->descriptor == nullptr ||
+        research->descriptor[4] == 0 ||
+        (row.chargeMs ? QueuedActionStatus(row, context, 0) != 0 :
+         ReadPackedAttributeValue(context, research->descriptor[4], 0) != 0)) {
+        RefreshPrivateResearchRows(controller);
+        WriteLog("Private research rejected: completion is set or its registered descriptor is unavailable.");
         return 0;
     }
 
     // AP10 recruitment and stock AP99 research both use APB, / APB8 /
-    // APB\r as their one building-activity tuple. Preserve AP10's tuple, expose
-    // an empty activity only for native validation/submission, capture the
-    // exact research tuple stock produces, then restore AP10.
-    // Payment, level/completion checks, duration selection, and command
-    // construction therefore remain native while ownership is separated.
-    const BuildingActivitySnapshot liveActivity =
-        CaptureBuildingActivity(context);
-    ClearBuildingActivity(context);
+    // APB\r as their one saved building-activity tuple. The busy gate above
+    // preserves stock's one-activity-at-a-time ownership.
+    // Native affordability, payment, duration selection, and command construction
+    // remain unchanged. Row stage/prerequisite presentation is not an execution
+    // authorization predicate; completion is rechecked explicitly above.
 
     using CanSubmitResearch = bool (__thiscall*)(void*, std::uint32_t);
     auto canSubmitResearch = reinterpret_cast<CanSubmitResearch>(
         g_imageBase + g_buildProfile->canSubmitResearchRva);
     if (!canSubmitResearch(
             reinterpret_cast<void*>(controller), row.actionControlId)) {
-        RestoreBuildingActivity(context, liveActivity);
         RefreshPrivateResearchRows(controller);
-        WriteLog("Stock eligibility gating rejected private research.");
+        WriteLog("Stock affordability gating rejected private research.");
         return 0;
     }
 
@@ -2895,24 +3081,18 @@ int BeginPrivateResearch(
         g_imageBase + g_buildProfile->submitResearchCommandRva);
     g_researchOwner.context = context;
     g_researchOwner.record = &row;
-    g_researchOwner.startedAt = 0;
-    g_researchOwner.duration = 0;
     g_researchOwner.pending = true;
-    g_researchOwner.active = false;
     submitResearchCommand(commandOwner, context, row.actionControlId);
 
     // Networked building commands normally apply on the next stock game
     // update, not inside SubmitResearchCommand. Handle the synchronous shape
-    // if present; otherwise restore AP10 now and let GameUpdateRefreshBridge
-    // capture the queued tuple on the exact update where stock installs it.
+    // if present; otherwise retire the pending UI reservation after execution.
     const bool capturedSynchronously =
-        CaptureSubmittedResearch(liveActivity);
-    if (!capturedSynchronously) {
-        RestoreBuildingActivity(context, liveActivity);
-    }
+        CaptureSubmittedResearch();
 
     RefreshPrivateResearchRows(controller);
     UpdateSecondaryPanelPresentation(controller);
+    RefreshResearchParentOpeners(static_cast<std::uint32_t>(g_parentController));
     WriteLog(capturedSynchronously
         ? "Submitted private research through AP99 and captured its stock tuple synchronously."
         : "Submitted private research through AP99; its queued stock tuple remains pending.");
@@ -2969,6 +3149,7 @@ int HandleSovereignTargetAction(
     // hook's ownership sentinel.
     InterlockedExchange(&g_pendingSovereignBuilding, static_cast<LONG>(building));
     g_pendingSovereignAction = &action;
+    if (action.sovereignGoldCost) WriteLog("Paid cast: targeting requested from the private spell button.");
     // AP69's stock slot-3 handler accepts only 0x1131..0x114C, then calls this
     // exact cdecl helper.  Invoke that same helper with the private descriptor
     // identity; calling the vtable with 0x2A20/0x2A21 would fall through to the
@@ -3006,9 +3187,10 @@ const std::uint32_t* ResolvePrivateResearchDescriptor(
     const auto* completionDescriptor = resolveStockDescriptor(
         state->record->completionTemplateControlId);
     if (templateDescriptor == nullptr || completionDescriptor == nullptr ||
-        completionDescriptor[4] == 0) {
+        !MajestyResearchCompletion::MatchesStockTemplate(
+            state->record->completionTemplateControlId, completionDescriptor[4])) {
         WriteLog(
-            "Private AP99 descriptor resolution failed: a declared stock template is unavailable.");
+            "Private AP99 descriptor resolution failed: a stock template is unavailable or its completion attribute differs.");
         return nullptr;
     }
     // AP99 allocates every five-dword descriptor through Majesty's operator
@@ -3026,6 +3208,7 @@ const std::uint32_t* ResolvePrivateResearchDescriptor(
     std::memcpy(
         state->descriptor, templateDescriptor, kResearchDescriptorSize);
     state->descriptor[1] = state->record->requiredLevel;
+    if (state->record->chargeMs) state->descriptor[0] = state->record->chargeMs;
     state->descriptor[2] = state->record->price;
     state->descriptor[4] = completionDescriptor[4];
     if (const auto* research = FindKingdomResearch(state->record->actionControlId))
@@ -3820,6 +4003,7 @@ bool InstallResearchCompletionNameClone() {
 }
 
 bool ValidateStockResearchRoute() {
+    if (!ValidatePrivateResearchExecutionProfile()) return false;
     const auto* refreshEntry = reinterpret_cast<const unsigned char*>(
         g_imageBase + g_buildProfile->refreshResearchRowsRva);
     const auto* singleRowEntry = reinterpret_cast<const unsigned char*>(
@@ -4031,27 +4215,33 @@ int __fastcall SecondaryPanelControllerControl(
         if (controlId == 0x1F4D) {
             return ReturnToPrivateParent(controller, g_activePanelRecord->parentDialogId);
         }
+        for (const auto& action : g_activePanelRecord->commands)
+            if (controlId == action.controlId) return SubmitPanelCommand(value, action);
         for (const auto& action : g_stockControllerRegistry.timedRageActions) {
             if (action.panelKey == g_activePanelRecord->panelKey &&
                 action.actionControlId == controlId) {
+                if (!SecondaryPanelAllowed(NativePanelContext(value), *g_activePanelRecord)) return 0;
                 return HandleTimedRageAction(value, action);
             }
         }
         for (const auto& row : g_stockControllerRegistry.researchRows) {
             if (row.panelKey == g_activePanelRecord->panelKey &&
                 row.actionControlId == controlId) {
+                if (!SecondaryPanelAllowed(NativePanelContext(value), *g_activePanelRecord)) return 0;
                 return BeginPrivateResearch(value, row);
             }
         }
         for (const auto& action : g_stockControllerRegistry.rageCommandActions) {
             if (action.panelKey == g_activePanelRecord->panelKey &&
                 action.actionControlId == controlId) {
+                if (!SecondaryPanelAllowed(NativePanelContext(value), *g_activePanelRecord)) return 0;
                 return HandleRageCommandAction(value, action);
             }
         }
         for (const auto& action : g_stockControllerRegistry.sovereignTargetActions) {
             if (action.panelKey == g_activePanelRecord->panelKey &&
                 action.visualControlId == controlId) {
+                if (!SecondaryPanelAllowed(NativePanelContext(value), *g_activePanelRecord)) return 0;
                 return HandleSovereignTargetAction(value, action);
             }
         }
@@ -4076,8 +4266,6 @@ void __fastcall SecondaryPanelControllerEvent(
         return;
     }
     g_stockAp69Event(controller, argument1, argument2, argument3, argument4);
-    UpdateSecondaryPanelPresentation(
-        reinterpret_cast<std::uint32_t>(controller));
     // AP99 0x004A9600 refreshes its research rows only for this exact event
     // set. Do not repaint the compound control every frame; doing so resets
     // its native in-progress drawing to the disabled base state.
@@ -4086,6 +4274,7 @@ void __fastcall SecondaryPanelControllerEvent(
         (argument2 == 0 && argument3 == 0x00505041) ||
         (argument2 == 1 &&
             (argument3 == kCurrentResearchAttributeId ||
+             argument3 == kResearchDurationAttributeId ||
              argument3 == 0x02425041));
     if (stockResearchRefresh) {
         const auto value = reinterpret_cast<std::uint32_t>(controller);
@@ -4093,6 +4282,11 @@ void __fastcall SecondaryPanelControllerEvent(
         RefreshPrivateResearchRows(value);
         RefreshPrivateActionRows(value, true);
     }
+    // Recruitment shares the duration field, but does not change AP99's
+    // CurrentResearch. Re-evaluate native eligibility on its duration event,
+    // then apply the shared busy overlay (never blindly enable a finished row).
+    UpdateSecondaryPanelPresentation(
+        reinterpret_cast<std::uint32_t>(controller));
 }
 
 void ClearSecondaryPanelControllerOwnedState() {
@@ -4172,6 +4366,11 @@ bool InstallSecondaryPanelControllerVtable(std::uint32_t controller) {
 
 int __fastcall ParentPanelControllerControl(
     void* controller, void*, std::uint32_t controlId) {
+    if (!ResearchParentCommandAllowed(reinterpret_cast<std::uint32_t>(controller), controlId)) {
+        RefreshResearchParentOpeners(reinterpret_cast<std::uint32_t>(controller));
+        return 0;
+    }
+    if (!EmploymentControlAllowed(reinterpret_cast<std::uint32_t>(controller), controlId)) return 0;
     int openResult = 0;
     if (HandleBuildingOpenToggle(controller, controlId, &openResult)) return openResult;
     if (OpenOccupantPanel(controller, controlId, &openResult)) return openResult;
@@ -4190,11 +4389,26 @@ int __fastcall ParentPanelControllerControl(
             return 0;
         }
     }
+    if (g_parentPanelRecord != nullptr && controlId > 0x22CEu) {
+        const auto* sibling = g_stockControllerRegistry.FindPanelByParentCommand(
+            g_parentPanelRecord->parentDialogId, controlId);
+        if (sibling != nullptr) {
+            if (InterlockedCompareExchange(&g_secondaryPanelActive, 0, 0) == 1 &&
+                g_activePanelRecord == sibling) return 0;
+            // Same stock opener and keep/remove result as the AP10 child route.
+            // Only the requested dialog differs; the native controller owns context.
+            using Open = int (__thiscall*)(void*, std::uint32_t, std::uint32_t);
+            return reinterpret_cast<Open>(g_imageBase + g_buildProfile->openDialogRva)(
+                controller, sibling->childDialogId, 0);
+        }
+    }
     if (g_parentPanelRecord != nullptr &&
         controlId == g_parentPanelRecord->openCommandId) {
-        if (InterlockedCompareExchange(&g_secondaryPanelActive, 0, 0) == 1) {
+        if (InterlockedCompareExchange(&g_secondaryPanelActive, 0, 0) == 1 &&
+            g_activePanelRecord == g_parentPanelRecord) {
             // AP10 translates visual control 0x1F44 into command 0x1F49. Consume
-            // that command before stock closes the primary panel and opens AP69.
+            // that command only when this SAME child is already open. Another
+            // child (e.g. a list) must not swallow a different panel's opener.
             WriteLog("Ignored a repeated secondary-panel command with AP10's stock no-action result.");
             return 0;
         }
@@ -4238,6 +4452,15 @@ void __fastcall ParentPanelControllerSetup(void* controller, void*) {
     RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
 }
 
+void ShowResearchBusyRecruitment(void* controller) {
+    const auto value = reinterpret_cast<std::uint32_t>(controller);
+    // AP10's stock recruit command/price/progress/caption controls. Do not
+    // force the recruit row visible: service-only parents intentionally hide it.
+    SendControllerMessage(value, 0x1F48u, 0x0A, 1, 0);
+    for (auto control : {0x1F51u, 0x1F56u, 0x1F57u})
+        SetControllerControlVisible(value, control, false);
+}
+
 void __fastcall ParentPanelControllerActivity(void* controller, void*) {
     using GetPanelContext = void* (__thiscall*)(void*);
     auto getPanelContext = reinterpret_cast<GetPanelContext>(
@@ -4254,6 +4477,8 @@ void __fastcall ParentPanelControllerActivity(void* controller, void*) {
             // the complete staged lifecycle.
             ApplyUpgradeResearchGate(
                 reinterpret_cast<std::uint32_t>(controller), context);
+            ShowResearchBusyRecruitment(controller);
+            RefreshResearchParentOpeners(reinterpret_cast<std::uint32_t>(controller));
             return;
         }
         using ReadPackedAttribute = int (__thiscall*)(
@@ -4265,19 +4490,24 @@ void __fastcall ParentPanelControllerActivity(void* controller, void*) {
         const auto* privateResearch =
             g_stockControllerRegistry.FindResearchByCommand(
                 static_cast<std::uint32_t>(currentResearch));
-        if (privateResearch != nullptr && g_parentPanelRecord != nullptr &&
-            privateResearch->panelKey == g_parentPanelRecord->panelKey) {
+        const auto* researchPanel = privateResearch
+            ? g_stockControllerRegistry.FindPanelByKey(privateResearch->panelKey) : nullptr;
+        if (researchPanel != nullptr && g_parentPanelRecord != nullptr &&
+            researchPanel->parentDialogId == g_parentPanelRecord->parentDialogId) {
             // AP17 does not run AP10's guild-activity renderer while its
             // native research command owns CurrentResearch. Preserve that
             // stock class boundary for the combined private/AP99 surface.
             ApplyUpgradeResearchGate(
                 reinterpret_cast<std::uint32_t>(controller), context);
+            ShowResearchBusyRecruitment(controller);
+            RefreshResearchParentOpeners(reinterpret_cast<std::uint32_t>(controller));
             return;
         }
     }
     g_stockParentActivity(controller);
     ApplyUpgradeResearchGate(
         reinterpret_cast<std::uint32_t>(controller), context);
+    RefreshBuildingOpenToggle(reinterpret_cast<std::uint32_t>(controller));
 }
 
 void __fastcall ParentPanelControllerEvent(
@@ -4666,6 +4896,7 @@ int __fastcall RewardPanelControl(
 
 int __fastcall RewardParentControl(
     void* controller, void*, std::uint32_t controlId) {
+    if (!EmploymentControlAllowed(reinterpret_cast<std::uint32_t>(controller), controlId)) return 0;
     int openResult = 0;
     if (HandleBuildingOpenToggle(controller, controlId, &openResult)) return openResult;
     if (OpenOccupantPanel(controller, controlId, &openResult)) return openResult;
@@ -4840,6 +5071,12 @@ const QuestBoardBuildProfile& QuestBoardProfile() {
     case MajestyBuildId::Gog: return kGogQuestBoard;
     default: StopUnsafeManagerRuntimeLaunch("No audited live-agent-list profile for this build.");
     }
+}
+bool PrepareProjectileBoolean() {
+    return g_buildProfile && ValidateQuestBoardProfile() &&
+        MajestyBooleanRuntime::Prepare(g_buildProfile->buildId,
+            g_imageBase+OccupantProfile().stringConstructor,
+            g_imageBase+QuestBoardProfile().stringDestructor);
 }
 
 bool ValidateSelectedParentControllerProfiles() {
@@ -5165,6 +5402,51 @@ QuestBoardScalarEvaluator g_questBoardScalarEvaluator =
 bool EvaluateIndependentToggle(const char* symbol, void* parent, int operation, std::uint32_t* result) {
     return g_questBoardScalarEvaluator(symbol, parent, true, operation, result, false) && *result <= 1;
 }
+int ReadPanelCooldown(const char* symbol,void* context) {
+    std::uint32_t raw=0xFFFFFFFFu;
+    return g_questBoardScalarEvaluator(symbol,context,false,0,&raw,false) ? static_cast<int>(raw) : -1;
+}
+bool EvaluatePanelEligibility(const char* symbol, void* parent) {
+    std::uint32_t result = 0;
+    return g_questBoardScalarEvaluator(symbol, parent, false, 0, &result, false) && result == 1;
+}
+std::uint32_t QueuedActionStatus(const MajestyStockControllers::ResearchRowRecord& row, void* unit, int operation) {
+    std::uint32_t result = 3;
+    if (!unit || !row.chargeMs || row.savedActionSymbol.empty()) return 3;
+    if (!g_questBoardScalarEvaluator(row.savedActionSymbol.c_str(), unit, true, operation, &result, false) || result > 3)
+        StopUnsafeManagerRuntimeLaunch("The prepared saved building action callback is missing or invalid.");
+    return result;
+}
+
+bool EvaluateAttackBountyPreparation(void* source, void* target, std::uint32_t price,
+    std::uint32_t amount, std::uint32_t* remainder) {
+    if(!source || !target || !remainder || !amount || amount>price || price>0x7FFFFFFFu)return false;
+    const auto& p=QuestBoardProfile();
+    std::uint32_t text[3]={};
+    __declspec(align(4)) unsigned char evaluator[0x40]={};
+    using Call=void (__thiscall*)(void*);
+    using Construct=void* (__thiscall*)(void*,const void*);
+    using AddAgent=void (__thiscall*)(void*,void*);
+    using AddInteger=void (__thiscall*)(void*,int);
+    using ResultAt=void** (__thiscall*)(void*,std::uint32_t);
+    using Scalar=std::uint32_t (__thiscall*)(void*);
+    struct Cleanup {void* p; Call destroy; ~Cleanup(){if(p)destroy(p);}};
+    reinterpret_cast<Construct>(g_imageBase+OccupantProfile().stringConstructor)(text,"MMM_PrepareAttackBounty");
+    Cleanup textCleanup{text,reinterpret_cast<Call>(g_imageBase+p.stringDestructor)};
+    reinterpret_cast<Construct>(g_imageBase+p.evaluatorConstructor)(evaluator,text);
+    Cleanup evaluatorCleanup{evaluator,reinterpret_cast<Call>(g_imageBase+p.evaluatorDestructor)};
+    if(!*reinterpret_cast<const std::uint32_t*>(evaluator+4))return false;
+    auto addAgent=reinterpret_cast<AddAgent>(g_imageBase+p.addAgent);
+    auto addInteger=reinterpret_cast<AddInteger>(g_imageBase+p.addInteger);
+    addAgent(evaluator,source);addAgent(evaluator,target);
+    addInteger(evaluator,static_cast<int>(price));addInteger(evaluator,static_cast<int>(amount));
+    reinterpret_cast<Call>(g_imageBase+p.execute)(evaluator);
+    void** entry=reinterpret_cast<ResultAt>(g_imageBase+p.resultAt)(evaluator+0x24,0);
+    if(!entry || !*entry || *reinterpret_cast<const std::uint32_t*>(static_cast<unsigned char*>(*entry)+4)!=kGplIntegerResultType)return false;
+    const auto value=reinterpret_cast<Scalar>(g_imageBase+p.scalarResult)(evaluator);
+    if(value>price)return false; // Includes GPL -1 failure, no continuation.
+    *remainder=value;return true;
+}
 
 bool EvaluateSourceTargetCallback(const char* symbol, void* spell, void* source, void* target) {
     if (!symbol || !spell || !source || !target) return false;
@@ -5224,6 +5506,11 @@ bool OccupantCallMatches(std::uintptr_t callRva, std::uintptr_t targetRva) {
     return code[0] == 0xE8 && callRva + 5 + relative == targetRva;
 }
 bool ValidateOccupantPanelProfile() {
+    if (HasPanelCommands() && (!g_buildProfile ||
+        !MajestyPairedOccupantAction::ValidateProfile(g_buildProfile->buildId, g_imageBase,
+            [](std::uintptr_t rva, unsigned) {
+                return reinterpret_cast<const unsigned char*>(g_imageBase + rva);
+            }))) return false;
     const auto& profile = OccupantProfile();
     const unsigned char entry[] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8};
     const unsigned char sharedControlCall[] = {0x55, 0x8B, 0xCE, 0xE8};
@@ -5349,6 +5636,35 @@ void* __fastcall OccupantActionString(void* destination, void*, const char* stoc
     }
     return OccupantString(destination, symbol);
 }
+#if defined(CAM_EMPLOYMENT_DIAGNOSTIC)
+void TraceEmploymentPair(const char* stage, const MajestyPairedOccupantAction::Context& context, void* evaluator) {
+    std::uint32_t type = 0xFFFFFFFFu, result = 0;
+    bool resultAvailable = false;
+    // Only the post-Execute hook still owns a live evaluator. Dispatch-return
+    // is after native destruction and must never inspect that pointer.
+    if (std::strcmp(stage, "executed") == 0 && context.executed && evaluator) {
+        const auto profile = QuestBoardProfile();
+        using ResultAt = void** (__thiscall*)(void*, std::uint32_t);
+        using ScalarResult = std::uint32_t (__thiscall*)(void*);
+        void** entry = reinterpret_cast<ResultAt>(g_imageBase + profile.resultAt)(
+            static_cast<unsigned char*>(evaluator) + 0x24, 0);
+        void* value = entry ? *entry : nullptr;
+        if (value) type = *reinterpret_cast<const std::uint32_t*>(static_cast<unsigned char*>(value) + 4);
+        if (type == kGplIntegerResultType) {
+            result = reinterpret_cast<ScalarResult>(g_imageBase + profile.scalarResult)(evaluator);
+            resultAvailable = true;
+        }
+    }
+    char message[512] = {};
+    std::snprintf(message, sizeof(message),
+        "HireDiag id=%u stage=%s building_id=0x%08lX building=%p hero=%p evaluator=%p admitted=%u appended=%u executed=%u result_available=%u type=0x%08lX result=%lu.",
+        context.diagnosticId, stage, static_cast<unsigned long>(context.building), context.resolvedBuilding,
+        context.validatedHero, evaluator, context.admitted ? 1u : 0u, context.appended,
+        context.executed ? 1u : 0u, resultAvailable ? 1u : 0u,
+        static_cast<unsigned long>(type), static_cast<unsigned long>(result));
+    WriteLog(message);
+}
+#endif
 void __cdecl SubmitOccupantAction(std::uint32_t command, std::uint32_t building,
                                  std::uint32_t agent, std::uint32_t price) {
     const QuestBoard* submittedList = nullptr;
@@ -5361,6 +5677,18 @@ void __cdecl SubmitOccupantAction(std::uint32_t command, std::uint32_t building,
         }
     }
     if (submittedList != nullptr) {
+#if defined(CAM_EMPLOYMENT_DIAGNOSTIC)
+        static unsigned submissions = 0;
+        if (submittedList->actionUsesPair && submissions < 16) {
+            ++submissions;
+            char message[256] = {};
+            std::snprintf(message, sizeof(message),
+                "HireDiag submission=%u command=0x%08lX building_id=0x%08lX hero_id=0x%08lX price=%lu.",
+                submissions, static_cast<unsigned long>(command), static_cast<unsigned long>(building),
+                static_cast<unsigned long>(agent), static_cast<unsigned long>(price));
+            WriteLog(message);
+        }
+#endif
         char trace[256] = {};
         std::snprintf(trace, sizeof(trace),
             "List action submitted: command=0x%08lX parent_id=0x%08lX callback=%s.",
@@ -5371,10 +5699,67 @@ void __cdecl SubmitOccupantAction(std::uint32_t command, std::uint32_t building,
     reinterpret_cast<BuildingCommandDispatch>(
         g_imageBase + g_buildProfile->submitBuildingCommandRva)(command, building, agent, price);
 }
+int SubmitPanelCommand(std::uint32_t controller, const MajestyStockControllers::PanelCommandRecord& action) {
+    if (!g_activePanelRecord || controller != static_cast<std::uint32_t>(g_childController)) return 0;
+    void* unit = NativePanelContext(controller);
+    std::uint32_t owner = 0xFFFFFFFFu;
+    if (!SecondaryPanelAllowed(unit, *g_activePanelRecord) ||
+        !EvaluatePanelEligibility(action.quoteSymbol.c_str(), unit) ||
+        !g_questBoardScalarEvaluator(action.ownerSymbol.c_str(), unit, false, 0, &owner, false) || owner > 31) return 0;
+    const auto handle = *reinterpret_cast<const std::uint32_t*>(static_cast<const unsigned char*>(unit)+0x70);
+    if (!handle || handle == 0xFFFFFFFFu) return 0;
+    SubmitOccupantAction(action.CommandId(), handle, owner, 0);
+    return 0;
+}
 void __cdecl DispatchOccupantAction(std::uint32_t command, std::uint32_t building,
                                    std::uint32_t agent, std::uint32_t price) {
+    for (const auto& panel : g_stockControllerRegistry.panels) for (const auto& action : panel.commands) {
+        if (command != action.CommandId()) continue;
+        // Immutable packet: command, building agent number, initiating player,
+        // zero price. Resolve afresh; never execute against a retained UI pointer.
+        if (price != 0 || agent > 31) return;
+        void* unit = g_questBoardAgentNumberResolver(building);
+        std::uint32_t owner = 0xFFFFFFFFu;
+        if (!SecondaryPanelAllowed(unit, panel) ||
+            !g_questBoardScalarEvaluator(action.ownerSymbol.c_str(), unit, false, 0, &owner, false) ||
+            owner != agent) return;
+        MajestyStockControllers::OccupantActionPanelRecord route = {};
+        route.actionCallbackSymbol = action.commitSymbol;
+        const auto* previous = g_executingOccupantPanel;
+        const auto* previousQuest = g_executingQuestBoard;
+        g_executingOccupantPanel = &route;
+        g_executingQuestBoard = nullptr;
+        {
+            MajestyPairedOccupantAction::Scope scope(MajestyPairedOccupantAction::NativeBinding().current, false, building);
+            g_stockOccupantDispatch(0x15, building, building, 0);
+        }
+        g_executingOccupantPanel = previous;
+        g_executingQuestBoard = previousQuest;
+        if (g_activePanelRecord == &panel && g_childController &&
+            NativePanelContext(static_cast<std::uint32_t>(g_childController)) == unit)
+            RefreshPanelCommands(static_cast<std::uint32_t>(g_childController));
+        return;
+    }
     const auto* record = g_stockControllerRegistry.FindOccupantPanelByCommand(command);
     const auto* quest = g_stockControllerRegistry.FindLiveAgentListByCommand(command);
+    const bool paired = quest != nullptr && quest->actionUsesPair;
+    MajestyPairedOccupantAction::Trace employmentTrace = nullptr;
+    unsigned diagnosticId = 0;
+#if defined(CAM_EMPLOYMENT_DIAGNOSTIC)
+    static unsigned dispatches = 0;
+    if (paired && dispatches < 16) {
+        diagnosticId = ++dispatches;
+        employmentTrace = &TraceEmploymentPair;
+        char message[256] = {};
+        std::snprintf(message, sizeof(message),
+            "HireDiag id=%u dispatch command=0x%08lX building_id=0x%08lX hero_id=0x%08lX price=%lu packet_admitted=%u.",
+            diagnosticId, static_cast<unsigned long>(command), static_cast<unsigned long>(building),
+            static_cast<unsigned long>(agent), static_cast<unsigned long>(price),
+            MajestyPairedOccupantAction::AdmitPacket(paired, price) ? 1u : 0u);
+        WriteLog(message);
+    }
+#endif
+    if (!MajestyPairedOccupantAction::AdmitPacket(paired, price)) return;
     const auto* previous = g_executingOccupantPanel;
     const auto* previousQuest = g_executingQuestBoard;
     ULONGLONG actionStarted = 0;
@@ -5389,9 +5774,15 @@ void __cdecl DispatchOccupantAction(std::uint32_t command, std::uint32_t buildin
     }
     g_executingOccupantPanel = record;
     g_executingQuestBoard = quest;
-    g_stockOccupantDispatch(
-        record == nullptr && quest == nullptr ? command : 0x15,
-        building, agent, price);
+    {
+        MajestyPairedOccupantAction::Scope scope(
+            MajestyPairedOccupantAction::NativeBinding().current, paired, building, employmentTrace, diagnosticId);
+        g_stockOccupantDispatch(
+            record == nullptr && quest == nullptr ? command : 0x15,
+            building, agent, price);
+        MajestyPairedOccupantAction::Observe(MajestyPairedOccupantAction::NativeBinding().current,
+                                             "dispatch-return", nullptr);
+    }
     g_executingOccupantPanel = previous;
     g_executingQuestBoard = previousQuest;
     const ULONGLONG actionFinished = quest == nullptr ? 0 : GetTickCount64();
@@ -5468,8 +5859,65 @@ bool WriteOccupantBranch(std::uintptr_t address, void* target, unsigned char opc
     }
     return flushed && restored;
 }
+bool HasPairedOccupantActions() {
+    return std::any_of(g_stockControllerRegistry.liveAgentLists.begin(),
+        g_stockControllerRegistry.liveAgentLists.end(),
+        [](const QuestBoard& panel) { return panel.actionUsesPair; });
+}
+bool AdmitPairedOccupantActors(void* building, void* hero) {
+    if (!building || !hero || !g_executingQuestBoard || !g_executingQuestBoard->actionUsesPair)
+        return false;
+    // Same native player contract as the existing sovereign source admission.
+    // Generated GPL additionally checks the declared title, completion and life.
+    const auto* source = static_cast<const unsigned char*>(building);
+    const auto* selected = static_cast<const unsigned char*>(hero);
+    return *reinterpret_cast<const std::uint32_t*>(source + 0x80) ==
+        *reinterpret_cast<const std::uint32_t*>(selected + 0x80);
+}
+void* ResolvePairedOccupantBuilding(std::uint32_t handle) {
+    if (!handle || handle == 0xFFFFFFFFu) return nullptr;
+    const auto index = MajestyPairedOccupantAction::ProfileIndex(g_buildProfile->buildId);
+    if (index >= 3) return nullptr;
+    auto* world = *reinterpret_cast<unsigned char**>(g_imageBase + SourceTargetProfile().worldPointer);
+    if (!world) return nullptr;
+    void* domain = *reinterpret_cast<void**>(world + 4);
+    if (!domain) return nullptr;
+    const auto& lookup = MajestyPairedOccupantAction::LookupProfiles[index];
+    using Category = void* (__thiscall*)(void*, std::uint32_t);
+    void* service = reinterpret_cast<Category>(g_imageBase + lookup.categoryGetter)(domain, 3);
+    if (!service || !MajestyPairedOccupantAction::AdmittedService(index,
+            *reinterpret_cast<std::uintptr_t*>(service), g_imageBase))
+        return nullptr;
+    // Both admitted primary tables must still select the identical guarded
+    // native lookup method, not an alternate category3 implementation.
+    const auto table = *reinterpret_cast<std::uintptr_t*>(service);
+    if (*reinterpret_cast<std::uintptr_t*>(table + 0x28) !=
+        *reinterpret_cast<std::uintptr_t*>(g_imageBase + lookup.serviceVtable + 0x28)) return nullptr;
+    return ResolveSovereignUnit(handle);
+}
 bool InstallOccupantPanelRoute() {
     if (!ValidateOccupantPanelProfile()) return false;
+    const bool paired = HasPairedOccupantActions();
+    if (paired && !MajestyPairedOccupantAction::ValidateProfile(
+            g_buildProfile->buildId, g_imageBase,
+            [](std::uintptr_t rva, unsigned) {
+                return reinterpret_cast<const unsigned char*>(g_imageBase + rva);
+            })) {
+        WriteLog("Paired list action installation refused: command/lookup profile differs.");
+        return false;
+    }
+    if (paired) {
+        const auto index = MajestyPairedOccupantAction::ProfileIndex(g_buildProfile->buildId);
+        for (const auto& window : MajestyPairedOccupantAction::LookupWindows[index]) {
+            const auto* bytes = reinterpret_cast<const unsigned char*>(g_imageBase + window.rva);
+            std::uint32_t hash = 2166136261u;
+            for (unsigned i = 0; i < window.size; ++i) hash = (hash ^ bytes[i]) * 16777619u;
+            if (hash != window.hash) {
+                WriteLog("Paired list action installation refused: stock category lookup differs.");
+                return false;
+            }
+        }
+    }
     const auto& profile = OccupantProfile();
     auto* trampoline = static_cast<unsigned char*>(VirtualAlloc(
         nullptr, 11, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
@@ -5498,6 +5946,20 @@ bool InstallOccupantPanelRoute() {
                 g_imageBase + profile.generalControlCall,
                 reinterpret_cast<void*>(&LiveAgentListControlHandoff),
                 0xE8)) return false;
+    }
+    if (paired) {
+        const auto& pair = MajestyPairedOccupantAction::Profiles[
+            MajestyPairedOccupantAction::ProfileIndex(g_buildProfile->buildId)];
+        auto& binding = MajestyPairedOccupantAction::NativeBinding();
+        binding.append = reinterpret_cast<MajestyPairedOccupantAction::StockAppend>(g_imageBase + pair.append);
+        binding.execute = reinterpret_cast<MajestyPairedOccupantAction::StockExecute>(g_imageBase + pair.execute);
+        binding.resolve = &ResolvePairedOccupantBuilding;
+        binding.admit = &AdmitPairedOccupantActors;
+        if (!binding.Ready() ||
+            !WriteOccupantBranch(g_imageBase + pair.appendCall,
+                reinterpret_cast<void*>(&MajestyPairedOccupantAction::AddSubjectShim), 0xE8) ||
+            !WriteOccupantBranch(g_imageBase + pair.executeCall,
+                reinterpret_cast<void*>(&MajestyPairedOccupantAction::ExecuteShim), 0xE8)) return false;
     }
     return WriteOccupantBranch(g_imageBase + profile.costStringCall, reinterpret_cast<void*>(&OccupantCostString), 0xE8) &&
         WriteOccupantBranch(g_imageBase + profile.actionStringCall, reinterpret_cast<void*>(&OccupantActionString), 0xE8) &&
@@ -6438,6 +6900,7 @@ bool InstallQuestBoardChildVtable(std::uint32_t controller) {
     return true;
 }
 
+#include "ResearchSubmissionRuntime.inl"
 #include "KingdomResearchRuntime.inl"
 #include "ExplorationObservationRuntime.inl"
 #include "SpellOriginRuntime.inl"
@@ -6473,6 +6936,7 @@ void __fastcall OccupantParentSetup(void* controller, void*) {
     RefreshKingdomResearch(reinterpret_cast<std::uint32_t>(controller), entry->recruitmentMode == 2);
 }
 int __fastcall OccupantParentControl(void* controller, void*, std::uint32_t command) {
+    if (!EmploymentControlAllowed(reinterpret_cast<std::uint32_t>(controller), command)) return 0;
     auto* entry = FindOccupantParentClass(controller);
     const bool recruitCommand = command == 0x1F48u || command == 0x1389u || command == 0x1388u;
     if (recruitCommand && KingdomResearchActivity(NativePanelContext(reinterpret_cast<std::uint32_t>(controller)))) return 0;
@@ -6824,14 +7288,22 @@ bool InstallPrivateRewardFlagModeRegistry() {
 
 bool g_expansionQuestContentInstalled = false;
 #include "CompactSovereignToolbar.inl"
+#include "MessageFlagControls.inl"
+#include "CompactToolbarDiagnostic.inl"
 
 extern "C" void __stdcall CaptureSecondaryController(
     std::uint32_t controller,
     std::uint32_t creationHandle) {
+    if(!MessageFlagControls::Capture(controller)) {
+        StopUnsafeManagerRuntimeLaunch("Message controls could not capture their stock HUD controller.");
+    }
     if(!CompactToolbar::Capture(controller)) {
         StopUnsafeManagerRuntimeLaunch("The compact sovereign toolbar did not match its verified stock UI profile.");
         return;
     }
+#if defined(CAM_COMPACT_TOOLBAR_DIAGNOSTIC)
+    CaptureCompactDiagnostic(controller);
+#endif
     if (controller == 0) {
         if (InterlockedExchange(&g_captureParentController, 0) == 1) {
             StopUnsafeManagerRuntimeLaunch(
@@ -7066,6 +7538,17 @@ extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) 
             idAddress,
             requested,
             " Mapped a resolved child dialog to the stock AP69 controller class.");
+        return;
+    }
+    // Select the same stock constructor as the CG epilogue fallback, before
+    // entering the stock switch. Some unknown IDs (including CG04) take an
+    // inline return and never reach that fallback. Only the factory selector
+    // changes: the already-created private layout/token and context stay intact.
+    // More specific typed controller mappings above retain precedence.
+    if ((requested & 0xFFFFu) == 0x4743u) {
+        *idAddress = kAp10DialogId;
+        LogDialogFactoryRequest(
+            idAddress, requested, " Mapped custom guild to stock AP10 controller.");
         return;
     }
     if (requested == kAp10DialogId && idAddress[2] != 0) {
@@ -7800,6 +8283,7 @@ bool InstallExpansionQuestContent() {
 }
 
 DWORD WINAPI InitializeRuntime(void*) {
+    WriteLog("Runtime session started; bounded first-fault capture enabled (support format 1).");
     g_imageBase = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
     const CapabilityManifestState capabilityManifest =
         LoadRuntimeCapabilityManifest();
@@ -7866,6 +8350,7 @@ DWORD WINAPI InitializeRuntime(void*) {
     if (requestedNameGeneratorHook != privateNameGenerators ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kMapFogQuery) != g_runtimeFeatureRegistry.mapFogQuery ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kMovementQuery) != g_runtimeFeatureRegistry.movementQuery ||
+        HasRuntimeCapability(MajestyRuntimeCapabilities::kMessageFlagControls) != g_runtimeFeatureRegistry.messageFlagControls ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kNativeTiming) != g_runtimeFeatureRegistry.nativeTiming ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kEquipment) != !g_runtimeFeatureRegistry.equipment.empty() ||
         HasRuntimeCapability(MajestyRuntimeCapabilities::kKingdomResearch) != kingdomResearch ||
@@ -7878,7 +8363,7 @@ DWORD WINAPI InitializeRuntime(void*) {
             "Terminating manager launch before Majesty resumes: MMCP hook selection and manager-owned runtime registries disagree.");
     }
 
-    if (!SelectMajestyBuildProfile() || !ValidateMajestyBuildProfile()) {
+    if (!g_buildProfile || !ValidateMajestyBuildProfile()) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: the executable does not match every declared runtime capability profile.");
     }
@@ -7910,14 +8395,17 @@ DWORD WINAPI InitializeRuntime(void*) {
             "Overlay movement scaling requires the audited beta2 linear movement boundary.");
     }
     if (g_runtimeFeatureRegistry.mapFogQuery || g_runtimeFeatureRegistry.movementQuery ||
-        g_runtimeFeatureRegistry.nativeTiming || kingdomResearch) {
+        g_runtimeFeatureRegistry.nativeTiming || kingdomResearch ||
+        HasRuntimeCapability(MajestyRuntimeCapabilities::kAttackObservation)) {
         RequireManagerRuntimeInstall(
             InstallMapQueryRuntime(g_imageBase, g_buildProfile->buildId,
                 g_runtimeFeatureRegistry.mapFogQuery, g_runtimeFeatureRegistry.movementQuery,
                 g_runtimeFeatureRegistry.nativeTiming ? &g_runtimeFeatureRegistry : nullptr,
                 kingdomResearch ? &KingdomResearchOrder : nullptr,
                 kingdomResearch ? &KingdomResearchEligible : nullptr,
-                g_runtimeFeatureRegistry.movementScales.empty() ? nullptr : &MovementQueryDistance),
+                g_runtimeFeatureRegistry.movementScales.empty() ? nullptr : &MovementQueryDistance,
+                HasRuntimeCapability(MajestyRuntimeCapabilities::kAttackObservation),
+                &StopUnsafeManagerRuntimeLaunch, &WriteLog),
             managerLaunch, "The stock GPL interface registration boundary did not match its profile.");
     }
 
@@ -7987,7 +8475,7 @@ DWORD WINAPI InitializeRuntime(void*) {
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the private research-completion name clone could not be installed.");
     }
-    if (kingdomResearch) {
+    if (kingdomResearch || !g_stockControllerRegistry.researchRows.empty()) {
         RequireManagerRuntimeInstall(InstallKingdomResearchGate(), managerLaunch,
             "The kingdom research command boundary did not match the audited stock profile.");
     }
@@ -8017,8 +8505,12 @@ DWORD WINAPI InitializeRuntime(void*) {
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the game-update refresh bridge could not be installed.");
     }
+    if (g_runtimeFeatureRegistry.messageFlagControls) {
+        RequireManagerRuntimeInstall(MessageFlagControls::Install(), managerLaunch,
+            "Message controls could not verify their stock HUD and dismissal profile.");
+    }
     if (stockControllerRecipes) {
-        if (!g_stockControllerRegistry.occupantActionPanels.empty() ||
+        if (HasPanelCommands() || !g_stockControllerRegistry.occupantActionPanels.empty() ||
             !g_stockControllerRegistry.liveAgentLists.empty()) {
             RequireManagerRuntimeInstall(InstallOccupantPanelRoute(), managerLaunch,
                 "Terminating manager launch: stock occupant action route could not be installed.");
@@ -8036,6 +8528,8 @@ DWORD WINAPI InitializeRuntime(void*) {
             InstallDialogFactoryTrace(),
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the dialog-factory hook could not be installed.");
+    }
+    if (stockControllerRecipes || g_runtimeFeatureRegistry.messageFlagControls) {
         RequireManagerRuntimeInstall(
             InstallSecondaryControllerHook(),
             managerLaunch,

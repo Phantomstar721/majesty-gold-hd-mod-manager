@@ -36,6 +36,7 @@ from majesty_cam.manager.startup_cache import (
     _manager_cache_identity_paths,
     StartupCache,
     catalog_input_signature,
+    game_preflight_signature,
     metadata_signature,
     qol_input_signature,
 )
@@ -45,6 +46,128 @@ MOD_ID = "8C48289E-7C70-4426-8913-133F3544A182"
 
 
 class StartupCacheTests(unittest.TestCase):
+    def test_game_evidence_tracks_declared_inputs_without_reading_large_payloads(self):
+        from majesty_cam.stock_gpl import STOCK_GPL_RUNTIME_PAIRS
+
+        with TemporaryDirectory() as temp:
+            game = Path(temp)
+            executable = game / 'MajestyHD.exe'
+            executable.write_bytes(b'public')
+            projects = set()
+            for pair in STOCK_GPL_RUNTIME_PAIRS:
+                project = game / 'SDK/OriginalQuests' / pair.project_relative
+                project.parent.mkdir(parents=True, exist_ok=True)
+                project.write_text('source="fixture.gpl"\ndata="fixture.dat"\n')
+                (project.parent / 'fixture.gpl').write_text('function Fixture() begin end')
+                (project.parent / 'fixture.dat').write_text('stock data')
+                projects.add(project)
+                target = game / pair.target_relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b'compiled')
+            stock = game / 'Data/gpltext.cam'
+            stock.write_bytes(b'stock text')
+            actual_read = Path.read_bytes
+            def read_project(path):
+                self.assertIn(path, projects, 'cache read a game payload rather than its metadata')
+                return actual_read(path)
+            with patch.object(Path, 'read_bytes', read_project), \
+                    patch.object(Path, 'rglob', side_effect=AssertionError('recursive game scan')):
+                previous = game_preflight_signature(game)
+                self.assertEqual(game_preflight_signature(game), previous)
+                for path in (executable, stock, game / STOCK_GPL_RUNTIME_PAIRS[0].target_relative,
+                             next(iter(projects)).parent / 'fixture.gpl',
+                             next(iter(projects)).parent / 'fixture.dat'):
+                    path.write_bytes(b'changed game evidence')
+                    current = game_preflight_signature(game)
+                    self.assertNotEqual(current, previous, path)
+                    previous = current
+                (game / 'Data/added.cam').write_bytes(b'new stock resource')
+                current = game_preflight_signature(game)
+                self.assertNotEqual(current, previous)
+                (game / 'Data/notes.txt').write_text('unrelated game notes')
+                self.assertEqual(game_preflight_signature(game), current)
+
+    def test_repaired_missing_project_invalidates_cached_game_evidence(self):
+        from majesty_cam.stock_gpl import STOCK_GPL_RUNTIME_PAIRS
+
+        with TemporaryDirectory() as temp:
+            game = Path(temp)
+            previous = game_preflight_signature(game)
+            for pair in STOCK_GPL_RUNTIME_PAIRS:
+                project = game / 'SDK/OriginalQuests' / pair.project_relative
+                project.parent.mkdir(parents=True, exist_ok=True)
+                project.write_text('source="fixture.gpl"\n')
+                current = game_preflight_signature(game)
+                self.assertNotEqual(current, previous)
+                previous = current
+            source = project.parent / 'fixture.gpl'
+            source.write_text('repaired source')
+            self.assertNotEqual(game_preflight_signature(game), previous)
+
+    def test_cached_red_catalog_rechecks_after_game_repair_switch_or_manager_update(self):
+        from majesty_cam.manager.qol_service import BETA2_BRANCH, GOG_BRANCH
+        from test_manager_qol_service import _write_synthetic_exe
+        from majesty_cam.manager import startup_cache
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            paths = _manager_paths(root)
+            package = paths.local_mods_root / 'Fixture'
+            package.mkdir()
+            manager_exe = paths.repo_root / 'Manager.exe'
+            manager_exe.write_bytes(b'manager-v1')
+            _write_synthetic_exe(paths.game_executable, PUBLIC_BRANCH)
+            entry = CatalogEntry(content_id=MOD_ID, raw_content_id=MOD_ID,
+                display_name='Fixture', kind=CatalogKind.MERGE, source=CatalogSource.LOCAL_MODS,
+                package_root=package, manifest_path=package / 'fixture.mmxml',
+                has_cam=True, merge_ready=True)
+            issue = CatalogIssue('unsafe_custom_text_binding', 'Missing stock input',
+                                 IssueSeverity.ERROR, package, MOD_ID)
+            def scan(**kwargs):
+                issues = kwargs['merge_preflight'](MOD_ID, 'Fixture', package)
+                return Catalog(entries=(replace(entry, issues=issues, merge_ready=not issues),))
+            def boot(selected_paths):
+                controller = ManagerController(paths=selected_paths, registry=CompatibilityRegistry(specs={}))
+                with patch.object(controller, '_replan'):
+                    return controller.scan(inspect_qol=False).catalog.entries[0]
+            with patch.object(startup_cache, '_manager_cache_identity_paths', return_value=(manager_exe,)), \
+                    patch('majesty_cam.manager.controller.scan_catalog', side_effect=scan) as discovery, \
+                    patch('majesty_cam.manager.controller.prepare_merge_package', return_value=object()), \
+                    patch('majesty_cam.manager.controller.prepared_catalog_merge_preflight', return_value=(issue,)) as deep, \
+                    patch('majesty_cam.manager.controller.game_preflight_signature', wraps=game_preflight_signature) as evidence:
+                self.assertFalse(boot(paths).merge_ready)
+                self.assertFalse(boot(paths).merge_ready)
+                self.assertEqual(deep.call_count, 1)
+                _write_synthetic_exe(paths.game_executable, BETA2_BRANCH)
+                deep.return_value = ()
+                self.assertTrue(boot(paths).merge_ready)
+                self.assertTrue(boot(paths).merge_ready)
+                self.assertEqual(deep.call_count, 2)
+                # Updating the Manager invalidates both nested cache layers.
+                manager_exe.write_bytes(b'updated-manager-v2')
+                deep.return_value = (issue,)
+                self.assertFalse(boot(paths).merge_ready)
+                self.assertEqual(deep.call_count, 3)
+                # Repairing a stock file clears the cached error without Rescan.
+                stock = paths.game_path / 'Data/gpltext.cam'
+                stock.parent.mkdir()
+                stock.write_bytes(b'restored stock text')
+                deep.return_value = ()
+                self.assertTrue(boot(paths).merge_ready)
+                self.assertEqual(deep.call_count, 4)
+                gog = root / 'gog'
+                gog.mkdir()
+                _write_synthetic_exe(gog / 'MajestyHD.exe', GOG_BRANCH)
+                deep.return_value = (issue,)
+                self.assertFalse(boot(replace(paths, game_path=gog)).merge_ready)
+                self.assertEqual(deep.call_count, 5)
+                deep.return_value = ()
+                self.assertTrue(boot(paths).merge_ready)
+                self.assertTrue(boot(paths).merge_ready)
+                self.assertEqual(deep.call_count, 6)
+                self.assertEqual(discovery.call_count, 6)
+                self.assertEqual(evidence.call_count, 9)  # one shared snapshot per scan
+
     def test_qol_signature_tracks_evidence_not_preferences_or_manager_rebuilds(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
@@ -292,6 +415,7 @@ class StartupCacheTests(unittest.TestCase):
             )
             registry = CompatibilityRegistry(specs={})
             signature = catalog_input_signature(
+                game_signature="fixture-game",
                 local_mods_root=mods,
                 local_quests_root=quests,
                 workshop_roots=(workshop,),
@@ -307,6 +431,7 @@ class StartupCacheTests(unittest.TestCase):
 
             payload.write_text("function Two() begin end", encoding="ascii")
             changed = catalog_input_signature(
+                game_signature="fixture-game",
                 local_mods_root=mods,
                 local_quests_root=quests,
                 workshop_roots=(workshop,),
@@ -510,6 +635,7 @@ class StartupCacheTests(unittest.TestCase):
             screenshot.write_bytes(b"first")
 
             before = catalog_input_signature(
+                game_signature="fixture-game",
                 local_mods_root=mods,
                 local_quests_root=quests,
                 workshop_roots=(workshop,),
@@ -517,6 +643,7 @@ class StartupCacheTests(unittest.TestCase):
             )
             screenshot.write_bytes(b"different screenshot bytes")
             after = catalog_input_signature(
+                game_signature="fixture-game",
                 local_mods_root=mods,
                 local_quests_root=quests,
                 workshop_roots=(workshop,),
@@ -542,6 +669,7 @@ class StartupCacheTests(unittest.TestCase):
             )
             registry = CompatibilityRegistry(specs={})
             before = catalog_input_signature(
+                game_signature="fixture-game",
                 local_mods_root=mods,
                 local_quests_root=quests,
                 workshop_roots=(workshop,),
@@ -549,6 +677,7 @@ class StartupCacheTests(unittest.TestCase):
             )
             strings.write_text("<Strings><String /></Strings>", encoding="ascii")
             changed_strings = catalog_input_signature(
+                game_signature="fixture-game",
                 local_mods_root=mods,
                 local_quests_root=quests,
                 workshop_roots=(workshop,),
@@ -563,6 +692,7 @@ class StartupCacheTests(unittest.TestCase):
                 "00000000-0000-4000-8000-000000000002",
             )
             added_package = catalog_input_signature(
+                game_signature="fixture-game",
                 local_mods_root=mods,
                 local_quests_root=quests,
                 workshop_roots=(workshop,),
@@ -582,6 +712,7 @@ class StartupCacheTests(unittest.TestCase):
             payload.write_bytes(b"first")
             registry = CompatibilityRegistry(specs={})
             before = catalog_input_signature(
+                game_signature="fixture-game",
                 local_mods_root=mods,
                 local_quests_root=quests,
                 workshop_roots=(workshop,),
@@ -589,6 +720,7 @@ class StartupCacheTests(unittest.TestCase):
             )
             payload.write_bytes(b"changed")
             after = catalog_input_signature(
+                game_signature="fixture-game",
                 local_mods_root=mods,
                 local_quests_root=quests,
                 workshop_roots=(workshop,),
@@ -623,6 +755,7 @@ class StartupCacheTests(unittest.TestCase):
 
             registry = CompatibilityRegistry(specs={})
             before = catalog_input_signature(
+                game_signature="fixture-game",
                 local_mods_root=mods,
                 local_quests_root=quests,
                 workshop_roots=(workshop,),
@@ -630,6 +763,7 @@ class StartupCacheTests(unittest.TestCase):
             )
             payload.write_text("linked target changed", encoding="ascii")
             after = catalog_input_signature(
+                game_signature="fixture-game",
                 local_mods_root=mods,
                 local_quests_root=quests,
                 workshop_roots=(workshop,),

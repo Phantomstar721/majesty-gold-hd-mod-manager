@@ -123,6 +123,7 @@ bool ParseRegistry(
     registry->enchantmentRows.clear();
     registry->mapFogQuery = false;
     registry->movementQuery = false;
+    registry->messageFlagControls = false;
     registry->nativeTiming = false;
     registry->timingSpellIds.clear();
     registry->timingEffectorIds.clear();
@@ -153,16 +154,16 @@ bool ParseRegistry(
         SetError(error, "runtime feature registry header is truncated");
         return false;
     }
-    if (version < kRegistryVersion || version > 9) {
+    if (version < kRegistryVersion || version > 13) {
         SetError(error, "runtime feature registry schema version is unsupported");
         return false;
     }
     std::uint32_t flags = 0;
     if (version >= 2 && (!ReadU32(bytes, size, &cursor, &flags) ||
-        (flags & ~(version == 9 ? 255u : version == 8 ? 127u : version == 7 ? 63u : version >= 5 ? 31u : version == 4 ? 15u : version == 3 ? 7u : 3u)) != 0 ||
+        (flags & ~(version == 13 ? 511u : version >= 9 ? 255u : version == 8 ? 127u : version == 7 ? 63u : version >= 5 ? 31u : version == 4 ? 15u : version == 3 ? 7u : 3u)) != 0 ||
         (version == 3 && !(flags & 4u)) || (version == 4 && !(flags & 8u)) ||
         ((version == 5 || version == 6) && !(flags & 16u)) || (version == 7 && !(flags & 32u)) ||
-        (version == 8 && !(flags & 64u)) || (version == 9 && !(flags & 128u)))) {
+        (version >= 10 && version <= 12 && !(flags & 32u)) || (version == 13 && !(flags & 256u)) || (version == 8 && !(flags & 64u)) || (version == 9 && !(flags & 128u)))) {
         SetError(error, "runtime feature registry flags are invalid or truncated");
         return false;
     }
@@ -417,7 +418,8 @@ bool ParseRegistry(
                     SetError(error, "hero information row is truncated"); return false;
                 }
             }
-            if (r.kind < 1 || r.kind > 3 || !IsPrintableFourCC(r.subjectId) ||
+            if (r.kind < 1 || r.kind > (version>=12 ? 5u : version>=10 ? 4u : 3u) ||
+                (r.kind==5 ? r.subjectId>127 : !IsPrintableFourCC(r.subjectId)) || (r.kind==4 && r.subjectId!=0x2D2D2D2D) ||
                 !IsPrintableFourCC(r.imageId) || r.imageId == 0x6E544E49 || r.imageId == 0x33395849 ||
                 r.imageSet > 0xFFFFFF || (r.kind == 3 ? r.unlockLevel < 1 || r.unlockLevel > 1000 : r.unlockLevel != 0) ||
                 !nk || nk > 64 || !nl || nl > 512 || !nt || nt > 512 || size-cursor < nk+nl+nt) {
@@ -437,10 +439,26 @@ bool ParseRegistry(
             r.featureKey.assign(reinterpret_cast<const char*>(bytes+cursor), nk); cursor += nk;
             r.displayText.assign(reinterpret_cast<const char*>(bytes+cursor), nl); cursor += nl;
             r.tooltipText.assign(reinterpret_cast<const char*>(bytes+cursor), nt); cursor += nt;
+            if(r.kind==4) {
+                std::uint32_t length=0;
+                if(!ReadU32(bytes,size,&cursor,&length) || !length || length>64 || length>size-cursor) {
+                    SetError(error,"saved attribute name is invalid or truncated");return false;
+                }
+                for(std::uint32_t j=0;j<length;++j) {
+                    const auto c=bytes[cursor+j];
+                    if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||c=='_'||(j&&c>='0'&&c<='9'))) {
+                        SetError(error,"saved attribute must be a GPL identifier");return false;
+                    }
+                }
+                r.attributeSymbol.assign(reinterpret_cast<const char*>(bytes+cursor),length);cursor+=length;
+                if(version>=11 && (!ReadU32(bytes,size,&cursor,&r.listCategory) || r.listCategory>1)) {
+                    SetError(error,"saved attribute category is invalid or truncated");return false;
+                }
+            }
             if (!info.empty()) {
                 const auto& p = info.back();
                 if (std::tie(r.kind, r.subjectId, r.featureKey) <= std::tie(p.kind, p.subjectId, p.featureKey) ||
-                    (r.kind != 3 && r.kind == p.kind && r.subjectId == p.subjectId)) {
+                    (r.kind != 3 && r.kind != 4 && r.kind == p.kind && r.subjectId == p.subjectId)) {
                     SetError(error, "hero information rows must be sorted and unique"); return false;
                 }
             }
@@ -484,6 +502,15 @@ bool ParseRegistry(
             previous = key;
         }
     }
+    if(version==12 && std::none_of(info.begin(),info.end(),[](const HeroInfoRecord& row){return row.kind==5;})) {
+        SetError(error,"MMFR12 requires an inventory display row");return false;
+    }
+    if(version==11 && std::none_of(info.begin(),info.end(),[](const HeroInfoRecord& row){return row.kind==4 && row.listCategory==1;})) {
+        SetError(error,"MMFR11 requires a lower-list saved attribute row");return false;
+    }
+    if(version==10 && std::none_of(info.begin(),info.end(),[](const HeroInfoRecord& row){return row.kind==4;})) {
+        SetError(error,"MMFR10 requires a saved attribute row");return false;
+    }
     if (cursor != size) {
         SetError(error, "runtime feature registry contains trailing bytes");
         return false;
@@ -492,6 +519,7 @@ bool ParseRegistry(
     registry->enchantmentRows = std::move(rows);
     registry->mapFogQuery = (flags & 1u) != 0;
     registry->movementQuery = (flags & 2u) != 0;
+    registry->messageFlagControls = (flags & 256u) != 0;
     registry->nativeTiming = (flags & 4u) != 0;
     registry->timingSpellIds = std::move(spells);
     registry->timingEffectorIds = std::move(effectors);

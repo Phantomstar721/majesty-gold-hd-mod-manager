@@ -1,9 +1,11 @@
 """Stock-relative analysis and safe relocation for Majesty CAM art.
 
-Majesty resolves ``TILE`` and ``SPLT`` records by their position in a CAM
-section.  A mod CAM commonly contains thousands of empty records so the game
-falls through to the stock archive, followed by a private block of records.
-Consequently, entry names are useful diagnostics but are not allocation keys.
+This module consumes dense numeric-slot views of ``TILE`` and ``SPLT``.
+``stock_art.normalize_art_slots`` converts ID-keyed CAM sections before
+composition; ordinal-flagged sections already use this representation.
+A mod CAM may contain empty records followed by a private block, or a compact
+TOC with sparse numeric IDs. The first four TOC-name bytes are the numeric key
+in ID mode; the remaining name bytes are diagnostics, not allocation keys.
 
 This module deliberately understands only explicitly audited IMAG frame
 layouts.  It never searches an IMAG byte string for integer-looking values.
@@ -418,6 +420,73 @@ def allocate_collision_free_ranges(
     )
 
 
+def _timed_v4_frame_start(data: bytes, anchor: int, direction_end: int) -> int | None:
+    """Proven group-one v4 layout: header, optional rectangle, pairs, timing.
+
+    Other existing layouts stay with their existing parsers. Never infer this
+    layout from values resembling TILE indices or from changed-slot coverage.
+    """
+    if _u32(data, 0) == 5:
+        return _v5_frame_start(data, anchor, direction_end)
+    if _u32(data, 0) != 4 or anchor + 20 > direction_end:
+        return None
+    streams, frames, rect_mask, other_mask, _a, _b, timing, groups = struct.unpack_from('<8H', data, anchor + 4)
+    if not timing:
+        return None
+    if rect_mask not in (0, 1) or other_mask or groups != 1:
+        raise UnsupportedImagShapeError('Unsupported timed version-4 masks or frame groups')
+    count = streams * frames
+    first = anchor + 24 + (8 if rect_mask else 0)
+    if not streams or not frames or count > MAX_FRAMES or first + count * 8 + 20 != direction_end:
+        raise UnsupportedImagShapeError('Timed version-4 frame/group/trailer bounds disagree')
+    for offset in range(first + 4, first + count * 8, 8):
+        index = _u32(data, offset) & 0xFFFFFF
+        if index != 0xFFFFFF and index >= LOW16_SENTINEL:
+            raise UnsupportedImagShapeError('Timed version-4 TILE index exceeds the supported positional table')
+    return first
+
+
+def _v5_frame_start(data: bytes, anchor: int, direction_end: int) -> int:
+    """Native v5: 24-byte header, rectangles, group/pairs, timing, events.
+
+    References are located forward from the header, never backward from the
+    direction end: optional event records follow the last frame. See
+    docs/imag-v5-remapping.md for the independent native read contract.
+    """
+    if anchor + 24 > direction_end:
+        raise UnsupportedImagShapeError('Truncated version-5 direction header')
+    streams, frames, rectangles, other, timing, groups, events = struct.unpack_from(
+        '<HHIIHHI', data, anchor + 4)
+    if groups != 1:
+        raise UnsupportedImagShapeError('Unsupported version-5 masks or frame groups')
+    count = streams * frames
+    first = anchor + 24 + 8 * bin(rectangles).count('1')
+    for _ in range(bin(other).count('1')):
+        if first + 4 > direction_end:
+            raise UnsupportedImagShapeError('Truncated version-5 auxiliary count')
+        first += 4 + _u32(data, first) * 8
+        if first > direction_end:
+            raise UnsupportedImagShapeError('Truncated version-5 auxiliary records')
+    first += 4  # Frame-group tag, not a frame coordinate or TILE.
+    cursor = first + count * 8 + (20 if timing else 0)
+    if not streams or not frames or count > MAX_FRAMES or cursor > direction_end:
+        raise UnsupportedImagShapeError('Version-5 frame/group/timing bounds disagree')
+    for _ in range(bin(events).count('1')):
+        if cursor + 4 > direction_end:
+            raise UnsupportedImagShapeError('Truncated version-5 event count')
+        event_count = _u32(data, cursor)
+        cursor += 4 + event_count * 32
+        if cursor > direction_end:
+            raise UnsupportedImagShapeError('Truncated version-5 event records')
+    # Native set/direction reads seek by the offset table. Unreferenced bytes
+    # between bodies are legal and are not additional frames or dependencies.
+    for offset in range(first + 4, first + count * 8, 8):
+        index = _u32(data, offset) & 0xFFFFFF
+        if index != 0xFFFFFF and index >= LOW16_SENTINEL:
+            raise UnsupportedImagShapeError('Version-5 TILE index exceeds the supported positional table')
+    return first
+
+
 def _parse_end_anchored_direction_references(
     data: bytes,
     *,
@@ -440,6 +509,9 @@ def _parse_end_anchored_direction_references(
     stream_count = count_word & 0xFFFF
     total = frame_count * stream_count
     frame_start = direction_end - total * 8
+    timed_start = _timed_v4_frame_start(data, anchor, direction_end)
+    if timed_start is not None:
+        frame_start = timed_start
     if (
         frame_count <= 0
         or stream_count <= 0
@@ -461,6 +533,8 @@ def _parse_end_anchored_direction_references(
         if mark_single_terminal and total == 1
         else "stock-end-anchored"
     )
+    if timed_start is not None:
+        layout = 'compact-v5' if _u32(data, 0) == 5 else 'compact-timed-v4'
     references: list[ImagTileReference] = []
     for stream in range(stream_count):
         for frame in range(frame_count):
@@ -538,23 +612,21 @@ def parse_imag_tile_references(
         offset = table_start + set_index * IMAG_SET_ENTRY_SIZE
         set_entries.append((_u32(data, offset), _u32(data, offset + 4)))
     set_offsets = [offset for _, offset in set_entries]
-    if set_offsets != sorted(set_offsets) or len(set(set_offsets)) != len(set_offsets):
+    if len(set(set_offsets)) != len(set_offsets):
         raise UnsupportedImagShapeError(
-            f"IMAG {_display_name(raw_name)!r} set offsets are not strictly increasing"
+            f"IMAG {_display_name(raw_name)!r} set offsets are duplicated"
         )
-    if set_offsets[0] < table_end or set_offsets[-1] >= len(data):
+    if min(set_offsets) < table_end or max(set_offsets) >= len(data):
         raise UnsupportedImagShapeError(
             f"IMAG {_display_name(raw_name)!r} set offsets leave the record"
         )
 
+    physical = sorted(set_offsets)
+    ends = dict(zip(physical, physical[1:] + [len(data)]))
     references: list[ImagTileReference] = []
     layouts: set[str] = set()
-    for set_index, (set_id, set_offset) in enumerate(set_entries):
-        set_end = (
-            set_entries[set_index + 1][1]
-            if set_index + 1 < len(set_entries)
-            else len(data)
-        )
+    for set_id, set_offset in set_entries:
+        set_end = ends[set_offset]
         if set_end - set_offset < IMAG_SET_FIXED_SIZE + 4:
             raise UnsupportedImagShapeError(
                 f"IMAG {_display_name(raw_name)!r} set {set_id} is truncated"
@@ -702,10 +774,9 @@ def parse_stock_imag_tile_references(
     )
     set_offsets = tuple(offset for _set_id, offset in set_entries)
     if (
-        set_offsets != tuple(sorted(set_offsets))
-        or len(set(set_offsets)) != len(set_offsets)
-        or set_offsets[0] < table_end
-        or set_offsets[-1] >= len(data)
+        len(set(set_offsets)) != len(set_offsets)
+        or min(set_offsets) < table_end
+        or max(set_offsets) >= len(data)
     ):
         raise UnsupportedImagShapeError(
             f"IMAG {_display_name(raw_name)!r} has an invalid set directory"
@@ -713,12 +784,10 @@ def parse_stock_imag_tile_references(
 
     references: list[ImagTileReference] = []
     layouts: set[str] = set()
-    for set_index, (set_id, set_start) in enumerate(set_entries):
-        set_end = (
-            set_entries[set_index + 1][1]
-            if set_index + 1 < len(set_entries)
-            else len(data)
-        )
+    physical = sorted(set_offsets)
+    ends = dict(zip(physical, physical[1:] + [len(data)]))
+    for set_id, set_start in set_entries:
+        set_end = ends[set_start]
         direction_count = _u32(data, set_start)
         pointer_start = set_start + IMAG_SET_FIXED_SIZE
         pointer_end = pointer_start + direction_count * 4
@@ -1616,16 +1685,17 @@ def _imag_set_payloads(data: bytes) -> tuple[tuple[int, bytes], ...]:
     )
     offsets = tuple(offset for _set_id, offset in directory)
     if (
-        offsets != tuple(sorted(offsets))
-        or len(set(offsets)) != len(offsets)
-        or offsets[0] < table_end
-        or offsets[-1] >= len(data)
+        len(set(offsets)) != len(offsets)
+        or min(offsets) < table_end
+        or max(offsets) >= len(data)
     ):
         raise UnsupportedImagShapeError("IMAG has invalid set offsets")
+    physical = sorted(offsets)
+    ends = dict(zip(physical, physical[1:] + [len(data)]))
     return tuple(
         (
             set_id,
-            data[offset:(directory[index + 1][1] if index + 1 < count else len(data))],
+            data[offset:ends[offset]],
         )
         for index, (set_id, offset) in enumerate(directory)
     )
@@ -1676,6 +1746,12 @@ def _parse_direction_layout(
     direction: int,
 ) -> tuple[str, int, int]:
     """Select one audited custom-package direction schema."""
+
+    timed_start = _timed_v4_frame_start(data, anchor, direction_end)
+    if timed_start is not None:
+        count = _u32(data, anchor + 4)
+        layout = 'compact-v5' if _u32(data, 0) == 5 else 'compact-timed-v4'
+        return layout, (count >> 16) * (count & 0xFFFF), timed_start + 4
 
     if anchor + 12 > direction_end:
         raise UnsupportedImagShapeError(

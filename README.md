@@ -9,6 +9,8 @@ subscribed to through Steam Workshop.
 It also combines compatible Merge mods and supplies the game-side support
 needed by custom buildings, panels, and other advanced features.
 
+Current release: **0.3.12 (beta)**. [What changed](release/v0.3.12.md).
+
 ## Features
 
 - Finds local and Steam Workshop mods and downloaded quests automatically.
@@ -16,7 +18,12 @@ needed by custom buildings, panels, and other advanced features.
   are present, with **Browse…** for other installation locations.
 - Organizes content into **Merge**, **Standard**, **Quests**, and
   **Quality of Life** tabs.
-- Enables detected mods by default and remembers your later choices.
+- Keeps newly detected mods disabled and remembers your choices.
+- Highlights new or updated content with gold indicators and compact pills.
+- Offers Classic Launch for selected Standard mods without preparing a merge.
+- Saves up to five named profiles with mod choices, game installation and launch options.
+- Can play original Majesty quests with expansion content using one global toggle.
+- Shows brief patch summaries under History, with an indicator after Manager updates.
 - Groups multi-option Workshop packages and prevents incompatible variants
   from being enabled together.
 - Clearly marks content that cannot be combined safely.
@@ -25,10 +32,17 @@ needed by custom buildings, panels, and other advanced features.
   combining mods for original-game quests.
 - Reuses unchanged stock data to keep repeated selection checks responsive.
 - Combines independent changes within shared GPL functions and XML Descriptions,
-  and asks for one preferred mod per pair when script changes cannot be safely combined.
+  and asks for one preferred mod per pair when changes cannot be safely combined.
+- Reviews Standard load-order choices together, with expandable conflict details;
+  conflicting sound records use the same preferred-mod choices.
 - Supports reusable list, research, reward, and recruitment panels, including
   single-panel layouts at lower resolutions.
 - Supports custom ability names, icons, and hover descriptions in hero panels.
+- Supports registered custom-hero combat and travel abilities, timed effects,
+  employment, research queues, and persistent item/status displays.
+- Keeps bounded failure evidence and offers **Save Support Report**, without
+  continuous tracing or automatic uploads.
+- Shows **Manager version** and **Game executable version** separately.
 - Leaves subscribed mods and downloaded quests unchanged.
 - Installs and manages the supported Majesty quality-of-life patches.
 - Supports both maintained Steam versions and GOG Gold HD 1.5.2.28. See
@@ -68,14 +82,23 @@ download Workshop subscriptions. The legacy GOG 1.5.1.2 executable is not suppor
 
 Close Majesty and the Manager before replacing or updating the application.
 Keep the complete folder together, including `_internal`. After Steam finishes
-downloading any updated mods, reopen the Manager, select **Rescan Content**,
-then **Prepare Selected Mods** (or **Prepare Again**) to refresh your generated
+downloading any updated mods, reopen the Manager and choose
+**Prepare Selected Mods** (or **Prepare Again**) to refresh your generated
 package before launching.
 
-See the [September 28 update notes](release/2026-09-28-update.md) for the latest
-source and staged Workshop changes. The [0.3.8 release notes](release/v0.3.8.md)
-describe the earlier downloadable release; a source update does not replace
-the GitHub release ZIP.
+See the [0.3.11 release notes](release/v0.3.11.md) for runtime and reporting
+updates, and the [sound naming guidance](docs/sound-resource-preferences.md)
+for authors. Compatibility checks refresh automatically when
+relevant inputs change; **Rescan Content** remains available for a manual refresh.
+
+## Reporting a problem
+
+Choose **Save Support Report** after a failure and share that ZIP with the
+steps you took. It contains bounded runtime logs, the first recorded failure,
+launch-time versions and mod identities, and recent Manager errors. It does not
+include saves, mod binaries or full memory dumps. Review it before sharing:
+local paths and mod names may identify your account. Nothing is sent automatically.
+See [support-report limits](docs/bounded-support-reporting.md).
 
 ## Content tabs
 
@@ -391,3 +414,10 @@ includes the applicable license texts.
 Majesty Gold HD and its assets are the property of their respective owners.
 This project is an independent community tool and is not affiliated with or
 endorsed by the game's rights holders, Valve, or Steam.
+
+## Maintainer builds
+
+One source checkout supports both build modes. `scripts/Build-ModManagerExe.ps1`
+updates the local test app; add `-Mode release` for the separate release candidate.
+`scripts/Stage-Workshop.ps1` stages that candidate for upload after verification.
+See [regression gates](docs/regression-gates.md). Building does not publish.

@@ -174,6 +174,32 @@ void Run(){
     PaidCommand legacy{};legacy.mode=123;const PaidRecord outer=second;
     g_paidRecord=&outer;DispatchPaidCommand({&legacy,nullptr});assert(g_paidRecord==&outer);g_paidRecord=nullptr;
     assert(releases>0 && !g_paidRecord && !g_sourceTargetExecution);
+    // Opt-in preparation happens after queued identity consumption, before
+    // sovereign debit. Ordinary v3 above retains its exact 500 contract.
+    auto previousPreparation=g_attackBountyPreparation;
+    g_attackBountyPreparation=&PrepareBounty;action.attackBountyAmount=500;
+    gold=500;int beforeCallbacks=callbackCalls;
+    saveDuringCallback=true;Dispatch(second);saveDuringCallback=false;
+    assert(gold==0 && callbackCalls==beforeCallbacks+1 && bountyCalls==1);
+    gold=499;beforeCallbacks=callbackCalls;Dispatch(second);
+    assert(gold==499 && callbackCalls==beforeCallbacks);
+    gold=500;failBounty=true;Dispatch(second);failBounty=false;
+    assert(gold==500 && callbackCalls==beforeCallbacks);
+    existingBounty=true;Dispatch(second);
+    assert(gold==0 && callbackCalls==beforeCallbacks+1);
+    action.attackBountyAmount=0;
+    // Returning to ordinary v3 must not consult the flag service, even when
+    // another action installed that service and it would reject this cast.
+    const int previousBountyCalls=bountyCalls;
+    failBounty=true;
+    for(bool hasPlayerFlag : {false,true}) {
+        existingBounty=hasPlayerFlag;gold=1000;
+        const int callsBefore=callbackCalls;
+        Dispatch(second);
+        assert(gold==500 && callbackCalls==callsBefore+1);
+        assert(bountyCalls==previousBountyCalls && existingBounty==hasPlayerFlag);
+    }
+    failBounty=false;g_attackBountyPreparation=previousPreparation;
 }
 }
 #include "PaidAcquisitionChecks.inl"

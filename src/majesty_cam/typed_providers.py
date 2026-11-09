@@ -8,7 +8,8 @@ import re
 
 PROVIDER_TYPE = "stock.typed-boolean-provider.v1"
 DISPATCH_TYPE = "stock.typed-boolean-dispatch.v1"
-FEATURE_TYPES = frozenset((PROVIDER_TYPE, DISPATCH_TYPE))
+OPTIONAL_DISPATCH_TYPE = "stock.optional-boolean-dispatch.v1"
+FEATURE_TYPES = frozenset((PROVIDER_TYPE, DISPATCH_TYPE, OPTIONAL_DISPATCH_TYPE))
 _SYMBOL = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
 _ARG_TYPES = frozenset(("agent", "string", "integer", "boolean", "location", "list"))
 
@@ -31,7 +32,17 @@ class TypedBooleanDispatch:
     type: str = DISPATCH_TYPE
 
 
-FEATURE_CLASSES = (TypedBooleanProvider, TypedBooleanDispatch)
+@dataclass(frozen=True)
+class OptionalBooleanDispatch:
+    """Selected-package contract with no runtime function-valued argument."""
+    feature_key: str
+    attribute: str
+    parameter_types: tuple[str, ...]
+    dispatch_symbol: str
+    type: str = OPTIONAL_DISPATCH_TYPE
+
+
+FEATURE_CLASSES = (TypedBooleanProvider, TypedBooleanDispatch, OptionalBooleanDispatch)
 
 
 def parse_feature(value):
@@ -49,7 +60,8 @@ def parse_feature(value):
     if not isinstance(args, (tuple, list)) or not 1 <= len(args) <= 8 or any(
             not isinstance(arg, str) or arg not in _ARG_TYPES for arg in args):
         raise ValueError("typed provider requires 1..8 supported GPL parameter types")
-    cls = TypedBooleanProvider if kind == PROVIDER_TYPE else TypedBooleanDispatch
+    cls = {PROVIDER_TYPE: TypedBooleanProvider, DISPATCH_TYPE: TypedBooleanDispatch,
+           OPTIONAL_DISPATCH_TYPE: OptionalBooleanDispatch}[kind]
     return cls(value["feature_key"], value["attribute"], tuple(args), value[symbol_key])
 
 
@@ -61,8 +73,15 @@ def feature_mapping(feature):
 
 
 def dispatch_source(feature, providers):
+    providers = tuple(providers)
     args = ", ".join(f"{kind} Arg{i}" for i, kind in enumerate(feature.parameter_types))
     values = ", ".join(f"Arg{i}" for i in range(len(feature.parameter_types)))
+    if isinstance(feature, OptionalBooleanDispatch):
+        if len(providers) > 1:
+            raise ValueError(f"optional provider contract is ambiguous: {feature.attribute}")
+        result = f"${providers[0]}({values})" if providers else "False"
+        return (f"function {feature.dispatch_symbol}({args}) is boolean\n"
+                f"declare\nbegin\n    return {result};\nend\n")
     lines = [f"function {feature.dispatch_symbol}(function Provider, {args}) is boolean",
              "declare", "begin"]
     for callback in sorted(providers, key=str.casefold):
@@ -134,7 +153,7 @@ def compose_dispatches(packages):
             signature = signatures.setdefault(attr, feature.parameter_types)
             if signature != feature.parameter_types:
                 raise ValueError(f"typed provider signature disagreement for {feature.attribute}")
-            if isinstance(feature, TypedBooleanDispatch):
+            if isinstance(feature, (TypedBooleanDispatch, OptionalBooleanDispatch)):
                 dispatches.append(feature)
             else:
                 callback = feature.callback_symbol

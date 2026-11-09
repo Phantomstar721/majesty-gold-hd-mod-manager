@@ -48,11 +48,13 @@ class GogSupportTests(unittest.TestCase):
             "stock.controller-recipes.v1",
         )), ())
 
-    def test_all_shared_features_have_gog_profiles(self):
+    def test_shared_features_preserve_approved_exact_image_exceptions(self):
         from majesty_cam.manager.capabilities import DERIVED_RUNTIME_CAPABILITIES
+        from majesty_cam.manager.runtime_profiles import EXACT_BETA2_CAPABILITIES
         capabilities = DERIVED_RUNTIME_CAPABILITIES
         self.assertEqual(unsupported_runtime_capabilities(GOG_BRANCH, capabilities),
-                         ())
+                         tuple(sorted(EXACT_BETA2_CAPABILITIES)))
+        self.assertEqual(unsupported_runtime_capabilities(GOG_BRANCH, capabilities-EXACT_BETA2_CAPABILITIES),())
         self.assertEqual(unsupported_runtime_capabilities(BETA2_BRANCH, capabilities), ())
 
     def test_optional_utilities_use_their_guarded_gog_installers(self):

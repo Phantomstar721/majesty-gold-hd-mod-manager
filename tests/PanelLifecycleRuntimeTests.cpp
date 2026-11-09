@@ -21,6 +21,9 @@ struct Controller {
 };
 static_assert(offsetof(Controller, stream) == 0x24, "native stream offset");
 static_assert(offsetof(Controller, listOwner) == 0x34, "MX05 list vector offset");
+int researchComplete = 0, researchActivityWrites = 0, researchAffordabilityCalls = 0;
+int savedResearchCommand = 0, savedResearchDuration = 0;
+std::uint32_t researchDescriptor[5] = {15000,1,200,0,0x18425041};
 unsigned char contextA[0xA0] = {}, contextB[0xA0] = {};
 unsigned char contextC[0xA0] = {}, contextD[0xA0] = {};
 void* contextTable[74] = {};
@@ -97,6 +100,10 @@ void* __fastcall PlayerAgent(void*, void*, std::uint32_t player) {
     return contextA;
 }
 int __fastcall ReadAttribute(void*, void*, std::uint32_t attribute, std::uint32_t) {
+    if (attribute == 0x01425041u || attribute == 0x02425041u) return 1;
+    if (attribute == kCurrentResearchAttributeId) return savedResearchCommand;
+    if (attribute == kResearchDurationAttributeId) return savedResearchDuration;
+    if (attribute == 0x18425041) return researchComplete;
     if (attribute == kEmbassyActiveFlagAttributeId) return packedValue;
     assert(
         attribute == kCurrentResearchAttributeId ||
@@ -105,6 +112,8 @@ int __fastcall ReadAttribute(void*, void*, std::uint32_t attribute, std::uint32_
     return 0;
 }
 void __fastcall WriteAttribute(void*, void*, std::uint32_t attribute, int value) {
+    if (attribute == kCurrentResearchAttributeId || attribute == kResearchStartedAtAttributeId ||
+        attribute == kResearchDurationAttributeId) ++researchActivityWrites;
     if (attribute == kEmbassyActiveFlagAttributeId) {
         packedValue = value;
         return;
@@ -131,7 +140,9 @@ void __fastcall SetInteger(
         OccupantParentEvent(&parent, nullptr, 1, 2, 0x06425041u, 4);
     }
 }
+std::map<std::uint32_t, bool> visibleState;
 void __fastcall Visible(void*, void*, std::uint32_t control, std::uint32_t value) {
+    visibleState[control] = value != 0;
     if (visibleControlCount < 16) {
         visibleControls[visibleControlCount] = control;
         visibleValues[visibleControlCount++] = value;
@@ -141,13 +152,17 @@ void __fastcall Visible(void*, void*, std::uint32_t control, std::uint32_t value
 void __fastcall Hide(void*, void*) { ++hideCount; }
 void __cdecl Refresh(void*, void* context, std::uint32_t command) {
     ++refreshCount; seenContext = context; seenCommand = command;
+    disabledControls[command] = researchComplete != 0;
 }
+void __fastcall ResearchEvent(void*, void*, unsigned, unsigned, unsigned, unsigned) {}
+void __fastcall ResearchParentActivity(void*, void*) { disabledControls[0x1F48] = false; }
 bool __fastcall Eligible(void* object, void*, std::uint32_t command) {
+    ++researchAffordabilityCalls;
     seenContext = Context(object, nullptr); seenCommand = command;
     return affordable;
 }
 void __cdecl Submit(std::uint32_t owner, void* context, std::uint32_t command) {
-    assert(owner == 456); ++submitCount; seenContext = context; seenCommand = command;
+    assert(owner == *reinterpret_cast<std::uint32_t*>(static_cast<unsigned char*>(context)+0x94)); ++submitCount; seenContext = context; seenCommand = command;
 }
 void __cdecl SubmitBuilding(
     std::uint32_t command, std::uint32_t building,
@@ -352,6 +367,8 @@ void Reset() {
     g_parentQuestBoard = nullptr;
     g_parentRecruitment = nullptr;
     g_researchOwner = {};
+    researchComplete = researchActivityWrites = researchAffordabilityCalls = 0;
+    savedResearchCommand = savedResearchDuration = 0;
     parent.context = child.context = contextA;
     replacementParent.context = replacementChild.context = contextB;
     fallbackCount = submitCount = refreshCount = openCount = hideCount = 0;
@@ -424,6 +441,7 @@ void Reset() {
     lastVisibleControl = lastVisibleValue = 0;
     std::memset(visibleControls, 0, sizeof(visibleControls));
     visibleControlCount = 0;
+    visibleState.clear();
 }
 void ResearchPair() {
     Reset();
@@ -474,6 +492,7 @@ void Initialize() {
     MajestyStockControllers::ResearchRowRecord row = {};
     row.panelKey = "example"; row.recipeKey = "generic-research"; row.actionControlId = 0x6000;
     g_stockControllerRegistry.researchRows = {row};
+    g_privateResearchDescriptors = {{&g_stockControllerRegistry.researchRows[0],researchDescriptor}};
     g_stockControllerRegistry.rewardPanels = {{"beacon", 0x31303042, 0x31303050, 0x4100}};
     g_stockControllerRegistry.occupantActionPanels = {
         {"clinic", 0x31303042, 0x32303050, 0x4101, 0x10000, "Clinic_Cost", "Clinic_Action", kMx09DialogId}};
@@ -493,6 +512,343 @@ bool ToggleScalar(const char* symbol, void* owner, bool hasInteger, int operatio
     if (operation == 0 || operation == 1) toggleSavedValues[owner] = operation;
     *result = toggleSavedValues[owner];
     return true;
+}
+bool employmentUnlocked = false;
+bool EmploymentScalar(const char* symbol, void* owner, bool hasInteger, int command,
+                      std::uint32_t* result, bool) {
+    assert(std::strcmp(symbol, "MM_Fixture_Admit") == 0 && hasInteger && owner == contextA);
+    assert(command == 31300 || command == 8009 || command == 31700 || command == 0x1F55);
+    *result = command == 31300 ? !employmentUnlocked : employmentUnlocked;
+    return true;
+}
+void SovereignRowPresentation() {
+    ResearchPair();
+    const auto oldActions = g_stockControllerRegistry.sovereignTargetActions;
+    const auto oldType = *reinterpret_cast<std::uint32_t*>(contextA + 0x7C);
+    MajestyStockControllers::SovereignTargetActionRecord action = {};
+    action.panelKey = g_activePanelRecord->panelKey;
+    action.visualControlId = 4403;
+    action.priceControlId = 3403;
+    action.iconControlId = 5403;
+    action.requiredLevel = 2;
+    action.sovereignGoldCost = 500;
+    g_stockControllerRegistry.sovereignTargetActions = {action};
+    // No panel reopening: level and treasury changes refresh the entire row,
+    // including companions left disabled by an earlier stock presenter call.
+    for (auto level : {1u, 2u, 3u, 1u, 2u}) {
+        *reinterpret_cast<std::uint32_t*>(contextA + 0x7C) = (0x30u + level) << 24;
+        for (auto gold : {499, 500, 1000, 0, 500}) {
+            playerGold = gold;
+            disabledControls = {{4403, true}, {3403, true}, {5403, true}, {7777, true}};
+            RefreshPrivateActionRows(reinterpret_cast<std::uint32_t>(&child), false);
+            const bool unavailable = level < 2 || gold < 500;
+            for (auto id : {4403u, 3403u, 5403u}) assert(disabledControls[id] == unavailable);
+            assert(disabledControls[7777] && disabledControls.size() == 4);
+        }
+    }
+    *reinterpret_cast<std::uint32_t*>(contextA + 0x7C) = oldType;
+    g_stockControllerRegistry.sovereignTargetActions = oldActions;
+}
+void EmploymentPresentation() {
+    ResearchPair();
+    const auto oldParentControl = g_stockParentControl;
+    g_stockParentControl = reinterpret_cast<ControllerControl>(&Fallback);
+    const auto oldLists = g_stockControllerRegistry.liveAgentLists;
+    const auto oldEvaluator = g_questBoardScalarEvaluator;
+    MajestyStockControllers::LiveAgentListRecord record = {};
+    record.parentDialogId = g_parentPanelRecord->parentDialogId;
+    record.openCommandId = 31300;
+    record.admissionCallbackSymbol = "MM_Fixture_Admit";
+    record.gatedControlIds = {8009};
+    g_stockControllerRegistry.liveAgentLists = {record};
+    g_questBoardScalarEvaluator = &EmploymentScalar;
+    for (bool unlocked : {false, true, false}) {
+        employmentUnlocked = unlocked;
+        disabledControls.clear();
+        RefreshEmploymentControls(reinterpret_cast<std::uint32_t>(&parent));
+        assert(disabledControls.size() == 2);
+        assert(disabledControls[31300] == unlocked);
+        assert(disabledControls[8009] == !unlocked);
+        assert(EmploymentControlAllowed(reinterpret_cast<std::uint32_t>(&parent), 0x1F47));
+    }
+    g_stockControllerRegistry.liveAgentLists[0].gatedControlIds = {8009, 0x1F55};
+    for (bool unlocked : {false, true, false}) {
+        employmentUnlocked = unlocked;
+        visibleControlCount = 0;
+        disabledControls.clear();
+        RefreshEmploymentControls(reinterpret_cast<std::uint32_t>(&parent));
+        assert(visibleControlCount == 2);
+        assert(visibleControls[0] == 31300 && visibleValues[0] == (unlocked ? 0u : 1u));
+        assert(visibleControls[1] == 0x1F55 && visibleValues[1] == (unlocked ? 1u : 0u));
+        assert(disabledControls[31300] == unlocked);
+        assert(disabledControls[8009] == !unlocked);
+        assert(disabledControls[0x1F55] == !unlocked);
+        const int before = fallbackCount;
+        const int result = ParentPanelControllerControl(&parent, nullptr, 0x1F55);
+        assert(result == (unlocked ? 23 : 0));
+        assert(fallbackCount == before + (unlocked ? 1 : 0));
+        if (unlocked) assert(seenCommand == 0x1F55);
+    }
+    g_stockControllerRegistry.liveAgentLists = oldLists;
+    g_questBoardScalarEvaluator = oldEvaluator;
+    g_stockParentControl = oldParentControl;
+    Reset();
+}
+bool GateScalar(const char* symbol, void* unit, bool hasInteger, int, std::uint32_t* result, bool) {
+    assert(std::string(symbol) == "MM_FixtureGate");
+    assert(unit == contextA && !hasInteger);
+    *result = employmentUnlocked ? 1 : 0;
+    return true;
+}
+unsigned immediateCalls = 0;
+void* ImmediateResolve(std::uint32_t id) { return id == 99 ? contextA : nullptr; }
+bool ImmediateScalar(const char* symbol, void* unit, bool hasInteger, int, std::uint32_t* result, bool) {
+    assert(unit == contextA && !hasInteger);
+    *result = std::string(symbol) == "Owner" ? 2 : 1;
+    return true;
+}
+void __cdecl ImmediateDispatch(std::uint32_t command, std::uint32_t building, std::uint32_t subject, std::uint32_t price) {
+    assert(command == 0x15 && building == 99 && subject == 99 && price == 0);
+    assert(g_executingOccupantPanel && g_executingOccupantPanel->actionCallbackSymbol == "Commit");
+    assert(g_executingQuestBoard == nullptr);
+    ++immediateCalls;
+}
+void ImmediateCommandDispatch() {
+    ResearchPair();
+    const auto panels = g_stockControllerRegistry.panels;
+    const auto evaluator = g_questBoardScalarEvaluator;
+    const auto resolver = g_questBoardAgentNumberResolver;
+    const auto dispatch = g_stockOccupantDispatch;
+    const auto oldType = *reinterpret_cast<std::uint32_t*>(contextA + 0x7C);
+    auto& panel = g_stockControllerRegistry.panels[0];
+    panel.commands = {{31904,"TryAction","Quote","Commit","Owner"}};
+    *reinterpret_cast<std::uint32_t*>(contextA+0x7C) = (panel.buildingFamilyId & 0xFFFFFFu) | 0x33000000u;
+    g_questBoardScalarEvaluator = &ImmediateScalar;
+    g_questBoardAgentNumberResolver = &ImmediateResolve;
+    g_stockOccupantDispatch = &ImmediateDispatch;
+    g_activePanelRecord = nullptr; // delivery after the source panel closed
+    const auto command = panel.commands[0].CommandId();
+    immediateCalls = 0;
+    DispatchOccupantAction(command,99,2,5000); // forbidden second/native debit
+    DispatchOccupantAction(command,99,3,0); // ownership changed
+    DispatchOccupantAction(command,100,2,0); // stale/deleted building
+    assert(immediateCalls == 0);
+    DispatchOccupantAction(command,99,2,0);
+    assert(immediateCalls == 1 && !g_executingOccupantPanel && !g_executingQuestBoard);
+    *reinterpret_cast<std::uint32_t*>(contextA+0x7C) = oldType;
+    g_stockControllerRegistry.panels = panels;
+    g_questBoardScalarEvaluator = evaluator;
+    g_questBoardAgentNumberResolver = resolver;
+    g_stockOccupantDispatch = dispatch;
+    Reset();
+}
+int cooldownRemaining=0, cooldownQueries=0;
+std::string cooldownText;
+bool CooldownQuery(const char* name,void* context,bool hasOperation,int,unsigned* result,bool) {
+    assert(std::strcmp(name,"Remaining")==0 && context==contextA && !hasOperation);
+    ++cooldownQueries;*result=static_cast<unsigned>(cooldownRemaining);return true;
+}
+bool CooldownText(unsigned,unsigned id,const char* text) {
+    assert(id==31921);cooldownText=text;return true;
+}
+void CooldownPresentation() {
+    ResearchPair();
+    const auto panel=g_stockControllerRegistry.panels[0];
+    const auto query=g_questBoardScalarEvaluator;
+    const auto setter=g_cooldownTextSetter;
+    auto& p=g_stockControllerRegistry.panels[0];
+    p.cooldownDurationMs=300000;p.cooldownProgressControlId=31920;p.cooldownTextControlId=31921;
+    p.cooldownRemainingCallbackSymbol="Remaining";
+    g_questBoardScalarEvaluator=&CooldownQuery;g_cooldownTextSetter=&CooldownText;
+    for(int remaining : {300000,60001,60000,2501,2500,1,0,-1,-2,-3,-4}) {
+        cooldownRemaining=remaining;cooldownQueries=0;
+        UpdateCooldownDisplay(reinterpret_cast<unsigned>(&child),contextA);
+        assert(cooldownQueries==1 && visibleState[31921]);
+        assert(visibleState[31920]==(remaining>0));
+        if(remaining<0) assert(cooldownText=="Recharge unavailable");
+        if(remaining==0) assert(cooldownText=="Recharge complete");
+        if(remaining==300000) assert(cooldownText=="Recharge: 5d 0h");
+        if(remaining==60001) assert(cooldownText=="Recharge: 1d 1h");
+        if(remaining==1) assert(cooldownText=="Recharge: 0d 1h");
+        const auto previous=cooldownText;
+        UpdateCooldownDisplay(reinterpret_cast<unsigned>(&child),contextA);
+        assert(cooldownText==previous); // unchanged native value while paused
+    }
+    g_stockControllerRegistry.panels[0]=panel;
+    g_questBoardScalarEvaluator=query;g_cooldownTextSetter=setter;Reset();
+}
+bool ChargedSiblingQuote(const char*,void*,bool hasOperation,int operation,unsigned* result,bool) {
+    assert(hasOperation && operation==0); *result=0; return true;
+}
+bool __fastcall UnexpectedChargedExecution(void*,void*,void*,std::uint32_t) {
+    assert(false); return false;
+}
+void ChargedSiblingPresentation() {
+    const auto rows=g_stockControllerRegistry.researchRows;
+    const auto oldFamily=*reinterpret_cast<unsigned*>(contextA+0x7C);
+    *reinterpret_cast<unsigned*>(contextA+0x7C)=g_stockControllerRegistry.panels[0].buildingFamilyId;
+    auto first=rows[0], second=first;
+    first.actionControlId=31900;first.priceControlId=32900;
+    first.progressControlId=31901;first.activeDisplayControlId=31902;
+    second.actionControlId=31904;second.priceControlId=32904;
+    second.progressControlId=31907;second.activeDisplayControlId=31908;
+    first.chargeMs=second.chargeMs=30000;
+    first.savedActionSymbol="MM_QA_Purge";second.savedActionSymbol="MM_QA_Cleanse";
+    g_stockControllerRegistry.researchRows={first,second};
+    g_privateResearchDescriptors={{&g_stockControllerRegistry.researchRows[0],researchDescriptor},
+        {&g_stockControllerRegistry.researchRows[1],researchDescriptor}};
+    for(unsigned selected : {31900u,31904u}) {
+        ResearchPair();g_questBoardScalarEvaluator=&ChargedSiblingQuote;
+        const auto other=selected==31900 ? 31904u : 31900u;
+        SecondaryPanelControllerControl(&child,nullptr,selected);
+        assert(submitCount==1 && g_researchOwner.pending);
+        SecondaryPanelControllerControl(&child,nullptr,selected);
+        SecondaryPanelControllerControl(&child,nullptr,other);
+        assert(submitCount==1); // same-frame repeated/alternate clicks
+        assert(disabledControls[31900] && disabledControls[31904]);
+        savedResearchCommand=selected;savedResearchDuration=30000;
+        assert(CaptureSubmittedResearch());
+        UpdateResearchPresentations(reinterpret_cast<unsigned>(&child));
+        assert(visibleState[selected==31900 ? 31901 : 31907]);
+        assert(!visibleState[selected==31900 ? 31907 : 31901]);
+        assert(disabledControls[other]);
+        SecondaryPanelControllerControl(&child,nullptr,other);
+        assert(submitCount==1);
+        // A queued alternate action also loses at execution, independently of
+        // the UI's earlier disabled state. No reserve/payment/schedule call.
+        assert(!ExecutePrivateResearchWithOutcome(
+            reinterpret_cast<StockResearchExecution>(&UnexpectedChargedExecution),
+            nullptr,contextA,other));
+        // Stock cancellation/completion clears its tuple. Sibling presentation
+        // becomes available on the next refresh if its saved cooldown allows it.
+        g_researchOwner={};savedResearchCommand=savedResearchDuration=0;
+        UpdateResearchPresentations(reinterpret_cast<unsigned>(&child));
+        assert(!disabledControls[31900] && !disabledControls[31904]);
+        assert(!visibleState[31901] && !visibleState[31907]);
+        const auto before=fallbackCount;
+        SecondaryPanelControllerControl(&child,nullptr,123);
+        assert(fallbackCount==before+1); // unrelated navigation remains stock
+    }
+    g_stockControllerRegistry.researchRows=rows;
+    *reinterpret_cast<unsigned*>(contextA+0x7C)=oldFamily;
+    g_privateResearchDescriptors={{&g_stockControllerRegistry.researchRows[0],researchDescriptor}};
+    Reset();
+}
+void SecondaryGatePresentation() {
+    ResearchPair();
+    const auto panels = g_stockControllerRegistry.panels;
+    const auto evaluator = g_questBoardScalarEvaluator;
+    const auto oldType = *reinterpret_cast<std::uint32_t*>(contextA + 0x7C);
+    auto& panel = g_stockControllerRegistry.panels[0];
+    panel.requiredLevel = 3;
+    panel.eligibilityCallbackSymbol = "MM_FixtureGate";
+    g_questBoardScalarEvaluator = &GateScalar;
+    const auto controller = reinterpret_cast<std::uint32_t>(&parent);
+    for (int level : {1, 2, 3}) for (bool eligible : {false, true}) {
+        *reinterpret_cast<std::uint32_t*>(contextA + 0x7C) =
+            (panel.buildingFamilyId & 0xFFFFFFu) | ((0x30u + level) << 24);
+        employmentUnlocked = eligible;
+        RefreshResearchParentOpeners(controller);
+        assert(visibleState[panel.openCommandId]);
+        assert(disabledControls[panel.openCommandId] == !(level == 3 && eligible));
+        assert(ResearchParentCommandAllowed(controller, panel.openCommandId) == (level == 3 && eligible));
+        assert(!SecondaryPanelAllowed(nullptr, panel));
+    }
+    *reinterpret_cast<std::uint32_t*>(contextA + 0x7C) = oldType;
+    g_stockControllerRegistry.panels = panels;
+    g_questBoardScalarEvaluator = evaluator;
+    Reset();
+}
+void ResearchParentPresentation() {
+    const auto panels = g_stockControllerRegistry.panels;
+    const auto rows = g_stockControllerRegistry.researchRows;
+    const auto lists = g_stockControllerRegistry.liveAgentLists;
+    const auto evaluator = g_questBoardScalarEvaluator;
+    auto sibling = panels[0];
+    sibling.panelKey = "fittings";
+    sibling.openCommandId = 31700;
+    sibling.childDialogId = 0x32505352;
+    g_stockControllerRegistry.panels.push_back(sibling);
+    auto row = rows[0];
+    row.panelKey = sibling.panelKey;
+    row.actionControlId = 0x6001;
+    g_stockControllerRegistry.researchRows.push_back(row);
+    ResearchPair();
+    MajestyStockControllers::LiveAgentListRecord gate = {};
+    gate.parentDialogId = panels[0].parentDialogId;
+    gate.openCommandId = 31300;
+    gate.admissionCallbackSymbol = "MM_Fixture_Admit";
+    gate.gatedControlIds = {8009, 31700};
+    g_stockControllerRegistry.liveAgentLists = {gate};
+    g_questBoardScalarEvaluator = &EmploymentScalar;
+    const auto controller = reinterpret_cast<std::uint32_t>(&parent);
+    for (int state = 0; state < 6; ++state) {
+        employmentUnlocked = state != 0;
+        savedResearchDuration = state == 2 || state == 3 ? 100 : 0;
+        savedResearchCommand = state == 3 ? 0x6001 : 0x6000;
+        g_researchOwner.pending = state == 1 || state == 5;
+        g_researchOwner.context = state == 5 ? contextB : contextA;
+        const bool unavailable = !employmentUnlocked;
+        visibleControlCount = 0;
+        RefreshResearchParentOpeners(controller);
+        assert(visibleControlCount == 2);
+        for (int i = 0; i < 2; ++i) assert(visibleValues[i] == 1);
+        for (auto command : {8009u, 31700u, 8004u}) {
+            assert(ResearchParentCommandAllowed(controller, command) == !unavailable);
+            if (unavailable) {
+                const auto calls = fallbackCount;
+                assert(ParentPanelControllerControl(&parent, nullptr, command) == 0);
+                assert(fallbackCount == calls);
+            }
+        }
+        assert(disabledControls[8009] == unavailable && disabledControls[31700] == unavailable);
+    }
+    // Browse each page while either sibling owns the shared saved slot.
+    // Item presentation is independent of navigation; delivered purchases
+    // remain rejected before native submission/payment.
+    g_researchOwner = {};
+    for (std::size_t i = 0; i < 2; ++i) {
+        auto& item = g_stockControllerRegistry.researchRows[i];
+        item.iconControlId = item.actionControlId + 500;
+        item.priceControlId = item.actionControlId + 1000;
+        item.progressControlId = item.actionControlId + 2000;
+        item.activeDisplayControlId = item.actionControlId + 3000;
+    }
+    employmentUnlocked = true;
+    for (auto activeCommand : {0x6000, 0x6001}) {
+        savedResearchCommand = activeCommand; savedResearchDuration = 100;
+        for (std::size_t page : {0u, 1u, 0u}) {
+            g_activePanelRecord = &g_stockControllerRegistry.panels[page];
+            const auto& item = g_stockControllerRegistry.researchRows[page];
+            visibleState[item.actionControlId] = false; // native AP99 hidden sibling
+            UpdateResearchPresentations(reinterpret_cast<std::uint32_t>(&child));
+            const bool active = item.actionControlId == static_cast<unsigned>(activeCommand);
+            assert(visibleState[item.actionControlId] == !active);
+            assert(visibleState[item.progressControlId] == active);
+            assert(visibleState[item.activeDisplayControlId] == active);
+            if (!active) {
+                assert(visibleState[item.iconControlId]);
+                assert(disabledControls[item.actionControlId]);
+            }
+            const auto submits = submitCount;
+            BeginPrivateResearch(reinterpret_cast<std::uint32_t>(&child), item);
+            assert(submitCount == submits);
+            assert(ResearchParentCommandAllowed(controller, 8009));
+            assert(ResearchParentCommandAllowed(controller, 31700));
+        }
+    }
+    // Action-only pages are outside the research-slot presentation contract.
+    g_stockControllerRegistry.researchRows.clear();
+    visibleControlCount = 0;
+    RefreshResearchParentOpeners(controller);
+    assert(visibleControlCount == 0);
+    Reset();
+    g_stockControllerRegistry.panels = panels;
+    g_stockControllerRegistry.researchRows = rows;
+    // The fixture resized the registry; restore the descriptor's row pointer.
+    g_privateResearchDescriptors = {{&g_stockControllerRegistry.researchRows[0], researchDescriptor}};
+    g_stockControllerRegistry.liveAgentLists = lists;
+    g_questBoardScalarEvaluator = evaluator;
 }
 void __fastcall RecruitmentSetup(void* object, void*) {
     auto* mode = reinterpret_cast<std::uint32_t*>(static_cast<unsigned char*>(object) + 0x30);
@@ -629,12 +985,96 @@ void RecruitmentChildLifecycle() {
 #include "SovereignSourceTargetChecks.inl"
 #include "PaidSourceTargetChecks.inl"
 #include "CompactToolbarChecks.inl"
+#include "MessageFlagControlsChecks.inl"
+#include "ResearchSubmissionChecks.inl"
+#include "QueuedResearchChecks.inl"
 
 int main() {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     _set_error_mode(_OUT_TO_STDERR);
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
     Initialize();
+    SovereignRowPresentation();
+    EmploymentPresentation();
+    ResearchParentPresentation();
+    SecondaryGatePresentation();
+    ImmediateCommandDispatch();
+    ChargedSiblingPresentation();
+    CooldownPresentation();
+    ResearchPair();
+    g_stockAp69Event = reinterpret_cast<ControllerEvent>(&ResearchEvent);
+    g_stockParentActivity = reinterpret_cast<ControllerActivity>(&ResearchParentActivity);
+    g_researchCompletionStaged = 0;
+    savedResearchCommand = 0x6000; savedResearchDuration = 100;
+    ParentPanelControllerActivity(&parent, nullptr);
+    assert(disabledControls[0x1F48]);
+    // A research order owned by a sibling page is still this building's
+    // single saved activity. It must not fall into the recruit presenter.
+    auto otherPage = g_stockControllerRegistry.panels[0];
+    otherPage.panelKey = "busy_sibling"; otherPage.childDialogId += 1;
+    otherPage.openCommandId = 32011;
+    g_stockControllerRegistry.panels.push_back(otherPage);
+    g_parentPanelRecord = &g_stockControllerRegistry.panels[0];
+    const auto oldResearchPanel = g_stockControllerRegistry.researchRows[0].panelKey;
+    g_stockControllerRegistry.researchRows[0].panelKey = otherPage.panelKey;
+    disabledControls[0x1F48] = false;
+    ParentPanelControllerActivity(&parent, nullptr);
+    assert(disabledControls[0x1F48]);
+    g_stockControllerRegistry.researchRows[0].panelKey = oldResearchPanel;
+    g_stockControllerRegistry.panels.pop_back();
+    g_parentPanelRecord = &g_stockControllerRegistry.panels[0];
+    g_activePanelRecord = g_parentPanelRecord;
+    savedResearchCommand = savedResearchDuration = 0;
+    ParentPanelControllerActivity(&parent, nullptr);
+    assert(!disabledControls[0x1F48]);
+    // Recruitment duration alone changes: busy disables, idle asks the native
+    // presenter to restore eligibility, completed research remains disabled.
+    for (int completed : {0, 1}) {
+        researchComplete = completed;
+        savedResearchDuration = 7000;
+        SecondaryPanelControllerEvent(&child, nullptr, 123, 1, kResearchDurationAttributeId, 0);
+        assert(disabledControls[0x6000]);
+        savedResearchDuration = 0;
+        SecondaryPanelControllerEvent(&child, nullptr, 123, 1, kResearchDurationAttributeId, 0);
+        assert(disabledControls[0x6000] == (completed != 0));
+    }
+    // Delivered stale/private commands after completion cannot queue a second
+    // purchase. Native completion's nonzero test includes negative values.
+    for (int complete : {1,-1}) {
+        ResearchPair(); researchComplete = complete;
+        SecondaryPanelControllerControl(&child, nullptr, 0x6000);
+        assert(submitCount == 0 && !g_researchOwner.pending);
+        assert(researchActivityWrites == 0 && researchAffordabilityCalls == 0);
+    }
+    ResearchPair();
+    savedResearchDuration = 7000; // already recruiting before UI submission
+    SecondaryPanelControllerControl(&child, nullptr, 0x6000);
+    assert(submitCount == 0 && researchActivityWrites == 0);
+    ResearchPair();
+    SecondaryPanelControllerControl(&child, nullptr, 0x6000);
+    assert(submitCount == 1 && g_researchOwner.pending);
+    SecondaryPanelControllerControl(&child, nullptr, 0x6000);
+    assert(submitCount == 1); // queued duplicate remains blocked
+    g_researchOwner = {}; savedResearchCommand = 0x6000; savedResearchDuration = 100;
+    assert(PrivateResearchMatches(contextA, &g_stockControllerRegistry.researchRows[0]));
+    SecondaryPanelControllerControl(&child, nullptr, 0x6000);
+    assert(submitCount == 1); // active duplicate remains blocked
+    g_researchOwner = {}; savedResearchCommand = savedResearchDuration = 0; researchComplete = 1;
+    SecondaryPanelControllerControl(&child, nullptr, 0x6000);
+    assert(submitCount == 1 && !g_researchOwner.pending);
+    ResearchPair(); researchDescriptor[4] = 0;
+    SecondaryPanelControllerControl(&child, nullptr, 0x6000);
+    assert(submitCount == 0 && !g_researchOwner.pending);
+    assert(researchActivityWrites == 0 && researchAffordabilityCalls == 0);
+    researchDescriptor[4] = 0x18425041;
+    ResearchPair();
+    auto registeredResearch = g_privateResearchDescriptors;
+    g_privateResearchDescriptors.clear();
+    SecondaryPanelControllerControl(&child, nullptr, 0x6000);
+    assert(submitCount == 0 && researchActivityWrites == 0 && !g_researchOwner.pending);
+    g_privateResearchDescriptors = std::move(registeredResearch);
+    ResearchSchedulerChecks::Run();
+    QueuedResearchChecks::Run();
     RecruitmentChildLifecycle();
     // 1. Single-panel replacement: native deletion of ONLY the parent preserves
     // the child's mapping, command ownership, player lookup, and research path.
@@ -730,6 +1170,34 @@ int main() {
     }
 
     // 9. Other parent wrappers also return the stock layout/removal decision.
+    Reset();
+    g_parentPanelRecord = &g_stockControllerRegistry.panels[0];
+    g_secondaryPanelActive = 1;
+    g_activePanelRecord = g_parentPanelRecord;
+    g_stockParentControl = reinterpret_cast<ControllerControl>(&Fallback);
+    assert(ParentPanelControllerControl(&parent, nullptr, g_parentPanelRecord->openCommandId) == 0);
+    assert(fallbackCount == 0 && g_secondaryPanelArmed == 0);
+    // A different child being open is not a repeated Research click.
+    g_activePanelRecord = nullptr;
+    assert(ParentPanelControllerControl(&parent, nullptr, g_parentPanelRecord->openCommandId) == 23);
+    assert(fallbackCount == 1 && g_secondaryPanelArmed == 1);
+    // Sibling research uses the same stock opener, including its native
+    // parent-retention result; changing page does not submit any research.
+    auto sibling = g_stockControllerRegistry.panels[0];
+    sibling.panelKey = "second_research";
+    sibling.childDialogId = 0x32505352u;
+    sibling.openCommandId = 32010;
+    g_stockControllerRegistry.panels.push_back(sibling);
+    for (int retained : {0, 1}) {
+        Reset(); openResult = retained;
+        g_parentPanelRecord = &g_stockControllerRegistry.panels[0];
+        const auto* second = &g_stockControllerRegistry.panels.back();
+        assert(ParentPanelControllerControl(&parent, nullptr, second->openCommandId) == retained);
+        assert(seenDialog == second->childDialogId && g_activePanelRecord == second);
+        assert(ParentPanelControllerControl(&parent, nullptr, second->openCommandId) == 0);
+        assert(openCount == 1);
+    }
+    Reset(); g_stockControllerRegistry.panels.pop_back();
     Reset(); openResult = 1; g_parentOccupantPanel = occupant;
     assert(ParentPanelControllerControl(&parent, nullptr, occupant->openCommandId) == 1);
     Reset(); g_parentOccupantPanel = occupant;
@@ -1492,5 +1960,6 @@ int main() {
     assert(g_questOfferPresentations[0].recordKey == 0);
     PaidChecks::Run();
     CompactChecks::Run();
+    MessageChecks::Run();
     std::puts("Panel lifecycle x86 tests passed.");
 }

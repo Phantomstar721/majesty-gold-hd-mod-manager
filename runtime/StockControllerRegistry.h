@@ -7,7 +7,7 @@
 
 namespace MajestyStockControllers {
 
-constexpr std::uint32_t kRegistryVersion = 25;
+constexpr std::uint32_t kRegistryVersion = 30;
 constexpr std::uint32_t kMaximumRecordCount = 256;
 constexpr std::uint32_t kMaximumPanelCount = 32;
 constexpr std::uint32_t kMaximumLiveAgentListVariants = 64;
@@ -20,12 +20,22 @@ constexpr const char* kEnvironmentVariable =
 constexpr const char* kRelativeRegistryPath =
     "DataMX/majesty_mod_manager_controllers.bin";
 
+struct PanelCommandRecord {
+    std::uint32_t controlId;
+    std::string callbackSymbol, quoteSymbol, commitSymbol, ownerSymbol;
+    std::uint32_t CommandId() const { return 0x30000u + controlId; }
+};
 struct SecondaryPanelRecord {
     std::string panelKey;
     std::uint32_t parentDialogId;
     std::uint32_t childDialogId;
     std::uint32_t buildingFamilyId;
     std::uint32_t openCommandId;
+    std::uint32_t requiredLevel = 1;
+    std::string eligibilityCallbackSymbol;
+    std::vector<PanelCommandRecord> commands;
+    std::string cooldownRemainingCallbackSymbol;
+    std::uint32_t cooldownDurationMs=0, cooldownProgressControlId=0, cooldownTextControlId=0;
 };
 
 struct ResourceMeterRecord {
@@ -50,6 +60,12 @@ struct ResearchRowRecord {
     std::uint32_t activeDisplayControlId;
     std::uint32_t iconControlId;
     std::string completionText;
+    std::uint32_t chargeMs = 0;
+    std::string readinessCallbackSymbol;
+    std::string completionCallbackSymbol;
+    std::string savedActionSymbol;
+    std::string quoteCallbackSymbol;
+    std::string startCallbackSymbol;
 };
 
 struct UpgradeRequirement {

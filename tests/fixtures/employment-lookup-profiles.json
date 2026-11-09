@@ -1,0 +1,300 @@
+{
+  "addressKind": "VA",
+  "imageBase": 4194304,
+  "profiles": [
+    {
+      "name": "Public",
+      "executableSHA256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "windows": [
+        {
+          "name": "CategoryGetter",
+          "va": 5903824,
+          "size": 30,
+          "sha256": "fae4eef28fca6da36199ab155bd0b4b3e8b86f6e3b69cf9e78574957b76bae9e"
+        },
+        {
+          "name": "CategorySearch",
+          "va": 5914752,
+          "size": 106,
+          "sha256": "e6ac9da725fb09a8074d98095bf6bf86c07f8d68be26fdf987629cf8928ea27c"
+        },
+        {
+          "name": "CategoryIterator",
+          "va": 5914576,
+          "size": 176,
+          "sha256": "06b6897c2c7e6073db288751f56633cdcacc5323a72a4667b65e614da7ae6d80"
+        },
+        {
+          "name": "HandleResolver",
+          "va": 5903856,
+          "size": 64,
+          "sha256": "6376bca7255fe4ca59d0e31c7629b147b8d28e1640adfa1b1e7a0fda4ace8c51"
+        },
+        {
+          "name": "ServiceLookupThunk",
+          "va": 6087648,
+          "size": 5,
+          "sha256": "9de9ba38c26be0ee06b98c8753ce641e38bfb31c61e320507fcb2da87849d0d3"
+        },
+        {
+          "name": "LookupPointer",
+          "va": 5914544,
+          "size": 32,
+          "sha256": "1e9091b024ff65a2a856b21038beed806edfcdf27ef3e1e6fd126092b968d317"
+        },
+        {
+          "name": "FindPayload",
+          "va": 5913456,
+          "size": 109,
+          "sha256": "f42ddfaca3dc4810b1f5b60158a3d70e73275c3c8db872be4c597c57b90f858b"
+        },
+        {
+          "name": "FindUnsignedKey",
+          "va": 5912464,
+          "size": 139,
+          "sha256": "e446c5b0a3eb2d018a94d71ad8ffe1233ca5d347e5a7d0d2e3cbbcb836ea557d"
+        }
+      ],
+      "metadata": [
+        {
+          "name": "AllUnitsRttiName",
+          "va": 8098436,
+          "size": 22,
+          "sha256": "154a37e164ad5f751f86b5314c5811e2eb1cf85c259158563c6b7cba1df21eae"
+        },
+        {
+          "name": "CompleteObjectLocator",
+          "va": 7721832,
+          "size": 20,
+          "sha256": "eda03d5d8ebd4f0a8df196b7addee61d1c48165a5f2e40e499b5ac8234fb6c90"
+        },
+        {
+          "name": "ServiceLookupSlot",
+          "va": 7638388,
+          "size": 4,
+          "sha256": "0f3ab98088a77c25f3433982428bf44912bec1baa6d94b23a49719ddae84c0cd"
+        }
+      ],
+      "serviceVtable": 7638348,
+      "categoryGetter": 5903824,
+      "handleResolver": 5903856,
+      "thunk": 6087648,
+      "lookupPointer": 5914544,
+      "findPayload": 5913456,
+      "findUnsignedKey": 5912464
+    },
+    {
+      "name": "Beta2",
+      "executableSHA256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "windows": [
+        {
+          "name": "CategoryGetter",
+          "va": 5989760,
+          "size": 30,
+          "sha256": "fae4eef28fca6da36199ab155bd0b4b3e8b86f6e3b69cf9e78574957b76bae9e"
+        },
+        {
+          "name": "CategorySearch",
+          "va": 6000688,
+          "size": 106,
+          "sha256": "8edbf9044094985158ae147c50467cd9c1a6175b670d048ae5a06b5b64ab4763"
+        },
+        {
+          "name": "CategoryIterator",
+          "va": 6000512,
+          "size": 176,
+          "sha256": "387b1525bdc5a27e08645e0df510a5549a46cc6b7ec73d55fe38cd4419336c54"
+        },
+        {
+          "name": "HandleResolver",
+          "va": 5989792,
+          "size": 64,
+          "sha256": "6376bca7255fe4ca59d0e31c7629b147b8d28e1640adfa1b1e7a0fda4ace8c51"
+        },
+        {
+          "name": "ServiceLookupThunk",
+          "va": 6174144,
+          "size": 5,
+          "sha256": "fc631015e32b0f83cdc931628b249b42fc5c464b97ecc8809449ec9a94d66166"
+        },
+        {
+          "name": "LookupPointer",
+          "va": 6000480,
+          "size": 32,
+          "sha256": "1e9091b024ff65a2a856b21038beed806edfcdf27ef3e1e6fd126092b968d317"
+        },
+        {
+          "name": "FindPayload",
+          "va": 5999392,
+          "size": 109,
+          "sha256": "a3d83014340b7839fb2306dfe01016d7023751dfab01d3a8f9be241b8bb492b1"
+        },
+        {
+          "name": "FindUnsignedKey",
+          "va": 5998400,
+          "size": 139,
+          "sha256": "9b7298793d71c0312473ab4d8b4991f656d895425e6cb3d9f826c3b9e8151ca4"
+        }
+      ],
+      "metadata": [
+        {
+          "name": "AllUnitsRttiName",
+          "va": 8224052,
+          "size": 22,
+          "sha256": "154a37e164ad5f751f86b5314c5811e2eb1cf85c259158563c6b7cba1df21eae"
+        },
+        {
+          "name": "CompleteObjectLocator",
+          "va": 7832400,
+          "size": 20,
+          "sha256": "bae9152b1a511a9c578925091de4dded8b08ead99a86f1618ca26d5604b73d8c"
+        },
+        {
+          "name": "ServiceLookupSlot",
+          "va": 7745092,
+          "size": 4,
+          "sha256": "59ad166b105bcb6f840a47f94298edc40ddce94dcabf90147288898e160abff8"
+        }
+      ],
+      "serviceVtable": 7745052,
+      "categoryGetter": 5989760,
+      "handleResolver": 5989792,
+      "thunk": 6174144,
+      "lookupPointer": 6000480,
+      "findPayload": 5999392,
+      "findUnsignedKey": 5998400
+    },
+    {
+      "name": "Gog",
+      "executableSHA256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "windows": [
+        {
+          "name": "CategoryGetter",
+          "va": 5986512,
+          "size": 30,
+          "sha256": "fae4eef28fca6da36199ab155bd0b4b3e8b86f6e3b69cf9e78574957b76bae9e"
+        },
+        {
+          "name": "CategorySearch",
+          "va": 5997440,
+          "size": 106,
+          "sha256": "95c0258e6b73cf3d0f996372f209e925819dbb56e521d6c5931a09f1b2a424be"
+        },
+        {
+          "name": "CategoryIterator",
+          "va": 5997264,
+          "size": 176,
+          "sha256": "83e89ff269fa6b43f7e201ce02e9d16d2ff91f4f416de9bfb31eb7a90b4d0232"
+        },
+        {
+          "name": "HandleResolver",
+          "va": 5986544,
+          "size": 64,
+          "sha256": "6376bca7255fe4ca59d0e31c7629b147b8d28e1640adfa1b1e7a0fda4ace8c51"
+        },
+        {
+          "name": "ServiceLookupThunk",
+          "va": 6170896,
+          "size": 5,
+          "sha256": "fc631015e32b0f83cdc931628b249b42fc5c464b97ecc8809449ec9a94d66166"
+        },
+        {
+          "name": "LookupPointer",
+          "va": 5997232,
+          "size": 32,
+          "sha256": "1e9091b024ff65a2a856b21038beed806edfcdf27ef3e1e6fd126092b968d317"
+        },
+        {
+          "name": "FindPayload",
+          "va": 5996144,
+          "size": 109,
+          "sha256": "252388e009fb92c5c13a257f523e0e7e212a498ce04161beb6f390e0a39ce59e"
+        },
+        {
+          "name": "FindUnsignedKey",
+          "va": 5995152,
+          "size": 139,
+          "sha256": "3ab01fff1c65f8729b597926f081092529bcb8d8c765ac1e4aa63fa9f9e3f9ea"
+        }
+      ],
+      "metadata": [
+        {
+          "name": "AllUnitsRttiName",
+          "va": 8224728,
+          "size": 22,
+          "sha256": "154a37e164ad5f751f86b5314c5811e2eb1cf85c259158563c6b7cba1df21eae"
+        },
+        {
+          "name": "CompleteObjectLocator",
+          "va": 7828740,
+          "size": 20,
+          "sha256": "f28cacae45fbaf9e790f4f1ab9d443d07f299ccf8f2997ab3842bc7a3796e524"
+        },
+        {
+          "name": "ServiceLookupSlot",
+          "va": 7740676,
+          "size": 4,
+          "sha256": "86c93fcb740284f722087fe088fde10eb9f803cd93a812d9e6cec5fbd150e925"
+        }
+      ],
+      "serviceVtable": 7740636,
+      "categoryGetter": 5986512,
+      "handleResolver": 5986544,
+      "thunk": 6170896,
+      "lookupPointer": 5997232,
+      "findPayload": 5996144,
+      "findUnsignedKey": 5995152
+    }
+  ],
+  "models": {
+    "cases": 99,
+    "absentCount": 81,
+    "presentCount": 18,
+    "empty": {
+      "key": 123,
+      "candidate": null,
+      "initialOutput": 4294967295,
+      "foundAL": 0,
+      "finalOutput": 4294967295,
+      "result": 0,
+      "visited": []
+    },
+    "gap": {
+      "key": 2,
+      "candidate": null,
+      "initialOutput": 305419896,
+      "foundAL": 0,
+      "finalOutput": 305419896,
+      "result": 0,
+      "visited": [
+        3,
+        1
+      ]
+    },
+    "highUnsigned": {
+      "key": 2147483649,
+      "candidate": null,
+      "initialOutput": 4294967295,
+      "foundAL": 0,
+      "finalOutput": 4294967295,
+      "result": 0,
+      "visited": [
+        4294967294,
+        2147483648
+      ]
+    },
+    "present": {
+      "key": 3,
+      "candidate": 3,
+      "initialOutput": 305419896,
+      "foundAL": 1,
+      "finalOutput": 268435460,
+      "result": 268435460,
+      "visited": [
+        3,
+        1
+      ]
+    }
+  },
+  "limits": "Ordinary valid stock GE_AllUnitsList category3/index and nonmutating read only. Absent exact key returns null; missing registry/service, corrupted index, alternate category3 implementation, concurrent mutation, recycled-ID/lifetime and exceptional recovery are not certified. Existing initialization evidence supplies category3 registration; no construction/removal/deletion analyzed or executed here."
+}

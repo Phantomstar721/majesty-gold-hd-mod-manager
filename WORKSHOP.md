@@ -1,3 +1,16 @@
+Version 0.3.12 (beta) adds Classic Launch for Standard mods without preparing a
+merge, up to five named setup profiles, and a global expansion-content toggle
+that includes original Majesty quests. New mods stay disabled until selected.
+Gold indicators highlight new or updated content, and History shows brief patch
+summaries beneath the Manager version.
+
+Version 0.3.11 added shared custom-hero and ability support, research queues,
+cooldown displays, and bounded automatic failure reporting. It also corrects a
+repeat-registration check when restarting quests. Existing packages remain
+supported on Steam Default 1.5.2.24, Steam beta2 1.5.2.28 and GOG 1.5.2.28.
+Use Save Support Report after a failure; reports stay local until you share them.
+Close the game and Manager before updating, then Prepare Again.
+
 Majesty Mod Manager makes it easy to organize and launch all of the Majesty Gold
 HD mods and quests you have installed or subscribed to.
 
@@ -6,14 +19,36 @@ support. Install this manager and launch Majesty through it to use them
 individually or together. It automatically finds and organizes your mods and
 quests, remembers your choices, and prepares anything that needs extra support.
 
-The latest update simplifies conflict choices: see the mods and affected
+The latest update preserves timed image data during merging and improves script
+comparison. Combine Standard and Merge mods, choosing one preferred mod per
+conflicting pair while retaining changes that safely combine.
+
+These choices also cover building XML overrides, including buildings supplied
+by another selected mod. Existing-building patches need no new custom-building
+declaration, and expansion-only changes stay in expansion quests.
+Compact art archives with sparse tile and palette IDs are also supported;
+they no longer have to pad their tables with thousands of empty records.
+Art merging also preserves authored image-set ordering and correctly places
+tiles whose palettes change during combination.
+
+Standard conflict choices are now shown together in one window. Sound conflicts
+use preferred-mod choices too, and periodic spell damage keeps the selected
+script's arguments and branches rather than requiring an exact stock statement.
+
+The previous update fixes a launch failure when research or movement features
+are selected on default Steam or GOG. It also preserves missing stock artwork
+needed by merged content and refreshes stale compatibility results after changing game
+versions or repairing game files. The Manager automatically refreshes affected
+checks while keeping unchanged results cached for faster startup.
+
+Recent updates also simplify conflict choices: see the mods and affected
 gameplay at a glance, with more information under Details. Choose a preferred
 mod for each pair; both stay enabled, and changes that can be combined are kept.
 It also improves compatibility with custom healing-potion behavior and lets mod
 authors share hero quest-participation declarations across Standard mod variants.
-Close Majesty and the Manager before updating. Afterwards, reopen the Manager,
-select Rescan Content, and Prepare Selected Mods (or Prepare Again) before
-launching Majesty.
+Close Majesty and the Manager before updating. Afterwards, reopen the Manager
+and Prepare Selected Mods (or Prepare Again) before launching Majesty.
+Rescan Content remains available if you want to force a fresh mod check.
 
 First launch:
 

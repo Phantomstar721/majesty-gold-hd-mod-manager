@@ -1460,7 +1460,7 @@ def _declares_native_source_event(package_root: Path) -> bool:
         return False
     features = value.get("runtime_features", ()) if isinstance(value, dict) else ()
     return isinstance(features, list) and any(
-        isinstance(feature, dict) and (feature.get("type") == SPELL_ORIGIN_TYPE or
+        isinstance(feature, dict) and (feature.get("type") in (SPELL_ORIGIN_TYPE, "stock.message-flag-controls.v1") or
         feature.get("type") == EVENT_TYPE and feature.get("event") == EVENT) for feature in features)
 
 

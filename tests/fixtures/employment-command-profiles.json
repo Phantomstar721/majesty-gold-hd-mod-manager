@@ -1,0 +1,384 @@
+{
+  "addressKind": "VA",
+  "imageBase": 4194304,
+  "profiles": [
+    {
+      "name": "Public",
+      "executableSHA256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "worldPointer": 8148044,
+      "commandTable": {
+        "va": 5002940,
+        "size": 92,
+        "sha256": "828ccec6eaf4f5caa4258a6ea885b97d1c93ad6b0586031654093fed79a71001"
+      },
+      "windows": [
+        {
+          "name": "CommandEntry",
+          "va": 5000608,
+          "size": 77,
+          "sha256": "8d5f84e46692abd6ad414e259da7d933b183452c2339415633efd4b54acf5770"
+        },
+        {
+          "name": "SelectedHeroPaymentAndInvocation",
+          "va": 5002627,
+          "size": 181,
+          "sha256": "0b0671430654e5eb3b554d26d5ffa6170cd618f39d6adc2a092b1a6a287ab77a"
+        },
+        {
+          "name": "EvaluatorCleanup",
+          "va": 5001143,
+          "size": 42,
+          "sha256": "cbb8868c18ff18890d6198aeb7ef03f7550e5f75224061925b51b3f76373c3c4"
+        },
+        {
+          "name": "OrdinaryEarlyReturn",
+          "va": 5002917,
+          "size": 22,
+          "sha256": "0a298fd28b57b2e8dad5c63b3937e057a388a8714186aed81a7ac4712c074c90"
+        },
+        {
+          "name": "HandleResolver",
+          "va": 5903856,
+          "size": 64,
+          "sha256": "6376bca7255fe4ca59d0e31c7629b147b8d28e1640adfa1b1e7a0fda4ace8c51"
+        },
+        {
+          "name": "SovereignResolverWorld",
+          "va": 5087316,
+          "size": 8,
+          "sha256": "7b84b871682ef569c6167b483c32309605d50657d9d538ede2f72694cbeae0c0"
+        },
+        {
+          "name": "SovereignResolverCall",
+          "va": 5087379,
+          "size": 5,
+          "sha256": "abe2d0a8b6075487344fab33c62a51b9b43831622febc8105efae5ccb5c8925c"
+        }
+      ],
+      "sites": {
+        "entry": 5000608,
+        "selectedArm": 5002627,
+        "heroLookup": 5002634,
+        "componentValidation": 5002657,
+        "payment": 5002726,
+        "construct": 5002762,
+        "addSubject": 5002789,
+        "execute": 5002798,
+        "cleanup": 5001143,
+        "destroy": 5001158,
+        "early": 5002917
+      },
+      "stock": {
+        "stringConstruct": 6453888,
+        "stringDestroy": 6454320,
+        "evaluatorConstruct": 5650048,
+        "addAgent": 5647424,
+        "execute": 5650368,
+        "destroy": 5650272,
+        "handleResolver": 5903856
+      }
+    },
+    {
+      "name": "Beta2",
+      "executableSHA256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "worldPointer": 8273876,
+      "commandTable": {
+        "va": 5005564,
+        "size": 92,
+        "sha256": "3851f48c40c3189c90f06be35a8e4df3311c131e6543b7fcc59e80d24781c5e2"
+      },
+      "windows": [
+        {
+          "name": "CommandEntry",
+          "va": 5003232,
+          "size": 77,
+          "sha256": "83ac43e809b1ec78048b02b686ac4f866f0b46852372d9117965ddd76fde51bd"
+        },
+        {
+          "name": "SelectedHeroPaymentAndInvocation",
+          "va": 5005251,
+          "size": 181,
+          "sha256": "8ef22b16084c07059bc6e1b6b96471ad13ca1538b47f6d6970c32892a3f7236d"
+        },
+        {
+          "name": "EvaluatorCleanup",
+          "va": 5003767,
+          "size": 42,
+          "sha256": "e8c1defdd423249327cd19ec6d7dd0071ee1138592c365f08820591fe51ebf26"
+        },
+        {
+          "name": "OrdinaryEarlyReturn",
+          "va": 5005541,
+          "size": 22,
+          "sha256": "0a298fd28b57b2e8dad5c63b3937e057a388a8714186aed81a7ac4712c074c90"
+        },
+        {
+          "name": "HandleResolver",
+          "va": 5989792,
+          "size": 64,
+          "sha256": "6376bca7255fe4ca59d0e31c7629b147b8d28e1640adfa1b1e7a0fda4ace8c51"
+        },
+        {
+          "name": "SovereignResolverWorld",
+          "va": 5088868,
+          "size": 8,
+          "sha256": "8b088433539308b3448d1d7d63df44e19085d27bb224548b82c8615e11eed7b6"
+        },
+        {
+          "name": "SovereignResolverCall",
+          "va": 5088931,
+          "size": 5,
+          "sha256": "95badf105e0e2e4f92460ec81a40bee43ff3dd841aa65075028902350f9952f1"
+        }
+      ],
+      "sites": {
+        "entry": 5003232,
+        "selectedArm": 5005251,
+        "heroLookup": 5005258,
+        "componentValidation": 5005281,
+        "payment": 5005350,
+        "construct": 5005386,
+        "addSubject": 5005413,
+        "execute": 5005422,
+        "cleanup": 5003767,
+        "destroy": 5003782,
+        "early": 5005541
+      },
+      "stock": {
+        "stringConstruct": 6529568,
+        "stringDestroy": 6530000,
+        "evaluatorConstruct": 5740464,
+        "addAgent": 5737840,
+        "execute": 5740784,
+        "destroy": 5740688,
+        "handleResolver": 5989792
+      }
+    },
+    {
+      "name": "Gog",
+      "executableSHA256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "worldPointer": 8274540,
+      "commandTable": {
+        "va": 5007100,
+        "size": 92,
+        "sha256": "359df758ce6d8aa9e24899c48de516a6a8d7350b954d16c1292dd82ab9fca218"
+      },
+      "windows": [
+        {
+          "name": "CommandEntry",
+          "va": 5004768,
+          "size": 77,
+          "sha256": "a7d45ed7b7c2d6c74521852a402d0ce31e183539027060620b4bb93807d42b79"
+        },
+        {
+          "name": "SelectedHeroPaymentAndInvocation",
+          "va": 5006787,
+          "size": 181,
+          "sha256": "7d6c8889a22fbdf3eee4c81773d90355899811698297d0ca153ad1b924a2c8a0"
+        },
+        {
+          "name": "EvaluatorCleanup",
+          "va": 5005303,
+          "size": 42,
+          "sha256": "286dc8282b9d81520bdba700e7b1edcf7fb1dccbfbc8ee3f3d9f4d003c9b1aaf"
+        },
+        {
+          "name": "OrdinaryEarlyReturn",
+          "va": 5007077,
+          "size": 22,
+          "sha256": "0a298fd28b57b2e8dad5c63b3937e057a388a8714186aed81a7ac4712c074c90"
+        },
+        {
+          "name": "HandleResolver",
+          "va": 5986544,
+          "size": 64,
+          "sha256": "6376bca7255fe4ca59d0e31c7629b147b8d28e1640adfa1b1e7a0fda4ace8c51"
+        },
+        {
+          "name": "SovereignResolverWorld",
+          "va": 5090724,
+          "size": 8,
+          "sha256": "49715f87c2bee3774018ed1755924b7221219556072f8a8f743c7accba428d5b"
+        },
+        {
+          "name": "SovereignResolverCall",
+          "va": 5090787,
+          "size": 5,
+          "sha256": "a4291bed127708aad30d44c49ec7bd2026833881f58e80991fb2396c1a4f688b"
+        }
+      ],
+      "sites": {
+        "entry": 5004768,
+        "selectedArm": 5006787,
+        "heroLookup": 5006794,
+        "componentValidation": 5006817,
+        "payment": 5006886,
+        "construct": 5006922,
+        "addSubject": 5006949,
+        "execute": 5006958,
+        "cleanup": 5005303,
+        "destroy": 5005318,
+        "early": 5007077
+      },
+      "stock": {
+        "stringConstruct": 6538096,
+        "stringDestroy": 6538528,
+        "evaluatorConstruct": 5737136,
+        "addAgent": 5734512,
+        "execute": 5737456,
+        "destroy": 5737360,
+        "handleResolver": 5986544
+      }
+    }
+  ],
+  "models": {
+    "paired": {
+      "trace": [
+        "native hero lookup",
+        "native component4541 validation",
+        "native hero-player treasury",
+        "native signed affordability",
+        "native debit",
+        "stock integer-seeded constructor",
+        "stock temporary string destruction",
+        "resolve packet building",
+        "stock AddAgent building",
+        "stock AddAgent hero",
+        "stock Execute",
+        "stock evaluator destruction"
+      ],
+      "args": [
+        "packet building",
+        "validated packet hero"
+      ],
+      "callbackCount": 1,
+      "debitCalls": 1,
+      "destroyCount": 1,
+      "gold": 10,
+      "resultTag": 1
+    },
+    "legacy": {
+      "trace": [
+        "native hero lookup",
+        "native component4541 validation",
+        "native hero-player treasury",
+        "native signed affordability",
+        "native debit",
+        "stock integer-seeded constructor",
+        "stock temporary string destruction",
+        "stock AddAgent hero",
+        "stock Execute",
+        "stock evaluator destruction"
+      ],
+      "args": [
+        "validated packet hero"
+      ],
+      "callbackCount": 1,
+      "debitCalls": 1,
+      "destroyCount": 1,
+      "gold": 10,
+      "resultTag": 1
+    },
+    "missing_building": {
+      "trace": [
+        "native hero lookup",
+        "native component4541 validation",
+        "native hero-player treasury",
+        "native signed affordability",
+        "native debit",
+        "stock integer-seeded constructor",
+        "stock temporary string destruction",
+        "resolve packet building",
+        "stock AddAgent hero",
+        "skip Execute for missing packet building",
+        "stock evaluator destruction"
+      ],
+      "args": [
+        "validated packet hero"
+      ],
+      "callbackCount": 0,
+      "debitCalls": 1,
+      "destroyCount": 1,
+      "gold": 10,
+      "resultTag": 1
+    },
+    "missing_hero": {
+      "trace": [
+        "native hero lookup"
+      ],
+      "callbackCount": 0,
+      "debitCalls": 0,
+      "destroyCount": 0,
+      "gold": 10
+    },
+    "invalid_component": {
+      "trace": [
+        "native hero lookup",
+        "native component4541 validation"
+      ],
+      "callbackCount": 0,
+      "debitCalls": 0,
+      "destroyCount": 0,
+      "gold": 10
+    },
+    "negative_treasury_zero_quote": {
+      "trace": [
+        "native hero lookup",
+        "native component4541 validation",
+        "native hero-player treasury",
+        "native signed affordability"
+      ],
+      "callbackCount": 0,
+      "debitCalls": 0,
+      "destroyCount": 0,
+      "gold": -1
+    },
+    "legacy_paid": {
+      "trace": [
+        "native hero lookup",
+        "native component4541 validation",
+        "native hero-player treasury",
+        "native signed affordability",
+        "native debit",
+        "stock integer-seeded constructor",
+        "stock temporary string destruction",
+        "stock AddAgent hero",
+        "stock Execute",
+        "stock evaluator destruction"
+      ],
+      "args": [
+        "validated packet hero"
+      ],
+      "callbackCount": 1,
+      "debitCalls": 1,
+      "destroyCount": 1,
+      "gold": 7,
+      "resultTag": 1
+    },
+    "paired_nonzero_quote": {
+      "trace": [
+        "reject nonzero employment quote before stock dispatch"
+      ],
+      "callbackCount": 0,
+      "debitCalls": 0,
+      "destroyCount": 0,
+      "gold": 10
+    }
+  },
+  "priorEvidenceSHA256": "d0f38e2d948f4ea3ebb3dc56a09d9c88ca23a2e44516cede520794936b78b23d",
+  "limits": "Static exact-profile instruction evidence and finite adaptation model only. Existing resolver category3 virtual28 ordinary nonzero-ID result is a supplied dependency, not a new actor-service identity/generation proof. No fault/exception cleanup, actors, game execution, consumer implementation or deployment.",
+  "existingSourceReferences": [
+    {
+      "path": "majesty-gold-hd-cam-merger/runtime/SovereignSourceTargetRuntime.inl",
+      "sha256": "8117e60e85c553e5e423b39efebde267012dfe0c0768d58a20a0c6cddad9095f"
+    },
+    {
+      "path": "majesty-gold-hd-cam-merger/docs/stock-occupant-action-panel.md",
+      "sha256": "663d3c8bb18ae690b0f5959deb8a1776aa2bd11e7c00eab6190e93923528fb61"
+    },
+    {
+      "path": "majesty-gold-hd-cam-merger/src/majesty_cam/action_callback_bridge.py",
+      "sha256": "8f0a8086eab9e1e41072af7e0b85368d44d5c91d44c7bbf77e14a269dc1d4e40"
+    }
+  ]
+}

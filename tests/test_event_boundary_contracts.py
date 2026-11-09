@@ -97,7 +97,7 @@ class EventBoundaryContractTests(unittest.TestCase):
         changed = replace(item, text=item.text[:start] + changes + item.text[end:])
         final = self.observe(changed)['fire_balm_effect']
         self.assertEqual(final.count('$Observe('), 1)
-        self.assertEqual(final.replace('\n\t$Observe(ThisAgent, "fire_balm");\n', ''), changed.text)
+        self.assertEqual(final.replace('\n\t$Observe(ThisAgent, "fire_balm");', ''), changed.text)
 
     def test_potion_observer_keeps_entry_guard_recipient_pair_and_completion_work(self):
         self.setup_event('potion-consumed')

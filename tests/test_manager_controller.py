@@ -817,6 +817,40 @@ class ManagerControllerTests(unittest.TestCase):
 
 
 class ManagerControllerPreferenceRetryTests(unittest.TestCase):
+    def test_changed_inputs_replan_before_composition_for_each_branch(self):
+        for branch in ("public", "beta2", "gog"):
+            with self.subTest(branch=branch):
+                self.controller.paths = replace(self.paths, game_path=self.paths.game_path / branch)
+                old = replace(self.controller.plan, fingerprint="old", source_metadata_signature="old")
+                fresh = replace(old, fingerprint="fresh", source_metadata_signature="new")
+                self.controller.plan = old
+                self.controller._script_retry_fingerprint = old.fingerprint
+                self.controller._script_retry_preferences = dict(self.choices)
+                def replan():
+                    self.controller.plan = fresh
+                with patch("majesty_cam.manager.controller._plan_source_metadata_signature",
+                           return_value="new"), patch.object(self.controller, "_replan",
+                           side_effect=replan) as refresh, patch(
+                           "majesty_cam.manager.controller.build_merged_package",
+                           side_effect=ManagerBuildError("composition sentinel")) as build:
+                    with self.assertRaisesRegex(ManagerBuildError, "composition sentinel"):
+                        self.controller.build()
+                refresh.assert_called_once_with()
+                self.assertIs(build.call_args.args[0], fresh)
+                self.assertEqual(self.controller._script_retry_preferences, {})
+                self.assertFalse(self.paths.merged_output_root.exists())
+
+    def test_unchanged_inputs_keep_plan_and_do_not_retry_composition_errors(self):
+        self.controller.plan = replace(self.controller.plan, source_metadata_signature="same")
+        with patch("majesty_cam.manager.controller._plan_source_metadata_signature",
+                   return_value="same"), patch.object(self.controller, "_replan") as refresh, patch(
+                   "majesty_cam.manager.controller.build_merged_package",
+                   side_effect=ManagerBuildError("changed during script review")) as build:
+            with self.assertRaisesRegex(ManagerBuildError, "changed during script review"):
+                self.controller.build()
+        refresh.assert_not_called()
+        build.assert_called_once()
+
     def setUp(self):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

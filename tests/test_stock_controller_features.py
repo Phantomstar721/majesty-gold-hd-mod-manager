@@ -319,12 +319,25 @@ class StockControllerFeatureTests(unittest.TestCase):
             with self.subTest(boundary=action_control_id):
                 normalize_controller_features(
                     tuple(
-                        replace(item, action_control_id=action_control_id)
+                        replace(item, action_control_id=action_control_id,
+                                price_control_id=action_control_id + 1000,
+                                icon_control_id=(action_control_id + 500 if item.icon_control_id else 0))
                         if item is research
                         else item
                         for item in self.features
                     )
                 )
+
+    def test_ap99_companions_follow_native_row_arithmetic(self) -> None:
+        row = next(item for item in self.features if isinstance(item, StockAp99ResearchRow))
+        for field, value, message in (
+            ('price_control_id', row.action_control_id + 256, 'price_control_id must equal'),
+            ('icon_control_id', row.action_control_id + 512, 'icon_control_id must be'),
+        ):
+            with self.subTest(field=field), self.assertRaisesRegex(ControllerFeatureError, message):
+                normalize_controller_features(tuple(
+                    replace(item, **{field: value}) if item is row else item
+                    for item in self.features))
 
     def test_ap99_templates_use_only_the_complete_constructed_descriptor_set(self) -> None:
         research = next(

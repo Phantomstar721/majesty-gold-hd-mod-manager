@@ -1,4 +1,5 @@
 #include "MajestyBuildId.h"
+#include "GplCallArguments.h"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -8,6 +9,8 @@
 #include "NativeTiming.h"
 #include "EarnedRewards.h"
 #include "RuntimeFeatureRegistry.h"
+#include "AttackObservationRuntime.h"
+#include "CheckedPlacementRuntime.h"
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -30,6 +33,9 @@ constexpr Profile kGog = {
 std::uintptr_t g_base = 0;
 const Profile* g_profile = nullptr;
 bool g_mapQuery = false, g_movementQuery = false;
+bool g_attackObservation = false;
+void (*g_unsafeLaunch)(const char*) = nullptr;
+void (*g_observationLog)(const char*) = nullptr;
 int (*g_researchOrder)(void*, std::uint32_t) = nullptr;
 int (*g_researchEligible)(void*, std::uint32_t) = nullptr;
 int (*g_movementDistance)(void*, int) = nullptr;
@@ -121,12 +127,15 @@ bool RedirectCall(std::uintptr_t rva, const void* target) {
     DWORD ignored = 0;
     return VirtualProtect(site, 5, old, &ignored) != 0;
 }
+// These functions RETURN their value in raw slot0. Written arguments start at1.
+// Unlike the observer/placement procedures, there is no explicit out argument.
 void* Argument(void* arguments, unsigned index) {
     if (arguments == nullptr) return nullptr;
     const auto first = Read<std::uintptr_t>(arguments, 0x0C);
     const auto last = Read<std::uintptr_t>(arguments, 0x10);
     if (first == 0 || last < first || last-first > 16*sizeof(void*) ||
         (last-first)%sizeof(void*) != 0 || index >= (last-first)/sizeof(void*)) return nullptr;
+    if (!MajestyGplCall::FrameSlot(index, (last-first)/sizeof(void*), index)) return nullptr;
     using At = void** (__thiscall*)(void*, unsigned);
     void** entry = reinterpret_cast<At>(g_base+g_profile->argumentAt)(arguments, index);
     return entry == nullptr ? nullptr : *entry;
@@ -588,6 +597,18 @@ void __cdecl ResearchAwardBonus(void* arguments) {
 }
 void __cdecl RegisterAfterStock() {
     reinterpret_cast<void (__cdecl*)()>(g_base+g_profile->registration)();
+    if (g_attackObservation && !MajestyAttackObservation::InstallRuntime(g_base,&Register,g_observationLog)) {
+        g_unsafeLaunch("Attack observation rejected at the stock registration boundary.");
+        // The supplied Manager failure handler is nonreturning. Do not resume
+        // with missing native procedures if a future handler violates that contract.
+        TerminateProcess(GetCurrentProcess(),ERROR_INVALID_DATA);
+        return;
+    }
+    if (g_attackObservation && !MajestyCheckedPlacement::InstallPreparedRuntime(&Register)) {
+        g_unsafeLaunch("Checked placement rejected at the stock registration boundary.");
+        TerminateProcess(GetCurrentProcess(),ERROR_INVALID_DATA);
+        return;
+    }
     if (g_mapQuery) {
         Register("MM_MapFog", &Fog);
         Register("MM_MapNextFrontier", &Frontier);
@@ -618,11 +639,17 @@ bool InstallMapQueryRuntime(std::uintptr_t imageBase, MajestyBuildId buildId,
                            const MajestyRuntimeFeatures::Registry* timing,
                            int (*researchOrder)(void*, std::uint32_t),
                            int (*researchEligible)(void*, std::uint32_t),
-                           int (*movementDistance)(void*, int)) {
+                           int (*movementDistance)(void*, int),
+                           bool attackObservation,
+                           void (*unsafeLaunch)(const char*),
+                           void (*log)(const char*)) {
     if ((researchOrder == nullptr) != (researchEligible == nullptr)) return false;
-    if (!mapQuery && !movementQuery && timing == nullptr && !researchOrder) return true;
-    if (researchOrder && buildId != MajestyBuildId::SteamBeta2) return false;
-    if (movementDistance && buildId != MajestyBuildId::SteamBeta2) return false;
+    if (!mapQuery && !movementQuery && timing == nullptr && !researchOrder && !attackObservation) return true;
+    if (attackObservation && !unsafeLaunch) return false;
+    g_attackObservation=attackObservation;g_unsafeLaunch=unsafeLaunch;g_observationLog=log;
+    // These callbacks are installed from the guarded per-build research and
+    // movement adapters. Their shared GPL bridge uses the selected profiles
+    // below; it must not reintroduce the pre-port beta2-only restriction.
     if (timing != nullptr && !timing->nativeTiming) return false;
     g_base = imageBase;
     switch (buildId) {

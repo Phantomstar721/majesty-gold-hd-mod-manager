@@ -6,10 +6,23 @@ param(
     [switch]$FreestyleDiagnosticNamedRetention,
     [switch]$SiegeCrashDiagnostic,
     [switch]$ExplorationTests,
-    [switch]$FeatureTests
+    [switch]$FeatureTests,
+    [switch]$RegistrationTests,
+    [switch]$AttackObservationTests,
+    [switch]$CheckedPlacementTests,
+    [switch]$RegistrationDiagnostic
 )
 
 $ErrorActionPreference = "Stop"
+if ($RegistrationTests) {
+    foreach ($name in @("MAJESTY_PUBLIC_EXE", "MAJESTY_BETA2_EXE", "MAJESTY_GOG_EXE", "MAJESTY_BCD_GAME", "MAJESTY_BCD_GOG_GAME")) {
+        $fixturePath = [Environment]::GetEnvironmentVariable($name)
+        $fixtureType = if ($name -like '*_GAME') { 'Container' } else { 'Leaf' }
+        if (-not $fixturePath -or -not (Test-Path -LiteralPath $fixturePath -PathType $fixtureType)) {
+            throw "Three-version runtime verification requires $name. No skipped profiles are allowed."
+        }
+    }
+}
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $sourceRoot = Join-Path $repoRoot "runtime"
 $output = if ([IO.Path]::IsPathRooted($OutputRoot)) {
@@ -106,6 +119,9 @@ $commonLibPaths = @(
 )
 
 $runtimeDefines = @()
+if ($RegistrationDiagnostic) {
+    $runtimeDefines += "/DMAJESTY_REGISTRATION_DIAGNOSTIC=1"
+}
 if ($FreestyleDiagnosticNamedRetention) {
     $runtimeDefines += "/DFREESTYLE_CAM_DIAGNOSTIC_NAMED_RETENTION=1"
 } elseif ($FreestyleDiagnosticParity) {
@@ -116,10 +132,25 @@ if ($SiegeCrashDiagnostic) {
 }
 
 $runtimeSources = @(
+    (Join-Path $sourceRoot "BooleanRuntime.cpp"),
+    (Join-Path $sourceRoot "NativeImpactRegistry.cpp"),
+    (Join-Path $sourceRoot "AuditedBeta2.cpp"),
+    (Join-Path $sourceRoot "CheckedPlacement.cpp")
+    (Join-Path $sourceRoot "CheckedNativeState.cpp")
+    (Join-Path $sourceRoot "CheckedPlacementNative.cpp")
+    (Join-Path $sourceRoot "CheckedPlacementRuntime.cpp")
+    (Join-Path $sourceRoot "CheckedPlacementProof.cpp"),
+    (Join-Path $sourceRoot "CheckedCast.cpp"),
+    (Join-Path $sourceRoot "CheckedCastWindows.cpp"),
+    (Join-Path $sourceRoot "CheckedRelocation.cpp"),
+    (Join-Path $sourceRoot "CheckedRelocationWindows.cpp"),
+    (Join-Path $sourceRoot "PaidSourceTargetCommand.cpp"),
+    (Join-Path $sourceRoot "AttackObservation.cpp"),
+    (Join-Path $sourceRoot "AttackObservationProof.cpp"),
+    (Join-Path $sourceRoot "AttackObservationRuntime.cpp"),
     (Join-Path $sourceRoot "EquipmentRuntime.cpp"),
     (Join-Path $sourceRoot "BoundedMapQuery.cpp"),
     (Join-Path $sourceRoot "MapQueryRuntime.cpp"),
-    (Join-Path $sourceRoot "PaidSourceTargetCommand.cpp"),
     (Join-Path $sourceRoot "MajestyModManagerRuntime.cpp"),
     (Join-Path $sourceRoot "ControllerLifecycleRegistry.cpp"),
     (Join-Path $sourceRoot "FreestyleCamRuntime.cpp"),
@@ -128,7 +159,7 @@ $runtimeSources = @(
     (Join-Path $sourceRoot "RuntimeFeatureRegistry.cpp"),
     (Join-Path $sourceRoot "StockControllerRegistry.cpp")
 )
-$runtimeLibraries = @("user32.lib")
+$runtimeLibraries = @("user32.lib", "bcrypt.lib")
 if ($SiegeCrashDiagnostic) {
     $runtimeSources += (Join-Path $sourceRoot "CrashDumpDiagnostic.cpp")
     $runtimeLibraries += "dbghelp.lib"
@@ -146,23 +177,70 @@ if ($LASTEXITCODE -ne 0) { throw "Runtime launcher build failed with exit code $
 
 $fixtureNames = @()
 if ($ExplorationTests) { $fixtureNames += "ExplorationNativeTests" }
-if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests", "PaidSourceTargetCommandTests", "PanelLifecycleRuntimeTests", "LargeModListTests" }
+if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests"; $fixtureNames += "ObserverReregistrationTests", "PlacementReregistrationTests"; $fixtureNames += "RegistrationDiagnosticTests", "BoundedRuntimeLogTests" }
+if ($FeatureTests) { $fixtureNames += "PaidSourceTargetCommandTests", "PanelLifecycleRuntimeTests", "LargeModListTests" }
+if ($RegistrationTests) { $fixtureNames += "SharedRegistrationRuntimeTests"; $fixtureNames += "NativeRegistrationLifecycleTests" }
+if ($AttackObservationTests) {
+    & $compiler /nologo /W4 /O2 /EHsc @commonIncludes `
+        (Join-Path $sourceRoot "NativeImpactRegistry.cpp") `
+        (Join-Path $sourceRoot "AttackObservation.cpp") `
+        (Join-Path $sourceRoot "AttackObservationProof.cpp") `
+        (Join-Path $repoRoot "tests\AttackObservationTests.cpp") `
+        "/Fo$output\" "/Fe:$output\AttackObservationTests.exe" /link @commonLibPaths
+    if ($LASTEXITCODE -ne 0) { throw "Attack observation fixture build failed" }
+    & (Join-Path $output "AttackObservationTests.exe")
+    if ($LASTEXITCODE -ne 0) { throw "Attack observation fixture failed" }
+}
+if ($CheckedPlacementTests) {
+    & $compiler /nologo /W4 /O2 /EHsc @commonIncludes `
+        (Join-Path $sourceRoot "CheckedPlacement.cpp") `
+        (Join-Path $sourceRoot "CheckedNativeState.cpp") `
+        (Join-Path $sourceRoot "CheckedPlacementProof.cpp") `
+        (Join-Path $sourceRoot "CheckedCast.cpp") `
+        (Join-Path $sourceRoot "CheckedRelocation.cpp") `
+        (Join-Path $repoRoot "tests\CheckedPlacementTests.cpp") `
+        "/Fo$output\" "/Fe:$output\CheckedPlacementTests.exe" /link @commonLibPaths
+    if ($LASTEXITCODE -ne 0) { throw "Checked placement fixture build failed" }
+    & (Join-Path $output "CheckedPlacementTests.exe")
+    if ($LASTEXITCODE -ne 0) { throw "Checked placement fixture failed" }
+    & $compiler /nologo /W4 /O2 /EHsc @commonIncludes `
+        (Join-Path $sourceRoot "CheckedPlacement.cpp") `
+        (Join-Path $repoRoot "tests\CosmeticActionCleanupTests.cpp") `
+        "/Fo$output\" "/Fe:$output\CosmeticActionCleanupTests.exe" /link @commonLibPaths
+    if ($LASTEXITCODE -ne 0) { throw "Cosmetic placement fixture build failed" }
+    & (Join-Path $output "CosmeticActionCleanupTests.exe")
+    if ($LASTEXITCODE -ne 0) { throw "Cosmetic placement fixture failed" }
+}
 foreach ($fixtureName in $fixtureNames) {
     $fixtureLinkOptions = @()
     $fixtureArguments = @()
-    if ($fixtureName -eq "LargeModListTests") {
+    $fixedImageFixture = $fixtureName -in @("SharedRegistrationRuntimeTests", "NativeRegistrationLifecycleTests", "LargeModListTests")
+    if ($fixedImageFixture) {
+        # Reserve the game image's preferred base for nonexecuted fixture bytes.
         $fixtureLinkOptions = @("/BASE:0x10000000", "/ALIGN:65536", "/DYNAMICBASE:NO")
         $fixtureArguments = @($env:MAJESTY_PUBLIC_EXE, $env:MAJESTY_BETA2_EXE, $env:MAJESTY_GOG_EXE)
     }
     $fixtureSources = @($runtimeSources | Where-Object { [IO.Path]::GetFileName($_) -ne "MajestyModManagerRuntime.cpp" })
-    if ($fixtureName -eq "LargeModListTests") {
-        $fixtureSources += (Join-Path $repoRoot "tests/GogFixtureMemory.cpp")
+    if ($fixtureName -in @("ObserverReregistrationTests", "NativeRegistrationLifecycleTests")) {
+        $fixtureSources = @($fixtureSources | Where-Object { [IO.Path]::GetFileName($_) -notin @("AttackObservationRuntime.cpp", "BooleanRuntime.cpp") })
+    }
+    if ($fixtureName -eq "ObserverReregistrationTests") {
+        $fixtureSources += (Join-Path $sourceRoot "BooleanRuntime.cpp")
+    }
+    if ($fixtureName -eq "PlacementReregistrationTests") {
+        $fixtureSources = @($fixtureSources | Where-Object { [IO.Path]::GetFileName($_) -ne "CheckedPlacementRuntime.cpp" })
+    }
+    if ($fixtureName -eq "NativeRegistrationLifecycleTests") {
+        $fixtureSources = @($fixtureSources | Where-Object { [IO.Path]::GetFileName($_) -ne "AuditedBeta2.cpp" })
+    }
+    if (($RegistrationTests -and $fixedImageFixture) -or $fixtureName -eq "LargeModListTests") {
+        $fixtureSources += (Join-Path $repoRoot "tests\GogFixtureMemory.cpp")
     }
     & $compiler /nologo /W4 /O2 /EHsc @commonIncludes @runtimeDefines `
         @fixtureSources (Join-Path $repoRoot "tests\$fixtureName.cpp") `
         "/Fo$output\" "/Fe:$output\$fixtureName.exe" /link @commonLibPaths @runtimeLibraries @fixtureLinkOptions
     if ($LASTEXITCODE -ne 0) { throw "$fixtureName build failed" }
-    if ($fixtureName -eq "LargeModListTests") {
+    if ($fixedImageFixture) {
         # Same fixed-address, data-only fixture layout used by GOG profile tests.
         $testExe = Join-Path $output "$fixtureName.exe"
         $testBytes = [IO.File]::ReadAllBytes($testExe)
@@ -185,10 +263,39 @@ foreach ($fixtureName in $fixtureNames) {
         & $compiler /nologo @objects "/Fe:$testExe" /link "/BASE:$testBase" /ALIGN:65536 /DYNAMICBASE:NO @commonLibPaths @runtimeLibraries
         if ($LASTEXITCODE -ne 0) { throw "Registration fixture layout did not link" }
     }
-    & (Join-Path $output "$fixtureName.exe") @fixtureArguments
-    if ($LASTEXITCODE -ne 0) { throw "$fixtureName failed" }
+    if ($fixtureName -eq "NativeRegistrationLifecycleTests") {
+        for ($profileIndex = 0; $profileIndex -lt 3; $profileIndex++) {
+            & (Join-Path $output "$fixtureName.exe") $fixtureArguments[$profileIndex] $profileIndex
+            if ($LASTEXITCODE -ne 0) { throw "$fixtureName failed for profile $profileIndex" }
+        }
+    } else {
+        & (Join-Path $output "$fixtureName.exe") @fixtureArguments
+        if ($LASTEXITCODE -ne 0) { throw "$fixtureName failed" }
+    }
+    if ($fixtureName -eq "RegistrationDiagnosticTests") {
+        # Prove the normal release build retains bounded registration evidence.
+        & $compiler /nologo /W4 /O2 /EHsc @commonIncludes `
+            (Join-Path $repoRoot "tests\RegistrationDiagnosticTests.cpp") `
+            "/Fo$output\RegistrationDiagnosticDisabled.obj" "/Fe:$output\RegistrationDiagnosticDisabled.exe" /link @commonLibPaths
+        if ($LASTEXITCODE -ne 0) { throw "Disabled registration diagnostic fixture build failed" }
+        & (Join-Path $output "RegistrationDiagnosticDisabled.exe")
+        if ($LASTEXITCODE -ne 0) { throw "Normal registration evidence fixture failed" }
+    }
 }
 
+if ($RegistrationTests -and $FeatureTests -and $ExplorationTests) {
+    $receipt = @{
+        schema = 1
+        verification = "offline-native-installation-and-lifecycle-fixtures"
+        liveGameplayAcceptance = $false
+        runtimeSha256 = (Get-FileHash -LiteralPath (Join-Path $output "MajestyBuildingRuntime.dll") -Algorithm SHA256).Hash
+        profiles = @{}
+    }
+    foreach ($name in @("MAJESTY_PUBLIC_EXE", "MAJESTY_BETA2_EXE", "MAJESTY_GOG_EXE")) {
+        $receipt.profiles[$name] = (Get-FileHash -LiteralPath ([Environment]::GetEnvironmentVariable($name)) -Algorithm SHA256).Hash
+    }
+    $receipt | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $output "runtime-parity.json") -Encoding UTF8
+}
 Write-Host "Built x86 Majesty Mod Manager native runtime:"
 Write-Host $output
 if ($FreestyleDiagnosticNamedRetention) {

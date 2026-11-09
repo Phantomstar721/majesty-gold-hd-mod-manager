@@ -47,6 +47,17 @@ class ScriptReviewDialogTests(unittest.TestCase):
         dialog.choice_buttons[pair.identity][owner].click()
         return pair.identity, owner
 
+    def test_already_applied_xml_pair_is_not_offered_again(self):
+        from majesty_cam.script_review import pair_key
+        fixed = ((pair_key('first', 'second'), 'second'),)
+        one = replace(conflict(), fixed_preferences=fixed)
+        two = replace(conflict(name='Other', owners=('third','fourth')), fixed_preferences=fixed)
+        dialog = self.dialog(one, two)
+        self.assertEqual(len(dialog.pairs), 1)
+        self.choose(dialog)
+        dialog.accept()
+        self.assertEqual(dialog.decisions[pair_key('first','second')], 'second')
+
     def test_one_preference_covers_every_rule_and_both_quest_scopes(self):
         dialog = self.dialog(conflict(name="Damage"), conflict(name="Potion_Check"),
                              conflict("majestyexpansion", name="Damage"))

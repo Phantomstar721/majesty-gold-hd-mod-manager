@@ -25,6 +25,7 @@ constexpr char kGenericControllerRecipes[] =
     "stock.controller-recipes.v1";
 constexpr char kMapFogQuery[] = "stock.map-fog-query.v1";
 constexpr char kMovementQuery[] = "stock.movement-query.v1";
+constexpr char kMessageFlagControls[] = "stock.message-flag-controls.v1";
 constexpr char kNativeTiming[] = "stock.native-timing.v1";
 constexpr char kEquipment[] = "stock.equipment.v1";
 constexpr char kKingdomResearch[] = "manager.kingdom-research.v1";
@@ -33,6 +34,9 @@ constexpr char kInventorySpellDisplay[] = "manager.inventory-spell-display.v1";
 constexpr char kMovementScale[] = "manager.overlay-movement-scale.v1";
 constexpr char kSourceExploration[] = "manager.source-exploration.v1";
 constexpr char kSpellOrigin[] = "manager.spell-origin.v1";
+constexpr char kCheckedPlacement[] = "manager.checked-placement.v1";
+constexpr char kAttackObservation[] = "manager.attack-projectile-observation.v1";
+constexpr char kProjectileInterception[] = "manager.projectile-interception.v1";
 
 struct Manifest {
     std::vector<std::string> capabilities;

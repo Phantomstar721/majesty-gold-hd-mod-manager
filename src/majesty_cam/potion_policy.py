@@ -128,6 +128,23 @@ def prepare_descriptions(result, stock_records, policies):
     from .descriptions import parse_descriptions, serialize_descriptions
     records = dict(stock_records)
     records.update({r.key: r for r in result.document.records})
+    available_actions = {r.to_element().get("Name", "").casefold()
+                         for key, r in records.items() if key[0] == "Action"}
+    # Stock Bazaar actions belong to the expansion dataset. Original Majesty
+    # must not require or import them merely because a hero declares a policy.
+    # An explicitly declared private action remains required below.
+    requested = {name.casefold(): potion for potion, (_, name) in POTIONS.items()
+                 if name.casefold() in available_actions}
+    stock_names = {name.casefold(): potion for potion, (_, name) in POTIONS.items()}
+    for policy in policies:
+        for potion, name in policy.private_actions.items():
+            if name.casefold() in stock_names and stock_names[name.casefold()] != potion:
+                raise ValueError("one action cannot represent two different potions")
+            if name.casefold() in requested and requested[name.casefold()] != potion:
+                raise ValueError("one action cannot represent two different potions")
+            requested[name.casefold()] = potion
+    if not requested:
+        return result, Plan()
     for policy in policies:
         if policy.shapeshift["preset"] == "custom":
             name = policy.shapeshift["unit_name"].casefold()
@@ -135,12 +152,6 @@ def prepare_descriptions(result, stock_records, policies):
                      and r.to_element().get("Name", "").casefold() == name]
             if len(units) != 1:
                 raise ValueError("custom potion form requires one loaded Unit description: " + name)
-    requested = {name.casefold(): potion for potion, (_, name) in POTIONS.items()}
-    for policy in policies:
-        for potion, name in policy.private_actions.items():
-            if name.casefold() in requested and requested[name.casefold()] != potion:
-                raise ValueError("one action cannot represent two different potions")
-            requested[name.casefold()] = potion
     roots = {r.key: r.to_element() for r in result.document.records}
     actions, found = [], set()
     for key, record in records.items():

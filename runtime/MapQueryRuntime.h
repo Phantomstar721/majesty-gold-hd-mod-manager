@@ -10,4 +10,7 @@ bool InstallMapQueryRuntime(std::uintptr_t imageBase, MajestyBuildId buildId,
                            const MajestyRuntimeFeatures::Registry* timing = nullptr,
                            int (*researchOrder)(void*, std::uint32_t) = nullptr,
                            int (*researchEligible)(void*, std::uint32_t) = nullptr,
-                           int (*movementDistance)(void*, int) = nullptr);
+                           int (*movementDistance)(void*, int) = nullptr,
+                           bool attackObservation = false,
+                           void (*unsafeLaunch)(const char*) = nullptr,
+                           void (*log)(const char*) = nullptr);

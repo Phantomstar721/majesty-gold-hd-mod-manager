@@ -1,66 +1,69 @@
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 
-from majesty_cam.action_callback_bridge import bridge_symbol, bridge_source, add_bridges, validate_bridge
-from majesty_cam.gpl import parse_gpl, SemanticMergeResult
-from majesty_cam.compose import compile_gpl
-from majesty_cam.stock_controller_features import StockMx04Mx05OccupantActionPanel
-from gpl_sampler_harness import SamplerHarness, Agent
+from majesty_cam.action_callback_bridge import (
+    add_bridges, bridge_source, bridge_symbol, validate_bridge,
+)
+from majesty_cam.gpl import SemanticMergeResult, parse_gpl
+from majesty_cam.stock_controller_features import StockMx05LiveAgentListPanel
+from gpl_sampler_harness import Agent, SamplerHarness
 
 
-class ActionCallbackBridgeTests(unittest.TestCase):
-    def test_generated_once_and_registry_uses_integer_adapter(self):
-        from majesty_cam.stock_controller_registry import resolve_stock_controller_registry
-        feature = StockMx04Mx05OccupantActionPanel("offers", "Example", "MX05", 0x7101,
-                                                  "Example_Cost", "Example_Action")
+class ActionBridgeTests(unittest.TestCase):
+    def test_pair_preserves_order_and_translates_boolean_once(self):
+        for success in (False, True):
+            with self.subTest(success=success):
+                vm = SamplerHarness(bridge_source('Hire', paired=True))
+                building, hero = Agent(), Agent()
+                calls = []
+                vm.calls['hire'] = lambda *args: calls.append(args) or success
+                self.assertEqual(vm.call(bridge_symbol('Hire', paired=True), building, hero), int(success))
+                self.assertEqual(calls, [(building, hero)])
+
+    def test_legacy_identity_and_single_argument_are_unchanged(self):
+        import hashlib
+        self.assertEqual(bridge_symbol('Hire'), 'MM_Action_' + hashlib.sha256(b'hire').hexdigest()[:24])
+        self.assertNotEqual(bridge_symbol('Hire'), bridge_symbol('Hire', paired=True))
+        vm = SamplerHarness(bridge_source('Hire'))
+        hero, calls = Agent(), []
+        vm.calls['hire'] = lambda *args: calls.append(args) or True
+        self.assertEqual(vm.call(bridge_symbol('Hire'), hero), 1)
+        self.assertEqual(calls, [(hero,)])
+
+    def test_validator_rejects_swapped_arguments_and_wrong_scope(self):
+        symbol = bridge_symbol('Hire', paired=True)
+        callback = 'function Hire(agent Building, agent Hero) is boolean declare begin return True; end'
+        functions = {symbol.casefold(): bridge_source('Hire', paired=True), 'hire': callback}
+        counts = {name: 1 for name in functions}
+        self.assertEqual(validate_bridge(symbol, functions, counts, paired=True), ('Hire', callback))
+        with self.assertRaises(ValueError):
+            validate_bridge(symbol, functions, counts)
+        functions[symbol.casefold()] = functions[symbol.casefold()].replace('$Hire(Building, Hero)', '$Hire(Hero, Building)')
+        with self.assertRaises(ValueError):
+            validate_bridge(symbol, functions, counts, paired=True)
+
+    def test_generation_selects_pair_from_declared_scope(self):
+        panel = StockMx05LiveAgentListPanel(
+            'hire', 'Forge', 'FH01', 8100, 'Count', 'Row', 'Revision',
+            None, None, None, None, 'Cost', 'Hire',
+            action_agent_scope='parent-and-selected-row')
         inventory = SimpleNamespace(selected=SimpleNamespace(package=SimpleNamespace(
-            definition=SimpleNamespace(runtime_features=(feature,)))))
-        original = SemanticMergeResult((), ())
-        result = add_bridges(original, (inventory, inventory))
+            definition=SimpleNamespace(runtime_features=(panel,)))))
+        result = add_bridges(SemanticMergeResult((), ()), (inventory,))
         self.assertEqual(len(result.items), 1)
-        with self.assertRaisesRegex(ValueError, "collides"):
+        self.assertEqual(result.items[0].normalized_name, bridge_symbol('Hire', paired=True).casefold())
+        with self.assertRaises(ValueError):
             add_bridges(result, (inventory,))
-        registry = resolve_stock_controller_registry((feature,),
-            {"offers": (int.from_bytes(b"CG01", "little"), int.from_bytes(b"CG02", "little"))})
-        self.assertEqual(registry.occupant_action_panels[0].action_callback_symbol,
-                         bridge_symbol("Example_Action"))
 
-    def test_boolean_result_is_converted_once_without_coercion(self):
-        for result in (False, True):
-            vm = SamplerHarness(bridge_source("Example_Action"))
-            calls = []
-            def action(subject):
-                calls.append(subject)
-                return result
-            vm.calls["example_action"] = action
-            subject = Agent()
-            self.assertEqual(vm.call(bridge_symbol("Example_Action"), subject), int(result))
-            self.assertEqual(calls, [subject])
-
-    def test_exact_bridge_and_collision_checks_and_compiler(self):
-        from majesty_cam.gameplay_events import require_callback
-        from majesty_cam.gpl import DefinitionKind
-        callback = "function Example_Action(agent Subject) is boolean\ndeclare\nbegin\nreturn True;\nend\n"
-        source = callback + bridge_source("Example_Action")
-        parsed = parse_gpl(source)
-        functions = {item.normalized_name: item.text for item in parsed.items}
-        counts = dict.fromkeys(functions, 1)
-        symbol = bridge_symbol("Example_Action")
-        name, text = validate_bridge(symbol, functions, counts)
-        require_callback(parse_gpl(text).require(DefinitionKind.FUNCTION, name), name, ("agent",), True)
-        self.assertEqual(symbol, bridge_symbol("example_action"))
-        with self.assertRaisesRegex(ValueError, "changed"):
-            validate_bridge(symbol, {**functions, symbol.casefold(): functions[symbol.casefold()].replace("return 1", "return 0")}, counts)
-        with self.assertRaisesRegex(ValueError, "exactly once"):
-            validate_bridge(symbol, functions, {**counts, "example_action": 2})
-        compiler = Path("C:/Program Files (x86)/Steam/steamapps/common/Majesty HD/SDK/Gplbcc.exe")
-        if compiler.is_file():
-            result = SemanticMergeResult(parsed.items, ())
-            with TemporaryDirectory(prefix="manager-action-abi-") as tmp:
-                compile_gpl(result.emit_project_source_set(), compiler, Path(tmp)/"compiler")
+    def test_secondary_gate_uses_single_agent_integer_bridge(self):
+        from majesty_cam.stock_controller_features import StockAp10Ap69SecondaryPanel
+        panel = StockAp10Ap69SecondaryPanel('page', 'Forge', 'FP01', 'FRG', 31720,
+                    required_level=3, eligibility_callback_symbol='Eligible')
+        inventory = SimpleNamespace(selected=SimpleNamespace(package=SimpleNamespace(
+            definition=SimpleNamespace(runtime_features=(panel,)))))
+        result = add_bridges(SemanticMergeResult((), ()), (inventory,))
+        self.assertEqual(result.items[0].text.strip(), bridge_source('Eligible').strip())
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

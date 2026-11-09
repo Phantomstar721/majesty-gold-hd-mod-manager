@@ -37,6 +37,8 @@ struct KingdomResearchRecord {
 struct HeroInfoRecord {
     std::uint32_t kind, subjectId, unlockLevel, imageId, imageSet;
     std::string featureKey, displayText, tooltipText;
+    std::string attributeSymbol;
+    std::uint32_t listCategory = 0; // 0: learned list, 1: lower Enchantments list
 };
 
 struct MovementScaleRecord {
@@ -58,6 +60,7 @@ struct Registry {
     std::vector<EnchantmentRowRecord> enchantmentRows;
     bool mapFogQuery = false;
     bool movementQuery = false;
+    bool messageFlagControls = false;
     bool nativeTiming = false;
     std::vector<std::uint32_t> timingSpellIds;
     std::vector<std::uint32_t> timingEffectorIds;
@@ -69,7 +72,7 @@ struct Registry {
     const HeroInfoRecord* FindHeroInfo(std::uint32_t kind, std::uint32_t subjectId) const;
 };
 
-// Parses the manager-owned, deterministic MMFR v1-v9 data formats. The parser is
+// Parses the manager-owned, deterministic MMFR v1-v13 data formats. The parser is
 // independent of Win32 and executable patching so every malformed boundary can
 // be tested before the injected runtime consumes it.
 bool ParseRegistry(

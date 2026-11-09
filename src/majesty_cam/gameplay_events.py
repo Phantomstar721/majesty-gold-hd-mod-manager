@@ -14,6 +14,9 @@ from .shared_features import EVENT_SIGNATURES, StockGameplayEventObserver
 from .event_boundaries import EventBoundary
 
 STOCK_EVENT_FILES = {
+    "infectious_cloud_hit": "TaskModules/Subtasks/mx_Spells.gpl",
+    "ratman_plague_active": "TaskModules/Subtasks/mx_Spells.gpl",
+    "plague_event": "Rules/Random_Events.gpl",
     "shapeshift_potion_end": "TaskModules/Subtasks/mx_Spells.gpl",
     "heal_self": "TaskModules/Subtasks/mx_heal_self.gpl",
     "heal_self_fleeing": "TaskModules/Subtasks/mx_heal_self.gpl",
@@ -33,6 +36,7 @@ STOCK_EVENT_FILES = {
     "travel_to_exp": "TaskModules/Characters/mx_Travel_to.gpl",
 }
 EVENT_FUNCTIONS = {
+    "status-applied": ("infectious_cloud_hit", "ratman_plague_active", "plague_event"),
     "potion-consumed": ("heal_self", "heal_self_fleeing", "speed_tonic_effect",
                         "strength_potion_effect", "shapeshift_potion_effect",
                         "regeneration_elixer_effect", "invisibility_brew_effect", "fire_balm_effect"),
@@ -300,6 +304,33 @@ def add_gameplay_event_observers(
     def calls(event: str, arguments: str) -> str:
         return "\n".join(f"\t${symbol}({arguments});" for symbol in requested[event])
 
+    if "status-applied" in requested:
+        # The stock application is TWO statements, in different orders at the
+        # missile/random-event and contagion sites. Observe only the completed
+        # transaction, never Begin's tail (contagion writes generation afterward).
+        # Extra selected-mod eligibility guards are retained verbatim.
+        for name in EVENT_FUNCTIONS["status-applied"]:
+            editor = boundary(name)
+            recipient = "hero" if name == "plague_event" else "target"
+            source = "hero" if name == "plague_event" else "thisagent"
+            begin = _tokens(f'$Ratman_Plague_Begin({source}, {recipient});')
+            generation = _tokens(f'$SetAttribute({recipient}, #ATTRIB_HasEffectRatmanPlague, #Ratman_Plague_Generations);')
+            pair = (begin, generation) if name == "ratman_plague_active" else (generation, begin)
+            def completed_pair(entries):
+                starts = [e for e in entries if e[0].head[:1] == ("$ratman_plague_begin",)]
+                if len(starts) != 1:
+                    editor.fail("status application call is missing or ambiguous")
+                _, _, siblings, index = starts[0]
+                start = index if pair[0] == begin else index - 1
+                if start < 0 or tuple(n.head for n in siblings[start:start+2]) != pair:
+                    editor.fail("status application must retain its adjacent initialization pair")
+                return siblings[start+1]
+            completed_pair(editor.stock_entries)
+            completed = completed_pair(editor.actual_entries)
+            editor.types(begin + generation)
+            editor.insert(completed, '\n' + calls("status-applied", f'{recipient}, "Ratman_Plague_Icon"'), after=True)
+            save_boundary(editor)
+
     for event, name, wrapper, argument in (
         ("combat-experience-awarded", "attack_end", "MM_Event_CombatXP",
          "exp_given / new_exp_div"),
@@ -344,7 +375,7 @@ end
                 continue
             editor = boundary(name)
             for node, after in _potion_consumption_boundaries(editor):
-                editor.insert(node, '\n' + notify + '\n', after=after)
+                editor.insert(node, '\n' + notify if after else notify + '\n', after=after)
             save_boundary(editor)
 
     payout_roots = {}

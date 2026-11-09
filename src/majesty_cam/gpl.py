@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
+from bisect import bisect_left
 import re
 from typing import Callable, Iterable, Mapping, Optional, Sequence, Union
 
@@ -363,6 +364,13 @@ def parse_gpl(text: str, source_name: str = "<memory>") -> ParsedSemanticSource:
     """Parse top-level GPL prototypes, functions, and expressions exactly."""
 
     masked = _mask_non_code(text)
+    # One linear index per parse instead of scanning every preceding character
+    # twice for each definition. Preserve the original newline/offset semantics.
+    newlines = tuple(match.start() for match in re.finditer("\n", text))
+    def make_span(start, end):
+        return SourceSpan(start=start, end=end,
+            start_line=bisect_left(newlines, start) + 1,
+            end_line=bisect_left(newlines, max(start, end - 1)) + 1)
     provisional: list[SemanticItem] = []
     prototype_ranges: list[tuple[int, int]] = []
     prototype_starts = list(_PROTOTYPE_START_RE.finditer(masked))
@@ -380,7 +388,7 @@ def parse_gpl(text: str, source_name: str = "<memory>") -> ParsedSemanticSource:
                 match.group(1),
                 _line_number(text, match.start()),
             )
-        span = _make_span(text, match.start(), end_match.end())
+        span = make_span(match.start(), end_match.end())
         provisional.append(
             SemanticItem(
                 kind=DefinitionKind.PROTOTYPE,
@@ -425,7 +433,7 @@ def parse_gpl(text: str, source_name: str = "<memory>") -> ParsedSemanticSource:
                 name,
                 _line_number(text, match.start()),
             )
-        span = _make_span(text, match.start(), definition_end)
+        span = make_span(match.start(), definition_end)
         provisional.append(
             SemanticItem(
                 kind=DefinitionKind.FUNCTION,
@@ -440,7 +448,7 @@ def parse_gpl(text: str, source_name: str = "<memory>") -> ParsedSemanticSource:
     for match in _EXPRESSION_RE.finditer(masked_without_prototypes):
         if _inside_any_range(match.start(), function_ranges):
             continue
-        span = _make_span(text, match.start(), match.end())
+        span = make_span(match.start(), match.end())
         provisional.append(
             SemanticItem(
                 kind=DefinitionKind.EXPRESSION,
@@ -714,8 +722,8 @@ def merge_sources(
 
 _INVENTORY_EXPRESSION_RE = re.compile(r"^#[A-Za-z_][A-Za-z0-9_]*$")
 _STOCK_DEATH_DROP_LAST_EXCLUSION_RE = re.compile(
-    r"(?P<indent>^[ \t]*)WhatItem[ \t]*!=[ \t]*"
-    r"#MarketItem_Market3_Item[ \t]*\)",
+    r"\bWhatItem\s*!=\s*"
+    r"#MarketItem_Market3_Item\b\s*(?=\))",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -1512,7 +1520,7 @@ def add_inventory_death_drop_exclusions(
     already_present = {
         expression.casefold()
         for expression in requested
-        if re.search(rf"\bWhatItem\s*!=\s*{re.escape(expression)}\b", target.text, re.I)
+        if re.search(rf"\bWhatItem\s*!=\s*{re.escape(expression)}\b", _mask_non_code(target.text), re.I)
     }
     additions = [
         expression
@@ -1522,24 +1530,19 @@ def add_inventory_death_drop_exclusions(
     if not additions:
         return result
 
-    matches = list(_STOCK_DEATH_DROP_LAST_EXCLUSION_RE.finditer(target.text))
+    matches = list(_STOCK_DEATH_DROP_LAST_EXCLUSION_RE.finditer(_mask_non_code(target.text)))
     if len(matches) != 1:
         raise ValueError(
             "Hero_Drop_Quest_Items does not contain exactly one recognized "
             "stock inventory exclusion condition"
         )
     match = matches[0]
-    indent = match.group("indent")
-    replacement = (
-        f"{indent}WhatItem != #MarketItem_Market3_Item &&\n"
-        + "\n".join(
-            f"{indent}WhatItem != {expression}{')' if index == len(additions) - 1 else ' &&'}"
-            for index, expression in enumerate(additions)
-        )
-    )
+    # Insert before the closing parenthesis; preserve every selected source
+    # byte, including comments and inline versus multiline formatting.
+    replacement = " && " + " && ".join(f"WhatItem != {expression}" for expression in additions)
     resolved = replace(
         target,
-        text=target.text[: match.start()] + replacement + target.text[match.end() :],
+        text=target.text[: match.end()] + replacement + target.text[match.end() :],
         source_name=source_name,
         span=None,
     )
@@ -1839,10 +1842,13 @@ def _inside_any_range(offset: int, ranges: Iterable[tuple[int, int]]) -> bool:
     return any(start <= offset < end for start, end in ranges)
 
 
+_LINE_END_RE = re.compile(r"[^\r\n]*(?:\r\n|\r|\n|$)")
+
+
 def _line_end(text: str, offset: int) -> int:
-    match = re.match(r"[^\r\n]*(?:\r\n|\r|\n|$)", text[offset:])
+    match = _LINE_END_RE.match(text, offset)
     assert match is not None
-    return offset + match.end()
+    return match.end()
 
 
 def _line_number(text: str, offset: int) -> int:

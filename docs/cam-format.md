@@ -55,6 +55,31 @@ Each entry header:
 Important: the 4-byte section padding field is not always zero in real game CAMs.
 Preserve it when unpacking and repacking.
 
+For numeric TILE/SPLT lookup, section flag bit 0 selects the ordinal shortcut.
+Without it, the first four bytes of the TOC name are a little-endian resource
+ID; these IDs need not equal record positions or start at zero. Duplicate IDs
+resolve to the last TOC entry. IMAG and PALT named resources are not numeric
+tables and must not undergo this conversion.
+
+The art composer converts ID-keyed tables to a bounded dense slot view before
+ancestry comparison, dependency validation and collision relocation. Missing
+IDs remain empty, without fabricated stock-lineage names. The container reader
+and writer preserve the original TOC and flags; they do not normalize files.
+Existing ordinal tables retain their interpretation even if their stored IDs
+differ. Output remains in the existing dense art format, with IMAG-to-TILE and
+TILE-to-SPLT references relocated together when necessary.
+
+Native numeric lookup reference: research `docs/resource-acquire-contract.md`,
+entry selection/identity (ordinal shortcut versus reverse ID search). This
+change adds no executable patch or runtime hook. Sparse TILE IDs are bounded
+to 0..65534 (65535 is the no-frame sentinel). SPLT keys are full DWORDs,
+including printable FourCC values. High SPLT keys are allocated compact slots
+after stock and authored numeric slots, with matching TILE references rewritten
+at the documented external-palette field. A shared mapping covers all CAMs in
+one component. The number of output palette slots is bounded, not the numeric
+value of a source palette key. An unreferenced key does not create an alias at
+its physical TOC position.
+
 ## Content
 
 Entry data is raw bytes. In ordinary archives, content is stored sequentially in section

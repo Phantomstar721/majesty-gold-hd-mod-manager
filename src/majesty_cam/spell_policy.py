@@ -116,6 +116,12 @@ def signature(item, types, returns=""):
     return match.groups(), match.end()
 
 
+def suppress_cast(item, action_name):
+    args, position = signature(item, ("agent", "agent"))
+    text = item.text[:position] + f'\n    if (${SUPPRESS}({args[0]}, "{action_name}")) return;\n' + item.text[position:]
+    return parse_gpl(text).require(DefinitionKind.FUNCTION, item.name)
+
+
 def validate_bindings(packages):
     """packages: (owner, declarations, parsed sources, effective XML elements)."""
     packages = tuple(packages)
@@ -217,11 +223,14 @@ def compose_guards(result, bindings, stock_loader=None):
             lines += ["        return False;", "    end"]
         generate(SUPPRESS, "agent Caster, string SpellName", lines)
         for feature in specials:
-            guard(feature.validation_callback_symbol, ("agent",), "integer",
-                  lambda a, f=feature: f'if (${SUPPRESS}({a[0]}, "{f.action_name}")) return 0;')
+            if feature.validation_callback_symbol:
+                guard(feature.validation_callback_symbol, ("agent",), "integer",
+                      lambda a, f=feature: f'if (${SUPPRESS}({a[0]}, "{f.action_name}")) return 0;')
             if feature.cast_callback_symbol:
-                guard(feature.cast_callback_symbol, ("agent", "agent"), "",
-                      lambda a, f=feature: f'if (${SUPPRESS}({a[0]}, "{f.action_name}")) return;')
+                key = (DefinitionKind.FUNCTION, feature.cast_callback_symbol.casefold())
+                if key not in items:
+                    raise ValueError(f"missing composed spell callback: {feature.cast_callback_symbol}")
+                items[key] = suppress_cast(items[key], feature.action_name)
         cast_key = (DefinitionKind.FUNCTION, "cast")
         if cast_key not in items:
             if stock_loader is None:

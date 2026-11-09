@@ -20,7 +20,8 @@ QWidget#appRoot { background-color: #12100c; }
 
 /* Dialogs inherit our pale text, so their surfaces must not use the OS palette. */
 QMessageBox,
-QDialog#conflictChoiceDialog {
+QDialog#conflictChoiceDialog,
+QDialog#historyDialog {
     color: #eee8d9;
     background-color: #181410;
 }
@@ -559,4 +560,20 @@ QLabel#tabChangeDot {
     border-radius: 4px;
     padding: 0;
     margin: 0;
+}
+
+QPushButton#historyButton {
+    padding: 1px 8px;
+    min-height: 20px;
+    color: #e5c36c;
+}
+QLabel#historyVersion {
+    color: #e5c36c;
+    font-size: 16px;
+    font-weight: 700;
+}
+QDialog#historyDialog QScrollArea,
+QDialog#historyDialog QScrollArea QWidget {
+    background-color: #181410;
+    border: none;
 }

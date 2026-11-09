@@ -41,10 +41,11 @@ class PotionTitleRegistrationTests(unittest.TestCase):
         self.assertGreater(observed.index('$Observe('), observed.index('$ForgetSpell'))
         self.assertEqual(observed.replace('\t$Observe(ThisAgent, "shapeshift_potion");\n', ''), effect.text)
 
-    def test_reject_unmatched_cleanup_and_unrelated_changes(self):
+    def test_preserve_authored_effects_and_cleanup_independently(self):
         effect, expiry = (self.variant(n) for n in ("shapeshift_potion_effect", "shapeshift_potion_end"))
-        with self.assertRaises(ValueError):
-            self.compose(effect)
+        result = {i.normalized_name: i.text for i in self.compose(effect).items}
+        self.assertEqual(result[effect.normalized_name].replace(
+            '\t$Observe(ThisAgent, "shapeshift_potion");\n', ''), effect.text)
         for changed_effect, changed_expiry in (
             (replace(effect, text=effect.text.replace('"Wizard"', '"Other"')), expiry),
             (replace(effect, text=effect.text.replace('|| title == "Custom Caster A"', '&& title == "Custom Caster A"')), expiry),
@@ -52,8 +53,24 @@ class PotionTitleRegistrationTests(unittest.TestCase):
             (effect, replace(expiry, text=expiry.text.replace('#ATTRIB_MaxHP, -30', '#ATTRIB_MaxHP, -31'))),
             (effect, replace(expiry, text=expiry.text.replace('Custom Caster B', 'Another Caster'))),
         ):
-            with self.subTest(effect=changed_effect.text, expiry=changed_expiry.text), self.assertRaises(ValueError):
-                self.compose(changed_effect, changed_expiry)
+            with self.subTest(effect=changed_effect.text, expiry=changed_expiry.text):
+                result = {i.normalized_name: i.text for i in self.compose(changed_effect, changed_expiry).items}
+                self.assertEqual(result[changed_expiry.normalized_name], changed_expiry.text)
+                self.assertEqual(result[changed_effect.normalized_name].replace(
+                    '\t$Observe(ThisAgent, "shapeshift_potion");\n', ''), changed_effect.text)
+
+    def test_reject_changed_consumption_boundary(self):
+        effect = self.variant("shapeshift_potion_effect")
+        import re
+        mutations = (
+            re.sub(r'\$deleteinventoryitem', '$OtherConsumption', effect.text, flags=re.I),
+            re.sub(r'\$forgetspell', '$OtherForget', effect.text, flags=re.I),
+            re.sub(r'\$isdead', '$DifferentGuard', effect.text, flags=re.I),
+        )
+        for text in mutations:
+            self.assertNotEqual(text, effect.text)
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                self.compose(replace(effect, text=text))
 
     def test_actual_candidate_source(self):
         candidate = ROOT / "majesty-gold-hd-custom-guild-bard/dist/CustomGuildBards-bazaar-v1/GPL/Bards_Baseline.gpl"

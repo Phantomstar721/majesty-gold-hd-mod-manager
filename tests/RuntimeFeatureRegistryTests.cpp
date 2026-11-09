@@ -349,6 +349,31 @@ int main() {
     AppendU32(&alphabetic, 128); AppendU32(&alphabetic, 2);
     AppendU32(&alphabetic, FourCC("AA02")); AppendU32(&alphabetic, FourCC("ZZ01"));
     if (!ExpectInvalid(alphabetic, "sorted unique FourCCs")) return 47;
+    auto inventory = Header(12,0,0);
+    AppendU32(&inventory,32);AppendU32(&inventory,1);
+    for(auto value:{5u,114u,0u,FourCC("DI01"),1019u,3u,5u,4u}) AppendU32(&inventory,value);
+    inventory.insert(inventory.end(),infoText,infoText+12);
+    if(!MajestyRuntimeFeatures::ParseRegistry(inventory.data(),inventory.size(),&registry,&error) ||
+        !registry.FindHeroInfo(5,114) || registry.FindHeroInfo(5,113)) return 48;
+    for(std::size_t size=0;size<inventory.size();++size)
+        if(MajestyRuntimeFeatures::ParseRegistry(inventory.data(),size,&registry,&error)) return 49;
+    auto invalidInventory=inventory;invalidInventory[28]=128;
+    if(MajestyRuntimeFeatures::ParseRegistry(invalidInventory.data(),invalidInventory.size(),&registry,&error)) return 50;
+    invalidInventory=inventory;invalidInventory[4]=11;
+    if(MajestyRuntimeFeatures::ParseRegistry(invalidInventory.data(),invalidInventory.size(),&registry,&error)) return 51;
+    auto message = Header(13, 0, 0);
+    AppendU32(&message, 256);
+    if (!MajestyRuntimeFeatures::ParseRegistry(message.data(), message.size(), &registry, &error) ||
+        !registry.messageFlagControls) return 52;
+    for (std::size_t size=0; size<message.size(); ++size)
+        if (MajestyRuntimeFeatures::ParseRegistry(message.data(), size, &registry, &error) ||
+            registry.messageFlagControls) return 53;
+    for (auto version : {1u, 2u, 12u, 14u}) {
+        auto bad=message; bad[4]=static_cast<unsigned char>(version);
+        if (MajestyRuntimeFeatures::ParseRegistry(bad.data(), bad.size(), &registry, &error)) return 54;
+    }
+    message[17]=0;
+    if (MajestyRuntimeFeatures::ParseRegistry(message.data(), message.size(), &registry, &error)) return 55;
     std::puts("Runtime feature registry parser tests passed.");
     return 0;
 }

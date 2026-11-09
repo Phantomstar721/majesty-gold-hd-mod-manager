@@ -7,6 +7,7 @@ import re
 from typing import Mapping, Union
 
 EVENT_SIGNATURES = {
+    "status-applied": ("agent", "string"),
     "potion-consumed": ("agent", "string"),
     "reward-flag-paid": ("agent", "agent", "integer"),
     "caravan-delivered": ("agent", "agent", "integer"),

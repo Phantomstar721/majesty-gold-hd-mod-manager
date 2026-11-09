@@ -4,7 +4,7 @@ import struct
 import unittest
 
 from majesty_cam.stock_controller_features import (
-    StockAp69SovereignTargetAction, StockAp69SourceTargetAction,
+    StockAp69SovereignTargetAction, StockAp69SourceTargetAction, StockAp69PaidSourceTargetAction,
     legacy_alchemist_controller_features, parse_controller_feature,
     controller_feature_mapping, ControllerFeatureError,
 )
@@ -39,6 +39,50 @@ class SourceTargetTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from('<I', encode_stock_controller_registry(legacy), 4)[0], 2)
         with self.assertRaises(ControllerFeatureError):
             parse_controller_feature(controller_feature_mapping(replace(new, callback_symbol='')))
+
+    def test_paid_v22_independent_gold_and_no_resource_dependency(self):
+        features, old = self.fixture()
+        fields = controller_feature_mapping(old)
+        fields.update(type='stock.ap69-sovereign-target-action.v3',
+                      target_template_control_id=0x1138, stock_target_mode='Sp29',
+                      required_level=2, sovereign_gold_cost=500)
+        del fields['resource_key'], fields['resource_cost']
+        paid = parse_controller_feature(fields)
+        self.assertIsInstance(paid, StockAp69PaidSourceTargetAction)
+        self.assertEqual(controller_feature_mapping(paid), fields)
+        features = tuple(paid if f is old else f for f in features)
+        registry = resolve_stock_controller_registry(features, {'brewing': (0x31425041, 0x32425041)})
+        data = encode_stock_controller_registry(registry)
+        self.assertEqual(struct.unpack_from('<I', data, 4)[0], 22)
+        self.assertEqual(decode_stock_controller_registry(data), registry)
+        import re
+        fixture=(Path(__file__).parent/'PaidControllerFixture.h').read_text()
+        self.assertEqual(data,bytes(int(v,16) for v in re.findall(r'0x([0-9A-F]{2})',fixture)))
+        for end in range(len(data)):
+            with self.assertRaises(ControllerRegistryError):
+                decode_stock_controller_registry(data[:end])
+        for key, value in [('sovereign_gold_cost',0),('sovereign_gold_cost',-1),
+                           ('required_level',3),('stock_target_mode','Sp23'),
+                           ('callback_symbol',''),('resource_cost',500)]:
+            with self.subTest(key=key, value=value), self.assertRaises(ControllerFeatureError):
+                parse_controller_feature(dict(fields, **{key:value}))
+
+    def test_attack_bounty_v24_roundtrip(self):
+        features, old = self.fixture()
+        fields = controller_feature_mapping(old)
+        fields.update(type='stock.ap69-attack-bounty-action.v1',
+                      target_template_control_id=0x1138, stock_target_mode='Sp29',
+                      required_level=2, sovereign_gold_cost=500, bounty_amount=500)
+        del fields['resource_key'], fields['resource_cost']
+        action = parse_controller_feature(fields)
+        registry = resolve_stock_controller_registry(tuple(action if f is old else f for f in features),
+            {'brewing': (0x31425041, 0x32425041)})
+        data = encode_stock_controller_registry(registry)
+        self.assertEqual(struct.unpack_from('<I', data, 4)[0], 24)
+        self.assertEqual(decode_stock_controller_registry(data), registry)
+        for amount in (0, -1, 501):
+            with self.assertRaises(ControllerFeatureError):
+                parse_controller_feature(dict(fields, bounty_amount=amount))
 
     def test_requires_three_agents_and_no_return(self):
         good = 'function Exact(agent Spell, agent Source, agent Target)\ndeclare\nbegin\nend'

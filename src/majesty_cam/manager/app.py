@@ -24,6 +24,8 @@ from .conflict_preview import ConflictPreview, preview_standard_choice, rule_lab
 from .preflight import PreparedMergeMod
 from .shortcuts import ShortcutError, create_manager_desktop_shortcut
 from .workshop import open_workshop_item
+from .catalog_changes import MANAGER_CHANGE_KEY
+from .history import PATCH_HISTORY
 from ..script_review import ScriptReviewCancelled
 from ..version import MANAGER_VERSION
 
@@ -136,6 +138,37 @@ class _ScriptReviewRequest:
 
 
 if _PYSIDE_IMPORT_ERROR is None:
+
+    class _HistoryDialog(QDialog):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.setObjectName("historyDialog")
+            self.setWindowTitle(f"{APP_NAME} — History")
+            self.resize(620, 560)
+            layout = QVBoxLayout(self)
+            current = QLabel(f"Your Manager version: {MANAGER_VERSION}")
+            layout.addWidget(current)
+            scroll = QScrollArea(self)
+            scroll.setWidgetResizable(True)
+            content = QWidget(scroll)
+            entries = QVBoxLayout(content)
+            entries.setSpacing(8)
+            for version, additions in PATCH_HISTORY:
+                heading = QLabel(version, content)
+                heading.setObjectName("historyVersion")
+                entries.addWidget(heading)
+                for addition in additions:
+                    label = QLabel("• " + addition, content)
+                    label.setWordWrap(True)
+                    label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                    entries.addWidget(label)
+                entries.addSpacing(12)
+            entries.addStretch(1)
+            scroll.setWidget(content)
+            layout.addWidget(scroll, 1)
+            close = QPushButton("Close", self)
+            close.clicked.connect(self.accept)
+            layout.addWidget(close, alignment=Qt.AlignmentFlag.AlignRight)
 
     class _ConflictChoiceDialog(QDialog):
         """Preview a candidate without applying it until explicitly accepted."""
@@ -1243,7 +1276,7 @@ if _PYSIDE_IMPORT_ERROR is None:
             except Exception as exc:
                 self.brand_assets = BrandAssets(None, None, None, (str(exc),))
 
-            self.setWindowTitle(APP_NAME)
+            self.setWindowTitle(f"{APP_NAME} — Manager {MANAGER_VERSION}")
             self.setMinimumSize(980, 640)
             self.resize(1180, 760)
             self.setObjectName("managerWindow")
@@ -1300,6 +1333,20 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.manager_version.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.manager_version.setToolTip("Version of this Mod Manager application, not MajestyHD.exe.")
             titles.addWidget(self.manager_version)
+            self.history_button = QPushButton("History")
+            self.history_button.setObjectName("historyButton")
+            self.history_button.setToolTip("See what's new in each Manager version.")
+            self.history_button.clicked.connect(self._show_history)
+            titles.addWidget(self.history_button, alignment=Qt.AlignmentFlag.AlignLeft)
+            dot = QPixmap(12, 12)
+            dot.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(dot)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#e5c36c"))
+            painter.drawEllipse(2, 2, 8, 8)
+            painter.end()
+            self._history_update_icon = QIcon(dot)
             header_layout.addLayout(titles)
             header_layout.setAlignment(
                 titles, Qt.AlignmentFlag.AlignTop
@@ -1434,6 +1481,10 @@ if _PYSIDE_IMPORT_ERROR is None:
                 self._create_desktop_shortcut
             )
             nav.addWidget(self.desktop_shortcut_button)
+            self.support_report_button = QPushButton("Save Support Report")
+            self.support_report_button.setToolTip("Save bounded logs and launch details to a ZIP. May include local paths and mod names; nothing is uploaded.")
+            self.support_report_button.clicked.connect(self._save_support_report)
+            nav.addWidget(self.support_report_button)
             self.selection_note = QLabel("Scanning installed content…")
             self.selection_note.setObjectName("selectionNote")
             nav.addWidget(self.selection_note)
@@ -1553,6 +1604,20 @@ if _PYSIDE_IMPORT_ERROR is None:
 
         def _startup_scan(self) -> None:
             self._start_scan(force_refresh=False)
+
+        @Slot()
+        def _save_support_report(self) -> None:
+            from .support_report import export_report
+            selected, _ = QFileDialog.getSaveFileName(self, "Save Support Report",
+                "Majesty-Support-Report.zip", "ZIP report (*.zip)")
+            if not selected:
+                return
+            try:
+                export_report(self.controller.paths, selected)
+            except (OSError, ValueError) as exc:
+                QMessageBox.warning(self, "Support report", str(exc))
+            else:
+                QMessageBox.information(self, "Support report", "Report saved. You can review the ZIP before sharing it. It contains logs, local paths and mod names, but no saves or game binaries.")
 
         @Slot()
         def _choose_game_executable(self) -> None:
@@ -1891,36 +1956,33 @@ if _PYSIDE_IMPORT_ERROR is None:
                 self.snapshot.catalog,
                 self.snapshot.selections,
             )
-            for conflict in conflicts:
-                if content_id is not None and content_id not in (
-                    conflict.left_id,
-                    conflict.right_id,
-                ):
-                    continue
-                winner = self.controller.standard_conflict_winners.get(
-                    conflict.pair_key
-                )
-                if not force_review and winner in (
-                    conflict.left_id,
-                    conflict.right_id,
-                ):
-                    continue
-                options = ((conflict.left_id, conflict.left_name), (conflict.right_id, conflict.right_name))
-                previews = {
-                    key: preview_standard_choice(
-                        self.snapshot.catalog, self.snapshot.selections, self.controller.order,
-                        self.controller.standard_conflict_winners, conflict, key,
-                    ) for key, _name in options
-                }
-                dialog = _ConflictChoiceDialog(options, previews, winner, self)
+            from .standard_review import StandardReviewConflict, native_choices, validate_native_choices
+            from .script_review_dialog import ScriptReviewDialog
+            from ..script_review import pair_key
+            saved = self.controller.standard_conflict_winners
+            try:
+                validate_native_choices(self.snapshot.catalog, self.snapshot.selections, saved)
+                invalid_order = False
+            except ValueError:
+                invalid_order = True
+            if conflicts and (force_review or invalid_order or any(saved.get(c.pair_key) not in
+                               (c.left_id, c.right_id) for c in conflicts)):
+                # Include every pair so contradictory saved choices can be repaired
+                # together, even when review was opened from one mod's Details.
+                def validate(decisions):
+                    validate_native_choices(self.snapshot.catalog, self.snapshot.selections,
+                                            {**saved, **native_choices(conflicts, decisions)})
+                dialog = ScriptReviewDialog(tuple(StandardReviewConflict(c) for c in conflicts), self,
+                    preferences={pair_key(c.left_id, c.right_id): saved[c.pair_key]
+                                 for c in conflicts if c.pair_key in saved},
+                    validate_choices=validate)
+                dialog.introduction.setText('Choose a preferred mod in each pair. Both stay enabled; '
+                                            'the preferred mod wins their shared changes.')
+                dialog.continue_button.setText('Save preferences')
                 if dialog.exec() != QDialog.DialogCode.Accepted:
                     return False
-                winner = dialog.winner
-                self.snapshot = self.controller.set_standard_conflict_winner(
-                    conflict.left_id,
-                    conflict.right_id,
-                    winner,
-                )
+                self.snapshot = self.controller.set_standard_conflict_winners(
+                    native_choices(conflicts, dialog.decisions))
             if self.snapshot is not None:
                 self._render_snapshot(self.snapshot)
             return True
@@ -2278,7 +2340,13 @@ if _PYSIDE_IMPORT_ERROR is None:
                     exc,
                 )
 
+        def _show_history(self) -> None:
+            _HistoryDialog(self).exec()
+
         def _render_snapshot(self, snapshot: ControllerSnapshot) -> None:
+            updated = MANAGER_CHANGE_KEY in (snapshot.changes or {})
+            self.history_button.setIcon(self._history_update_icon if updated else QIcon())
+            self.history_button.setAccessibleName("History — Manager updated" if updated else "History")
             for item in snapshot.plan.selected_merge:
                 self.prepared_cache[item.content_id] = item
                 if item.ready:

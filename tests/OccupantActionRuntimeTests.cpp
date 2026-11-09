@@ -13,9 +13,14 @@ std::uint32_t g_seen[4] = {};
 const OccupantPanel* g_seenOwner = nullptr;
 const QuestBoard* g_seenQuestOwner = nullptr;
 const char* g_seenQuestCallback = nullptr;
+bool g_seenPair = false;
+std::uint32_t g_seenPairBuilding = 0;
 void __cdecl RecordCommand(std::uint32_t command, std::uint32_t building,
                            std::uint32_t agent, std::uint32_t price) {
     g_seen[0] = command; g_seen[1] = building; g_seen[2] = agent; g_seen[3] = price;
+    const auto* pair = MajestyPairedOccupantAction::NativeBinding().current;
+    g_seenPair = pair && pair->paired;
+    g_seenPairBuilding = pair ? pair->building : 0;
     g_seenOwner = g_executingOccupantPanel;
     g_seenQuestOwner = g_executingQuestBoard;
     g_seenQuestCallback = g_executingQuestBoard == nullptr
@@ -83,6 +88,14 @@ int main() {
     assert(g_seen[1] == 30 && g_seen[2] == 40 && g_seen[3] == 0);
     assert(std::strcmp(g_seenQuestCallback, "Quest_Refresh") == 0);
     assert(g_executingQuestBoard == nullptr);
+    g_stockControllerRegistry.liveAgentLists[0].actionUsesPair = true;
+    DispatchOccupantAction(0x20000, 123, 456, 0);
+    assert(g_seenPair && g_seenPairBuilding == 123 && g_seen[2] == 456);
+    assert(MajestyPairedOccupantAction::NativeBinding().current == nullptr);
+    g_seen[0] = 0;
+    DispatchOccupantAction(0x20000, 123, 456, 1);
+    assert(g_seen[0] == 0); // A paired packet never charges a nonzero price.
+    g_stockControllerRegistry.liveAgentLists[0].actionUsesPair = false;
     // Changing panel cannot change a queued command's owner.
     g_activeOccupantPanel = stable;
     DispatchOccupantAction(0x10001, 10, 20, 300);

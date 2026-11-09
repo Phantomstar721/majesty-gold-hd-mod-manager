@@ -209,6 +209,45 @@ class DescriptionFieldCompositionTests(unittest.TestCase):
 
 
 class MixedPaletteCompositionTests(unittest.TestCase):
+    def test_sparse_id_tile_and_palette_survive_prefix_provider(self):
+        from majesty_cam.stock_art import normalize_art_slots
+        stock = self.archive(b'STOK', 0, self.tile(0, 1), (b'stock',))
+        sparse = self.archive(b'SPRS', 20000, self.tile(20000, 9), (b'sparse',))
+        sparse = CamArchive(tuple(
+            replace(s, entries=(replace(s.entries[-1], name=struct.pack('<I', 20000).ljust(20, b'\0')),),
+                    padding=b'\0' * 4)
+            if s.extension in (b'TILE', b'SPLT') else s for s in sparse.sections))
+        sparse = normalize_art_slots(sparse)
+        prefix = self.archive(b'PREF', 0, self.tile(0, 7), (b'prefix',))
+        for mods in ((('sparse', sparse), ('prefix', prefix)),
+                     (('prefix', prefix), ('sparse', sparse))):
+            analyses = tuple(analyze_art_archive(stock, a, mod_id=o) for o, a in mods)
+            providers = tuple((SimpleNamespace(selected=SimpleNamespace(alias=o)), Path(o), a)
+                              for o, a in mods)
+            result = _compose_art_domain('fixture', 'main', stock, providers, analyses)
+            sections = {s.extension: s for s in result.archive.sections}
+            self.assertEqual(sections[b'TILE'].entries[20000].data, self.tile(20000, 9))
+            self.assertEqual(sections[b'SPLT'].entries[20000].data, b'sparse')
+
+    def test_identical_tiles_diverge_after_palette_relocation(self):
+        stock = self.archive(b'STOK', 0, self.tile(0, 1), (b'stock',))
+        for reverse in (False, True):
+            mods = [(owner, self.archive(key, 0, self.tile(0, 9), (owner.encode(),)))
+                    for owner, key in [('first', b'ONE1'), ('second', b'TWO2')]]
+            if reverse:
+                mods.reverse()
+            analyses = tuple(analyze_art_archive(stock, archive, mod_id=owner)
+                             for owner, archive in mods)
+            providers = tuple((SimpleNamespace(selected=SimpleNamespace(alias=owner)),
+                               Path(owner + '.cam'), archive) for owner, archive in mods)
+            result = _compose_art_domain('fixture', 'main', stock, providers, analyses)
+            sections = {s.extension: s for s in result.archive.sections}
+            for owner, archive in mods:
+                index = result.report.tile_allocation.mapping_for(owner).get(0, 0)
+                tile = sections[b'TILE'].entries[index].data
+                palette = struct.unpack_from('<I', tile, 22)[0]
+                self.assertEqual(sections[b'SPLT'].entries[palette].data, owner.encode())
+
     @staticmethod
     def tile(palette, marker):
         payload = bytearray(27)
@@ -1905,23 +1944,28 @@ class ControllerComposeTests(unittest.TestCase):
             inventory.resources = tuple(
                 item for item in inventory.resources if item.key != b"XTRA"
             )
-            inventory.selected.package.definition = ModDefinition(
-                schema_version=3,
-                mod_id=definition.mod_id,
-                internal_name=definition.internal_name,
-                display_name=definition.display_name,
-                custom_buildings=(
-                    CustomBuildingDefinition(
-                        local_name="FixtureGuild",
-                        dialog_id=None,
-                        controller_base="AP07",
-                        panel_resource_template="AP10",
-                    ),
-                ),
-                runtime_features=definition.runtime_features,
-            )
-            with self.assertRaisesRegex(ComposeError, "requires parent building"):
-                resolve_controller_registry((inventory,))
+            # AP02 is a valid primary controller, but its 13-slot lifecycle
+            # cannot consume the AP10 secondary-panel recipe (17 slots).
+            # A resource-only change must not silently opt it into that ABI.
+            for controller, template in (("AP07", "AP10"), ("AP02", "AP02")):
+                with self.subTest(controller=controller, template=template):
+                    inventory.selected.package.definition = ModDefinition(
+                        schema_version=3,
+                        mod_id=definition.mod_id,
+                        internal_name=definition.internal_name,
+                        display_name=definition.display_name,
+                        custom_buildings=(
+                            CustomBuildingDefinition(
+                                local_name="FixtureGuild",
+                                dialog_id=None,
+                                controller_base=controller,
+                                panel_resource_template=template,
+                            ),
+                        ),
+                        runtime_features=definition.runtime_features,
+                    )
+                    with self.assertRaisesRegex(ComposeError, "requires parent building"):
+                        resolve_controller_registry((inventory,))
 
     def test_controller_family_cannot_override_a_stock_description(self):
         with TemporaryDirectory() as tmp:

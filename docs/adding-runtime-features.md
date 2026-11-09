@@ -16,6 +16,12 @@ for default Steam, Steam beta2 and GOG, with per-build guards and regression
 coverage. Document native evidence separately from live acceptance; ask before
 accepting a version-limited exception. Never remove guards to claim compatibility.
 
+Parser availability alone does not establish native support. The
+[attack-observation integration](attack-observation-contract.md) requires the
+exact audited executable, validated effective definitions, actual compiled-output
+provenance and guarded native load completion. Offline verification is not native
+gameplay acceptance; unsupported routes keep their unknown result.
+
 ## Use supported data-only recipes first
 
 Schema-v3 packages place supported declarations in the top-level
@@ -194,3 +200,18 @@ See the [Merge mod authoring guide](manager-merge-contract.md) for the package
 format. To propose implementation support, open a
 [pull request](https://github.com/Phantomstar721/majesty-gold-hd-mod-manager/pulls)
 against the public repository.
+
+For a private stock teleport cast with checked exterior placement, use
+`stock.checked-placement.v1` and the [checked placement contract](checked-placement-contract.md).
+Its exact-image native boundary depends on the shared attack-observation service;
+composition derives the capability and binds it to actual emitted callbacks.
+
+Paid exact source/target actions use the separately versioned [AP69 v3 contract](paid-source-target-contract.md). They require MMCR22; stock/v2 queued packets retain their original encoding and semantics.
+
+Saved fitting presentation uses [AP78 saved-attribute rows](saved-attribute-row-contract.md). MMFR10 reads an existing positive integer on the freshly selected hero through guarded stock lookup; it never grants or changes the fitting.
+
+Development targeted-missile policies use the [native interception contract](projectile-interception-contract.md). Whole-hit absorption is separate from damage modifiers; native gameplay acceptance remains pending.
+
+Source-only damage modifiers use [damage contributions](damage-contribution-contract.md).
+Providers register bounded phases around one destination-stock calculation;
+they do not replace entire combat functions or supply native HP hooks.

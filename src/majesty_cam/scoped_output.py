@@ -64,6 +64,33 @@ def partition(base, expansion):
     return ScriptBundle(subset(base, (i for key, i in left.items() if key in common)), patches)
 
 
+def complete_observer_patches(bundle, callback_names, *, required_scopes=()):
+    """Preserve both effective views while giving each a real completion BCD.
+
+    A partially scoped bundle has no native file-completion event for the view
+    without a patch. Move the shared, already emitted release callback into both
+    dataset patches. This changes placement only, never its code or ownership;
+    no empty bytecode or fabricated definition is introduced.
+    """
+    if set(required_scopes) - set(SCOPES):
+        raise ValueError('unsupported observer completion scope')
+    if len(bundle.patches) == 2 or (not bundle.patches and not required_scopes):
+        return bundle
+    names={name.casefold() for name in callback_names}
+    common=source_items(bundle.common.source_set)
+    moved=tuple(item for item in common if item.kind.value=='function' and item.normalized_name in names)
+    if {item.normalized_name for item in moved}!=names:
+        raise ValueError('observer release callbacks must be shared before completing dataset patches')
+    keys={item.key for item in moved}
+    patches=dict(bundle.patches)
+    def subset(result,items):
+        return replace(result,source_set=SemanticMergeResult(tuple(items),()).emit_project_source_set())
+    return ScriptBundle(subset(bundle.common,(item for item in common if item.key not in keys)),
+        tuple((scope,subset(patches.get(scope,bundle.common),
+            (*source_items(patches[scope].source_set),*moved) if scope in patches else moved))
+            for scope in SCOPES))
+
+
 def audit_scope_dependencies(result, providers, stock):
     """Reject known opposite-scope native references, including callback names.
 
