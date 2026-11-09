@@ -87,6 +87,8 @@ class ControllerSnapshot:
     qol_utilities: tuple[QolUtilityStatus, ...]
     game_build: MajestyBranch | None
     notices: tuple[str, ...]
+    changes: Mapping[str, str] = None
+    can_classic_launch: bool = False
 
 
 class ManagerController:
@@ -128,6 +130,7 @@ class ManagerController:
         self._managed_build_cache: ManagerBuildResult | None = None
         self._managed_build_cache_loaded = False
         self.notices: list[str] = []
+        self.catalog_changes = {}
 
     def detected_installations(self) -> tuple[tuple[Path, MajestyBranch], ...]:
         """Return supported installs, including a manually selected location."""
@@ -188,6 +191,10 @@ class ManagerController:
         progress: Callable[[str], None] | None = None,
     ) -> ControllerSnapshot:
         self.notices = []
+        from .presets import recover_switch
+        recovered = recover_switch(self.paths)
+        if recovered is not None and recovered.game_executable is not None:
+            self.select_game_executable(Path(recovered.game_executable), replan=False)
         if force_refresh:
             self._prepared_merge_cache.clear()
         cache = StartupCache.load(self.paths.startup_cache_path)
@@ -242,6 +249,8 @@ class ManagerController:
             )
             cache.retain_preflight(preflight_ids)
             cache.set_catalog(catalog_signature, self.catalog)
+        from .catalog_changes import detect_changes
+        self.catalog_changes = detect_changes(self.paths, self.catalog)
         try:
             saved = load_profile(self.paths.profile_path)
         except ProfileFormatError as exc:
@@ -300,7 +309,16 @@ class ManagerController:
             allow_cached=True,
         )
         cache.save()
+        self._save_selection_state()
         return self.snapshot()
+
+    def activate_profile(self, identity, *, progress=None):
+        from .presets import Presets
+        profile = Presets(self.paths).activate(identity)
+        if profile.game_executable is not None:
+            self.select_game_executable(Path(profile.game_executable), replan=False)
+        self._managed_build_cache_loaded = False
+        return self.scan(progress=progress)
 
     def change_qol(self, key: str, install: bool) -> ControllerSnapshot:
         """Apply or remove one utility and refresh only the affected status.
@@ -513,6 +531,11 @@ class ManagerController:
             path=result.output_root,
         )
         save_profile(self.paths.profile_path, self.profile)
+        from .presets import Presets
+        store = Presets(self.paths)
+        if store.state["active"] is not None:
+            store.save(self.profile)
+            store.retain_build(self.profile, result.fingerprint)
         return result, self.snapshot()
 
     def _discard_stale_script_preferences(self) -> None:
@@ -520,10 +543,10 @@ class ManagerController:
             self._script_retry_fingerprint = None
             self._script_retry_preferences = {}
 
-    def launch(self) -> tuple[LaunchResult, ControllerSnapshot]:
+    def launch(self, *, classic=False) -> tuple[LaunchResult, ControllerSnapshot]:
         profile_lock = None
         try:
-            if self.plan.has_merge:
+            if self.plan.has_merge and not classic:
                 try:
                     profile_lock = acquire_merged_profile_lock(
                         self.paths.merged_output_root
@@ -536,7 +559,7 @@ class ManagerController:
             if not self._managed_build_cache_loaded:
                 self._refresh_managed_build_cache()
             snapshot = self.snapshot()
-            if not snapshot.can_launch:
+            if not (snapshot.can_classic_launch if classic else snapshot.can_launch):
                 if not self._required_qol_ready():
                     raise ManagerLaunchError(
                         self._required_qol_message("launching Majesty")
@@ -549,12 +572,17 @@ class ManagerController:
                 raise ManagerLaunchError(
                     details or "The current profile is not ready to launch."
                 )
-            active_ids = list(self.plan.selected_standard_ids)
+            standard_ids = (tuple(e.content_id for e in sorted(self.catalog.standard,
+                                  key=lambda entry: self.order.index(entry.content_id)
+                                  if entry.content_id in self.order else len(self.order))
+                                  if e.content_id and e.selectable and self.selections.get(e.content_id))
+                            if classic else self.plan.selected_standard_ids)
+            active_ids = list(standard_ids)
             intent_registry: Path | None = None
             capability_manifest = self.paths.empty_runtime_capability_manifest
             runtime_feature_registry = self.paths.empty_runtime_feature_registry
             controller_registry = self.paths.empty_controller_registry
-            if self.plan.has_merge:
+            if self.plan.has_merge and not classic:
                 try:
                     _require_current_plan_sources(
                         self.plan,
@@ -587,7 +615,7 @@ class ManagerController:
                 active_ids,
                 standard_mods=tuple(
                     entry for entry in self.catalog.entries
-                    if entry.content_id in self.plan.selected_standard_ids
+                    if entry.content_id in standard_ids
                 ),
                 quests=self.catalog.quests,
                 intent_registry=intent_registry,
@@ -648,6 +676,8 @@ class ManagerController:
                 self.qol_catalog.branch if self.qol_catalog is not None else None
             ),
             notices=tuple(self.notices),
+            changes=dict(self.catalog_changes),
+            can_classic_launch=runtime_ready and qol_ready,
         )
 
     def _refresh_managed_build_cache(
@@ -909,8 +939,11 @@ class ManagerController:
         seen = set(order)
         order.extend(key for key in self.selections if key not in seen)
         profile = self.profile.with_selections(self.selections, order)
+        from .quest_dataset import enabled
         return replace(
             profile,
+            game_executable=str(self.paths.game_executable.resolve()),
+            expansion_content=enabled(self.paths),
             standard_conflict_winners=dict(self.standard_conflict_winners),
         )
 

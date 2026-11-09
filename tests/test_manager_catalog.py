@@ -509,6 +509,9 @@ class ManagerCatalogTests(unittest.TestCase):
     def test_explicit_tool_delivery_phrases_are_detected_in_manifest_metadata(self):
         cases = (
             ("Majesty Helper (modding tool only)", "Ordinary description"),
+            ("Custom building side-panel and scripted ground-targeting engine (exe replacer - read README, nothing to enable)", "Replaces MajestyHD.exe."),
+            ("Majesty executable file combiner (a program - read README, nothing to enable)", "Run the program separately."),
+            ("Majesty Helper", "You do not need to tick this mod."),
             ("Majesty Helper", "Changes nothing in-game; subscribing downloads a tool."),
             ("Majesty Helper", "This item changes nothing in the game."),
         )

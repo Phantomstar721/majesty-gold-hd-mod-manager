@@ -111,8 +111,11 @@ class ManagerProfile:
     last_build_fingerprint: str | None = None
     last_build_mod_id: str | None = None
     last_build_path: str | None = None
+    classic_launch: bool = False
+    game_executable: str | None = None
+    expansion_content: bool | None = None
 
-    def selected(self, mod_id: str, *, default: bool = True) -> bool:
+    def selected(self, mod_id: str, *, default: bool = False) -> bool:
         return bool(self.selections.get(normalize_guid(mod_id), default))
 
     def with_selections(
@@ -123,6 +126,9 @@ class ManagerProfile:
         normalized = {normalize_guid(key): bool(value) for key, value in selections.items()}
         normalized_order = _unique_guids(order)
         return ManagerProfile(
+            classic_launch=self.classic_launch,
+            game_executable=self.game_executable,
+            expansion_content=self.expansion_content,
             selections=normalized,
             order=normalized_order,
             standard_conflict_winners=dict(self.standard_conflict_winners),
@@ -139,6 +145,9 @@ class ManagerProfile:
         path: Path,
     ) -> "ManagerProfile":
         return ManagerProfile(
+            classic_launch=self.classic_launch,
+            game_executable=self.game_executable,
+            expansion_content=self.expansion_content,
             selections=dict(self.selections),
             order=self.order,
             standard_conflict_winners=dict(self.standard_conflict_winners),
@@ -193,7 +202,13 @@ def load_profile(path: Path) -> ManagerProfile | None:
         if winner not in pair.split("|"):
             raise ProfileFormatError(f"invalid standard Mod conflict winner in {path}")
         conflict_winners[pair] = winner
+    expansion_content = value.get("expansion_content")
+    if expansion_content is not None and type(expansion_content) is not bool:
+        raise ProfileFormatError(f"invalid expansion-content setting in {path}")
     return ManagerProfile(
+        game_executable=_optional_string(value.get("game_executable")),
+        expansion_content=expansion_content,
+        classic_launch=bool(value.get("classic_launch", False)),
         selections=selections,
         order=_unique_guids(raw_order),
         standard_conflict_winners=conflict_winners,
@@ -206,6 +221,9 @@ def load_profile(path: Path) -> ManagerProfile | None:
 def save_profile(path: Path, profile: ManagerProfile) -> None:
     payload = {
         "schema_version": PROFILE_SCHEMA_VERSION,
+        "classic_launch": profile.classic_launch,
+        "game_executable": profile.game_executable,
+        "expansion_content": profile.expansion_content,
         "selections": dict(sorted(profile.selections.items())),
         "order": list(profile.order),
         "standard_conflict_winners": dict(
@@ -230,17 +248,17 @@ def initial_selection(
     saved_profile: ManagerProfile | None,
     remembered_ids: Sequence[str] = (),
 ) -> tuple[dict[str, bool], tuple[str, ...], str]:
-    """Choose manager state precedence and default every new valid mod on.
+    """Choose manager state precedence and keep newly discovered mods off.
 
     Manager-owned state is authoritative after the first run.  On first run an
     existing Remember Active Mods file is imported exactly.  Without either
-    source, every detected mod starts enabled as requested.
+    source, detected mods remain disabled until selected.
     """
 
     detected = _unique_guids(mod_ids)
     if saved_profile is not None:
         selections = {
-            mod_id: saved_profile.selections.get(mod_id, True) for mod_id in detected
+            mod_id: saved_profile.selections.get(mod_id, False) for mod_id in detected
         }
         ordered = _order_subset(detected, saved_profile.order)
         return selections, ordered, "manager"
@@ -252,7 +270,7 @@ def initial_selection(
         ordered = _order_subset(detected, remembered)
         return selections, ordered, "remembered"
 
-    return {mod_id: True for mod_id in detected}, detected, "defaults"
+    return {mod_id: False for mod_id in detected}, detected, "defaults"
 
 
 def _order_subset(detected: Sequence[str], preferred: Sequence[str]) -> tuple[str, ...]:

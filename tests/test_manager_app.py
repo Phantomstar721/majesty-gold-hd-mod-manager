@@ -161,7 +161,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
         )
         def select(path, *, replan=True):
             self.assertFalse(replan)
-            controller.paths = SimpleNamespace(game_path=path.parent, game_executable=path)
+            controller.paths = SimpleNamespace(game_path=path.parent, game_executable=path, profile_path=path.parent / "profile.json")
         controller.select_game_executable = Mock(side_effect=select)
         with patch.object(manager_app.QTimer, "singleShot"):
             window = manager_app.ManagerWindow(controller)
@@ -213,7 +213,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
             started.set()
             if not release.wait(5):
                 raise RuntimeError("test did not release selection worker")
-            controller.paths = SimpleNamespace(game_path=path.parent, game_executable=path)
+            controller.paths = SimpleNamespace(game_path=path.parent, game_executable=path, profile_path=path.parent / "profile.json")
         controller.select_game_executable = select
         with patch.object(manager_app.QTimer, "singleShot"):
             window = manager_app.ManagerWindow(controller)
@@ -636,7 +636,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
         def select(executable, *, replan=True):
             self.assertFalse(replan)
             controller.paths = SimpleNamespace(
-                game_path=executable.parent, game_executable=executable)
+                game_path=executable.parent, game_executable=executable, profile_path=executable.parent / "profile.json")
         controller.select_game_executable = Mock(side_effect=select)
         with patch.object(manager_app.QTimer, "singleShot"):
             window = manager_app.ManagerWindow(controller)
@@ -716,6 +716,43 @@ class ManagerAppLayoutTests(unittest.TestCase):
             "The manager could not check the installed game helpers.",
         )
         window.close()
+
+    def test_changes_use_tab_dot_and_compact_metadata_pill(self):
+        from PySide6.QtWidgets import QLabel, QTabBar
+        from majesty_cam.manager.profile import ManagerProfile
+        identity = "11111111-1111-1111-1111-111111111111"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            controller = SimpleNamespace(
+                paths=SimpleNamespace(game_path=root/"Game", profile_path=root/"profile.json"),
+                profile=ManagerProfile())
+            entry = CatalogEntry(identity,identity,"Example Standard mod",CatalogKind.STANDARD,
+                                 CatalogSource.LOCAL_MODS,root,root/"mod.mmxml",False,False)
+            snapshot = replace(_snapshot_with_required_qol("installed","installed"),
+                               catalog=Catalog((entry,)),changes={identity:"NEW"})
+            with patch.object(manager_app.QTimer,"singleShot"):
+                window=manager_app.ManagerWindow(controller)
+            window._render_snapshot(snapshot)
+            window.tabs.setCurrentIndex(1)
+            window.resize(1200,850)
+            window.show()
+            self.application.processEvents()
+            bar=window.tabs.tabBar()
+            dot=bar.tabButton(1,QTabBar.ButtonPosition.RightSide)
+            self.assertEqual(dot.objectName(),"tabChangeDot")
+            self.assertEqual(dot.width(),8)
+            self.assertNotIn("New",window.tabs.tabText(1))
+            card=window.pages[CatalogKind.STANDARD].cards[0]
+            source=card.findChild(QLabel,"sourceBadge")
+            self.assertEqual(card.change_badge.text(),"New")
+            self.assertLessEqual(card.change_badge.height(),source.height()+2)
+            self.assertLess(card.change_badge.x(),card.width()/2)
+            window._render_snapshot(replace(snapshot,changes={identity:"UPDATED"}))
+            self.assertEqual(window.pages[CatalogKind.STANDARD].cards[0].change_badge.text(),"Updated")
+            window._render_snapshot(replace(snapshot,changes={}))
+            self.assertIsNone(bar.tabButton(1,QTabBar.ButtonPosition.RightSide))
+            self.assertTrue(window.pages[CatalogKind.STANDARD].cards[0].change_badge.isHidden())
+            window.close()
 
     def test_mod_card_keeps_names_single_line_and_hides_internal_id(self) -> None:
         from PySide6.QtWidgets import QLabel, QPushButton

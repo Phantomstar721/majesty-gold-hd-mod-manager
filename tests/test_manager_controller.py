@@ -83,6 +83,8 @@ class ManagerControllerTests(unittest.TestCase):
                                        source_metadata_signature=package_input_metadata_signature(package_root))
             controller = ManagerController(paths=paths, registry=CompatibilityRegistry(specs={}))
             controller._prepared_merge_cache[HAUNT_ID] = prepared
+            from majesty_cam.manager.profile import ManagerProfile, save_profile
+            save_profile(paths.profile_path, ManagerProfile(selections={HAUNT_ID: True}))
             catalog = Catalog(entries=(_entry(HAUNT_ID, "Map Queries", package_root),))
             # Discovery and stock files are fixtures; keep the real scan,
             # replan, feature resolution, fingerprint, and cache paths.

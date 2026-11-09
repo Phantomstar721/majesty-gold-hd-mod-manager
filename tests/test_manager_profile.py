@@ -46,20 +46,20 @@ class ManagerProfileTests(unittest.TestCase):
         self.assertEqual(order, (TWO, ONE))
         self.assertEqual(source, "remembered")
 
-    def test_without_prior_state_every_detected_mod_defaults_on(self):
+    def test_without_prior_state_every_detected_mod_defaults_off(self):
         selected, order, source = initial_selection(
             (ONE, TWO), saved_profile=None, remembered_ids=()
         )
-        self.assertEqual(selected, {ONE: True, TWO: True})
+        self.assertEqual(selected, {ONE: False, TWO: False})
         self.assertEqual(order, (ONE, TWO))
         self.assertEqual(source, "defaults")
 
-    def test_manager_state_wins_and_new_mods_default_on(self):
+    def test_manager_state_wins_and_new_mods_default_off(self):
         profile = ManagerProfile(selections={ONE: False}, order=(ONE,))
         selected, order, source = initial_selection(
             (ONE, TWO), saved_profile=profile, remembered_ids=(ONE,)
         )
-        self.assertEqual(selected, {ONE: False, TWO: True})
+        self.assertEqual(selected, {ONE: False, TWO: False})
         self.assertEqual(order, (ONE, TWO))
         self.assertEqual(source, "manager")
 
@@ -71,6 +71,8 @@ class ManagerProfileTests(unittest.TestCase):
                 selections={ONE: True},
                 order=(ONE,),
                 standard_conflict_winners={pair: TWO},
+                game_executable=str(Path(tmp)/"MajestyHD.exe"),
+                expansion_content=True,
             ).with_successful_build(
                 fingerprint="abc123", mod_id=TWO, path=Path(tmp) / "Merged"
             )
@@ -80,6 +82,10 @@ class ManagerProfileTests(unittest.TestCase):
             self.assertEqual(loaded.selections, {ONE: True})
             self.assertEqual(loaded.order, (ONE,))
             self.assertEqual(loaded.standard_conflict_winners, {pair: TWO})
+            self.assertEqual(loaded.game_executable, profile.game_executable)
+            self.assertTrue(loaded.expansion_content)
+            self.assertEqual(loaded.with_selections({},()).game_executable, profile.game_executable)
+            self.assertTrue(loaded.with_selections({},()).expansion_content)
             self.assertEqual(loaded.last_build_fingerprint, "abc123")
             self.assertEqual(loaded.last_build_mod_id, TWO)
             self.assertEqual(normalize_guid("{" + ONE.lower() + "}"), ONE)

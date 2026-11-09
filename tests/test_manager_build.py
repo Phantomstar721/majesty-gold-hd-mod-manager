@@ -504,7 +504,7 @@ class ManagerBuildPlanTests(unittest.TestCase):
                         "runtime": {
                             "capabilities": [],
                             "capability_manifest": capability_record,
-                            "feature_registry": feature_record,
+                            "feature_registry": {**feature_record, "map_fog_query": False},
                             "controller_registry": controller_record,
                         }
                     }
@@ -561,6 +561,9 @@ class ManagerBuildPlanTests(unittest.TestCase):
             ), patch(
                 "majesty_cam.scoped_output.load_generated_bundle", return_value=(package,)
             ):
+                self.assertIsNotNone(read_managed_build(root))
+                sentinel["intent_registry"]["record_count"] = 5
+                (root / MANAGER_OUTPUT_SENTINEL).write_text(json.dumps(sentinel), encoding="utf-8")
                 self.assertIsNotNone(read_managed_build(root))
                 protected = (
                     manifest,

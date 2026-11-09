@@ -1,7 +1,7 @@
 // Included inside the runtime's anonymous namespace. See docs/gog-standard-mods.md.
 constexpr wchar_t kGogStandardManifestsEnvironment[] = L"MAJESTY_MOD_MANAGER_STANDARD_MANIFESTS";
 constexpr std::size_t kMaximumStandardManifestCharacters = 30000;
-constexpr std::size_t kMaximumStandardMods = 26;
+constexpr std::size_t kMaximumStandardMods = 256;
 struct GogStandardMod {
     std::string id;
     std::string manifest;

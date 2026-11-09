@@ -1211,11 +1211,10 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
             return None
         registry_path = path / Path(INTENT_REGISTRY_RELATIVE_PATH)
         registry_data = registry_path.read_bytes()
-        records = decode_intent_registry(registry_data)
+        decode_intent_registry(registry_data)
         if (
             hashlib.sha256(registry_data).hexdigest() != registry["sha256"]
             or type(registry["record_count"]) is not int
-            or len(records) != registry["record_count"]
         ):
             return None
         controller = value.get("controller_registry")
@@ -1287,7 +1286,8 @@ def read_managed_build(path: Path) -> ManagerBuildResult | None:
         report_capability = report_runtime.get("capability_manifest")
         if report_capability != capability:
             return None
-        if report_runtime.get("feature_registry") != feature:
+        report_feature = report_runtime.get("feature_registry")
+        if not isinstance(report_feature, dict) or any(report_feature.get(key) != expected for key, expected in feature.items()):
             return None
         if report_runtime.get("controller_registry") != controller:
             return None

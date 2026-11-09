@@ -25,6 +25,7 @@ from .preflight import PreparedMergeMod
 from .shortcuts import ShortcutError, create_manager_desktop_shortcut
 from .workshop import open_workshop_item
 from ..script_review import ScriptReviewCancelled
+from ..version import MANAGER_VERSION
 
 
 try:  # Keep non-GUI merger imports usable without the optional Qt runtime.
@@ -60,6 +61,7 @@ try:  # Keep non-GUI merger imports usable without the optional Qt runtime.
         QHBoxLayout,
         QLabel,
         QLineEdit,
+        QInputDialog,
         QMainWindow,
         QMessageBox,
         QPlainTextEdit,
@@ -68,6 +70,7 @@ try:  # Keep non-GUI merger imports usable without the optional Qt runtime.
         QScrollArea,
         QSizePolicy,
         QTabWidget,
+        QTabBar,
         QVBoxLayout,
         QWidget,
     )
@@ -468,6 +471,11 @@ if _PYSIDE_IMPORT_ERROR is None:
                     )
                 variant.setToolTip(variant_tip)
                 metadata.addWidget(variant)
+            self.change_badge = QLabel()
+            self.change_badge.setObjectName("changeBadge")
+            self.change_badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            self.change_badge.hide()
+            metadata.addWidget(self.change_badge)
             author_text = entry.details or entry.description
             self.author_detail: Optional[QLabel] = None
             self.details_button: Optional[QPushButton] = None
@@ -836,15 +844,6 @@ if _PYSIDE_IMPORT_ERROR is None:
                     lambda _checked=False: self.bulk_selection.emit(self.kind, False)
                 )
                 bar.addWidget(self.clear_button)
-            else:
-                self.expansion_quests = QCheckBox("Play all quests with expansion content")
-                quest_option = QVBoxLayout()
-                quest_option.setSpacing(2)
-                quest_option.addWidget(self.expansion_quests)
-                credit = QLabel("(Credit to mikmak300)")
-                credit.setObjectName("sectionDescription")
-                quest_option.addWidget(credit)
-                bar.addLayout(quest_option)
             layout.addWidget(toolbar)
 
             self.scroll = QScrollArea()
@@ -880,7 +879,8 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.cards = []
             self.groups = []
             self.standalone_cards = []
-            entry_list = tuple(entries)
+            changes = getattr(snapshot, 'changes', None) or {}
+            entry_list = tuple(sorted(entries, key=lambda e: e.content_id not in changes))
             collection_entries: dict[str, tuple[CatalogEntry, ...]] = {}
             for entry in entry_list:
                 if entry.in_collection and entry.collection_id:
@@ -930,6 +930,11 @@ if _PYSIDE_IMPORT_ERROR is None:
                 self.card_layout.addWidget(card)
                 self.cards.append(card)
                 self.standalone_cards.append(card)
+
+            for card in self.cards:
+                if card.entry.content_id in changes:
+                    card.change_badge.setText(changes[card.entry.content_id].title())
+                    card.change_badge.show()
 
             self.empty = QLabel(
                 "No content detected in this section."
@@ -1290,6 +1295,11 @@ if _PYSIDE_IMPORT_ERROR is None:
             tagline = QLabel("Choose your adventures, mods, and game helpers")
             tagline.setObjectName("tagline")
             titles.addWidget(tagline)
+            self.manager_version = QLabel(f"Manager version: {MANAGER_VERSION}")
+            self.manager_version.setObjectName("managerVersion")
+            self.manager_version.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.manager_version.setToolTip("Version of this Mod Manager application, not MajestyHD.exe.")
+            titles.addWidget(self.manager_version)
             header_layout.addLayout(titles)
             header_layout.setAlignment(
                 titles, Qt.AlignmentFlag.AlignTop
@@ -1302,7 +1312,7 @@ if _PYSIDE_IMPORT_ERROR is None:
 
             game_version = QVBoxLayout()
             game_version.setSpacing(3)
-            version_label = QLabel("GAME VERSION")
+            version_label = QLabel("GAME EXE VERSION")
             version_label.setObjectName("microLabel")
             version_label.setAlignment(header_label_alignment)
             version_label.setFixedHeight(14)
@@ -1395,6 +1405,21 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.search.setMaximumWidth(360)
             self.search.textChanged.connect(self._filter_pages)
             nav.addWidget(self.search)
+            from .quest_dataset import enabled
+            self.expansion_quests = QCheckBox("Expansion content for all quests (including original Majesty quests)")
+            self.expansion_quests.setToolTip(
+                "Use Northern Expansion content in all quests, including stock Majesty quests and downloaded quests. "
+                "Takes effect on the next launch."
+            )
+            self.expansion_quests.setChecked(enabled(self.controller.paths))
+            self.expansion_quests.clicked.connect(self._set_expansion_quests)
+            quest_option = QVBoxLayout()
+            quest_option.setSpacing(2)
+            quest_option.addWidget(self.expansion_quests)
+            credit = QLabel("(Credit to mikmak300)")
+            credit.setObjectName("sectionDescription")
+            quest_option.addWidget(credit)
+            nav.addLayout(quest_option)
             nav.addStretch(1)
             self.desktop_shortcut_button = QPushButton("Desktop Shortcut")
             self.desktop_shortcut_button.setProperty("role", "quiet")
@@ -1429,6 +1454,7 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.notice_bar.hide()
             page.addWidget(self.notice_bar)
 
+            self._tab_change_dots = {}
             self.tabs = QTabWidget()
             self.tabs.setObjectName("catalogTabs")
             self.pages: dict[CatalogKind, _CatalogPage] = {}
@@ -1442,10 +1468,6 @@ if _PYSIDE_IMPORT_ERROR is None:
                 catalog_page.selection_changed.connect(self._selection_changed)
                 catalog_page.steam_requested.connect(self.steam_requested.emit)
                 catalog_page.conflicts_requested.connect(self._show_conflicts)
-                if kind is CatalogKind.QUEST:
-                    from .quest_dataset import enabled
-                    catalog_page.expansion_quests.setChecked(enabled(self.controller.paths))
-                    catalog_page.expansion_quests.clicked.connect(self._set_expansion_quests)
                 self.pages[kind] = catalog_page
                 self.tabs.addTab(catalog_page, label)
             self.qol_page = _QolPage()
@@ -1498,6 +1520,14 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.launch_button.setCursor(Qt.CursorShape.PointingHandCursor)
             self.launch_button.clicked.connect(self.launch)
             self.launch_button.setEnabled(False)
+            self.profile_button = QPushButton("Profile")
+            self.profile_button.setMaximumWidth(190)
+            self.profile_button.clicked.connect(self._choose_profile)
+            footer_layout.addWidget(self.profile_button)
+            self.classic_launch = QCheckBox("Classic Launch")
+            self.classic_launch.setToolTip("Launch selected Standard mods in their current order without conflict resolution.")
+            self.classic_launch.clicked.connect(self._change_launch_mode)
+            footer_layout.addWidget(self.classic_launch)
             footer_layout.addWidget(self.launch_button)
             page.addWidget(footer)
 
@@ -1612,6 +1642,8 @@ if _PYSIDE_IMPORT_ERROR is None:
             self._initial_qol_check_complete = False
             self._refresh_installations(choices)
             self.install_path.setFullText(str(self.controller.paths.game_path))
+            from .quest_dataset import enabled
+            self.expansion_quests.setChecked(enabled(self.controller.paths))
             self._scan_finished(snapshot)
 
         @Slot(bool)
@@ -1619,8 +1651,9 @@ if _PYSIDE_IMPORT_ERROR is None:
             from .quest_dataset import enabled, set_enabled
             try:
                 set_enabled(self.controller.paths, checked)
+                self.controller._save_selection_state()
             except OSError as exc:
-                self.pages[CatalogKind.QUEST].expansion_quests.setChecked(enabled(self.controller.paths))
+                self.expansion_quests.setChecked(enabled(self.controller.paths))
                 self._show_interaction_error("Could not save quest setting", exc)
 
         @Slot()
@@ -1671,6 +1704,8 @@ if _PYSIDE_IMPORT_ERROR is None:
                 return
             if any(issue.code not in _STANDARD_CONFLICT_ISSUES for issue in self.snapshot.plan.issues):
                 self._show_build_issues()
+                return
+            if not self._confirm_profile_edits():
                 return
             force_review = any(
                 issue.code == "conflicting_standard_order_choices"
@@ -1890,19 +1925,130 @@ if _PYSIDE_IMPORT_ERROR is None:
                 self._render_snapshot(self.snapshot)
             return True
 
+        def _change_launch_mode(self, checked):
+            from dataclasses import replace
+            self.controller.profile = replace(self.controller.profile, classic_launch=checked)
+            self.controller._save_selection_state()
+            self._render_snapshot(self.controller.snapshot())
+
+        def _save_preset(self, new):
+            from .presets import Presets
+            store = Presets(self.controller.paths)
+            name = None
+            if new:
+                name, ok = QInputDialog.getText(self, "Save profile", "Profile name",
+                                                text=f"Profile {len(store.state['items']) + 1}")
+                if not ok:
+                    return False
+            profile = self.controller._profile_with_current_selections()
+            store.save(profile, name=name)
+            if self.snapshot and self.snapshot.plan.has_merge and not self.snapshot.build_required and self.snapshot.managed_build:
+                store.retain_build(profile, self.snapshot.plan.fingerprint)
+            self._render_snapshot(self.controller.snapshot())
+            return True
+
+        def _confirm_profile_edits(self):
+            from .presets import Presets
+            if not Presets(self.controller.paths).dirty(self.controller._profile_with_current_selections()):
+                return True
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle("Save profile changes")
+            dialog.setText("Your selections differ from the loaded profile.")
+            update = dialog.addButton("Update profile", QMessageBox.ButtonRole.AcceptRole)
+            create = dialog.addButton("Save as new profile", QMessageBox.ButtonRole.ActionRole)
+            dialog.addButton(QMessageBox.StandardButton.Cancel)
+            dialog.exec()
+            if dialog.clickedButton() not in (update, create):
+                return False
+            try:
+                return self._save_preset(dialog.clickedButton() is create)
+            except (OSError, ValueError, RuntimeError) as exc:
+                self._show_interaction_error("Could not save profile", exc)
+                return False
+
+        def _choose_profile(self):
+            from .presets import Presets
+            if self._busy:
+                return
+            store = Presets(self.controller.paths)
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Mod profiles")
+            layout = QVBoxLayout(dialog)
+            picker = QComboBox()
+            for item in store.state["items"]:
+                picker.addItem(item["name"], item["id"])
+            picker.setCurrentIndex(max(0, picker.findData(store.state["active"])))
+            layout.addWidget(picker)
+            quest_note = QLabel("Downloaded quests remain available through Majesty's quest list.")
+            quest_note.setWordWrap(True)
+            layout.addWidget(quest_note)
+            load = QPushButton("Use selected profile")
+            load.setEnabled(picker.count() > 0)
+            save = QPushButton("Save current selections as new profile")
+            save.setEnabled(picker.count() < 5)
+            remove = QPushButton("Delete selected profile")
+            remove.setEnabled(picker.count() > 0)
+            layout.addWidget(load)
+            layout.addWidget(save)
+            layout.addWidget(remove)
+
+            def activate():
+                if not self._confirm_profile_edits():
+                    return
+                identity = picker.currentData()
+                dialog.accept()
+                def action(progress):
+                    progress("Loading saved profile")
+                    snapshot = self.controller.activate_profile(identity, progress=progress)
+                    return snapshot, self.controller.detected_installations()
+                self._run_task("Loading profile", action, self._installation_changed)
+
+            def save_new():
+                try:
+                    if self._save_preset(True):
+                        dialog.accept()
+                except (OSError, ValueError, RuntimeError) as exc:
+                    self._show_interaction_error("Could not save profile", exc)
+
+            def delete():
+                identity = picker.currentData()
+                if QMessageBox.question(dialog, "Delete profile",
+                        f"Delete {picker.currentText()} and its saved setup?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
+                    return
+                try:
+                    store.delete(identity)
+                except (OSError, ValueError) as exc:
+                    self._show_interaction_error("Could not delete profile", exc)
+                    return
+                self._render_snapshot(self.controller.snapshot())
+                dialog.accept()
+
+            load.clicked.connect(activate)
+            save.clicked.connect(save_new)
+            remove.clicked.connect(delete)
+            dialog.exec()
+
         @Slot()
         def launch(self) -> None:
             if (
                 self._busy
                 or self.snapshot is None
-                or not self.snapshot.can_launch
+                or not (self.snapshot.can_classic_launch if self.classic_launch.isChecked() else self.snapshot.can_launch)
                 or _missing_required_qol_helpers(self.snapshot)
             ):
                 return
 
+            if not self._confirm_profile_edits():
+                return
+            classic = self.classic_launch.isChecked()
+            if classic and QMessageBox.warning(self, "Classic Launch",
+                    "Standard mods will load in their selected order. Overlapping or incompatible mods can cause errors, crashes or broken saves.",
+                    QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Ok:
+                return
             def action(progress: Callable[[str], None]) -> object:
                 progress("Checking required game helpers")
-                return self.controller.launch()
+                return self.controller.launch(classic=classic)
 
             self._run_task("Launching Majesty", action, self._launch_finished)
 
@@ -1965,6 +2111,8 @@ if _PYSIDE_IMPORT_ERROR is None:
 
         @Slot(str, str)
         def _task_failed(self, message: str, details: str) -> None:
+            from .support_report import record_error
+            record_error(self.controller.paths, message, details)
             self.build_state.setText(f"{self._task_name} failed")
             dialog = QMessageBox(self)
             dialog.setIcon(QMessageBox.Icon.Critical)
@@ -2157,7 +2305,22 @@ if _PYSIDE_IMPORT_ERROR is None:
                     self.prepared_cache,
                     self.blocked_cache,
                 )
+                new = any(e.content_id in (getattr(snapshot, "changes", None) or {}) for e in entries)
                 self.tabs.setTabText(index, f"{_tab_name(kind)}   {len(entries)}")
+                tab_bar = self.tabs.tabBar()
+                dot = self._tab_change_dots.get(index)
+                if new and dot is None:
+                    dot = QLabel(tab_bar)
+                    self._tab_change_dots[index] = dot
+                    dot.setObjectName("tabChangeDot")
+                    dot.setFixedSize(8, 8)
+                    dot.setToolTip("New or updated content")
+                    dot.setAccessibleName("New or updated content")
+                    tab_bar.setTabButton(index, QTabBar.ButtonPosition.RightSide, dot)
+                elif not new and dot is not None:
+                    tab_bar.setTabButton(index, QTabBar.ButtonPosition.RightSide, None)
+                    self._tab_change_dots.pop(index)
+                    dot.deleteLater()
             utilities = _snapshot_qol_utilities(snapshot)
             self.qol_page.populate(utilities)
             self.tabs.setTabText(3, f"Quality of Life   {len(utilities)}")
@@ -2239,7 +2402,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                         f"{label}  ·  {version}" if version else label,
                         "ready",
                     )
-                    tooltip = f"Detected Majesty version {version}" if version else text
+                    tooltip = f"Game executable version: {version}\n{self.controller.paths.game_path / 'MajestyHD.exe'}" if version else text
             else:
                 text, state = "Majesty Gold HD", "pending"
                 tooltip = "Game version details will appear after the version check."
@@ -2312,8 +2475,24 @@ if _PYSIDE_IMPORT_ERROR is None:
                     else "Select at least one supported Merge mod to build a setup."
                 )
             )
-            self.launch_button.setEnabled(snapshot.can_launch and required_qol_ready)
-            if not required_qol_ready:
+            classic = getattr(getattr(self.controller, "profile", None), "classic_launch", False)
+            self.classic_launch.setChecked(classic)
+            self.launch_button.setText("Classic Launch" if classic else "Launch Majesty")
+            self.launch_button.setEnabled((snapshot.can_classic_launch if classic else snapshot.can_launch) and required_qol_ready)
+            from .presets import Presets
+            store = Presets(self.controller.paths)
+            active = next((i["name"] for i in store.state["items"] if i["id"] == store.state["active"]), None)
+            label = "Profile"
+            if active:
+                metrics = self.profile_button.fontMetrics()
+                available_width = self.profile_button.maximumWidth() - metrics.horizontalAdvance("Profile ()") - 28
+                name = metrics.elidedText(active, Qt.TextElideMode.ElideRight, available_width)
+                label = f"Profile ({name})"
+            self.profile_button.setText(label)
+            self.profile_button.setToolTip(f"Profile ({active})" if active else "Choose or save a profile")
+            if classic:
+                launch_tip = "Launch selected Standard mods as they are, with your installed game improvements."
+            elif not required_qol_ready:
                 launch_tip = (
                     "Install the required patches on the Quality of Life tab first."
                 )
@@ -2337,6 +2516,8 @@ if _PYSIDE_IMPORT_ERROR is None:
                 self.build_state.setText(message)
             self.progress.setVisible(busy)
             self.rescan_button.setEnabled(not busy)
+            self.profile_button.setEnabled(not busy)
+            self.classic_launch.setEnabled(not busy)
             self.choose_game_button.setEnabled(not busy)
             self.install_selector.setEnabled(not busy)
             self.open_game_folder_button.setEnabled(not busy)
@@ -2348,6 +2529,7 @@ if _PYSIDE_IMPORT_ERROR is None:
             enabled = enabled and self.snapshot is not None
             self.review_mod_preferences.setEnabled(bool(enabled and self.snapshot.plan.has_merge))
             self.search.setEnabled(enabled)
+            self.expansion_quests.setEnabled(enabled)
             for catalog_page in self.pages.values():
                 catalog_page.set_interactions_enabled(enabled)
             self.qol_page.set_interactions_enabled(enabled)

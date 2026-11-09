@@ -7714,6 +7714,8 @@ bool InstallSecondaryControllerHook() {
 #include "GogStandardMods.inl"
 #include "GogWorkshopQuests.inl"
 
+#include "LargeModList.inl"
+
 using ComposeQuestDataset = void* (__cdecl*)(void*, unsigned);
 using LookupQuestDataset = void* (__thiscall*)(void*, unsigned);
 ComposeQuestDataset g_composeQuestDataset = nullptr;
@@ -7879,6 +7881,9 @@ DWORD WINAPI InitializeRuntime(void*) {
     if (!SelectMajestyBuildProfile() || !ValidateMajestyBuildProfile()) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: the executable does not match every declared runtime capability profile.");
+    }
+    if (!InstallLargeModList()) {
+        StopUnsafeManagerRuntimeLaunch("The selected-mod restore routine does not match the bundled persistence helper. Reinstall Remember Active Mods in Quality of Life.");
     }
     if (!InstallExpansionQuestContent()) {
         StopUnsafeManagerRuntimeLaunch("Expansion quest content: quest dataset calls or Sorcerer's Abode spell bar do not match the selected game build.");

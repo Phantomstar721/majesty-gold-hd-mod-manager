@@ -39,6 +39,8 @@ TOOL_DELIVERY_ISSUE_CODE = "non_gameplay_tool_delivery"
 _KNOWN_TOOL_DELIVERY_IDS = frozenset((MAJESTY_SCRIPT_MERGER_ID,))
 _TOOL_DELIVERY_PHRASES = (
     "modding tool only",
+    "nothing to enable",
+    "you do not need to tick this mod",
     "changes nothing in game",
     "changes nothing in the game",
 )

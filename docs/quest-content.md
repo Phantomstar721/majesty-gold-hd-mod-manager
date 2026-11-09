@@ -1,6 +1,6 @@
 # Quest content
 
-In **Quests**, check **Play all quests with expansion content** and launch Majesty through the Manager. Original and Northern Expansion quests then load the expansion resources. Quest-specific rules and restrictions still apply. The Sorcerer’s Abode spell bar uses its stock icons and tooltips. Uncheck the box and relaunch for each quest’s stock content. This setting defaults to off and takes effect on the next Manager launch without Prepare.
+Beside the search box, check **Expansion content for all quests (including original Majesty quests)** and launch Majesty through the Manager. Original and Northern Expansion quests then load the expansion resources. Quest-specific rules and restrictions still apply. The Sorcerer’s Abode spell bar uses its stock icons and tooltips. Uncheck the box and relaunch for each quest’s stock content. This setting defaults to off and takes effect on the next Manager launch without Prepare.
 
 ## Implementation evidence
 

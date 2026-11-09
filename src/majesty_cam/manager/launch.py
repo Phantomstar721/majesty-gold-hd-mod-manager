@@ -43,7 +43,7 @@ from .qol_service import GOG_BRANCH, QolService, detect_majesty_branch
 from .runtime_profiles import unsupported_runtime_capabilities
 
 
-CURRENT_PERSISTENCE_LIMIT = 26
+CURRENT_PERSISTENCE_LIMIT = 256
 STANDARD_MANIFESTS_ENV_VAR = "MAJESTY_MOD_MANAGER_STANDARD_MANIFESTS"
 QUEST_MANIFESTS_ENV_VAR = "MAJESTY_MOD_MANAGER_QUEST_MANIFESTS"
 
@@ -112,7 +112,7 @@ def launch_majesty(
         raise ManagerLaunchError(
             f"The current guarded persistence bridge can restore at most "
             f"{CURRENT_PERSISTENCE_LIMIT} active IDs; this profile has {len(ordered)}. "
-            "The manager-owned arbitrary-length runtime restore hook is not yet bundled."
+            "Use up to 256 selected components per launch."
         )
     environment = os.environ.copy()
     environment.pop(INTENT_REGISTRY_ENV_VAR, None)
