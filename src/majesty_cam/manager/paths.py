@@ -36,6 +36,12 @@ class ManagerPaths:
         return self.game_path / GAME_EXECUTABLE_NAME
 
     @property
+    def launch_executable(self) -> Path:
+        from .edition import panel_alpha
+        from .alpha_executable import target_for
+        return target_for(self.game_executable) if panel_alpha() else self.game_executable
+
+    @property
     def runtime_launcher(self) -> Path:
         return self.runtime_root / "MajestyBuildingRuntimeLauncher.exe"
 
@@ -109,8 +115,13 @@ def detect_manager_paths(
     )
 
     runtime_candidates = [repo_root / "payload" / "runtime"]
+    from .edition import panel_alpha
+    if panel_alpha():
+        runtime_candidates = [repo_root / 'payload' / 'panel-engine' / 'runtime']
+        if not frozen:
+            runtime_candidates.append(repo_root / 'local/panel-engine-alpha/runtime')
     if not frozen:
-        runtime_candidates.append(
+        if not panel_alpha(): runtime_candidates.append(
             repo_root / "local" / "manager-runtime-release"
         )
     runtime_root = (
@@ -156,6 +167,9 @@ def detect_manager_paths(
         remember_candidates[0],
     )
 
+    from .edition import panel_alpha
+    from .edition import output_directory_name
+    output_root = local_mods / output_directory_name()
     return ManagerPaths(
         repo_root=repo_root,
         game_path=game_path,
@@ -167,7 +181,7 @@ def detect_manager_paths(
         remember_mods_installer=remember_installer.resolve(strict=False),
         remembered_path=canonical_remembered_path(local_appdata),
         profile_path=default_profile_path(local_appdata),
-        merged_output_root=local_mods / "Majesty Mod Manager - Merged",
+        merged_output_root=output_root,
     )
 
 

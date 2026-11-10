@@ -114,6 +114,30 @@ class MajestyBranchDetectionTests(unittest.TestCase):
 
 
 class QolServiceTests(unittest.TestCase):
+    def test_one_import_failure_keeps_other_helpers_and_recognized_build(self):
+        from majesty_cam.manager.qol_service import GOG_BRANCH, QolUtilityStatus
+        for branch in (PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH):
+            with self.subTest(branch=branch.key), TemporaryDirectory() as temp:
+                root = Path(temp)
+                specs = tuple(replace(QOL_PATCHES[1], key=f'helper-{i}') for i in range(4))
+                scripts = root/'payload/qol/utilities'/specs[0].bundle_directory/'scripts'
+                scripts.mkdir(parents=True)
+                for name in (specs[0].install_script_name, specs[0].remove_script_name):
+                    (scripts/name).write_text('')
+                service = QolService(repo_root=root, game_executable=root/'MajestyHD.exe', specs=specs)
+                def inspect(item, detected):
+                    if item.spec.key == 'helper-1':
+                        raise ImportError('partially initialized helper module')
+                    return QolUtilityStatus(item, QolUtilityState.AVAILABLE, True, True, False, 'Available')
+                with patch('majesty_cam.manager.qol_service.detect_majesty_branch', return_value=branch), \
+                     patch.object(service, '_inspect_resolved', side_effect=inspect):
+                    snapshot = service.inspect()
+                self.assertEqual(snapshot.branch, branch)
+                self.assertEqual([item.key for item in snapshot.utilities], [item.key for item in specs])
+                self.assertEqual(snapshot.get('helper-1').state, QolUtilityState.ERROR)
+                self.assertIn('ImportError', snapshot.get('helper-1').detail)
+                self.assertTrue(all(snapshot.get(key).can_install for key in ('helper-0','helper-2','helper-3')))
+
     def test_cold_inspection_is_bounded_parallel_and_preserves_spec_order(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)

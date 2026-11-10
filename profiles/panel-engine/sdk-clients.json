@@ -1,0 +1,196 @@
+{
+  "schema": 1,
+  "contract": "panel-engine.sdk-typed-callers.v1",
+  "sources": [
+    "SDK sf_functions.cpp arg_str/return_unit/build_at citations",
+    "SDK we_engine.cpp GUILD_RECRUIT",
+    "runtime/PaidSourceTargetProfiles.h",
+    "runtime/MajestyModManagerRuntime.cpp:QuestBoardBuildProfile/MajestyBuildProfile"
+  ],
+  "limits": "Bounded client correspondence and opaque API targets only; no actor, registry, VM, allocator or exception implementation expansion.",
+  "profiles": {
+    "public": {
+      "fixtureSha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "clients": {
+        "stringArgument": {
+          "va": 4404245,
+          "size": 174,
+          "sha256": "ebfdd721a43f511bcb19846daa5226683a4a00d63edbb63d6ac46c80b22ea0af",
+          "knownCallAnchors": {
+            "38": 5606176
+          },
+          "textGetterVA": 5647376
+        },
+        "agentReturn": {
+          "va": 4403124,
+          "size": 92,
+          "sha256": "6a3889f521659cc50a546438ab461fcc977693d3506088ec477f9ae96ce0ef18",
+          "knownCallAnchors": {
+            "4": 4382192,
+            "19": 4380016,
+            "29": 5604896,
+            "87": 4251456
+          },
+          "assignReferenceVA": 5586912,
+          "flagMakeVA": 5092640,
+          "flagCallBytes": "e875850a008bf883c42485ff745c"
+        },
+        "recruitment": {
+          "va": 4810656,
+          "size": 262,
+          "sha256": "8d97f4608b4ffa190c4485522e532fb87ebad35e48330974d80c90cfafd7a466",
+          "knownCallAnchors": {
+            "41": 4617536,
+            "93": 7180158
+          },
+          "listConstructorVA": 4325792,
+          "listCopyVA": 6700448,
+          "listDestructorVA": 4324400
+        },
+        "buildingInput": {
+          "va": 4406970,
+          "size": 260,
+          "sha256": "5dd64c6a415663353e60e26cc7412d571c488d13dd9083dd110e8f755be230f8",
+          "knownCallAnchors": {
+            "122": 4325792,
+            "181": 6700448
+          },
+          "placeSettingsVA": 4571936,
+          "listSetVA": 6699472,
+          "placeBuildingVA": 4994880
+        },
+        "buildingOrderInput": {
+          "va": 4995584,
+          "size": 55,
+          "sha256": "52c7f82fc9f6285c78dba5702b937cc34b70dfac75be4f378df89181c5bcfd30",
+          "knownCallAnchors": {
+            "50": 4994880
+          },
+          "placeBuildingVA": 4994880
+        }
+      }
+    },
+    "beta2": {
+      "fixtureSha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "clients": {
+        "stringArgument": {
+          "va": 4408101,
+          "size": 174,
+          "sha256": "267a7213db071ba47d15f87bca74a1575c8a63fbe653a257206af8c3280c4e5c",
+          "knownCallAnchors": {
+            "38": 5696608
+          },
+          "textGetterVA": 5737792
+        },
+        "agentReturn": {
+          "va": 4407060,
+          "size": 92,
+          "sha256": "4d33ed08a37aca07ce4f8dc655d661be85ba2f98fb251ee085a51d46bfbd337f",
+          "knownCallAnchors": {
+            "4": 4386128,
+            "19": 4384688,
+            "29": 5695328,
+            "87": 4255456
+          },
+          "assignReferenceVA": 5677344,
+          "flagMakeVA": 5094192,
+          "flagCallBytes": "e8257c0a008bf883c42485ff745c"
+        },
+        "recruitment": {
+          "va": 4812720,
+          "size": 262,
+          "sha256": "317cffad80a65bf24c9d583d719e42838d5c51fc5d3b7ecb48a7412a15954ecd",
+          "knownCallAnchors": {
+            "41": 4622208,
+            "93": 7267650
+          },
+          "listConstructorVA": 4329824,
+          "listCopyVA": 6787584,
+          "listDestructorVA": 4328432
+        },
+        "buildingInput": {
+          "va": 4410826,
+          "size": 260,
+          "sha256": "b7db8fde168191e7b0a817b7a45cc7340ac8ca8d5347bc0153212f6d0eaeabad",
+          "knownCallAnchors": {
+            "122": 4329824,
+            "181": 6787584
+          },
+          "placeSettingsVA": 4576080,
+          "listSetVA": 6786608,
+          "placeBuildingVA": 4997504
+        },
+        "buildingOrderInput": {
+          "va": 4998208,
+          "size": 55,
+          "sha256": "52c7f82fc9f6285c78dba5702b937cc34b70dfac75be4f378df89181c5bcfd30",
+          "knownCallAnchors": {
+            "50": 4997504
+          },
+          "placeBuildingVA": 4997504
+        }
+      }
+    },
+    "gog": {
+      "fixtureSha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "clients": {
+        "stringArgument": {
+          "va": 4407877,
+          "size": 174,
+          "sha256": "b1f066f8bf3e2fc38fb685c03a9c69cf59c3505f28de8541869f7008865af4ba",
+          "knownCallAnchors": {
+            "38": 5693280
+          },
+          "textGetterVA": 5734464
+        },
+        "agentReturn": {
+          "va": 4406756,
+          "size": 92,
+          "sha256": "33191cd23db07598b8ef73dcc7919c702fc3795113ef5cdb0fd774fd6d947c7e",
+          "knownCallAnchors": {
+            "4": 4385824,
+            "19": 4383744,
+            "29": 5692000,
+            "87": 4252016
+          },
+          "assignReferenceVA": 5674016,
+          "flagMakeVA": 5096048,
+          "flagCallBytes": "e895840a008bf883c42485ff745c"
+        },
+        "recruitment": {
+          "va": 4814176,
+          "size": 262,
+          "sha256": "c0b8ce3bdb2af8b8ebea1e0a0c7e9bdcc473636202122bf88bd268e179a11445",
+          "knownCallAnchors": {
+            "41": 4621984,
+            "93": 7264812
+          },
+          "listConstructorVA": 4326384,
+          "listCopyVA": 6784752,
+          "listDestructorVA": 4324992
+        },
+        "buildingInput": {
+          "va": 4410602,
+          "size": 260,
+          "sha256": "0f381fe9c827acc58c7967d948148e61482052962ab88fd412718c3d0267b80e",
+          "knownCallAnchors": {
+            "122": 4326384,
+            "181": 6784752
+          },
+          "placeSettingsVA": 4575856,
+          "listSetVA": 6783776,
+          "placeBuildingVA": 4999040
+        },
+        "buildingOrderInput": {
+          "va": 4999744,
+          "size": 55,
+          "sha256": "52c7f82fc9f6285c78dba5702b937cc34b70dfac75be4f378df89181c5bcfd30",
+          "knownCallAnchors": {
+            "50": 4999040
+          },
+          "placeBuildingVA": 4999040
+        }
+      }
+    }
+  }
+}

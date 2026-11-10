@@ -10,7 +10,9 @@ param(
     [switch]$RegistrationTests,
     [switch]$AttackObservationTests,
     [switch]$CheckedPlacementTests,
-    [switch]$RegistrationDiagnostic
+    [switch]$RegistrationDiagnostic,
+    [switch]$PanelEngineAlpha,
+    [switch]$EngineModules
 )
 
 $ErrorActionPreference = "Stop"
@@ -119,6 +121,12 @@ $commonLibPaths = @(
 )
 
 $runtimeDefines = @()
+if ($EngineModules -or $PanelEngineAlpha) {
+    $runtimeDefines += "/DCAM_PANEL_ENGINE_SUPPORT=1"
+}
+if ($PanelEngineAlpha) {
+    $runtimeDefines += "/DCAM_PANEL_ENGINE_ALPHA=1"
+}
 if ($RegistrationDiagnostic) {
     $runtimeDefines += "/DMAJESTY_REGISTRATION_DIAGNOSTIC=1"
 }
@@ -174,6 +182,21 @@ if ($LASTEXITCODE -ne 0) { throw "Runtime DLL build failed with exit code $LASTE
     (Join-Path $sourceRoot "MajestyBuildingRuntimeLauncher.cpp") `
     "/Fo$output\" "/Fe:$output\MajestyBuildingRuntimeLauncher.exe" /link @commonLibPaths
 if ($LASTEXITCODE -ne 0) { throw "Runtime launcher build failed with exit code $LASTEXITCODE" }
+if ($PanelEngineAlpha -or $EngineModules) {
+    & $compiler /nologo /W4 /O2 /EHsc @commonIncludes `
+        (Join-Path $repoRoot 'tests/PanelEngineModuleTests.cpp') `
+        "/Fo$output\PanelEngineModuleTests.obj" "/Fe:$output\PanelEngineModuleTests.exe" /link @commonLibPaths
+    if ($LASTEXITCODE -ne 0) { throw 'Alpha module ABI fixture build failed' }
+    $samples=Join-Path $repoRoot 'local/panel-engine-alpha/module-descriptors'
+    $arguments=@()
+    foreach ($branch in @('public','beta2','gog')) {
+        foreach ($service in @('window-engine','script-functions')) {
+            $arguments+=Join-Path $samples ($service+'-'+$branch+'.bin')
+        }
+    }
+    & (Join-Path $output 'PanelEngineModuleTests.exe') @arguments
+    if ($LASTEXITCODE -ne 0) { throw 'Alpha module native ABI fixture failed' }
+}
 
 $fixtureNames = @()
 if ($ExplorationTests) { $fixtureNames += "ExplorationNativeTests" }
@@ -215,6 +238,11 @@ foreach ($fixtureName in $fixtureNames) {
     $fixtureLinkOptions = @()
     $fixtureArguments = @()
     $fixedImageFixture = $fixtureName -in @("SharedRegistrationRuntimeTests", "NativeRegistrationLifecycleTests", "LargeModListTests")
+    if ($PanelEngineAlpha -and $fixtureName -eq 'LargeModListTests') {
+        $fixedImageFixture=$false
+        $fixtureLinkOptions=@('/BASE:0x10000000','/DYNAMICBASE')
+        $fixtureArguments=@($env:MAJESTY_PUBLIC_EXE,$env:MAJESTY_BETA2_EXE,$env:MAJESTY_GOG_EXE)
+    }
     if ($fixedImageFixture) {
         # Reserve the game image's preferred base for nonexecuted fixture bytes.
         $fixtureLinkOptions = @("/BASE:0x10000000", "/ALIGN:65536", "/DYNAMICBASE:NO")

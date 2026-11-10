@@ -1,0 +1,593 @@
+{
+  "schema": 1,
+  "contract": "panel-engine.rtti-data.v1",
+  "source": "SDK GPL_INTEGER_VT/LIST_VTABLE; native x86 MSVC RTTI records",
+  "limits": "Class-table identity and consumed target slots only; native implementations, full sizes and 40-slot copying remain unproved.",
+  "profiles": {
+    "public": {
+      "fixtureSha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "classes": {
+        "gplInteger": {
+          "va": 7627764,
+          "name": ".?AVGplInteger@@",
+          "hierarchyAttributes": 0,
+          "bases": [
+            {
+              "name": ".?AVGplInteger@@",
+              "contained": 1,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVGplType@@",
+              "contained": 0,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            }
+          ],
+          "slots": [
+            5596400,
+            5785536,
+            5784944,
+            5784992,
+            5785072,
+            5784912,
+            5784880,
+            5785376,
+            5785088,
+            5785104,
+            5785200
+          ],
+          "sha256": "063ca761cd138e1ee2eb13c65f65efc062ccbbfaaa1692d44d09a5f20500c9b9"
+        },
+        "unitList": {
+          "va": 7590404,
+          "name": ".?AVBase_UnitListController@@",
+          "hierarchyAttributes": 0,
+          "bases": [
+            {
+              "name": ".?AVBase_UnitListController@@",
+              "contained": 2,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVStatsWindowController@@",
+              "contained": 1,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVDialogController@@",
+              "contained": 0,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            }
+          ],
+          "slots": [
+            4821008,
+            4820640,
+            4814416,
+            4817264,
+            4804128,
+            4804144,
+            4912144,
+            4909872,
+            4813088,
+            4911248,
+            4911904,
+            7180152,
+            4820032,
+            4820048,
+            4816416
+          ],
+          "sha256": "4ebd1db628a14dcbd24af76a0cebf455f0d9fdfa42b8fb7048cc0bbd51fea904"
+        },
+        "statsWindow": {
+          "va": 7594992,
+          "name": ".?AVStatsWindowController@@",
+          "hierarchyAttributes": 0,
+          "bases": [
+            {
+              "name": ".?AVStatsWindowController@@",
+              "contained": 1,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVDialogController@@",
+              "contained": 0,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            }
+          ],
+          "slots": [
+            4913104,
+            4915840,
+            4617504,
+            4911616,
+            4804128,
+            4804144,
+            4912144,
+            4909872,
+            4911840,
+            4911248,
+            4911904
+          ],
+          "sha256": "bf968ab7a7499e99309aea03ae1c75e4e9f0c8cc69cbc5f1f73bdf275be5c8d0"
+        },
+        "basicBuilding": {
+          "va": 7590220,
+          "name": ".?AVBase_BuildingController@@",
+          "hierarchyAttributes": 0,
+          "bases": [
+            {
+              "name": ".?AVBase_BuildingController@@",
+              "contained": 2,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVStatsWindowController@@",
+              "contained": 1,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVDialogController@@",
+              "contained": 0,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            }
+          ],
+          "slots": [
+            4804320,
+            4807056,
+            4805920,
+            4806544,
+            4804128,
+            4804144,
+            4912144,
+            4909872,
+            4807152,
+            4911248,
+            4911904,
+            4805136,
+            4805312
+          ],
+          "sha256": "1a41e97f419803cb7e1f9c3071e350cce96bba35abd8b6bb495edbc23f2e2fa2"
+        }
+      }
+    },
+    "beta2": {
+      "fixtureSha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "classes": {
+        "gplInteger": {
+          "va": 7734092,
+          "name": ".?AVGplInteger@@",
+          "hierarchyAttributes": 0,
+          "bases": [
+            {
+              "name": ".?AVGplInteger@@",
+              "contained": 1,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVGplType@@",
+              "contained": 0,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            }
+          ],
+          "slots": [
+            5686832,
+            5875808,
+            5875216,
+            5875264,
+            5875344,
+            5875184,
+            5875152,
+            5875648,
+            5875360,
+            5875376,
+            5875472
+          ],
+          "sha256": "39d9ded7620f8bba90eb2b624f7ca4ddb8a9b14504ea1727f7f90d0edb814a8c"
+        },
+        "unitList": {
+          "va": 7691996,
+          "name": ".?AVBase_UnitListController@@",
+          "hierarchyAttributes": 0,
+          "bases": [
+            {
+              "name": ".?AVBase_UnitListController@@",
+              "contained": 2,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVStatsWindowController@@",
+              "contained": 1,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVDialogController@@",
+              "contained": 0,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            }
+          ],
+          "slots": [
+            4823280,
+            4822288,
+            4816496,
+            4822432,
+            4806192,
+            4806208,
+            4914432,
+            4912160,
+            4815152,
+            4913536,
+            4914192,
+            7267638,
+            4821680,
+            4821696,
+            4818496
+          ],
+          "sha256": "0f37daf43e0d2add37ab337f3dbe7356a72bafdd3b7320217e016a99d0b3d34f"
+        },
+        "statsWindow": {
+          "va": 7696584,
+          "name": ".?AVStatsWindowController@@",
+          "hierarchyAttributes": 0,
+          "bases": [
+            {
+              "name": ".?AVStatsWindowController@@",
+              "contained": 1,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVDialogController@@",
+              "contained": 0,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            }
+          ],
+          "slots": [
+            4915392,
+            4918128,
+            4622176,
+            4913904,
+            4806192,
+            4806208,
+            4914432,
+            4912160,
+            4914128,
+            4913536,
+            4914192
+          ],
+          "sha256": "cbaf910612108eac211ba05f7bdc667a34ecd3846f737fa6d8be39b970185056"
+        },
+        "basicBuilding": {
+          "va": 7691812,
+          "name": ".?AVBase_BuildingController@@",
+          "hierarchyAttributes": 0,
+          "bases": [
+            {
+              "name": ".?AVBase_BuildingController@@",
+              "contained": 2,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVStatsWindowController@@",
+              "contained": 1,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVDialogController@@",
+              "contained": 0,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            }
+          ],
+          "slots": [
+            4806384,
+            4809120,
+            4807984,
+            4808608,
+            4806192,
+            4806208,
+            4914432,
+            4912160,
+            4809216,
+            4913536,
+            4914192,
+            4807200,
+            4807376
+          ],
+          "sha256": "2dff55d6d470bebad11201134a6c863de41dfac7db744c7f4909b1379530f696"
+        }
+      }
+    },
+    "gog": {
+      "fixtureSha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "classes": {
+        "gplInteger": {
+          "va": 7729668,
+          "name": ".?AVGplInteger@@",
+          "hierarchyAttributes": 0,
+          "bases": [
+            {
+              "name": ".?AVGplInteger@@",
+              "contained": 1,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVGplType@@",
+              "contained": 0,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            }
+          ],
+          "slots": [
+            5683504,
+            5872496,
+            5871904,
+            5871952,
+            5872032,
+            5871872,
+            5871840,
+            5872336,
+            5872048,
+            5872064,
+            5872160
+          ],
+          "sha256": "09c58cd64c29ddec9901abd9364efc24070b762d88011446f008bb71a50bcfa8"
+        },
+        "unitList": {
+          "va": 7688212,
+          "name": ".?AVBase_UnitListController@@",
+          "hierarchyAttributes": 0,
+          "bases": [
+            {
+              "name": ".?AVBase_UnitListController@@",
+              "contained": 2,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVStatsWindowController@@",
+              "contained": 1,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVDialogController@@",
+              "contained": 0,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            }
+          ],
+          "slots": [
+            4824736,
+            4823744,
+            4817952,
+            4823888,
+            4807648,
+            4807664,
+            4915888,
+            4913616,
+            4816608,
+            4914992,
+            4915648,
+            7264806,
+            4823136,
+            4823152,
+            4819952
+          ],
+          "sha256": "595942202cb3ae02e84d8e29570d1e53fa099967880729f183d29cb6d3c5ab36"
+        },
+        "statsWindow": {
+          "va": 7692800,
+          "name": ".?AVStatsWindowController@@",
+          "hierarchyAttributes": 0,
+          "bases": [
+            {
+              "name": ".?AVStatsWindowController@@",
+              "contained": 1,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVDialogController@@",
+              "contained": 0,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            }
+          ],
+          "slots": [
+            4916848,
+            4919584,
+            4621952,
+            4915360,
+            4807648,
+            4807664,
+            4915888,
+            4913616,
+            4915584,
+            4914992,
+            4915648
+          ],
+          "sha256": "b27c53aaadda1d42ff7c0aadfc32f47830d5665ce756254d5d4a0b4d53e8635c"
+        },
+        "basicBuilding": {
+          "va": 7688024,
+          "name": ".?AVBase_BuildingController@@",
+          "hierarchyAttributes": 0,
+          "bases": [
+            {
+              "name": ".?AVBase_BuildingController@@",
+              "contained": 2,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVStatsWindowController@@",
+              "contained": 1,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            },
+            {
+              "name": ".?AVDialogController@@",
+              "contained": 0,
+              "placement": [
+                0,
+                4294967295,
+                0
+              ],
+              "attributes": 64
+            }
+          ],
+          "slots": [
+            4807840,
+            4810576,
+            4809440,
+            4810064,
+            4807648,
+            4807664,
+            4915888,
+            4913616,
+            4810672,
+            4914992,
+            4915648,
+            4808656,
+            4808832
+          ],
+          "sha256": "db9d221b33fe01bbb9bc74cf07b016daae98780dc495851f7f60f64c5369cdd4"
+        }
+      }
+    }
+  }
+}

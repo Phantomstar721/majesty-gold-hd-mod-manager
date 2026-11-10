@@ -1,6 +1,11 @@
 """Brief player-facing patch history, newest first."""
 
 PATCH_HISTORY = (
+    ("0.3.13", (
+        "Optional patches support native custom building panels and scripted ground actions.",
+        "Selected mods explain which optional patches they need before launch.",
+        "Fixes repeated research completion that could crash the game.",
+    )),
     ("0.3.12", (
         "Classic Launch runs your selected Standard mods without preparing a merge.",
         "Save up to five profiles, including your mods, game installation and launch options.",

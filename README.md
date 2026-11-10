@@ -9,7 +9,12 @@ subscribed to through Steam Workshop.
 It also combines compatible Merge mods and supplies the game-side support
 needed by custom buildings, panels, and other advanced features.
 
-Current release: **0.3.12 (beta)**. [What changed](release/v0.3.12.md).
+Current release candidate: **0.3.13 (beta)**. [What changed](release/v0.3.13.md).
+
+The **0.3.13 beta** adds optional Custom Building Panels and Scripted
+Ground Actions, credited to mikmak300. Install either from Quality of Life
+when selected content needs it. Native engine mods retain their normal
+Standard packaging and dataset scope. [Beta changes](release/v0.3.13.md).
 
 ## Features
 
@@ -375,6 +380,13 @@ x86 Visual C++ build tools and a Windows 10 SDK:
 The complete release payload also uses public helper and compatibility-source
 projects. The [payload staging script](scripts/Stage-ModManagerPayload.ps1)
 lists the required repositories and their default sibling-directory names.
+
+Building the optional native engines also requires mikmak300's pinned Window
+Engine/Script Functions SDK, kept separately from this repository. The default
+input is `../.audits/flamey-window-engine-sdk-20261109/sdk`; see
+`scripts/build_panel_engine_modules.py` for the SDK-root option. Its native API
+inventory and three-version profiles are included under `profiles/panel-engine`.
+Raw SDK sources and stock game executable fixtures are not redistributed here.
 
 `scripts\Stage-ModManagerPayload.ps1` and
 `scripts\Build-ModManagerExe.ps1` also accept explicit paths for each dependency

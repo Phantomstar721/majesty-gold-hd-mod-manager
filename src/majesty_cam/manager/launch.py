@@ -75,6 +75,7 @@ def launch_majesty(
     controller_registry: Path,
     merged_profile_root: Path | None = None,
     acquired_profile_lock: ExclusiveProfileLock | None = None,
+    engine_requirements: Sequence = (),
 ) -> LaunchResult:
     """Project the manager profile, then invoke the suspended DLL launcher.
 
@@ -85,6 +86,17 @@ def launch_majesty(
     unused generated profile.
     """
 
+    from .edition import alpha_launch_blocker,panel_alpha
+    blocker = alpha_launch_blocker()
+    if blocker:
+        raise ManagerLaunchError(blocker)
+    if engine_requirements:
+        from .engine_patches import installed_revisions
+        from ..engine_dependencies import missing,prompt_text
+        try:
+            requirements=missing(engine_requirements,installed_revisions(paths.repo_root,paths.game_executable))
+            if requirements:raise ValueError(prompt_text(requirements))
+        except (OSError,ValueError,KeyError) as exc:raise ManagerLaunchError(str(exc)) from exc
     if merged_profile_root is not None and acquired_profile_lock is not None:
         raise ManagerLaunchError(
             "The generated Merge profile lock was supplied twice."
@@ -247,6 +259,9 @@ def launch_majesty(
             except Exception as exc:
                 raise ManagerLaunchError(str(exc)) from exc
         try:
+            if panel_alpha():
+                from .alpha_executable import current_path,publish
+                publish(paths.game_executable,current_path(paths.game_executable).read_bytes(),repo_root=paths.repo_root)
             configure_launch(paths, environment)
         except (OSError, ValueError, SyntaxError) as exc:
             raise ManagerLaunchError(f"Could not configure expansion quest content: {exc}") from exc
@@ -254,7 +269,7 @@ def launch_majesty(
 
         command = [
             str(paths.runtime_launcher),
-            str(paths.game_executable),
+            str(paths.launch_executable if panel_alpha() else paths.game_executable),
             str(paths.runtime_dll),
             *game_arguments,
         ]
@@ -294,7 +309,7 @@ def launch_majesty(
     return LaunchResult(
         launcher_pid=process.pid,
         active_mod_ids=tuple(ordered),
-        executable=paths.game_executable,
+        executable=paths.launch_executable if panel_alpha() else paths.game_executable,
         runtime_dll=paths.runtime_dll,
         warnings=tuple(warnings),
     )

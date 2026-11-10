@@ -106,6 +106,11 @@ class ResearchDescriptorProfileTests(unittest.TestCase):
                 # Entire reason != 2 branch bypasses descriptor lookup/effects.
                 self.assertEqual(image.read(completion+0x27, 11),
                                  bytes.fromhex("837c2450020f8504020000"))
+                # Both reason branches converge on this exact EAX=0 epilogue.
+                # Event completion/removal consumes the whole return word.
+                epilogue = bytes.fromhex(
+                    "33c08b4c243064890d00000000595f5e5d5b83c428c3")
+                self.assertEqual(image.read(completion+0x236, len(epilogue)), epilogue)
 
 
 if __name__ == "__main__": unittest.main()

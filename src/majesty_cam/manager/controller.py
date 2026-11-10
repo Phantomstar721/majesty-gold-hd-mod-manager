@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .edition import panel_alpha
+
 from dataclasses import dataclass, replace
 import json
 from pathlib import Path
@@ -91,6 +93,8 @@ class ControllerSnapshot:
     notices: tuple[str, ...]
     changes: Mapping[str, str] = None
     can_classic_launch: bool = False
+    engine_requirements: tuple = ()
+    engine_dependency_issues: tuple[str, ...] = ()
 
 
 class ManagerController:
@@ -133,6 +137,7 @@ class ManagerController:
         self._managed_build_cache_loaded = False
         self.notices: list[str] = []
         self.catalog_changes = {}
+        self._engine_dependency_cache = {}
 
     def detected_installations(self) -> tuple[tuple[Path, MajestyBranch], ...]:
         """Return supported installs, including a manually selected location."""
@@ -263,7 +268,7 @@ class ManagerController:
             self.notices.append(str(exc))
         remembered = read_remembered_mods(
             self.paths.remembered_path,
-            legacy_path=self.paths.game_path / "MajestyModPersistence.txt",
+            legacy_path=None if panel_alpha() else self.paths.game_path / "MajestyModPersistence.txt",
         )
         remembered = self._expand_generated_profile_ids(remembered)
         selectable_ids = tuple(
@@ -578,6 +583,17 @@ class ManagerController:
             self._script_retry_preferences = {}
 
     def launch(self, *, classic=False) -> tuple[LaunchResult, ControllerSnapshot]:
+        from .edition import alpha_launch_blocker
+        blocker = alpha_launch_blocker()
+        if blocker:
+            raise ManagerLaunchError(blocker)
+        from .engine_patches import installed_revisions
+        from ..engine_dependencies import missing,prompt_text
+        try:
+            evidence,_=self._engine_dependencies(classic=classic)
+            required=missing(evidence,installed_revisions(self.paths.repo_root,self.paths.game_executable)) if evidence else ()
+            if required:raise ValueError(prompt_text(required))
+        except (OSError,ValueError,KeyError) as exc:raise ManagerLaunchError(str(exc)) from exc
         profile_lock = None
         try:
             if self.plan.has_merge and not classic:
@@ -661,6 +677,7 @@ class ManagerController:
                 controller_registry=controller_registry,
                 acquired_profile_lock=profile_lock,
                 ensure_qol=not self._qol_cache_is_current(),
+                engine_requirements=evidence,
             )
             self.profile = self._profile_with_current_selections()
             save_profile(self.paths.profile_path, self.profile)
@@ -675,6 +692,7 @@ class ManagerController:
     def snapshot(self) -> ControllerSnapshot:
         if not self._managed_build_cache_loaded:
             self._refresh_managed_build_cache()
+        requirements, dependency_issues = self._engine_dependencies()
         managed = self._managed_build_cache
         build_required = bool(
             self.plan.has_merge
@@ -693,6 +711,9 @@ class ManagerController:
                 self.paths.runtime_dll,
             )
         )
+        from .edition import alpha_launch_blocker
+        if alpha_launch_blocker():
+            runtime_ready = False
         qol_ready = self._required_qol_ready()
         can_build = self.plan.has_merge and self.plan.valid and qol_ready
         can_launch = self.plan.valid and runtime_ready and qol_ready and not build_required
@@ -710,12 +731,45 @@ class ManagerController:
                 self.qol_catalog.utilities if self.qol_catalog is not None else ()
             ),
             game_build=(
-                self.qol_catalog.branch if self.qol_catalog is not None else None
+                self.qol_catalog.branch if self.qol_catalog is not None
+                else detect_majesty_branch(self.paths.game_executable)
             ),
-            notices=tuple(self.notices),
+            notices=tuple(self.notices) + ((alpha_launch_blocker(),) if alpha_launch_blocker() else ()),
             changes=dict(self.catalog_changes),
             can_classic_launch=runtime_ready and qol_ready,
+            engine_requirements=requirements,
+            engine_dependency_issues=dependency_issues,
         )
+
+    def _engine_dependencies(self,*,classic=False):
+        from .engine_patches import discover, signature
+        evidence, issues = [], []
+        entries=list(self.catalog.entries)
+        managed=getattr(self,'_managed_build_cache',None)
+        finalized=bool(not classic and self.plan.has_merge and managed is not None
+                       and managed.fingerprint==self.plan.fingerprint and managed.manifest.is_file())
+        if finalized:
+            from types import SimpleNamespace
+            entries.extend(SimpleNamespace(content_id=identifier,display_name='Prepared profile',
+                manifest_path=managed.manifest,package_root=managed.output_root,generated=False,
+                kind=CatalogKind.MERGE,_finalized_engine=True) for identifier in managed.active_mod_ids)
+        for entry in entries:
+            if not entry.content_id or not self.selections.get(entry.content_id) or entry.generated:
+                if not getattr(entry,'_finalized_engine',False):continue
+            if classic and entry.kind is not CatalogKind.STANDARD:continue
+            if finalized and entry.kind is CatalogKind.MERGE and not getattr(entry,'_finalized_engine',False):continue
+            key = (str(entry.manifest_path), entry.content_id)
+            cached = self._engine_dependency_cache.get(key)
+            try:
+                if cached is None or signature(cached[0].paths) != cached[1]:
+                    result = discover(entry)
+                    cached = result, signature(result.paths)
+                    self._engine_dependency_cache[key] = cached
+                evidence.extend(cached[0].evidence)
+                issues.extend(entry.display_name + ": " + text for text in cached[0].unresolved)
+            except (OSError, ValueError) as exc:
+                issues.append(entry.display_name + ": " + str(exc))
+        return tuple(evidence), tuple(issues)
 
     def _refresh_managed_build_cache(
         self,

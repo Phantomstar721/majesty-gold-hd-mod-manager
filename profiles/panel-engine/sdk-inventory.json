@@ -1,0 +1,532 @@
+{
+  "window-engine": {
+    "source": "Window Engine/src/we_engine.cpp",
+    "sha256": "d6049b8021575241027677db2df441cdb50bd0038735c3fda6058b70d1a40b9b",
+    "macros": [
+      {
+        "name": "GAME_FACTORY",
+        "category": "native-function",
+        "hex_values": [
+          "0x50ac00"
+        ]
+      },
+      {
+        "name": "GET_UNIT",
+        "category": "native-function",
+        "hex_values": [
+          "0x467540"
+        ]
+      },
+      {
+        "name": "ATTR_RAW",
+        "category": "native-function",
+        "hex_values": [
+          "0x42d570"
+        ]
+      },
+      {
+        "name": "GAME_OBJ",
+        "category": "native-function",
+        "hex_values": [
+          "0x425d00"
+        ]
+      },
+      {
+        "name": "YSTRING_CTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x627a80"
+        ]
+      },
+      {
+        "name": "YSTRING_DTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x627c30"
+        ]
+      },
+      {
+        "name": "YSTRING_SET",
+        "category": "native-function",
+        "hex_values": [
+          "0x628240"
+        ]
+      },
+      {
+        "name": "GDH_CTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x563680"
+        ]
+      },
+      {
+        "name": "GDH_RESET",
+        "category": "native-function",
+        "hex_values": [
+          "0x562ea0"
+        ]
+      },
+      {
+        "name": "GDH_ADDAGENT",
+        "category": "native-function",
+        "hex_values": [
+          "0x562c40"
+        ]
+      },
+      {
+        "name": "GDH_ADDINT",
+        "category": "native-function",
+        "hex_values": [
+          "0x562c60"
+        ]
+      },
+      {
+        "name": "GDH_CALL",
+        "category": "native-function",
+        "hex_values": [
+          "0x5637c0"
+        ]
+      },
+      {
+        "name": "GDH_RETURN",
+        "category": "native-function",
+        "hex_values": [
+          "0x563520"
+        ]
+      },
+      {
+        "name": "GDH_DTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x563760"
+        ]
+      },
+      {
+        "name": "GUILD_COST",
+        "category": "native-function",
+        "hex_values": [
+          "0x496080"
+        ]
+      },
+      {
+        "name": "GUILD_RECRUIT",
+        "category": "native-function",
+        "hex_values": [
+          "0x4967a0"
+        ]
+      },
+      {
+        "name": "LOCAL_PLAYER",
+        "category": "native-function",
+        "hex_values": [
+          "0x424a00"
+        ]
+      },
+      {
+        "name": "GAME_STRING",
+        "category": "native-function",
+        "hex_values": [
+          "0x424020"
+        ]
+      },
+      {
+        "name": "SHOW_MSG",
+        "category": "native-function",
+        "hex_values": [
+          "0x46ac00"
+        ]
+      },
+      {
+        "name": "MSG_COLOUR",
+        "category": "native-function",
+        "hex_values": [
+          "0x46abe0"
+        ]
+      },
+      {
+        "name": "GET_ITEM",
+        "category": "native-function",
+        "hex_values": [
+          "0x6524c0"
+        ]
+      },
+      {
+        "name": "GAME_NEW",
+        "category": "native-function",
+        "hex_values": [
+          "0x6d8f7e"
+        ]
+      },
+      {
+        "name": "STATS_CTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x4aea20"
+        ]
+      },
+      {
+        "name": "BUILDING_CTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x495b10"
+        ]
+      },
+      {
+        "name": "OPEN_SUB",
+        "category": "native-function",
+        "hex_values": [
+          "0x4b03f0"
+        ]
+      },
+      {
+        "name": "WINDOW_ID",
+        "category": "native-function",
+        "hex_values": [
+          "0x42a1f0"
+        ]
+      },
+      {
+        "name": "GET_ATTR",
+        "category": "native-function",
+        "hex_values": [
+          "0x5b9fd0"
+        ]
+      },
+      {
+        "name": "LIST_CTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x498f80"
+        ]
+      },
+      {
+        "name": "LIST_BUTTONS",
+        "category": "native-function",
+        "hex_values": [
+          "0x498100"
+        ]
+      },
+      {
+        "name": "VEC_ERASE",
+        "category": "native-function",
+        "hex_values": [
+          "0x49d280"
+        ]
+      },
+      {
+        "name": "VEC_INSERT",
+        "category": "native-function",
+        "hex_values": [
+          "0x49d9c0"
+        ]
+      },
+      {
+        "name": "AGENT_MGR",
+        "category": "native-function",
+        "hex_values": [
+          "0x55eef0"
+        ]
+      },
+      {
+        "name": "AGENT_BY_ID",
+        "category": "native-function",
+        "hex_values": [
+          "0x55e8e0"
+        ]
+      },
+      {
+        "name": "AGENT_UNIT",
+        "category": "native-function",
+        "hex_values": [
+          "0x55f2c0"
+        ]
+      },
+      {
+        "name": "WATCH",
+        "category": "native-function",
+        "hex_values": [
+          "0x467650"
+        ]
+      },
+      {
+        "name": "FOLLOW",
+        "category": "native-function",
+        "hex_values": [
+          "0x454dc0"
+        ]
+      },
+      {
+        "name": "UNIT_NAME",
+        "category": "native-function",
+        "hex_values": [
+          "0x4422f0"
+        ]
+      },
+      {
+        "name": "ADD_ROW",
+        "category": "native-function",
+        "hex_values": [
+          "0x65cff0"
+        ]
+      },
+      {
+        "name": "ART_CTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x6729f0"
+        ]
+      },
+      {
+        "name": "ART_KIND",
+        "category": "native-function",
+        "hex_values": [
+          "0x672340"
+        ]
+      },
+      {
+        "name": "ART_ID",
+        "category": "native-function",
+        "hex_values": [
+          "0x672390"
+        ]
+      },
+      {
+        "name": "ART_KEY",
+        "category": "native-function",
+        "hex_values": [
+          "0x672ad0"
+        ]
+      },
+      {
+        "name": "ART_FRAME",
+        "category": "native-function",
+        "hex_values": [
+          "0x671f40"
+        ]
+      },
+      {
+        "name": "ART_PLACE",
+        "category": "native-function",
+        "hex_values": [
+          "0x6721a0"
+        ]
+      },
+      {
+        "name": "ART_RELEASE",
+        "category": "native-function",
+        "hex_values": [
+          "0x672310"
+        ]
+      },
+      {
+        "name": "ART_LOAD",
+        "category": "native-function",
+        "hex_values": [
+          "0x672bd0"
+        ]
+      },
+      {
+        "name": "ART_DRAW",
+        "category": "native-function",
+        "hex_values": [
+          "0x672850"
+        ]
+      },
+      {
+        "name": "ITEM_COLOUR",
+        "category": "native-function",
+        "hex_values": [
+          "0x65c580"
+        ]
+      },
+      {
+        "name": "TB_CTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x66e700"
+        ]
+      },
+      {
+        "name": "TB_ALPHA",
+        "category": "native-function",
+        "hex_values": [
+          "0x66c780"
+        ]
+      },
+      {
+        "name": "TB_COLOUR",
+        "category": "native-function",
+        "hex_values": [
+          "0x66c770"
+        ]
+      },
+      {
+        "name": "TB_FONT",
+        "category": "native-function",
+        "hex_values": [
+          "0x66c740"
+        ]
+      },
+      {
+        "name": "TB_TEXT",
+        "category": "native-function",
+        "hex_values": [
+          "0x66fb00"
+        ]
+      },
+      {
+        "name": "TB_DRAW",
+        "category": "native-function",
+        "hex_values": [
+          "0x66e7b0"
+        ]
+      },
+      {
+        "name": "TB_DTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x66f190"
+        ]
+      },
+      {
+        "name": "FRAME_TALL",
+        "category": "native-function",
+        "hex_values": [
+          "0x4af420"
+        ]
+      }
+    ]
+  },
+  "script-functions": {
+    "source": "Script Functions/src/sf_functions.cpp",
+    "sha256": "1c342d54eed816f5e85bdda326786d91cd82dea0e989caab56113e09eb1eba6b",
+    "macros": [
+      {
+        "name": "YSTRING_CTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x627a80"
+        ]
+      },
+      {
+        "name": "YSTRING_DTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x627c30"
+        ]
+      },
+      {
+        "name": "AGENT_MGR",
+        "category": "native-function",
+        "hex_values": [
+          "0x55eef0"
+        ]
+      },
+      {
+        "name": "REGISTER",
+        "category": "native-function",
+        "hex_values": [
+          "0x56bce0"
+        ]
+      },
+      {
+        "name": "ARG_AT",
+        "category": "native-function",
+        "hex_values": [
+          "0x42ddf0"
+        ]
+      },
+      {
+        "name": "AGENT_UNIT",
+        "category": "native-function",
+        "hex_values": [
+          "0x558b20"
+        ]
+      },
+      {
+        "name": "STR_TEXT",
+        "category": "native-function",
+        "hex_values": [
+          "0x562c10"
+        ]
+      },
+      {
+        "name": "ATTR_RAW",
+        "category": "native-function",
+        "hex_values": [
+          "0x42d570"
+        ]
+      },
+      {
+        "name": "AGENTREF_CTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x558620"
+        ]
+      },
+      {
+        "name": "AGENTREF_SET",
+        "category": "native-function",
+        "hex_values": [
+          "0x553fe0"
+        ]
+      },
+      {
+        "name": "AGENTREF_DTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x40df40"
+        ]
+      },
+      {
+        "name": "TYPE_BY_NAME",
+        "category": "native-function",
+        "hex_values": [
+          "0x5ae060"
+        ]
+      },
+      {
+        "name": "LIST_CTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x4201a0"
+        ]
+      },
+      {
+        "name": "LIST_SET",
+        "category": "native-function",
+        "hex_values": [
+          "0x6639d0"
+        ]
+      },
+      {
+        "name": "LIST_DTOR",
+        "category": "native-function",
+        "hex_values": [
+          "0x41fc30"
+        ]
+      },
+      {
+        "name": "FLAG_MAKE",
+        "category": "native-function",
+        "hex_values": [
+          "0x4db520"
+        ]
+      },
+      {
+        "name": "SPELL_CAST",
+        "category": "native-function",
+        "hex_values": [
+          "0x4da020"
+        ]
+      },
+      {
+        "name": "PLACE_SETTINGS",
+        "category": "native-function",
+        "hex_values": [
+          "0x45c320"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,158 @@
+{
+  "schema": 1,
+  "contract": "we1.gpl-evaluator-reset.v1",
+  "normalReturnOnly": true,
+  "source": "SDK we_engine.cpp GDH_RESET; Manager BooleanRuntimeProfiles.h providers",
+  "layout": "this+8 argument frame; reseed integer zero; rebuild slots at frame+0x1c",
+  "profiles": {
+    "public": {
+      "va": 5648032,
+      "size": 31,
+      "sha256": "360e566d6b1ad2522800dfdaaf1d38cc1c3430526bd62f18b515d48782a045bd",
+      "fixtureSha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "providers": [
+        {
+          "va": 5747904,
+          "size": 293,
+          "sha256": "ed0fd0ffbbe4b1ec267b17862053378075785cbb75d1d66a15f02ddd71d8dcd8"
+        },
+        {
+          "va": 5752624,
+          "size": 169,
+          "sha256": "5e85af7503e20e2c6d26654c0a72ead49e9ed0a2e3ac20bad55eeefab7b9ae5f"
+        },
+        {
+          "va": 5751760,
+          "size": 244,
+          "sha256": "c7a7de6a40e80725332b828b2f6c453703149114264d0fcdd021188ec19537c5"
+        }
+      ]
+    },
+    "beta2": {
+      "va": 5738448,
+      "size": 31,
+      "sha256": "dc9394b77c9859c832a5bf897eebebbad5f592843a72237876e9b33cdac8c6d1",
+      "fixtureSha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "providers": [
+        {
+          "va": 5838304,
+          "size": 293,
+          "sha256": "d56a27953aa8d7fe7187465a31bfdd3ba554d739cc9a556fef5a6d863a8faef5"
+        },
+        {
+          "va": 5843024,
+          "size": 169,
+          "sha256": "cea65e214e9b062648dc1e0528c3b1f47e452043eadf5c5e0e042aba15acd91d"
+        },
+        {
+          "va": 5842160,
+          "size": 244,
+          "sha256": "d5212f7aa4018a30de69c733af00c5b016b3719a3b6ceb4253cc1b9f8de3370b"
+        }
+      ]
+    },
+    "gog": {
+      "va": 5735120,
+      "size": 31,
+      "sha256": "dc9394b77c9859c832a5bf897eebebbad5f592843a72237876e9b33cdac8c6d1",
+      "fixtureSha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "providers": [
+        {
+          "va": 5834976,
+          "size": 293,
+          "sha256": "c895d94984f2536c5bccf281ca3caf8d461558c7866ddfca1f5d8483732554f3"
+        },
+        {
+          "va": 5839696,
+          "size": 169,
+          "sha256": "27d85e57324be0d639540a92a422cfca72e9cbd2c9d0d0719eedb6ba564951a5"
+        },
+        {
+          "va": 5838832,
+          "size": 244,
+          "sha256": "ff3029ab2d8d557f799390d7ce532a021a8a2f12ca4d5cb2ebc5b4944ae64566"
+        }
+      ]
+    }
+  },
+  "relatedClients": {
+    "appendInteger": {
+      "profiles": {
+        "public": {
+          "va": 5647456,
+          "size": 8,
+          "sha256": "dedcbd26ddd887c11278b5964809319bd5324188b2ade20282fc1f38e850677b",
+          "provider": {
+            "va": 5752624,
+            "size": 169,
+            "sha256": "5e85af7503e20e2c6d26654c0a72ead49e9ed0a2e3ac20bad55eeefab7b9ae5f"
+          },
+          "fixtureSha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4"
+        },
+        "beta2": {
+          "va": 5737872,
+          "size": 8,
+          "sha256": "c70b93d7302b2c19c40baa0640772454f85f0823d86fa33590236abdb87133c1",
+          "provider": {
+            "va": 5843024,
+            "size": 169,
+            "sha256": "cea65e214e9b062648dc1e0528c3b1f47e452043eadf5c5e0e042aba15acd91d"
+          },
+          "fixtureSha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82"
+        },
+        "gog": {
+          "va": 5734544,
+          "size": 8,
+          "sha256": "c70b93d7302b2c19c40baa0640772454f85f0823d86fa33590236abdb87133c1",
+          "provider": {
+            "va": 5839696,
+            "size": 169,
+            "sha256": "27d85e57324be0d639540a92a422cfca72e9cbd2c9d0d0719eedb6ba564951a5"
+          },
+          "fixtureSha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792"
+        }
+      },
+      "normalReturnOnly": true,
+      "contract": "this+8 tail request to verified integer append"
+    },
+    "returnInteger": {
+      "profiles": {
+        "public": {
+          "va": 5649696,
+          "size": 22,
+          "sha256": "7edea360dc7ab6760001e93ec9cf9832d72027800a2717a1095f950cf83ec987",
+          "provider": {
+            "va": 4382192,
+            "size": 105,
+            "sha256": "9986dba09927f473fbee5c9890b2335e586e6db9ae46e05927f4b52784da584d"
+          },
+          "fixtureSha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4"
+        },
+        "beta2": {
+          "va": 5740112,
+          "size": 22,
+          "sha256": "a770b6c7fc7fe537d4fbf90f7b5b8cc1b7d41b2c4869c7d9bef871f799175ca3",
+          "provider": {
+            "va": 4386128,
+            "size": 105,
+            "sha256": "74ddfbf616e321645ceb7ddc2af5b9e0819e5c1e2b9d8da2d1c1832559faa752"
+          },
+          "fixtureSha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82"
+        },
+        "gog": {
+          "va": 5736784,
+          "size": 22,
+          "sha256": "6d9952990238041a5d33988821449dc08f5c4fa12e6e28d5a635231fd25bf522",
+          "provider": {
+            "va": 4385824,
+            "size": 105,
+            "sha256": "3a49426d0777dd715363f61ed5163927c13b0661ef0a3a23182cd1176ebdc4db"
+          },
+          "fixtureSha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792"
+        }
+      },
+      "normalReturnOnly": true,
+      "contract": "result slot0 at this+0x24, preserve native virtual integer accessor at +0x28"
+    }
+  }
+}

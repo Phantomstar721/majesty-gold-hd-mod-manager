@@ -12,7 +12,17 @@ struct Profile { MajestyBuildId buildId; };
 Profile profile{};
 Profile* g_buildProfile=&profile;
 std::uintptr_t g_imageBase=0;
+#if defined(CAM_PANEL_ENGINE_ALPHA)
+#include "../runtime/LargeModList.h"
+unsigned fixtureProfiles[3][12]{};
+// The real adapter body, with its native profile API dependencies redirected
+// to this fixture's own memory. Native profile bytes are checked separately.
+#define profiles fixtureProfiles
+#endif
 #include "../runtime/LargeModList.inl"
+#if defined(CAM_PANEL_ENGINE_ALPHA)
+#undef profiles
+#endif
 extern "C" unsigned char GogFixtureBytes[0x500000];
 FILE* input=nullptr;
 unsigned commits=0;
@@ -34,11 +44,24 @@ void Jump(unsigned address,void* target) {
 }
 int main(int argc,char** argv){
     assert(argc==4);
+#if defined(CAM_PANEL_ENGINE_ALPHA)
+    // Keep the test EXE at a normal high image base. Reserve only this process's
+    // fake game memory, without a low-base PE/system-DLL relocation collision.
+    void* image=VirtualAlloc(nullptr,0x500000,
+                            MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE);
+    assert(image);
+#else
     void* image=GogFixtureBytes;
+#endif
     DWORD old;
     assert(VirtualProtect(image,sizeof(GogFixtureBytes),PAGE_EXECUTE_READWRITE,&old));
     g_imageBase=reinterpret_cast<std::uintptr_t>(image);
+#if !defined(CAM_PANEL_ENGINE_ALPHA)
     assert(g_imageBase==0x400000);
+#else
+    for(unsigned b=0;b<3;++b) for(unsigned n=0;n<12;++n)
+        fixtureProfiles[b][n]=static_cast<unsigned>(g_imageBase)+LargeModList::profiles[b][n]-0x400000;
+#endif
     for(unsigned index=0;index<3;++index){
         profile.buildId=static_cast<MajestyBuildId>(index);
         std::ifstream file(argv[index+1],std::ios::binary);
@@ -54,7 +77,11 @@ int main(int argc,char** argv){
         std::memcpy(section.Name,".mpst",6);section.VirtualAddress=0x480000;section.Misc.VirtualSize=0x1200;
         auto* sectionBytes=static_cast<unsigned char*>(image)+section.VirtualAddress;
         auto* code=sectionBytes+0x300;
+#if defined(CAM_PANEL_ENGINE_ALPHA)
+        const auto& p=fixtureProfiles[index];
+#else
         const auto& p=LargeModList::profiles[index];
+#endif
         std::memcpy(code,LargeModList::payload,sizeof(LargeModList::payload));
         auto put=[](void* dest,unsigned value){std::memcpy(dest,&value,4);};
         unsigned imports[]={0x735430,0x735434,0x735444,0x73544C,0x7C1E30,0x7C1E38,0x7C1E4C,0x7C1DFC};
@@ -74,6 +101,10 @@ int main(int argc,char** argv){
         put(code+sizeof(LargeModList::payload)-8,p[3]);
         code[0]^=1;assert(!InstallLargeModList());code[0]^=1;
         assert(InstallLargeModList());
+#if defined(CAM_PANEL_ENGINE_ALPHA)
+        assert(std::strstr(reinterpret_cast<char*>(sectionBytes+0x600),
+            "\\MajestyModManagerPanelEngineAlpha\\MajestyModPersistence.txt"));
+#endif
         Jump(p[0],reinterpret_cast<void*>(&Noop));
         Jump(p[1],reinterpret_cast<void*>(&Insert));
         Jump(p[2],reinterpret_cast<void*>(&Count));

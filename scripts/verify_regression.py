@@ -18,14 +18,22 @@ sys.dont_write_bytecode = True
 
 COMMON = (
     "test_manager_history",
-    "test_manager_presets", "test_manager_profile", "test_manager_controller", "test_quest_dataset", "test_standard_project_recovery",
+    "test_manager_presets", "test_manager_profile", "test_manager_controller", "test_manager_qol_service", "test_quest_dataset", "test_standard_project_recovery",
     "test_attack_observation_proof", "test_native_impact",
     "test_imag_v5", "test_timed_imag", "test_support_report",
     "test_feature_parity_profiles", "test_native_impact_profiles",
     "test_impact_compatible_image", "test_manager_build", "test_startup_cache",
     "test_stock_input_cache", "test_regression_gate",
 )
+PANEL_ALPHA = (
+    "test_panel_engine_alpha",
+    "test_panel_engine_owner_fixture",
+    "test_panel_engine_modules", "test_panel_engine_installation",
+    "test_panel_engine_complete_profiles",
+    "test_panel_engine_persistence_fixture",
+)
 DEVELOPMENT = (
+    "test_panel_engine_beta",
     "test_message_flag_controls", "test_message_flag_profiles",
     "test_queued_building_action", "test_panel_commands",
     "test_status_applied_event",
@@ -55,6 +63,7 @@ DEVELOPMENT = (
     "test_dawnfall_action_profiles", "test_cosmetic_action_profiles",
     "test_travel_cast_profiles",
 )
+DEVELOPMENT += PANEL_ALPHA
 RELEASE = DEVELOPMENT + ("test_release_scope", "test_release_merge_literals",)
 
 def normalized(code):
@@ -104,9 +113,10 @@ class BundleLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
             if normalized(expected) != normalized(self.archive.extract(name)):
                 raise ValueError("Packaged code differs from current source: " + name)
 
-    def verify_data(self, application):
+    def verify_data(self, application, *, alpha=False):
         for folder in ("profiles", "payload"):
             source = ROOT / folder
+            if alpha and folder=='payload':source=ROOT/'local/panel-engine-alpha/package-payload'
             bundled = application / "_internal" / folder
             expected = {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest()
                         for p in source.rglob("*") if p.is_file() and p.suffix != '.log'}
@@ -170,8 +180,10 @@ def test_inputs():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", required=True, choices=("release", "development"))
+    parser.add_argument("--mode", required=True, choices=("release", "development", "panel-engine-alpha"))
     parser.add_argument("--application", type=Path, help="Read and test packaged EXE; never launch it")
+    parser.add_argument("--executable-name", default="Majesty Mod Manager.exe")
+    parser.add_argument("--receipt-root", type=Path, default=ROOT / "local/regression")
     parser.add_argument("--verify-receipt", action="store_true", help="Check unchanged tested artifact before staging")
     args = parser.parse_args()
     configured = (ROOT / "regression-mode.txt").read_text().strip()
@@ -180,7 +192,7 @@ def main():
     if args.verify_receipt:
         if not args.application:
             raise ValueError("Receipt verification requires --application")
-        receipt = json.loads((ROOT / "local/regression" / (args.mode + "-package.json")).read_text())
+        receipt = json.loads((args.receipt_root / (args.mode + "-package.json")).read_text())
         if receipt.get("mode") != args.mode or not receipt.get("packaged"):
             raise ValueError("Not a packaged regression receipt for this mode")
         files = {str(p.relative_to(args.application)): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -191,21 +203,23 @@ def main():
     initial_inputs = test_inputs()
     bundle = None
     if args.application:
-        bundle = BundleLoader(args.application / "Majesty Mod Manager.exe")
+        bundle = BundleLoader(args.application / args.executable_name)
         bundle.verify_source()
-        bundle.verify_data(args.application)
+        bundle.verify_data(args.application,alpha=args.executable_name=='Majesty Mod Manager - Panel Engine Alpha.exe')
         sys.meta_path.insert(0, bundle)
     fixtures = fixture_evidence()
     os.environ["MAJESTY_REQUIRE_DAMAGE_FIXTURES"] = "1"
     names = tuple(dict.fromkeys(COMMON + (RELEASE if args.mode == "release" else DEVELOPMENT)
-                  + tuple(p.stem for p in sorted((ROOT / "tests").glob("test_*profiles.py")))))
+                  + (PANEL_ALPHA if args.mode=='panel-engine-alpha' else ())
+                  + tuple(p.stem for p in sorted((ROOT / "tests").glob("test_*profiles.py"))
+                          )))
     # A child owns the audit hook; this process only writes its local receipt.
     if os.environ.get("MMM_REGRESSION_CHILD") == "1":
         sys.addaudithook(write_guard(os.environ["MMM_REGRESSION_TEMP"]))
         execute_tests(names)
         return 0
     import subprocess
-    reports = ROOT / "local" / "regression"
+    reports = args.receipt_root
     reports.mkdir(parents=True, exist_ok=True)
     receipt = reports / (args.mode + ("-package" if bundle else "-source") + ".json")
     if receipt.exists():
@@ -220,7 +234,7 @@ def main():
         raise ValueError("Regression inputs changed while checks were running; no receipt issued")
     if bundle:
         bundle.verify_source()
-        bundle.verify_data(args.application)
+        bundle.verify_data(args.application,alpha=args.executable_name=='Majesty Mod Manager - Panel Engine Alpha.exe')
     evidence = {"schema": 1, "mode": args.mode, "fixtures": fixtures,
                 "modules": names, "packaged": bool(bundle), "liveGameplayAcceptance": False,
                 "testInputs": initial_inputs}

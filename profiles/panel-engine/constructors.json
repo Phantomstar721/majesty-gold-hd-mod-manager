@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "contract": "panel-engine.ui-construction.v1",
+  "sources": [
+    "SDK STATS_CTOR/BUILDING_CTOR/LIST_CTOR",
+    "profiles/panel-engine/vtables.json",
+    "runtime/MajestyModManagerRuntime.cpp:uiManagerRva"
+  ],
+  "limits": "Complete normal constructor callers/class identity; base/allocator/exception implementations and full layout/teardown remain separate.",
+  "profiles": {
+    "public": {
+      "fixtureSha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "constructors": {
+        "statsWindow": {
+          "va": 4909600,
+          "size": 100,
+          "sha256": "9e92854692f2fb8d3bbe596f0c93eb02471022ff743f2bd8c97ed602401f73c5",
+          "primaryVtableVA": 7594992,
+          "returnStackBytes": 8,
+          "opaqueBaseControllerVA": 4617968
+        },
+        "basicBuilding": {
+          "va": 4807440,
+          "size": 138,
+          "sha256": "bd619abee8232d0857bf8b498f168718b4cac10b365b07fd98b669b3eda765a4",
+          "primaryVtableVA": 7590220,
+          "returnStackBytes": 8,
+          "statsConstructorVA": 4909600,
+          "uiContextVA": 4349184
+        },
+        "unitList": {
+          "va": 4820864,
+          "size": 129,
+          "sha256": "4c6d82307b50b32bdee347cd4df8404b19bfe70a11197c825456fdbd0522893a",
+          "primaryVtableVA": 7590404,
+          "returnStackBytes": 8,
+          "statsConstructorVA": 4909600
+        }
+      }
+    },
+    "beta2": {
+      "fixtureSha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "constructors": {
+        "statsWindow": {
+          "va": 4911888,
+          "size": 100,
+          "sha256": "ddb9fe065f0a3dd005618b90cb4a6cf2b9f454906be1ae43452b3d76737918ac",
+          "primaryVtableVA": 7696584,
+          "returnStackBytes": 8,
+          "opaqueBaseControllerVA": 4622640
+        },
+        "basicBuilding": {
+          "va": 4809504,
+          "size": 138,
+          "sha256": "4e1d92e6a4765fac0ab7be1978fbff814398f321f196f4069a9a72c744fc9e7a",
+          "primaryVtableVA": 7691812,
+          "returnStackBytes": 8,
+          "statsConstructorVA": 4911888,
+          "uiContextVA": 4353232
+        },
+        "unitList": {
+          "va": 4823136,
+          "size": 129,
+          "sha256": "c15be5fddb0372eca182a093c81698d2c8865b5de2304f203c15d97b71d29c44",
+          "primaryVtableVA": 7691996,
+          "returnStackBytes": 8,
+          "statsConstructorVA": 4911888
+        }
+      }
+    },
+    "gog": {
+      "fixtureSha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "constructors": {
+        "statsWindow": {
+          "va": 4913344,
+          "size": 100,
+          "sha256": "0b4a3304ab4a83e7d577e9a842eba233dacd9861b13ec5fa529072551dc1672c",
+          "primaryVtableVA": 7692800,
+          "returnStackBytes": 8,
+          "opaqueBaseControllerVA": 4622416
+        },
+        "basicBuilding": {
+          "va": 4810960,
+          "size": 138,
+          "sha256": "105e66c4913737dffcc4189cd9802c731fc46fee4f6af5bb6826131ee7935590",
+          "primaryVtableVA": 7688024,
+          "returnStackBytes": 8,
+          "statsConstructorVA": 4913344,
+          "uiContextVA": 4349792
+        },
+        "unitList": {
+          "va": 4824592,
+          "size": 129,
+          "sha256": "804a89680ef0f5e774bf50ab277662b400315de74f16984aa5dce92d49369e35",
+          "primaryVtableVA": 7688212,
+          "returnStackBytes": 8,
+          "statsConstructorVA": 4913344
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,140 @@
+{
+  "schema": 1,
+  "contract": "panel-engine.data-clients.v1",
+  "sources": [
+    "SDK we_engine.cpp:YSTRING_SET/ATTR_RAW",
+    "runtime/PaidSourceTargetProfiles.h:component_lookup",
+    "research/docs/native-string-lifecycle.md",
+    "research/docs/smnu-secondary-text.md:63A9E0",
+    "research/functions.tsv:ObjectAttributes_FindPayloadByRawKey_Local/ObjectAttributeTree_FindUnsignedKeyIterator_Local"
+  ],
+  "limits": "Complete normal data clients and opaque provider identity; no exceptional, CRT, VM or actor lifecycle implementation proof.",
+  "profiles": {
+    "public": {
+      "fixtureSha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "narrowAssign": {
+        "va": 6455872,
+        "size": 127,
+        "sha256": "8c8128d77626c8bfe6113fafbf985bbbd248263943b55d966375c6e4900a891a"
+      },
+      "rawAttribute": {
+        "va": 4380016,
+        "size": 109,
+        "sha256": "9ece292fe46316fc05b01e9f58e3ca50730182f239bfb6ca236a61d362c35ba4"
+      },
+      "attributeTree": {
+        "va": 4378944,
+        "size": 139,
+        "sha256": "e446c5b0a3eb2d018a94d71ad8ffe1233ca5d347e5a7d0d2e3cbbcb836ea557d"
+      },
+      "stringConstructor": {
+        "va": 6453888,
+        "size": 69,
+        "sha256": "31e0d241776d33de06590b29a0d623b38d2007f91fe6b20a1fd71e56409fab9d"
+      },
+      "stringDestructor": {
+        "va": 6454320,
+        "size": 33,
+        "sha256": "fd0475efd6b4ebe7fb517d92a671b23465158305c93dd50b82cd9d45b81c8c5c"
+      },
+      "opaqueStringProviders": [
+        6453392,
+        6756855
+      ],
+      "imports": [
+        [
+          "msvcr90.dll",
+          "free"
+        ],
+        [
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ]
+      ]
+    },
+    "beta2": {
+      "fixtureSha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "narrowAssign": {
+        "va": 6531552,
+        "size": 127,
+        "sha256": "efd77ddb6be59980fddf4195b78db4ce58069238a981313800d92271f9979bd0"
+      },
+      "rawAttribute": {
+        "va": 4384688,
+        "size": 109,
+        "sha256": "d48e1ba7954b80a0cf966e6e556f26322dd0ea897612119237d760480745f958"
+      },
+      "attributeTree": {
+        "va": 4383936,
+        "size": 139,
+        "sha256": "9b7298793d71c0312473ab4d8b4991f656d895425e6cb3d9f826c3b9e8151ca4"
+      },
+      "stringConstructor": {
+        "va": 6529568,
+        "size": 69,
+        "sha256": "36bbbf4896220da6c3694d7030a0661b50e11d6716c7cd2a5a87622315f592b6"
+      },
+      "stringDestructor": {
+        "va": 6530000,
+        "size": 33,
+        "sha256": "4ce4f6506c5f58aec5a28736e80cba647545b3575bab5de707d1d02adc1bed5f"
+      },
+      "opaqueStringProviders": [
+        6529072,
+        6843991
+      ],
+      "imports": [
+        [
+          "msvcr90.dll",
+          "free"
+        ],
+        [
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ]
+      ]
+    },
+    "gog": {
+      "fixtureSha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "narrowAssign": {
+        "va": 6540080,
+        "size": 127,
+        "sha256": "06c3d85fd21328a7c47a26b674dbdb75996e6b7f42eaba18f36ab919f838fb67"
+      },
+      "rawAttribute": {
+        "va": 4383744,
+        "size": 109,
+        "sha256": "9ac3f9ae5c5cdf9eb0e04f3be0d3adfa7688b3927b6e3b83764c820a5309719a"
+      },
+      "attributeTree": {
+        "va": 4382576,
+        "size": 139,
+        "sha256": "3ab01fff1c65f8729b597926f081092529bcb8d8c765ac1e4aa63fa9f9e3f9ea"
+      },
+      "stringConstructor": {
+        "va": 6538096,
+        "size": 69,
+        "sha256": "506880c93f89182eed627e6bcc5bf842c293d7661fd2801f80470bf000a9d385"
+      },
+      "stringDestructor": {
+        "va": 6538528,
+        "size": 33,
+        "sha256": "52952ca379150ac317991d649d0edc62fe73a071c2841575521252af18514046"
+      },
+      "opaqueStringProviders": [
+        6537600,
+        6841159
+      ],
+      "imports": [
+        [
+          "msvcr90.dll",
+          "free"
+        ],
+        [
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ]
+      ]
+    }
+  }
+}

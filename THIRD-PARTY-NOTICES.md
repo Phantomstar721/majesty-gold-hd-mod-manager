@@ -61,6 +61,13 @@ files remain beside the bundled scripts.
 
 Source: https://github.com/Phantomstar721/majesty-gold-hd-qol-utilities
 
+## Optional native engine patches
+
+Custom Building Panels and Scripted Ground Actions use Window Engine and Script
+Functions SDK code by mikmak300. Each optional Quality of Life row also credits
+the author. The SDK components are not relicensed under the Manager's MIT
+license; the Manager's version profiles, integration and tests are separate.
+
 ## Custom Guild: Phantoms Haunt compatibility content
 
 The packaged manager includes a manager-compatible edition of Custom Guild:

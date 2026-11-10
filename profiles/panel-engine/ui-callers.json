@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "contract": "panel-engine.list-presenter-apis.v1",
+  "source": "runtime/MajestyModManagerRuntime.cpp:QuestBoardBuildProfile; SDK GAME_STRING/UNIT_NAME/ART_DRAW",
+  "limits": "Complete normal methods/existing typed presenter API and unit-name frame only; downstream/exception implementations stay opaque.",
+  "profiles": {
+    "public": {
+      "fixtureSha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "methods": {
+        "gameString": {
+          "va": 4341792,
+          "size": 41,
+          "sha256": "1a26faec162d4f2c8aba36a3ed8b4d070dc384925bbabaac7de02c27dc29eb72",
+          "profileField": "rowSummaryTextResolver"
+        },
+        "unitName": {
+          "va": 4465392,
+          "size": 351,
+          "sha256": "7167ca8f288808a2fa4d3c5d638073426edcbb6b0f6fc7ce31a4fe403747189f",
+          "profileField": "rowNameFormatter"
+        },
+        "imageDraw": {
+          "va": 6760528,
+          "size": 34,
+          "sha256": "3ef6629815fd8e56c6adefcc1dff0a34adcc1494feb22a7cb82318cc535919bb",
+          "profileField": "rowStatusDraw"
+        }
+      },
+      "unitNameCallVA": 4818053,
+      "unitNameCallBytes": "6a008d4c243c5751e8669efaff"
+    },
+    "beta2": {
+      "fixtureSha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "methods": {
+        "gameString": {
+          "va": 4345840,
+          "size": 41,
+          "sha256": "6c46c80a500d8b7e0e9876c524a19d602cb6a0b97865eec9b0bd12c95d7427b6",
+          "profileField": "rowSummaryTextResolver"
+        },
+        "unitName": {
+          "va": 4469248,
+          "size": 351,
+          "sha256": "2d821f7776437456187943adeeee8072162a3c1eb895d31d6c850ff525394485",
+          "profileField": "rowNameFormatter"
+        },
+        "imageDraw": {
+          "va": 6847664,
+          "size": 34,
+          "sha256": "3ef6629815fd8e56c6adefcc1dff0a34adcc1494feb22a7cb82318cc535919bb",
+          "profileField": "rowStatusDraw"
+        }
+      },
+      "unitNameCallVA": 4819637,
+      "unitNameCallBytes": "6a008d4c243c5751e846a7faff"
+    },
+    "gog": {
+      "fixtureSha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "methods": {
+        "gameString": {
+          "va": 4342400,
+          "size": 41,
+          "sha256": "a1ade35cd793b948bfb83134896ca1b6ae9fb5114ef41b78fa5e93b93646d70d",
+          "profileField": "rowSummaryTextResolver"
+        },
+        "unitName": {
+          "va": 4469024,
+          "size": 351,
+          "sha256": "4a81f687258adf188bd54a50dc077dec7941202724de63611f30fdde258cfa70",
+          "profileField": "rowNameFormatter"
+        },
+        "imageDraw": {
+          "va": 6844832,
+          "size": 34,
+          "sha256": "3ef6629815fd8e56c6adefcc1dff0a34adcc1494feb22a7cb82318cc535919bb",
+          "profileField": "rowStatusDraw"
+        }
+      },
+      "unitNameCallVA": 4821093,
+      "unitNameCallBytes": "6a008d4c243c5751e8b6a0faff"
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "contract": "panel-engine.stock-agent-resolution-client.v1",
+  "sources": [
+    "runtime/MajestyModManagerRuntime.cpp:QuestBoardBuildProfile.liveAgentResolver",
+    "runtime/MapQueryRuntime.cpp:Profile.engine",
+    "docs/branch-reader-implementation-status.md:bounded Public lookup"
+  ],
+  "limits": "Existing resolver caller only: null/deleted guard and opaque lookup/association boundaries; no full actor lifetime, registry or cleanup proof.",
+  "profiles": {
+    "public": {
+      "fixtureSha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "resolveReferenceVA": 5606176,
+      "size": 43,
+      "sha256": "6550aeca1f59974c9f0cd88b646f313043ea0de8ac05b1f20b20432838be313f",
+      "managerVA": 5631728,
+      "lookupAgentVA": 5630176,
+      "associatedUnitVA": 5632704,
+      "deletedByteOffset": 56
+    },
+    "beta2": {
+      "fixtureSha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "resolveReferenceVA": 5696608,
+      "size": 43,
+      "sha256": "012ba6ac3b993eee415e795f03cd91b33bf9490dd0e1ccfb7983a91e209a74e2",
+      "managerVA": 5722160,
+      "lookupAgentVA": 5720608,
+      "associatedUnitVA": 5723120,
+      "deletedByteOffset": 56
+    },
+    "gog": {
+      "fixtureSha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "resolveReferenceVA": 5693280,
+      "size": 43,
+      "sha256": "012ba6ac3b993eee415e795f03cd91b33bf9490dd0e1ccfb7983a91e209a74e2",
+      "managerVA": 5718832,
+      "lookupAgentVA": 5717280,
+      "associatedUnitVA": 5719792,
+      "deletedByteOffset": 56
+    }
+  }
+}

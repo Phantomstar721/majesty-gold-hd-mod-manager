@@ -26,6 +26,7 @@ from .shortcuts import ShortcutError, create_manager_desktop_shortcut
 from .workshop import open_workshop_item
 from .catalog_changes import MANAGER_CHANGE_KEY
 from .history import PATCH_HISTORY
+from .edition import panel_alpha, alpha_launch_blocker
 from ..script_review import ScriptReviewCancelled
 from ..version import MANAGER_VERSION
 
@@ -1264,6 +1265,7 @@ if _PYSIDE_IMPORT_ERROR is None:
             self._busy = False
             self._task_name = ""
             self._initial_qol_check_complete = False
+            self._engine_missing_signature = None
             self.steam_requested.connect(self._open_workshop_item)
             self.script_review_requested.connect(self._review_script_conflicts)
             QApplication.instance().aboutToQuit.connect(self._cancel_script_review)
@@ -2117,6 +2119,16 @@ if _PYSIDE_IMPORT_ERROR is None:
             if not self._confirm_profile_edits():
                 return
             classic = self.classic_launch.isChecked()
+            from ..engine_dependencies import missing
+            from .engine_patches import PATCH_KEYS
+            revisions={service:1 for service,key in PATCH_KEYS.items()
+                if any(row.key==key and row.installed is True for row in self.snapshot.qol_utilities)}
+            evidence=self.snapshot.engine_requirements
+            if classic:
+                evidence,_=self.controller._engine_dependencies(classic=True)
+            if missing(evidence,revisions):
+                self._show_engine_dependencies(evidence=evidence)
+                return
             if classic and QMessageBox.warning(self, "Classic Launch",
                     "Standard mods will load in their selected order. Overlapping or incompatible mods can cause errors, crashes or broken saves.",
                     QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Ok:
@@ -2356,7 +2368,35 @@ if _PYSIDE_IMPORT_ERROR is None:
         def _show_history(self) -> None:
             _HistoryDialog(self).exec()
 
+        def _show_engine_dependencies(self,*,evidence=None):
+            from ..engine_dependencies import missing, prompt_text
+            from .edition import panel_alpha
+            if self.snapshot is None:
+                return
+            from .engine_patches import PATCH_KEYS
+            revisions={service:1 for service,key in PATCH_KEYS.items()
+                       if any(row.key==key and row.installed is True for row in self.snapshot.qol_utilities)}
+            requirements = missing(self.snapshot.engine_requirements if evidence is None else evidence, revisions)
+            if not requirements:
+                return
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle("Required game patches")
+            dialog.setText(prompt_text(requirements))
+            dialog.setInformativeText("Install these optional patches in Quality of Life, then launch again. Your selections are kept.")
+            open_qol = dialog.addButton("Open Quality of Life", QMessageBox.ButtonRole.AcceptRole)
+            dialog.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
+            dialog.exec()
+            if dialog.clickedButton() is open_qol:
+                self.tabs.setCurrentWidget(self.qol_page)
+                self.search.clear()
+                self.qol_page.scroll.verticalScrollBar().setValue(0)
+
         def _render_snapshot(self, snapshot: ControllerSnapshot) -> None:
+            signature = (str(self.controller.paths.game_path), snapshot.engine_requirements)
+            if signature != self._engine_missing_signature:
+                self._engine_missing_signature = signature
+                if snapshot.engine_requirements:
+                    QTimer.singleShot(0, self._show_engine_dependencies)
             updated = MANAGER_CHANGE_KEY in (snapshot.changes or {})
             self.history_button.setIcon(self._history_update_icon if updated else QIcon())
             self.history_button.setAccessibleName("History — Manager updated" if updated else "History")
@@ -2590,7 +2630,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                     "Majesty or required launch files could not be found, or one of "
                     "your choices still needs attention."
                 )
-            self.launch_button.setToolTip(launch_tip)
+            self.launch_button.setToolTip(alpha_launch_blocker() or launch_tip)
 
         def _set_busy(self, busy: bool, message: str = "") -> None:
             self._busy = busy

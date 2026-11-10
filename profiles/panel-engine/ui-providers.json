@@ -1,0 +1,543 @@
+{
+  "schema": 1,
+  "contract": "panel-engine.ordinary-ui-providers.v1",
+  "limits": "Native normal API/client correspondence and explicit equivalent aliases; no driver, actor, exception or shared registry implementation expansion.",
+  "sources": [
+    "SDK we_engine.cpp native UI declarations and row-draw citation6BAABD",
+    "Manager QuestBoardBuildProfile, FreestyleCamProfile and FeatureParityProfiles",
+    "research TextLayout_ConstructEmptyDefaultsWithoutParsing_Local/ReleaseMembersNormalEntry/ReplaceParsedNarrow"
+  ],
+  "profiles": {
+    "public": {
+      "fixtureSha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "providers": {
+        "TB_FONT": {
+          "va": 6735680,
+          "source": "stockRowDraw",
+          "callOffset": 100,
+          "size": 45,
+          "sha256": "aff5c8c5f5a41703457d16f710b1226c48374118cb13b1e3c7942337365c25ff"
+        },
+        "TB_ALPHA": {
+          "va": 6735744,
+          "source": "stockRowDraw",
+          "callOffset": 184,
+          "size": 10,
+          "sha256": "6d731f768f8834c3595c479205dc6991ea8b4b940958f6be330f60aa9373eef1"
+        },
+        "ITEM_COLOUR": {
+          "va": 6669696,
+          "source": "stockRowDraw",
+          "callOffset": 194,
+          "size": 131,
+          "sha256": "0e4b83c945201b32a95536f51d1d13e99213d3745b2948c9f0435392b1485313"
+        },
+        "TB_COLOUR": {
+          "va": 6735728,
+          "source": "stockRowDraw",
+          "callOffset": 202,
+          "size": 10,
+          "sha256": "396b31693515cb75cdf9173465c8199f0fd5acb695d04b0d980f5707d6686b6f"
+        },
+        "TB_DRAW": {
+          "va": 6743984,
+          "source": "stockRowDraw",
+          "callOffset": 224
+        },
+        "SHOW_MSG": {
+          "va": 4631552,
+          "size": 222,
+          "sha256": "7b4f024e35af18b6887fcfe39ac809db63f44c5b46069368df673bd82906a817",
+          "stackBytes": 0,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8128092,
+            8131476,
+            8131476
+          ]
+        },
+        "LIST_BUTTONS": {
+          "va": 4817152,
+          "size": 100,
+          "sha256": "f0767b144df80c9ee894fca5109d0407e8b06de69d732bf923a9b204cf304f19",
+          "stackBytes": 0,
+          "source": "complete normal method correspondence"
+        },
+        "WATCH": {
+          "va": 4617808,
+          "size": 27,
+          "sha256": "42e8f0fe864efa14cd50459d05ce7cdf9dd00caebfe5ef30617ae286de13a15f",
+          "stackBytes": 8,
+          "source": "complete normal method correspondence"
+        },
+        "FOLLOW": {
+          "va": 4541888,
+          "size": 40,
+          "sha256": "da23ab4ac222fe29062212c6b91e203d81d1389641e04b63de9b7d5460ed6e13",
+          "stackBytes": 8,
+          "source": "complete normal method correspondence"
+        },
+        "VEC_INSERT": {
+          "va": 4839872,
+          "size": 331,
+          "sha256": "fa98fad1b3acb7a8b8a929e2d6c44d28c8dea4620c349f3a41ad54362af0b0f7",
+          "stackBytes": 16,
+          "source": "complete normal method correspondence"
+        },
+        "TB_CTOR": {
+          "va": 6743808,
+          "size": 175,
+          "sha256": "f5e4b6bd71f57932bf4e7d89dc22734c74d1866f9f8ecfef67a567e22257d5a6",
+          "stackBytes": 0,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8128092
+          ]
+        },
+        "TB_TEXT": {
+          "va": 6748928,
+          "size": 232,
+          "sha256": "e9110a1134058eb2736fe510028c1db33ebb038b26ae061c0caaf4e3fe8752f2",
+          "stackBytes": 4,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8128092
+          ]
+        },
+        "TB_DTOR": {
+          "va": 6746512,
+          "size": 164,
+          "sha256": "5863d205118e4a5d83a32c1eeb53f225c47fe0c799292d59a8fea6f028f879e9",
+          "stackBytes": 0,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8128092
+          ]
+        },
+        "FRAME_TALL": {
+          "va": 4912160,
+          "size": 123,
+          "sha256": "16b876178957ad871e5587436768a4ef26a84afd20b2fb45dfed57574bab88ff",
+          "stackBytes": 4,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8131456,
+            8131456,
+            8148044,
+            8148044
+          ]
+        },
+        "ADD_ROW": {
+          "va": 6672304,
+          "size": 54,
+          "sha256": "602e0bd978e8a56c748009333a4121d88f2ea42436b37d8a56c4a91af176f4a9",
+          "source": "verified existing HeroAppend; whole byte-identical alias"
+        },
+        "VEC_ERASE": {
+          "va": 4838016,
+          "size": 139,
+          "sha256": "7923609eb3e7ffd6ed56b2e3ff36ce6b1840bb1c6259b0e68dd3d2722a0881dc",
+          "source": "whole position-independent code equivalence",
+          "equivalentVAs": [
+            4838016,
+            5342000
+          ]
+        },
+        "PLACE_SETTINGS": {
+          "va": 4571936,
+          "size": 108,
+          "sha256": "cccbe1f2122abf0558eb0bda5cfcfd89de04e3215bb4107e1a8df723949fa7f1",
+          "source": "stock building input client and complete normal getter"
+        }
+      },
+      "clients": {
+        "stockRowDraw": {
+          "va": 7056061,
+          "size": 287,
+          "sha256": "ad06ae41126ab95f97ddcf52ef67ac6b0ae4dbf559575dc55ca2709e174d580a"
+        },
+        "cameraFrame": {
+          "va": 4817581,
+          "bytes": "8b086a01518b0df0127c00e803cbfbff",
+          "cameraGlobalVA": 8131312
+        }
+      },
+      "imports": [
+        [
+          "LIST_BUTTONS",
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ],
+        [
+          "LIST_BUTTONS",
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ],
+        [
+          "LIST_BUTTONS",
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ],
+        [
+          "VEC_INSERT",
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ]
+      ]
+    },
+    "beta2": {
+      "fixtureSha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "providers": {
+        "TB_FONT": {
+          "va": 6822816,
+          "source": "stockRowDraw",
+          "callOffset": 100,
+          "size": 45,
+          "sha256": "aff5c8c5f5a41703457d16f710b1226c48374118cb13b1e3c7942337365c25ff"
+        },
+        "TB_ALPHA": {
+          "va": 6822880,
+          "source": "stockRowDraw",
+          "callOffset": 184,
+          "size": 10,
+          "sha256": "6d731f768f8834c3595c479205dc6991ea8b4b940958f6be330f60aa9373eef1"
+        },
+        "ITEM_COLOUR": {
+          "va": 6756832,
+          "source": "stockRowDraw",
+          "callOffset": 194,
+          "size": 131,
+          "sha256": "328c3b7a79e17ee125d99cfdc9e8eb0803c94df951ed83d139b01929918ea97e"
+        },
+        "TB_COLOUR": {
+          "va": 6822864,
+          "source": "stockRowDraw",
+          "callOffset": 202,
+          "size": 10,
+          "sha256": "396b31693515cb75cdf9173465c8199f0fd5acb695d04b0d980f5707d6686b6f"
+        },
+        "TB_DRAW": {
+          "va": 6831120,
+          "source": "stockRowDraw",
+          "callOffset": 224
+        },
+        "SHOW_MSG": {
+          "va": 4636304,
+          "size": 222,
+          "sha256": "3c14c9bdf4ddb37f401ebb1c4bec1b33be6cb33826e69a775a7bbf4bd5e1bec5",
+          "stackBytes": 0,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8253700,
+            8257100,
+            8257100
+          ]
+        },
+        "LIST_BUTTONS": {
+          "va": 4819232,
+          "size": 100,
+          "sha256": "59ad7f7e968ddc8c10a674a35e1865be819c219afe63407f5c573d83a636d9a0",
+          "stackBytes": 0,
+          "source": "complete normal method correspondence"
+        },
+        "WATCH": {
+          "va": 4622480,
+          "size": 27,
+          "sha256": "c02eaab95b7254d3102678f15b34d66aff71b04518178ea51d527f2e2c649656",
+          "stackBytes": 8,
+          "source": "complete normal method correspondence"
+        },
+        "FOLLOW": {
+          "va": 4546032,
+          "size": 40,
+          "sha256": "b97aa69504a9c6fd660e2c55fcc1d54091d758ff0153f97b449d5be0df9453b3",
+          "stackBytes": 8,
+          "source": "complete normal method correspondence"
+        },
+        "VEC_INSERT": {
+          "va": 4842144,
+          "size": 331,
+          "sha256": "85514744f39f688830b2e19fde7752458dd346651ffaa603e7971796b80ae620",
+          "stackBytes": 16,
+          "source": "complete normal method correspondence"
+        },
+        "TB_CTOR": {
+          "va": 6830944,
+          "size": 175,
+          "sha256": "c81868f05f109a357576c638199ee35982a9d8ab8a58d201375b4961c62e51b9",
+          "stackBytes": 0,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8253700
+          ]
+        },
+        "TB_TEXT": {
+          "va": 6836064,
+          "size": 232,
+          "sha256": "c65f06adc686412f44399495ac8406aa51ab260024ad74829d6117c97b7ffee3",
+          "stackBytes": 4,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8253700
+          ]
+        },
+        "TB_DTOR": {
+          "va": 6833648,
+          "size": 164,
+          "sha256": "3329ec8c2b50d8bf4ebfb778de3d0662a945214e5b47a8ebabfaa82bbf4e0336",
+          "stackBytes": 0,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8253700
+          ]
+        },
+        "FRAME_TALL": {
+          "va": 4914448,
+          "size": 123,
+          "sha256": "c8b6a6452a3db8107b50c8f838279f78beca4f3035b76513eee1cbf0ac4a75e9",
+          "stackBytes": 4,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8257080,
+            8257080,
+            8273876,
+            8273876
+          ]
+        },
+        "ADD_ROW": {
+          "va": 6759440,
+          "size": 54,
+          "sha256": "602e0bd978e8a56c748009333a4121d88f2ea42436b37d8a56c4a91af176f4a9",
+          "source": "verified existing HeroAppend; whole byte-identical alias"
+        },
+        "VEC_ERASE": {
+          "va": 4840288,
+          "size": 139,
+          "sha256": "f97a384d2e0e15eaebce2fdb48c7dbcf0d8d821b584e9a636a1361510bdfa007",
+          "source": "whole position-independent code equivalence",
+          "equivalentVAs": [
+            4840288,
+            5408896
+          ]
+        },
+        "PLACE_SETTINGS": {
+          "va": 4576080,
+          "size": 108,
+          "sha256": "c4b4318e3b4a87bfcad8103c2d6bcec983fa8e241705aec29ebdef9146524da3",
+          "source": "stock building input client and complete normal getter"
+        }
+      },
+      "clients": {
+        "stockRowDraw": {
+          "va": 7143501,
+          "size": 287,
+          "sha256": "87f29e77efcdcdc023914fb69ffdd534ca1db0b584d02a11f572edb60361204a"
+        },
+        "cameraFrame": {
+          "va": 4822749,
+          "bytes": "8b086a01518b0da8fd7d00e803c7fbff",
+          "cameraGlobalVA": 8256936
+        }
+      },
+      "imports": [
+        [
+          "LIST_BUTTONS",
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ],
+        [
+          "LIST_BUTTONS",
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ],
+        [
+          "LIST_BUTTONS",
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ],
+        [
+          "VEC_INSERT",
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ]
+      ]
+    },
+    "gog": {
+      "fixtureSha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "providers": {
+        "TB_FONT": {
+          "va": 6819984,
+          "source": "stockRowDraw",
+          "callOffset": 100,
+          "size": 45,
+          "sha256": "aff5c8c5f5a41703457d16f710b1226c48374118cb13b1e3c7942337365c25ff"
+        },
+        "TB_ALPHA": {
+          "va": 6820048,
+          "source": "stockRowDraw",
+          "callOffset": 184,
+          "size": 10,
+          "sha256": "6d731f768f8834c3595c479205dc6991ea8b4b940958f6be330f60aa9373eef1"
+        },
+        "ITEM_COLOUR": {
+          "va": 6754000,
+          "source": "stockRowDraw",
+          "callOffset": 194,
+          "size": 131,
+          "sha256": "2e23533e13c69c37f367d63db21b81a7a05ae3040c466695a9ba4129e54053f6"
+        },
+        "TB_COLOUR": {
+          "va": 6820032,
+          "source": "stockRowDraw",
+          "callOffset": 202,
+          "size": 10,
+          "sha256": "396b31693515cb75cdf9173465c8199f0fd5acb695d04b0d980f5707d6686b6f"
+        },
+        "TB_DRAW": {
+          "va": 6828288,
+          "source": "stockRowDraw",
+          "callOffset": 224
+        },
+        "SHOW_MSG": {
+          "va": 4636080,
+          "size": 222,
+          "sha256": "aa2db759c7ffc4c83e6d7e4304d0527eaf5836ee5d3c1c89b45e1a76134840b6",
+          "stackBytes": 0,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8254380,
+            8257772,
+            8257772
+          ]
+        },
+        "LIST_BUTTONS": {
+          "va": 4820688,
+          "size": 100,
+          "sha256": "1c55deabee307001f66a9496f6ecdd5bfcfdcf57fee6522031e0660ff3b8cadd",
+          "stackBytes": 0,
+          "source": "complete normal method correspondence"
+        },
+        "WATCH": {
+          "va": 4622256,
+          "size": 27,
+          "sha256": "c02eaab95b7254d3102678f15b34d66aff71b04518178ea51d527f2e2c649656",
+          "stackBytes": 8,
+          "source": "complete normal method correspondence"
+        },
+        "FOLLOW": {
+          "va": 4545808,
+          "size": 40,
+          "sha256": "ddc77c92aee78f7d6230d0bbadbca5e21ce4cb989845629abf52e9a7d184ff63",
+          "stackBytes": 8,
+          "source": "complete normal method correspondence"
+        },
+        "VEC_INSERT": {
+          "va": 4843600,
+          "size": 331,
+          "sha256": "5b75eb717d1dcef092acbfb7932d1fbead935d3dba94ac75a42dd40b9891ae55",
+          "stackBytes": 16,
+          "source": "complete normal method correspondence"
+        },
+        "TB_CTOR": {
+          "va": 6828112,
+          "size": 175,
+          "sha256": "90450db5c08e96a2f739309a9aa9c910ecea000a0134f218b5d5eb688f4655a3",
+          "stackBytes": 0,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8254380
+          ]
+        },
+        "TB_TEXT": {
+          "va": 6833232,
+          "size": 232,
+          "sha256": "7f4df19fbba879b576b6653cc546e963eb0f77e9ebaed1a79c0ca7ea5e58ddbb",
+          "stackBytes": 4,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8254380
+          ]
+        },
+        "TB_DTOR": {
+          "va": 6830816,
+          "size": 164,
+          "sha256": "43df870289252d965fa6aad900024d9317f75da06afeee3228ed78748cc96980",
+          "stackBytes": 0,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8254380
+          ]
+        },
+        "FRAME_TALL": {
+          "va": 4915904,
+          "size": 123,
+          "sha256": "7a38504d790657e0bc359ea3ec8e34a938867f56a2b9dcd6e1ce8f12f71d1869",
+          "stackBytes": 4,
+          "source": "complete normal method correspondence",
+          "opaqueDataVAs": [
+            8257752,
+            8257752,
+            8274540,
+            8274540
+          ]
+        },
+        "ADD_ROW": {
+          "va": 6756608,
+          "size": 54,
+          "sha256": "602e0bd978e8a56c748009333a4121d88f2ea42436b37d8a56c4a91af176f4a9",
+          "source": "verified existing HeroAppend; whole byte-identical alias"
+        },
+        "VEC_ERASE": {
+          "va": 4841744,
+          "size": 139,
+          "sha256": "842f0bbb7cba3888a664297c66b4e79a37eed8ddee441154148bd579a5a77c6c",
+          "source": "whole position-independent code equivalence",
+          "equivalentVAs": [
+            4841744,
+            5348144
+          ]
+        },
+        "PLACE_SETTINGS": {
+          "va": 4575856,
+          "size": 108,
+          "sha256": "3ebde236c62f03c28b25f5e39d459c30af9bac316d7ecdbe14e000a8e369c633",
+          "source": "stock building input client and complete normal getter"
+        }
+      },
+      "clients": {
+        "stockRowDraw": {
+          "va": 7140669,
+          "size": 287,
+          "sha256": "87f29e77efcdcdc023914fb69ffdd534ca1db0b584d02a11f572edb60361204a"
+        },
+        "cameraFrame": {
+          "va": 4824205,
+          "bytes": "8b086a01518b0d48007e00e873c0fbff",
+          "cameraGlobalVA": 8257608
+        }
+      },
+      "imports": [
+        [
+          "LIST_BUTTONS",
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ],
+        [
+          "LIST_BUTTONS",
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ],
+        [
+          "LIST_BUTTONS",
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ],
+        [
+          "VEC_INSERT",
+          "msvcr90.dll",
+          "_invalid_parameter_noinfo"
+        ]
+      ]
+    }
+  }
+}

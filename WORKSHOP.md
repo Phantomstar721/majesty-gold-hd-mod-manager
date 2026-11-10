@@ -1,4 +1,11 @@
-Version 0.3.12 (beta) adds Classic Launch for Standard mods without preparing a
+Version 0.3.13 (beta) adds optional Custom Building Panels and Scripted Ground
+Actions, with credit to mikmak300 on each patch's Quality of Life row. Selected
+content explains its detected or declared patch requirements before launch;
+install the patches you need from Quality of Life. Native engine mods keep
+their Standard packaging. This update also fixes repeated research completion
+that could crash the game. Supports Default Steam, beta2 and GOG.
+
+Version 0.3.12 (beta) added Classic Launch for Standard mods without preparing a
 merge, up to five named setup profiles, and a global expansion-content toggle
 that includes original Majesty quests. New mods stay disabled until selected.
 Gold indicators highlight new or updated content, and History shows brief patch

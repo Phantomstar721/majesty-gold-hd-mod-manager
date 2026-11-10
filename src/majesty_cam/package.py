@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .engine_dependencies import PatchRequirement, parse_requirements, requirement_mapping
+
 from .inventory_items import InventoryDeathDropExclusion, TYPE as INVENTORY_DEATH_TYPE, parse as parse_inventory_death, mapping as inventory_death_mapping
 
 from dataclasses import dataclass
@@ -240,6 +242,7 @@ class ModDefinition:
     custom_buildings: Tuple[CustomBuildingDefinition, ...]
     runtime_capabilities: Tuple[str, ...] = ()
     runtime_features: Tuple[PackageRuntimeFeature, ...] = ()
+    external_patches: Tuple[PatchRequirement, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -469,7 +472,13 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
             expected.add("runtime_features")
     else:
         expected = common_fields | {"runtime_features"}
+    if schema_version >= 2 and "external_patches" in value:
+        expected.add("external_patches")
     _require_exact_fields(value, expected, "mod definition")
+    try:
+        external_patches = parse_requirements(value.get("external_patches", ()))
+    except ValueError as exc:
+        raise PackageFormatError(str(exc)) from exc
 
     mod_id = _required_string(value["mod_id"], "mod definition mod_id")
     internal_name = _required_string(
@@ -843,6 +852,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         custom_buildings=tuple(buildings),
         runtime_capabilities=tuple(capabilities),
         runtime_features=tuple(features),
+        external_patches=external_patches,
     )
 
 
@@ -1308,6 +1318,8 @@ def mod_definition_mapping(definition: ModDefinition) -> dict:
             _runtime_feature_mapping(feature)
             for feature in definition.runtime_features
         ]
+    if definition.schema_version >= 2 and definition.external_patches:
+        value["external_patches"] = [requirement_mapping(r) for r in definition.external_patches]
     return value
 
 

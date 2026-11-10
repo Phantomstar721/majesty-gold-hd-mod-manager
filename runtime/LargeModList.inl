@@ -47,6 +47,30 @@ bool InstallLargeModList() {
         if (m.original >= 0x7BDD00 && m.original < 0x7BDD30)
             put(expanded,m.offset,reinterpret_cast<unsigned>(arena+kCapacity)+m.original-0x7BDD00);
     }
+#if defined(CAM_PANEL_ENGINE_ALPHA)
+    // Preserve the exact synchronous stock restore routine. Only its filename
+    // changes, after the original installed payload was fully matched above.
+    wchar_t widePath[MAX_PATH] = {};
+    const DWORD length=GetEnvironmentVariableW(L"LOCALAPPDATA",widePath,MAX_PATH);
+    static const wchar_t suffix[]=L"\\MajestyModManagerPanelEngineAlpha\\MajestyModPersistence.txt";
+    if (!length || length+sizeof(suffix)/sizeof(wchar_t)>MAX_PATH) return false;
+    std::memcpy(widePath+length,suffix,sizeof(suffix));
+    char alphaPreferencePath[0x100] = {};
+    BOOL lossy=FALSE;
+    // Use the same native ANSI file path contract as the stock helper, with
+    // strict round-trip rejection rather than silently substituting '?'.
+    const unsigned page=GetACP();
+    if (!WideCharToMultiByte(page,page==CP_UTF8?WC_ERR_INVALID_CHARS:WC_NO_BEST_FIT_CHARS,
+            widePath,-1,alphaPreferencePath,sizeof(alphaPreferencePath),nullptr,
+            page==CP_UTF8?nullptr:&lossy) || lossy) return false;
+    DWORD pathProtection=0,pathIgnored=0;
+    if (!VirtualProtect(section+0x600,sizeof(alphaPreferencePath),PAGE_READWRITE,&pathProtection)) return false;
+    // Both the stock save routine and its restore payload use this one data
+    // string. Redirecting only the restore operand would leak alpha selections
+    // into the ordinary Manager's saved list on exit.
+    std::memcpy(section+0x600,alphaPreferencePath,sizeof(alphaPreferencePath));
+    if (!VirtualProtect(section+0x600,sizeof(alphaPreferencePath),pathProtection,&pathIgnored)) return false;
+#endif
     // Same synchronous fread/parser/list/commit routine with a larger owned arena.
     put(expanded,48,kCapacity-1);
     DWORD previous,ignored;

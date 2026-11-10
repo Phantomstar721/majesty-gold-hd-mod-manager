@@ -891,6 +891,7 @@ def merge_named_resources(
         tuple[bytes, bytes], ScopedNamedResourceResolution
     ] | None = None,
     stock_resources: Mapping[tuple[bytes, bytes], bytes] | None = None,
+    entry_transform=None,
 ) -> tuple[tuple[CamEntry, ...], tuple[NamedMergeSelection, ...]]:
     """Union a named CAM registry using its native four-byte resource key."""
 
@@ -945,11 +946,24 @@ def merge_named_resources(
                     f"named CAM resolution for {section!r}/{key!r} has a mismatched key"
                 )
             entry = resolution.entry
+            if entry_transform is not None:
+                # A chosen resource contains its author's references. Never
+                # relocate the winner using a losing participant's namespace.
+                if resolution.selected_owner is None:
+                    candidates = tuple(entry_transform(owner, old_key, entry)
+                                       for owner in sorted(resolution.participant_owners))
+                    if any(candidate.data != candidates[0].data for candidate in candidates[1:]):
+                        raise ComposeError("named CAM choice needs its selected owner for typed reference relocation")
+                    entry = candidates[0]
+                else:
+                    entry = entry_transform(resolution.selected_owner, old_key, entry)
         elif stock_map.get((section, key)) == entry.data:
             # The generated profile loads last. Re-emitting an unchanged stock
             # record would be an active override that could erase a normally
             # loaded Standard Mod; ancestry-only records are true no-ops.
             continue
+        elif entry_transform is not None:
+            entry = entry_transform(resource.owner, old_key, entry)
         existing_position = positions.get(key)
         if existing_position is None:
             positions[key] = len(ordered)
@@ -1210,6 +1224,7 @@ def merge_text_resources(
     controller_panels: Sequence[ResolvedControllerPanel] = (),
     controller_registry: ResolvedControllerRegistry | None = None,
     hero_info_tooltips: bool = False,
+    external_panel_behaviors: bool = False,
     named_resolutions: Mapping[
         tuple[bytes, bytes], ScopedNamedResourceResolution
     ] | None = None,
@@ -1242,6 +1257,10 @@ def merge_text_resources(
         controller_panels=controller_panels,
     )
     rename_map = {(owner, old): new for owner, old, new in dialog_renames}
+    panel_text_transform = None
+    if external_panel_behaviors:
+        from .panel_engine_composition import text_relocator
+        panel_text_transform = text_relocator(resources, dialog_renames)
 
     whole: dict[bytes, StrtMergeSelection] = {}
     processed_whole_keys: set[bytes] = set()
@@ -1338,6 +1357,7 @@ def merge_text_resources(
         renames=rename_map,
         resolutions=named_resolutions,
         stock_resources=stock_named_resources,
+        entry_transform=panel_text_transform,
     )
 
     dialog_keys = {entry.name[:4] for entry in smnu_entries}
@@ -8108,6 +8128,7 @@ def compose_package(
     reserved_description_names: Sequence[str] = (),
     inventory_death_drop_exclusions: Sequence[str] = (),
     runtime_capabilities: Sequence[str] = (),
+    external_panel_behaviors: bool = False,
     private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
     prepared_inventories: Sequence[PackageInventory] | None = None,
     standard_script_inputs=(),
@@ -8223,6 +8244,7 @@ def compose_package(
         controller_panels=controller_result.panels,
         controller_registry=controller_result.registry,
         hero_info_tooltips=bool(runtime_feature_registry.hero_info_rows),
+        external_panel_behaviors=external_panel_behaviors,
         named_resolutions=named_cam_resolutions,
         strt_resolutions=strt_resolutions,
         stock_named_resources=stock_named_resources,
@@ -8483,6 +8505,25 @@ def compose_package(
         canonical_runtime_capabilities,
         dialog_resolutions,
     )
+    if external_panel_behaviors:
+        from .engine_dependencies import from_effective_resources,from_verified_sources
+        from .engine_dependencies import PatchRequirement,requirement_mapping
+        inferred=[]
+        effective={(section.extension,entry.name[:4]):entry.data
+                   for section in text_result.text_archive.sections for entry in section.entries
+                   if section.extension in (b'SMNU',b'STRT')}
+        inferred.extend(from_effective_resources(effective,owner_id=output_mod_id,
+            owner_name=actual_display_name,dataset='Any'))
+        for scope,output in script_bundle.outputs:
+            inferred.extend(from_verified_sources(output.source_set.files.items(),owner_id=output_mod_id,
+                owner_name=actual_display_name,dataset=scope))
+        requirements={row['service']:row['minimum_revision'] for row in definition_payload.get('external_patches',())}
+        for evidence in inferred:
+            r=evidence.requirement
+            requirements[r.service]=max(requirements.get(r.service,0),r.minimum_revision)
+        if requirements:
+            definition_payload['external_patches']=[requirement_mapping(PatchRequirement(service,revision))
+                for service,revision in sorted(requirements.items())]
 
     staging = Path(
         tempfile.mkdtemp(prefix=f".{profile_slug}-", dir=output_root.parent)
@@ -9695,6 +9736,14 @@ def _generated_definition(
         "custom_buildings": buildings,
         "runtime_capabilities": list(runtime_capabilities),
     }
+    requirements = {}
+    for selected in selected_mods:
+        for requirement in getattr(selected.package.definition, "external_patches", ()):
+            requirements[requirement.service] = max(requirements.get(requirement.service, 0),
+                                                    requirement.minimum_revision)
+    if requirements:
+        payload["external_patches"] = [{"service": service, "minimum_revision": revision}
+                                       for service, revision in sorted(requirements.items())]
     # Reuse the public exact-schema validator before serializing the sidecar.
     parse_mod_definition(payload)
     return payload

@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "contract": "panel-engine.hook-sites.v1",
+  "sources": [
+    "runtime/MajestyModManagerRuntime.cpp:MajestyBuildProfile",
+    "runtime/MapQueryRuntime.cpp:Profile",
+    "SDK we_engine.cpp:WE_Factory; sf_functions.cpp:SF_Hook"
+  ],
+  "limits": "Hook bytes and targets only; no native callee/lifecycle or engine admission claim.",
+  "profiles": {
+    "public": {
+      "fixtureSha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "windowFactoryCall": {
+        "rva": 153925,
+        "bytes": "e8b6520e00",
+        "targetVA": 5286912
+      },
+      "factoryOwnerEntry": {
+        "rva": 1092608,
+        "bytes": "6aff68170e7000"
+      },
+      "postFactoryOwnerSite": {
+        "rva": 153930,
+        "bytes": "8b6b2483c310"
+      },
+      "stockRegistrationCall": {
+        "rva": 1674983,
+        "bytes": "e8247b0200",
+        "targetVA": 6031888
+      },
+      "scriptRegistrationTail": {
+        "rva": 1674988,
+        "bytes": "e96fb1e9ff",
+        "targetVA": 4407392
+      },
+      "registerFunctionRva": 1490144,
+      "boardExtentsRva": 1821120
+    },
+    "beta2": {
+      "fixtureSha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "windowFactoryCall": {
+        "rva": 157973,
+        "bytes": "e836480f00",
+        "targetVA": 5353808
+      },
+      "factoryOwnerEntry": {
+        "rva": 1159504,
+        "bytes": "6aff68b7907100"
+      },
+      "postFactoryOwnerSite": {
+        "rva": 157978,
+        "bytes": "8b6b2483c310"
+      },
+      "stockRegistrationCall": {
+        "rva": 1760919,
+        "bytes": "e8547d0200",
+        "targetVA": 6118384
+      },
+      "scriptRegistrationTail": {
+        "rva": 1760924,
+        "bytes": "e9cf70e8ff",
+        "targetVA": 4411248
+      },
+      "registerFunctionRva": 1580272,
+      "boardExtentsRva": 1906992
+    },
+    "gog": {
+      "fixtureSha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "windowFactoryCall": {
+        "rva": 154533,
+        "bytes": "e8b6740e00",
+        "targetVA": 5296224
+      },
+      "factoryOwnerEntry": {
+        "rva": 1101920,
+        "bytes": "6aff68c75b7100"
+      },
+      "postFactoryOwnerSite": {
+        "rva": 154538,
+        "bytes": "8b6b2483c310"
+      },
+      "stockRegistrationCall": {
+        "rva": 1757671,
+        "bytes": "e8547d0200",
+        "targetVA": 6115136
+      },
+      "scriptRegistrationTail": {
+        "rva": 1757676,
+        "bytes": "e99f7ce8ff",
+        "targetVA": 4411024
+      },
+      "registerFunctionRva": 1576944,
+      "boardExtentsRva": 1903744
+    }
+  }
+}

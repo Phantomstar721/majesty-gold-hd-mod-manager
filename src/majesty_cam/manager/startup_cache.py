@@ -385,8 +385,18 @@ def qol_input_signature(service: QolService) -> str:
     # installed executable patches different. Track actual game inputs and
     # script *contents*, so copying identical helpers during packaging is cheap.
     paths: list[Path] = [service.game_executable]
+    from .edition import panel_alpha
+    if panel_alpha():
+        from .alpha_executable import target_for
+        from .engine_patches import bundle_root
+        paths.append(target_for(service.game_executable))
+        paths.append(service.repo_root/'profiles/panel-engine/alpha-ui-layouts.json')
+    from .engine_patches import bundle_root
+    modules=bundle_root(service.repo_root)
+    paths.extend((modules/'modules.json',*sorted(modules.glob('*.mmne'))))
     data = service.game_executable.parent / "Data"
     paths.extend(data.glob("UIData_*.dat"))
+    if panel_alpha():paths.extend(data.glob('UIAlfa_*.dat'))
     scripts: dict[str, Path] = {}
     context = ["qol-inspection-v2", str(QOL_INSPECTION_CACHE_VERSION),
                json.dumps([(spec.key, spec.installed_phrase, spec.preference_only,
@@ -787,7 +797,7 @@ def _catalog_root_inputs(
 
 def _is_manager_generated_cache_path(path: Path) -> bool:
     name = path.name.casefold()
-    if name.startswith((".manager-merged-", ".majestymodmanager-build-")):
+    if name.startswith((".manager-merged-", ".majestymodmanager-build-", ".panel-engine-alpha-", ".majestymodmanageralpha-build-")):
         return True
     return (path / ".majesty-mod-manager-owned.json").is_file()
 

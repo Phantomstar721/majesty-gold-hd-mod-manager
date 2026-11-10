@@ -45,6 +45,7 @@
 #include "PairedOccupantAction.h"
 #include "PairedOccupantProfiles.h"
 #include "PairedOccupantLookupProfiles.h"
+#include "PanelEngineModules.h"
 
 namespace {
 
@@ -515,7 +516,7 @@ std::uintptr_t g_resolveResearchDescriptorTrampoline = 0;
 std::uintptr_t g_researchDescriptorRegistryMap = 0;
 std::uintptr_t g_researchDescriptorRegistryFindOrInsert = 0;
 bool g_privateResearchDescriptorsRegistered = false;
-using ResearchCompletion = void (__cdecl*)(
+using ResearchCompletion = std::uint32_t (__cdecl*)(
     std::uint32_t, void*, std::uint32_t, std::uint32_t, std::uint32_t);
 ResearchCompletion g_stockResearchCompletion = nullptr;
 std::uintptr_t g_resolveSpellDescriptorTrampoline = 0;
@@ -591,6 +592,7 @@ bool g_suppressQuestStatusIconsForCurrentRow = false;
 
 HMODULE g_runtimeModule = nullptr;
 std::uintptr_t g_imageBase = 0;
+#include "PanelEngineModules.inl"
 WNDPROC g_originalWindowProcedure = nullptr;
 LONG g_secondaryPanelArmed = 0;
 LONG g_ap10ControllerContext = 0;
@@ -1878,6 +1880,19 @@ bool InstallCustomGuildFactoryFallback() {
         g_imageBase + g_buildProfile->customGuildFallbackRva);
     unsigned char patch[kCustomGuildFactoryPatchSize] = {};
     BuildCustomGuildFactoryPatch(patch);
+#if defined(CAM_PANEL_ENGINE_SUPPORT)
+    // WE delegates to the original factory before interpreting BASE/CLASS.
+    // Keep its stock unknown-ID result; our entry hook still maps non-WE CGs.
+    if (g_panelEngineModules.windowEngine) {
+        if (!std::memcmp(site,kStockUnknownDialogEpilogue,sizeof(patch))) return true;
+        if (std::memcmp(site,patch,sizeof(patch))) return false;
+        DWORD previous=0, ignored=0;
+        if (!VirtualProtect(site,sizeof(patch),PAGE_EXECUTE_READWRITE,&previous)) return false;
+        std::memcpy(site,kStockUnknownDialogEpilogue,sizeof(patch));
+        const bool flushed=FlushInstructionCache(GetCurrentProcess(),site,sizeof(patch))!=FALSE;
+        return VirtualProtect(site,sizeof(patch),previous,&ignored) && flushed;
+    }
+#endif
     if (std::memcmp(site, patch, sizeof(patch)) == 0) {
         char message[192] = {};
         sprintf_s(
@@ -2785,13 +2800,16 @@ bool EnsurePrivateResearchCompletionDescriptor(
     return RegisterPrivateResearchDescriptors() && matches();
 }
 
-void __cdecl ResearchCompletionBridge(
+std::uint32_t __cdecl ResearchCompletionBridge(
     std::uint32_t commandOwner,
     void* context,
     std::uint32_t eventRecord,
     std::uint32_t eventArgument,
     std::uint32_t eventType) {
-    if (CompleteKingdomResearch(commandOwner, context, eventRecord, eventArgument, eventType)) return;
+    // The stock dispatcher consumes EAX: zero retires the order, nonzero keeps
+    // it for another tick. Stock research returns zero on every normal path.
+    // A void bridge leaks logging/cleanup return registers back to that caller.
+    if (CompleteKingdomResearch(commandOwner, context, eventRecord, eventArgument, eventType)) return 0;
     const auto* record = context ? g_stockControllerRegistry.FindResearchByCommand(
         static_cast<std::uint32_t>(ReadPackedAttributeValue(context, kCurrentResearchAttributeId))) : nullptr;
     const auto* panel = record ? g_stockControllerRegistry.FindPanelByKey(record->panelKey) : nullptr;
@@ -2799,9 +2817,8 @@ void __cdecl ResearchCompletionBridge(
         ((*reinterpret_cast<const std::uint32_t*>(static_cast<const unsigned char*>(context)+0x7C) & 0xFFFFFFu) ==
          (panel->buildingFamilyId & 0xFFFFFFu));
     if (!privateResearchCompletion) {
-        g_stockResearchCompletion(
+        return g_stockResearchCompletion(
             commandOwner, context, eventRecord, eventArgument, eventType);
-        return;
     }
 
     if (record->chargeMs) {
@@ -2814,7 +2831,7 @@ void __cdecl ResearchCompletionBridge(
         const auto flags = *reinterpret_cast<const std::uint32_t*>(static_cast<unsigned char*>(context)+0x74);
         if (!(flags & 4u)) QueuedActionStatus(*record, context, eventType == 2 ? 2 : 3);
         InterlockedExchange(&g_researchCompletedThisUpdate, 1);
-        return;
+        return 0;
     }
 
     // Stock event 0x2009 consumes the saved building tuple directly, including
@@ -2829,7 +2846,7 @@ void __cdecl ResearchCompletionBridge(
     }
 
     InterlockedExchange(&g_researchCompletionStaged, 1);
-    g_stockResearchCompletion(
+    const auto stockResultCode = g_stockResearchCompletion(
         commandOwner, context, eventRecord, eventArgument, eventType);
     if (eventType == 1) {
         // Same cancellation adapter as kingdom research: stock owns order
@@ -2844,7 +2861,7 @@ void __cdecl ResearchCompletionBridge(
         InterlockedExchange(&g_researchCompletionStaged, 0);
         WriteLog(
             "Stock event 0x2009 returned without retiring private research.");
-        return;
+        return stockResultCode;
     }
 
     if (g_researchOwner.context == context && g_researchOwner.record == record)
@@ -2856,6 +2873,7 @@ void __cdecl ResearchCompletionBridge(
         "Observed native event 0x2009 complete private research 0x%08X.",
         recipe);
     WriteLog(trace);
+    return stockResultCode;
 }
 
 void ExplorationStepBegin();
@@ -7294,6 +7312,12 @@ bool g_expansionQuestContentInstalled = false;
 extern "C" void __stdcall CaptureSecondaryController(
     std::uint32_t controller,
     std::uint32_t creationHandle) {
+    if (g_panelEngineModules.ownsController &&
+        g_panelEngineModules.ownsController(reinterpret_cast<void*>(controller))) {
+        InterlockedExchange(&g_captureParentController,0);
+        InterlockedExchange(&g_captureChildController,0);
+        return;
+    }
     if(!MessageFlagControls::Capture(controller)) {
         StopUnsafeManagerRuntimeLaunch("Message controls could not capture their stock HUD controller.");
     }
@@ -7465,6 +7489,13 @@ void LogDialogFactoryRequest(
 }
 
 extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) {
+    if (g_panelEngineModules.ownsView &&
+        g_panelEngineModules.ownsView(reinterpret_cast<void*>(idAddress[1]))) {
+        InterlockedExchange(&g_captureParentController,0);
+        InterlockedExchange(&g_captureChildController,0);
+        InterlockedExchange(&g_secondaryPanelArmed,0);
+        return;
+    }
     const std::uint32_t requested = *idAddress;
     if (g_stockControllerRegistry.FindPrivateRecruitmentByChild(requested) != nullptr) {
         *idAddress = 0x32355041u;
@@ -8367,6 +8398,9 @@ DWORD WINAPI InitializeRuntime(void*) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: the executable does not match every declared runtime capability profile.");
     }
+    if (!InitializePanelEngineModules()) {
+        StopUnsafeManagerRuntimeLaunch("The optional panel engine module does not match its guarded engine ABI.");
+    }
     if (!InstallLargeModList()) {
         StopUnsafeManagerRuntimeLaunch("The selected-mod restore routine does not match the bundled persistence helper. Reinstall Remember Active Mods in Quality of Life.");
     }
@@ -8444,7 +8478,7 @@ DWORD WINAPI InitializeRuntime(void*) {
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the Freestyle CAM lifecycle repair could not be installed.");
     }
-    if (expandedBuildingSlots) {
+    if (expandedBuildingSlots || g_panelEngineModules.windowEngine) {
         RequireManagerRuntimeInstall(
             InstallCustomGuildFactoryFallback(),
             managerLaunch,
@@ -8509,7 +8543,7 @@ DWORD WINAPI InitializeRuntime(void*) {
         RequireManagerRuntimeInstall(MessageFlagControls::Install(), managerLaunch,
             "Message controls could not verify their stock HUD and dismissal profile.");
     }
-    if (stockControllerRecipes) {
+    if (stockControllerRecipes || g_panelEngineModules.windowEngine) {
         if (HasPanelCommands() || !g_stockControllerRegistry.occupantActionPanels.empty() ||
             !g_stockControllerRegistry.liveAgentLists.empty()) {
             RequireManagerRuntimeInstall(InstallOccupantPanelRoute(), managerLaunch,
@@ -8529,7 +8563,8 @@ DWORD WINAPI InitializeRuntime(void*) {
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the dialog-factory hook could not be installed.");
     }
-    if (stockControllerRecipes || g_runtimeFeatureRegistry.messageFlagControls) {
+    if (stockControllerRecipes || g_runtimeFeatureRegistry.messageFlagControls ||
+        g_panelEngineModules.windowEngine) {
         RequireManagerRuntimeInstall(
             InstallSecondaryControllerHook(),
             managerLaunch,

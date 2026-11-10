@@ -104,6 +104,41 @@ class ManagerAppLayoutTests(unittest.TestCase):
 
         cls.application = QApplication.instance() or QApplication(["manager-ui-tests"])
 
+    def test_prepared_launch_button_follows_readiness_in_alpha_and_beta(self):
+        from majesty_cam.manager.qol_service import PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            controller = SimpleNamespace(paths=SimpleNamespace(game_path=root/'Game', profile_path=root/'state/profile.json'),
+                profile=SimpleNamespace(classic_launch=False))
+            with patch.object(manager_app.QTimer, 'singleShot'):
+                window = manager_app.ManagerWindow(controller)
+            base = _snapshot_with_required_qol('installed', 'installed')
+            prepared = replace(base, plan=replace(base.plan, selected_merge=(object(),)),
+                managed_build=SimpleNamespace(output_root=root/'Mods/Prepared'), can_classic_launch=True)
+            try:
+                for edition in ('', 'panel-engine-alpha'):
+                    for branch in (PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH):
+                        with self.subTest(edition=edition, branch=branch.key), patch.dict(os.environ, {'MAJESTY_MANAGER_EDITION': edition}):
+                            ready = replace(prepared, game_build=branch)
+                            controller.profile.classic_launch = False
+                            window._render_build_state(ready)
+                            self.assertTrue(window.launch_button.isEnabled(), 'Prepared setup must be launchable')
+                            self.assertEqual(window.build_state.text(), 'Your selected mods are ready')
+                            for blocked in (
+                                replace(ready, can_launch=False, build_required=True),
+                                replace(ready, can_launch=False),
+                                replace(ready, qol_utilities=_snapshot_with_required_qol('available', 'installed').qol_utilities),
+                            ):
+                                window._render_build_state(blocked)
+                                self.assertFalse(window.launch_button.isEnabled())
+                            controller.profile.classic_launch = True
+                            window._render_build_state(ready)
+                            self.assertTrue(window.launch_button.isEnabled())
+                            window._render_build_state(replace(ready, can_classic_launch=False))
+                            self.assertFalse(window.launch_button.isEnabled())
+            finally:
+                window.close()
+
     def test_conflict_preview_switching_does_not_apply_until_saved(self):
         from majesty_cam.manager.conflict_preview import ConflictPreview
         options = (("a", "Rules <A>"), ("b", "Rules & B"))

@@ -66,6 +66,13 @@ VARIANT_B_ID = "10000000-0000-4000-8000-000000000002"
 
 
 class ManagerControllerTests(unittest.TestCase):
+    def test_game_version_does_not_depend_on_qol_inspection_success(self):
+        with TemporaryDirectory() as temp:
+            controller = ManagerController(paths=_manager_paths(Path(temp)), registry=CompatibilityRegistry(specs={}))
+            controller.qol_catalog = None
+            with patch('majesty_cam.manager.controller.detect_majesty_branch', return_value=PUBLIC_BRANCH):
+                self.assertEqual(controller.snapshot().game_build, PUBLIC_BRANCH)
+
     def test_scan_and_cached_rescan_plan_a_selected_map_query_package(self):
         with TemporaryDirectory() as tmp:
             paths = _manager_paths(Path(tmp))

@@ -55,7 +55,8 @@ def create_manager_desktop_shortcut(
     if not desktop.is_dir():
         raise ShortcutError(f"Windows Desktop folder was not found: {desktop}")
 
-    shortcut = desktop / SHORTCUT_NAME
+    from .edition import panel_alpha
+    shortcut = desktop / ("Majesty Mod Manager - Panel Engine Alpha.lnk" if panel_alpha() else SHORTCUT_NAME)
     environment = os.environ.copy()
     environment.update(
         {

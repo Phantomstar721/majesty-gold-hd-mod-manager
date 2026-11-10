@@ -15,6 +15,9 @@ from enum import Enum
 from pathlib import Path
 import struct
 import subprocess
+import tempfile
+import shutil
+import os
 from typing import Callable, Sequence
 import xml.etree.ElementTree as ET
 
@@ -113,7 +116,7 @@ SUPPORTED_BRANCHES = (PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH)
 
 # Change this if status interpretation changes independently of the shipped
 # scripts/specs. UI/runtime rebuilds do not change canonical patch evidence.
-QOL_INSPECTION_CACHE_VERSION = 4
+QOL_INSPECTION_CACHE_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -248,6 +251,17 @@ QOL_PATCHES = (
     ),
 )
 
+PANEL_ENGINE_PATCHES = (
+    QolPatchSpec("panel-engine", "Custom Building Panels",
+        "Runs version-1 Window Engine building panels required by selected mods.\n(Credit to mikmak300)",
+        "majesty-gold-hd-cam-merger", "Custom Building Panels", "panel-engine",
+        "Install-PanelEngine.ps1", "Restore-PanelEngine.ps1", license_identifier="Author SDK; terms pending"),
+    QolPatchSpec("scripted-ground-actions", "Scripted Ground Actions",
+        "Provides the SF_MapAction native function required by selected mods.\n(Credit to mikmak300)",
+        "majesty-gold-hd-cam-merger", "Scripted Ground Actions", "scripted-ground-actions",
+        "Install-ScriptedGroundActions.ps1", "Restore-ScriptedGroundActions.ps1", license_identifier="Author SDK; terms pending"),
+)
+
 
 @dataclass(frozen=True)
 class ResolvedQolPatch:
@@ -343,7 +357,7 @@ class QolService:
         repo_root: Path,
         game_executable: Path,
         prefs_path: Path | None = None,
-        specs: Sequence[QolPatchSpec] = QOL_PATCHES,
+        specs: Sequence[QolPatchSpec] | None = None,
         powershell_executable: str = "powershell.exe",
         runner: Runner | None = None,
         elevated_runner: Runner | None = None,
@@ -352,24 +366,42 @@ class QolService:
         self.repo_root = repo_root.resolve(strict=False)
         self.game_executable = game_executable.resolve(strict=False)
         self.prefs_path = (prefs_path or default_prefs_path()).resolve(strict=False)
-        self.specs = tuple(specs)
+        from .edition import panel_alpha
+        self.specs = tuple(specs if specs is not None else
+                           QOL_PATCHES + PANEL_ENGINE_PATCHES)
         self.powershell_executable = powershell_executable
         self._runner = runner or self._run_command
         self._elevated_runner = elevated_runner or run_elevated_hidden
         self._elevation_probe = elevation_probe or directory_requires_elevation
 
     def inspect(self) -> QolCatalogSnapshot:
-        branch = detect_majesty_branch(self.game_executable)
+        branch = detect_majesty_branch(self._inspection_executable())
         patches = tuple(resolve_qol_patch(self.repo_root, spec) for spec in self.specs)
+        from .edition import panel_alpha
+        # Finish shared imports before the cold-start worker pool. Frozen
+        # importers can otherwise expose a partially initialized module
+        # while another worker imports its engine dependency.
+        from . import alpha_ui, engine_patches
         # Canonical dry-runs are independent and read-only. Bound the cold
         # inspection to three processes; retain separate PowerShell scopes and
         # each command's timeout rather than sharing script globals/runspaces.
         if branch is not None and len(patches) > 1:
             with ThreadPoolExecutor(max_workers=3) as executor:
-                utilities = tuple(executor.map(lambda patch: self._inspect_resolved(patch, branch), patches))
+                utilities = tuple(executor.map(lambda patch: self._inspect_safely(patch, branch), patches))
         else:
-            utilities = tuple(self._inspect_resolved(patch, branch) for patch in patches)
+            utilities = tuple(self._inspect_safely(patch, branch) for patch in patches)
         return QolCatalogSnapshot(self.game_executable, branch, utilities)
+
+    def _inspect_safely(self, patch, branch):
+        # One failed helper must retain its own diagnostic card, not erase the
+        # entire catalog or mislabel a recognized game as unsupported.
+        try:
+            return self._inspect_resolved(patch, branch)
+        except Exception as exc:
+            return QolUtilityStatus(patch, QolUtilityState.ERROR,
+                supported=patch.spec.preference_only or branch is not None,
+                applicable=False, installed=None,
+                detail=f"{type(exc).__name__}: {exc}")
 
     def refresh_preferences(self, snapshot: QolCatalogSnapshot) -> QolCatalogSnapshot:
         """Refresh cheap per-user settings without invalidating binary checks."""
@@ -383,7 +415,7 @@ class QolService:
         spec = self._spec(key)
         return self._inspect_resolved(
             resolve_qol_patch(self.repo_root, spec),
-            detect_majesty_branch(self.game_executable),
+            detect_majesty_branch(self._inspection_executable()),
         )
 
     def apply(
@@ -425,6 +457,16 @@ class QolService:
         current: QolUtilityStatus | None = None,
     ) -> QolUtilityStatus:
         spec = self._spec(key)
+        from .edition import panel_alpha
+        if key in ('panel-engine','scripted-ground-actions'):
+            from .engine_patches import change_patch
+            try:
+                change_patch(self.repo_root,self.game_executable,key,
+                    detect_majesty_branch(self._inspection_executable()),install,
+                    runner=self._runner,elevated_runner=self._elevated_runner,
+                    elevation_probe=self._elevation_probe)
+            except (OSError,ValueError,KeyError) as exc:raise QolServiceError(str(exc)) from exc
+            return self.inspect_patch(key)
         if current is None:
             current = self.inspect_patch(key)
         elif current.key != key or current.patch.spec.key != spec.key:
@@ -452,14 +494,16 @@ class QolService:
 
         command = self._command(spec, script)
         try:
-            if (
+            if panel_alpha() and not spec.preference_only:
+                completed = self._alpha_script(spec,script,dry_run=False)
+            elif (
                 not spec.preference_only
                 and self._elevation_probe(self.game_executable.parent)
             ):
                 completed = self._elevated_runner(command)
             else:
                 completed = self._runner(command)
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
             action = "install" if install else "remove"
             raise QolServiceError(
                 f"Could not {action} {spec.name}: {exc}"
@@ -493,6 +537,14 @@ class QolService:
         branch: MajestyBranch | None,
     ) -> QolUtilityStatus:
         spec = patch.spec
+        if spec.key in ("panel-engine", "scripted-ground-actions"):
+            from .engine_patches import inspect_patch
+            try:
+                installed=inspect_patch(self.repo_root,self.game_executable,spec.key,branch)
+                return QolUtilityStatus(patch,QolUtilityState.INSTALLED if installed else QolUtilityState.AVAILABLE,
+                                        True,True,installed,'Installed.' if installed else 'Available.')
+            except (OSError,ValueError,KeyError) as exc:
+                return QolUtilityStatus(patch,QolUtilityState.UNSUPPORTED,False,False,None,str(exc))
         if not patch.apply_available:
             return QolUtilityStatus(
                 patch,
@@ -527,8 +579,10 @@ class QolService:
             )
 
         try:
-            completed = self._runner(self._command(spec, patch.install_script, dry_run=True))
-        except (OSError, subprocess.SubprocessError, QolServiceError) as exc:
+            from .edition import panel_alpha
+            completed = (self._alpha_script(spec,patch.install_script,dry_run=True)
+                         if panel_alpha() else self._runner(self._command(spec, patch.install_script, dry_run=True)))
+        except (OSError, subprocess.SubprocessError, QolServiceError, ValueError) as exc:
             return QolUtilityStatus(
                 patch,
                 QolUtilityState.ERROR,
@@ -561,6 +615,59 @@ class QolService:
             detail=output or ("Installed" if installed else "Available"),
         )
 
+    def _inspection_executable(self):
+        from .edition import panel_alpha
+        from .alpha_executable import current_path
+        return current_path(self.game_executable) if panel_alpha() else self.game_executable
+
+    def _alpha_script(self,spec,script,*,dry_run):
+        # Canonical standalone installers expect the literal MajestyHD.exe.
+        # Run them against a disposable copy, then publish only the fixed alpha
+        # sibling. Their backup/output paths cannot reach the original game.
+        from .alpha_executable import publish
+        from .profile import default_profile_path
+        work=default_profile_path().parent/'executable-work'
+        work.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='qol-',dir=str(work)) as folder:
+            staged=Path(folder)/'MajestyHD.exe'
+            raw=self._inspection_executable().read_bytes()
+            from .alpha_ui import rewrite,UI_PATCHES,names,backup_path,BACKUP_NAME
+            branch=detect_majesty_branch(self._inspection_executable())
+            normalized,private=rewrite(raw,self.repo_root,branch,private=False)
+            staged.write_bytes(normalized)
+            needs_ui=spec.key in UI_PATCHES
+            backup=None
+            if needs_ui:
+                directory=Path(folder)/'Data';directory.mkdir()
+                originals=sorted((self.game_executable.parent/'Data').glob('UIData_*.dat'))
+                if not originals:raise QolServiceError('The selected game has no resolution-specific UIData files.')
+                for source in originals:
+                    shadow=source.with_name(names(source.name))
+                    if shadow.exists() and not private:
+                        raise QolServiceError('Existing alpha UI files have no active alpha filename owner. Review the alpha executable before replacing them.')
+                    shutil.copyfile(shadow if private and shadow.is_file() else source,directory/source.name)
+                backup=backup_path(self.game_executable,default_profile_path().parent,branch)
+                seed=backup if backup.is_dir() else self.game_executable.parent/'Data'/BACKUP_NAME
+                if seed.is_dir():shutil.copytree(seed,directory/BACKUP_NAME)
+            command=self._command(spec,script,dry_run=dry_run)
+            command[command.index('-GamePath')+1]=folder
+            if spec.key in ('remember-mods','remember-speed','remember-zoom') and script.name.casefold().startswith('install-'):
+                command.extend(('-PreferenceDirectory',str(default_profile_path().parent)))
+            result=self._runner(command)
+            if not dry_run and result.returncode==0:
+                changed,_=rewrite(staged.read_bytes(),self.repo_root,branch,private=private or needs_ui)
+                ui_files=({p.name:p.read_bytes() for p in (Path(folder)/'Data').glob('UIData_*.dat')}
+                          if needs_ui else None)
+                # Keep canonical backups before publishing, so a later restore
+                # cannot lose the stock source of a successful UI installation.
+                if needs_ui and (Path(folder)/'Data'/BACKUP_NAME).is_dir():
+                    backup.parent.mkdir(parents=True,exist_ok=True)
+                    shutil.copytree(Path(folder)/'Data'/BACKUP_NAME,backup,dirs_exist_ok=True)
+                publish(self.game_executable,changed,repo_root=self.repo_root,ui_files=ui_files,
+                        runner=self._runner,elevated_runner=self._elevated_runner,
+                        elevation_probe=self._elevation_probe)
+            return result
+
     def _command(
         self,
         spec: QolPatchSpec,
@@ -588,6 +695,15 @@ class QolService:
         self, command: Sequence[str]
     ) -> subprocess.CompletedProcess[str]:
         try:
+            options={}
+            from .edition import panel_alpha
+            if Path(command[0]).name.casefold()=='powershell.exe':
+                # A PowerShell 7 parent can export only its own module paths.
+                # Windows PowerShell 5 must see its stock Utility module first
+                # (Get-FileHash is used by the canonical UI backup installer).
+                environment={key:value for key,value in os.environ.items()
+                             if key.casefold() not in ('psmodulepath','winpsmodulepath')}
+                options['env']=environment
             return subprocess.run(
                 list(command),
                 check=False,
@@ -596,6 +712,7 @@ class QolService:
                 encoding="utf-8",
                 errors="replace",
                 timeout=60,
+                **options,
                 **no_console_window_options(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -617,6 +734,10 @@ def resolve_qol_patch(repo_root: Path, spec: QolPatchSpec) -> ResolvedQolPatch:
     """
 
     repo_root = repo_root.resolve(strict=False)
+    if spec.key in ('panel-engine','scripted-ground-actions'):
+        from .edition import panel_alpha
+        script=repo_root/'payload/panel-engine'/('Publish-AlphaExecutable.ps1' if panel_alpha() else 'Publish-EngineExecutable.ps1')
+        return ResolvedQolPatch(spec,'manager-native-engine',script.parent,script,script,None)
     workspace_root = repo_root.parent
     candidates = (
         (

@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from .edition import panel_alpha
 from .runtime_profiles import require_supported_runtime
 
 from dataclasses import dataclass, replace
@@ -998,7 +1000,8 @@ def build_merged_package(
         raise ManagerBuildError(
             f"Refusing to replace a non-manager directory: {target}"
         )
-    staging = paths.local_mods_root / f".MajestyModManager-build-{uuid.uuid4().hex}"
+    staging_prefix=".MajestyModManagerAlpha-build-" if panel_alpha() else ".MajestyModManager-build-"
+    staging = paths.local_mods_root / f"{staging_prefix}{uuid.uuid4().hex}"
     try:
         _cleanup_stale_manager_artifacts(paths.local_mods_root, target)
         if progress:
@@ -1030,7 +1033,7 @@ def build_merged_package(
             paths.game_path,
             staging,
             tuple(item.selected_mod for item in plan.selected_merge),
-            profile_slug="manager-merged",
+            profile_slug="panel-engine-alpha" if panel_alpha() else "manager-merged",
             display_name="Majesty Mod Manager: Merged Profile",
             internal_name="MajestyModManagerMergedProfile",
             resolution_owners=plan.resolution_owners,
@@ -1040,6 +1043,7 @@ def build_merged_package(
             prepared_inventories=inventories,
             standard_script_inputs=tuple(standard_scripts.read(e) for e in plan.standard_script_entries),
             max_generated_mods=_remaining_generated_slots(plan),
+            external_panel_behaviors=True,
             script_review=script_review,
             script_conflict_resolver=review if script_conflict_resolver is not None else None,
         )
@@ -1110,7 +1114,7 @@ def build_merged_package(
     except (ComposeError, OSError, ValueError, ManagerBuildError) as exc:
         cleanup_error = None
         if staging.exists() and _is_safe_staging_path(
-            staging, paths.local_mods_root, ".MajestyModManager-build-"
+            staging, paths.local_mods_root, staging_prefix
         ):
             try:
                 shutil.rmtree(staging)
@@ -1660,9 +1664,11 @@ def _fingerprint_stock_compose_inputs(
 
 
 def _safe_manager_target(mods_root: Path, target: Path) -> Path:
+    from .edition import output_directory_name
     mods = mods_root.resolve(strict=False)
     resolved = target.resolve(strict=False)
-    if resolved.parent != mods or resolved.name != "Majesty Mod Manager - Merged":
+    expected = output_directory_name()
+    if resolved.parent != mods or resolved.name != expected:
         raise ManagerBuildError(f"Unsafe manager output target: {resolved}")
     if resolved.is_symlink():
         raise ManagerBuildError(f"Manager output target cannot be a symlink: {resolved}")
@@ -1700,7 +1706,9 @@ def _cleanup_stale_manager_artifacts(parent: Path, target: Path) -> None:
     """Remove abandoned Manager staging and recover interrupted publication."""
 
     resolved_parent = parent.resolve(strict=False)
-    temporary_prefixes = (".manager-merged-", ".majestymodmanager-build-")
+    from .edition import panel_alpha
+    temporary_prefixes = ((".panel-engine-alpha-", ".majestymodmanageralpha-build-") if panel_alpha()
+                          else (".manager-merged-", ".majestymodmanager-build-"))
     backup_prefix = f".{target.name}.backup-".casefold()
     try:
         children = tuple(resolved_parent.iterdir())

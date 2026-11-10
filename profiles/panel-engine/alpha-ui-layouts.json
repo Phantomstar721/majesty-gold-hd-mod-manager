@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "stock": "UIData_%d_%d.dat",
+  "alpha": "UIAlfa_%d_%d.dat",
+  "source": "docs/message-flag-controls-integration.md: resolution-specific UI loader, native filename formatting before resource open; separate explicit three-build operand guards",
+  "profiles": {
+    "public": {
+      "literalRva": 3413076,
+      "callFrames": [
+        {
+          "rva": 986136,
+          "bytes": "55538d44241c685414740050e8374f1600"
+        },
+        {
+          "rva": 986244,
+          "bytes": "51528d44241c685414740050e8cb4e1600"
+        }
+      ]
+    },
+    "beta2": {
+      "literalRva": 3514788,
+      "callFrames": [
+        {
+          "rva": 987624,
+          "bytes": "55538d44241c68a4a1750050e8c79d1700"
+        },
+        {
+          "rva": 987732,
+          "bytes": "51528d44241c68a4a1750050e85b9d1700"
+        }
+      ]
+    },
+    "gog": {
+      "literalRva": 3511204,
+      "callFrames": [
+        {
+          "rva": 989192,
+          "bytes": "55538d44241c68a493750050e8e7d41600"
+        },
+        {
+          "rva": 989300,
+          "bytes": "51528d44241c68a493750050e87bd41600"
+        }
+      ]
+    }
+  }
+}

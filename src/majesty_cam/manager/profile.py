@@ -37,12 +37,16 @@ def default_local_appdata() -> Path:
 
 def canonical_remembered_path(local_appdata: Path | None = None) -> Path:
     root = local_appdata or default_local_appdata()
+    from .edition import panel_alpha, state_folder
+    if panel_alpha():
+        return root / state_folder() / REMEMBERED_FILENAME
     return root / "MajestyHD" / REMEMBERED_FILENAME
 
 
 def default_profile_path(local_appdata: Path | None = None) -> Path:
     root = local_appdata or default_local_appdata()
-    return root / "MajestyModManager" / PROFILE_FILENAME
+    from .edition import state_folder
+    return root / state_folder() / PROFILE_FILENAME
 
 
 def read_remembered_mods(

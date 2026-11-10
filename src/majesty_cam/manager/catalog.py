@@ -558,10 +558,28 @@ def _parse_content_node(
     has_cam = expected_tag == "Mod" and any(
         _local_name(node.tag) == "CAM" for node in content.iter()
     )
+    from .edition import panel_alpha
+    native_engine_component = False
+    if has_cam and content_id:
+        # Positive native protocol evidence permits ordinary independently
+        # loadable engine mods. A CAM filename or title is never admission.
+        from .engine_patches import discover, _selected_definition
+        from types import SimpleNamespace
+        try:
+            probe=SimpleNamespace(package_root=candidate.package_root,manifest_path=manifest,
+                                  content_id=content_id,display_name=display_name)
+            definition_path=candidate.package_root/DEFINITION_FILE_NAME
+            definition=(_selected_definition(definition_path,content_id)
+                        if definition_path.is_file() else None)
+            native_contract=(not definition_path.is_file() or definition is not None and
+                not (definition.custom_buildings or definition.runtime_features or definition.runtime_capabilities))
+            native_engine_component=native_contract and bool(discover(probe).evidence)
+        except (OSError,ValueError):
+            native_engine_component=False
     kind = (
         CatalogKind.QUEST
         if expected_tag == "Quest"
-        else (CatalogKind.MERGE if has_cam or _declares_native_source_event(candidate.package_root)
+        else (CatalogKind.MERGE if (has_cam and not native_engine_component) or _declares_native_source_event(candidate.package_root)
               else CatalogKind.STANDARD)
     )
     generated = _is_generated_package(candidate.package_root)
@@ -1649,7 +1667,7 @@ def _deduplicate_entries(
 
 def _is_generated_package(package_root: Path) -> bool:
     if package_root.name.casefold().startswith(
-        (".manager-merged-", ".majestymodmanager-build-")
+        (".manager-merged-", ".majestymodmanager-build-", ".panel-engine-alpha-", ".majestymodmanageralpha-build-")
     ):
         return True
     try:

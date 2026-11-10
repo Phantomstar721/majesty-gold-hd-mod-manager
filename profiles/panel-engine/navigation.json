@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "contract": "panel-engine.stock-back-route.v1",
+  "source": "SDK go_back and actual Base_UnitListController command route",
+  "limits": "Verified owned caller block and opaque callee roles; not full handler or target implementation coverage.",
+  "profiles": {
+    "public": {
+      "fixtureSha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "commandHandlerVA": 4817264,
+      "frontBytes": "5356578bf133dbe8c4f3fcff8bf88b4424103d4d1f00000f8f920100000f8485010000",
+      "backArmVA": 4817688,
+      "backArmBytes": "6a00e945ffffff",
+      "backBlockVA": 4817508,
+      "backBlockBytes": "57e896daf8ff8bc8e87f1ff9ff508bcee8778101005fbb010000005e8bc35bc20400",
+      "extendedBackDispatch": null,
+      "uiContextVA": 4349184,
+      "windowIdVA": 4366832,
+      "openSubwindowVA": 4916208
+    },
+    "beta2": {
+      "fixtureSha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "commandHandlerVA": 4822432,
+      "frontBytes": "5356578bf133dbe8d4f1fcff8bf88b4424103d401f00000f8fc80100000f8485010000",
+      "backArmVA": 4822948,
+      "backArmBytes": "6a00e9e9feffff",
+      "backBlockVA": 4822676,
+      "backBlockBytes": "57e836d6f8ff8bc8e81f27f9ff508bcee8377601005fbb010000005e8bc35bc20400",
+      "extendedBackDispatch": "8bc881e9411f0000741c83e90c7410",
+      "uiContextVA": 4353232,
+      "windowIdVA": 4373952,
+      "openSubwindowVA": 4918496
+    },
+    "gog": {
+      "fixtureSha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "commandHandlerVA": 4823888,
+      "frontBytes": "5356578bf133dbe844ebfcff8bf88b4424103d401f00000f8fc80100000f8485010000",
+      "backArmVA": 4824404,
+      "backArmBytes": "6a00e9e9feffff",
+      "backBlockVA": 4824132,
+      "backBlockBytes": "57e816c3f8ff8bc8e8af13f9ff508bcee8377601005fbb010000005e8bc35bc20400",
+      "extendedBackDispatch": "8bc881e9411f0000741c83e90c7410",
+      "uiContextVA": 4349792,
+      "windowIdVA": 4370432,
+      "openSubwindowVA": 4919952
+    }
+  }
+}

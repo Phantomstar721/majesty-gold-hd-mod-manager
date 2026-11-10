@@ -76,7 +76,11 @@ if ($Mode -eq "release") {
 }
 & (Join-Path $repoRoot "scripts/Test-EffectSequence.ps1") -FadeLifecycle
 if ($LASTEXITCODE -ne 0) { throw "Three-version effect lifecycle verification failed" }
-$runtimeArguments = @{ AttackObservationTests = $true; CheckedPlacementTests = $true; OutputRoot = $runtimeSource; RegistrationTests = ($Mode -eq "release"); FeatureTests = $true; ExplorationTests = $true }
+& $releasePython (Join-Path $PSScriptRoot 'build_panel_engine_modules.py')
+if ($LASTEXITCODE -ne 0) { throw 'Native engine module build failed.' }
+& $releasePython (Join-Path $PSScriptRoot 'prepare_panel_engine_descriptor_fixtures.py')
+if ($LASTEXITCODE -ne 0) { throw 'Native engine descriptor fixtures failed.' }
+$runtimeArguments = @{ EngineModules = $true; AttackObservationTests = $true; CheckedPlacementTests = $true; OutputRoot = $runtimeSource; RegistrationTests = ($Mode -eq "release"); FeatureTests = $true; ExplorationTests = $true }
 if ($MsvcToolRoot) { $runtimeArguments.MsvcToolRoot = $MsvcToolRoot }
 if ($WindowsSdkRoot) { $runtimeArguments.WindowsSdkRoot = $WindowsSdkRoot }
 & $runtimeBuild @runtimeArguments
@@ -101,6 +105,11 @@ try {
     Copy-Item -LiteralPath (Join-Path $runtimeSource "MajestyBuildingRuntimeLauncher.exe") -Destination $runtimeTarget
     Copy-Item -LiteralPath (Join-Path $runtimeSource "MajestyBuildingRuntime.dll") -Destination $runtimeTarget
     Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $runtimeTarget "LICENSE-manager-runtime.txt")
+
+    $engineTarget = Join-Path $stage 'panel-engine'
+    New-Item -ItemType Directory -Path $engineTarget | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'local/panel-engine-alpha/native-modules') -Destination (Join-Path $engineTarget 'modules') -Recurse
+    Copy-Item -Path (Join-Path $repoRoot 'helpers/panel-engine/scripts/Publish-*Executable.ps1') -Destination $engineTarget
 
     $visitorTarget = Join-Path $stage "qol\generic-visitor-lists"
     New-Item -ItemType Directory -Path $visitorTarget | Out-Null

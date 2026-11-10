@@ -22,6 +22,14 @@ $requiredPayloadFiles = @(
     "payload\runtime\MajestyBuildingRuntimeLauncher.exe",
     "payload\runtime\MajestyBuildingRuntime.dll",
     "payload\runtime\LICENSE-manager-runtime.txt",
+    "payload\panel-engine\modules\modules.json",
+    "payload\panel-engine\modules\window-engine-public.mmne",
+    "payload\panel-engine\modules\window-engine-beta2.mmne",
+    "payload\panel-engine\modules\window-engine-gog.mmne",
+    "payload\panel-engine\modules\script-functions-public.mmne",
+    "payload\panel-engine\modules\script-functions-beta2.mmne",
+    "payload\panel-engine\modules\script-functions-gog.mmne",
+    "payload\panel-engine\Publish-EngineExecutable.ps1",
     "payload\qol\generic-visitor-lists\Install-GenericVisitorLists.ps1",
     "payload\qol\generic-visitor-lists\MajestyBuildProfiles.ps1",
     "payload\qol\generic-visitor-lists\LICENSE.txt",
@@ -37,6 +45,14 @@ $requiredPayloadFiles = @(
 if (-not $OutputDir) {
     $OutputDir = Join-Path $repoRoot $(if ($Mode -eq "release") { "dist\release-candidate" } else { "dist" })
 }
+$applicationPath = [IO.Path]::GetFullPath((Join-Path $OutputDir 'Majesty Mod Manager'))
+function Assert-ManagerClosed {
+    $running = Get-Process -Name 'Majesty Mod Manager' -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and $_.Path.StartsWith($applicationPath + '\', [StringComparison]::OrdinalIgnoreCase)
+    }
+    if ($running) { throw 'Close the local test Manager before replacing it.' }
+}
+Assert-ManagerClosed
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw "Run Setup - Majesty Mod Manager.bat before building the standalone app."
 }
@@ -77,6 +93,8 @@ if (-not (Test-Path -LiteralPath $payloadMarker -PathType Leaf) -or
     ((Get-Content -LiteralPath $payloadMarker -Raw).Trim() -ne "schema=3")) {
     throw "Manager payload staging did not produce the required schema-3 marker."
 }
+& $python (Join-Path $PSScriptRoot 'verify_alpha_cold_start.py') --beta
+if ($LASTEXITCODE -ne 0) { throw 'Beta cold-start source check failed.' }
 foreach ($relative in $requiredPayloadFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $relative) -PathType Leaf)) {
         throw "Manager payload staging omitted required file: $relative"
@@ -112,6 +130,7 @@ if (Test-Path -LiteralPath $assetRoot -PathType Container) {
 }
 $arguments += (Join-Path $PSScriptRoot "mod_manager_entry.py")
 
+Assert-ManagerClosed
 & $python @arguments
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller failed with exit code $LASTEXITCODE."
@@ -130,6 +149,8 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\FREESTYLE-CAM-SIDECAR.txt"
 Copy-Item -LiteralPath (Join-Path $assetRoot "STEAM-ICON-NOTICE.txt") -Destination $applicationLicenses -Force
 & $python (Join-Path $PSScriptRoot 'verify_regression.py') --mode $Mode --application $applicationOutput
 if ($LASTEXITCODE -ne 0) { throw 'Packaged Manager regression gate failed. Do not distribute this build.' }
+& $python (Join-Path $PSScriptRoot 'verify_alpha_cold_start.py') --beta --application $applicationOutput
+if ($LASTEXITCODE -ne 0) { throw 'Packaged beta cold-start check failed.' }
 if ($Mode -eq "release") {
 $receiptPath = Join-Path $repoRoot "local\manager-runtime-release\runtime-parity.json"
 $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json

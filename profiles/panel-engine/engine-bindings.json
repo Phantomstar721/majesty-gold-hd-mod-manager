@@ -1,0 +1,767 @@
+{
+  "schema": 1,
+  "serviceRevision": 1,
+  "ownershipABI": 1,
+  "components": {
+    "window-engine": {
+      "sdkSource": "Window Engine/src/we_engine.cpp",
+      "sdkSha256": "d6049b8021575241027677db2df441cdb50bd0038735c3fda6058b70d1a40b9b",
+      "functions": {
+        "GAME_FACTORY": {
+          "source": "runtime/MajestyModManagerRuntime.cpp",
+          "field": "dialogFactoryRva",
+          "profiles": {
+            "public": 5286912,
+            "beta2": 5353808,
+            "gog": 5296224
+          }
+        },
+        "GET_UNIT": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "HeroSelected",
+          "profiles": {
+            "public": 4617536,
+            "beta2": 4622208,
+            "gog": 4621984
+          }
+        },
+        "ATTR_RAW": {
+          "source": "runtime/PaidSourceTargetProfiles.h",
+          "field": "component_lookup",
+          "profiles": {
+            "public": 4380016,
+            "beta2": 4384688,
+            "gog": 4383744
+          }
+        },
+        "GAME_OBJ": {
+          "source": "runtime/MajestyModManagerRuntime.cpp",
+          "field": "uiManagerRva",
+          "profiles": {
+            "public": 4349184,
+            "beta2": 4353232,
+            "gog": 4349792
+          }
+        },
+        "YSTRING_CTOR": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "StringCtor",
+          "profiles": {
+            "public": 6453888,
+            "beta2": 6529568,
+            "gog": 6538096
+          }
+        },
+        "YSTRING_DTOR": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "StringDtor",
+          "profiles": {
+            "public": 6454320,
+            "beta2": 6530000,
+            "gog": 6538528
+          }
+        },
+        "YSTRING_SET": {
+          "profiles": {
+            "public": 6455872,
+            "beta2": 6531552,
+            "gog": 6540080
+          },
+          "source": "profiles/panel-engine/data-clients.json",
+          "field": "YSTRING_SET",
+          "alias": false
+        },
+        "GDH_CTOR": {
+          "source": "runtime/BooleanRuntimeProfiles.h",
+          "field": "construct",
+          "profiles": {
+            "public": 5650048,
+            "beta2": 5740464,
+            "gog": 5737136
+          }
+        },
+        "GDH_RESET": {
+          "profiles": {
+            "public": 5648032,
+            "beta2": 5738448,
+            "gog": 5735120
+          },
+          "source": "profiles/panel-engine/provider-clients.json",
+          "field": "GDH_RESET",
+          "alias": false
+        },
+        "GDH_ADDAGENT": {
+          "source": "runtime/BooleanRuntimeProfiles.h",
+          "field": "addAgent",
+          "profiles": {
+            "public": 5647424,
+            "beta2": 5737840,
+            "gog": 5734512
+          }
+        },
+        "GDH_ADDINT": {
+          "source": "runtime/MajestyModManagerRuntime.cpp:QuestBoardBuildProfile",
+          "field": "addInteger",
+          "profiles": {
+            "public": 5647456,
+            "beta2": 5737872,
+            "gog": 5734544
+          }
+        },
+        "GDH_CALL": {
+          "source": "runtime/BooleanRuntimeProfiles.h",
+          "field": "execute",
+          "profiles": {
+            "public": 5650368,
+            "beta2": 5740784,
+            "gog": 5737456
+          }
+        },
+        "GDH_RETURN": {
+          "source": "runtime/MajestyModManagerRuntime.cpp:QuestBoardBuildProfile",
+          "field": "scalarResult",
+          "profiles": {
+            "public": 5649696,
+            "beta2": 5740112,
+            "gog": 5736784
+          }
+        },
+        "GDH_DTOR": {
+          "source": "runtime/BooleanRuntimeProfiles.h",
+          "field": "destroy",
+          "profiles": {
+            "public": 5650272,
+            "beta2": 5740688,
+            "gog": 5737360
+          }
+        },
+        "GUILD_COST": {
+          "source": "runtime/PrivateRecruitmentProfiles.h",
+          "field": "helpers[2]",
+          "profiles": {
+            "public": 4808832,
+            "beta2": 4810896,
+            "gog": 4812352
+          }
+        },
+        "GUILD_RECRUIT": {
+          "profiles": {
+            "public": 4810656,
+            "beta2": 4812720,
+            "gog": 4814176
+          },
+          "source": "profiles/panel-engine/sdk-clients.json",
+          "field": "GUILD_RECRUIT",
+          "alias": false
+        },
+        "LOCAL_PLAYER": {
+          "source": "runtime/MajestyModManagerRuntime.cpp",
+          "field": "getCurrentPlayerRva",
+          "profiles": {
+            "public": 4344320,
+            "beta2": 4348368,
+            "gog": 4344928
+          }
+        },
+        "GAME_STRING": {
+          "source": "runtime/MajestyModManagerRuntime.cpp:QuestBoardBuildProfile",
+          "field": "rowSummaryTextResolver",
+          "profiles": {
+            "public": 4341792,
+            "beta2": 4345840,
+            "gog": 4342400
+          }
+        },
+        "SHOW_MSG": {
+          "profiles": {
+            "public": 4631552,
+            "beta2": 4636304,
+            "gog": 4636080
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "SHOW_MSG",
+          "alias": false
+        },
+        "MSG_COLOUR": {
+          "source": "runtime/MajestyModManagerRuntime.cpp",
+          "field": "prepareSystemAlertRva",
+          "profiles": {
+            "public": 4631520,
+            "beta2": 4636272,
+            "gog": 4636048
+          }
+        },
+        "GET_ITEM": {
+          "source": "runtime/MajestyModManagerRuntime.cpp",
+          "field": "streamControlLookupRva",
+          "profiles": {
+            "public": 6628544,
+            "beta2": 6715680,
+            "gog": 6716832
+          }
+        },
+        "GAME_NEW": {
+          "source": "runtime/MajestyModManagerRuntime.cpp",
+          "field": "stockOperatorNewRva",
+          "profiles": {
+            "public": 7180158,
+            "beta2": 7267650,
+            "gog": 7264812
+          }
+        },
+        "STATS_CTOR": {
+          "profiles": {
+            "public": 4909600,
+            "beta2": 4911888,
+            "gog": 4913344
+          },
+          "source": "profiles/panel-engine/constructors.json",
+          "field": "STATS_CTOR",
+          "alias": false
+        },
+        "BUILDING_CTOR": {
+          "profiles": {
+            "public": 4807440,
+            "beta2": 4809504,
+            "gog": 4810960
+          },
+          "source": "profiles/panel-engine/constructors.json",
+          "field": "BUILDING_CTOR",
+          "alias": false
+        },
+        "OPEN_SUB": {
+          "source": "runtime/MajestyModManagerRuntime.cpp",
+          "field": "openDialogRva",
+          "profiles": {
+            "public": 4916208,
+            "beta2": 4918496,
+            "gog": 4919952
+          }
+        },
+        "WINDOW_ID": {
+          "profiles": {
+            "public": 4366832,
+            "beta2": 4373952,
+            "gog": 4370432
+          },
+          "source": "profiles/panel-engine/navigation.json",
+          "field": "WINDOW_ID",
+          "alias": false
+        },
+        "GET_ATTR": {
+          "source": "runtime/MajestyModManagerRuntime.cpp",
+          "field": "readPackedAttributeRva",
+          "profiles": {
+            "public": 6004688,
+            "beta2": 6090608,
+            "gog": 6087360
+          }
+        },
+        "LIST_CTOR": {
+          "profiles": {
+            "public": 4820864,
+            "beta2": 4823136,
+            "gog": 4824592
+          },
+          "source": "profiles/panel-engine/constructors.json",
+          "field": "LIST_CTOR",
+          "alias": false
+        },
+        "LIST_BUTTONS": {
+          "profiles": {
+            "public": 4817152,
+            "beta2": 4819232,
+            "gog": 4820688
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "LIST_BUTTONS",
+          "alias": false
+        },
+        "VEC_ERASE": {
+          "profiles": {
+            "public": 4838016,
+            "beta2": 4840288,
+            "gog": 4841744
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "VEC_ERASE",
+          "alias": false
+        },
+        "VEC_INSERT": {
+          "profiles": {
+            "public": 4839872,
+            "beta2": 4842144,
+            "gog": 4843600
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "VEC_INSERT",
+          "alias": false
+        },
+        "AGENT_MGR": {
+          "source": "runtime/BooleanRuntimeProfiles.h",
+          "field": "context",
+          "profiles": {
+            "public": 5631728,
+            "beta2": 5722160,
+            "gog": 5718832
+          }
+        },
+        "AGENT_BY_ID": {
+          "profiles": {
+            "public": 5630176,
+            "beta2": 5720608,
+            "gog": 5717280
+          },
+          "source": "profiles/panel-engine/agent-clients.json",
+          "field": "AGENT_BY_ID",
+          "alias": false
+        },
+        "AGENT_UNIT": {
+          "profiles": {
+            "public": 5632704,
+            "beta2": 5723120,
+            "gog": 5719792
+          },
+          "source": "profiles/panel-engine/agent-clients.json",
+          "field": "AGENT_UNIT",
+          "alias": false
+        },
+        "WATCH": {
+          "profiles": {
+            "public": 4617808,
+            "beta2": 4622480,
+            "gog": 4622256
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "WATCH",
+          "alias": false
+        },
+        "FOLLOW": {
+          "profiles": {
+            "public": 4541888,
+            "beta2": 4546032,
+            "gog": 4545808
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "FOLLOW",
+          "alias": false
+        },
+        "UNIT_NAME": {
+          "source": "runtime/MajestyModManagerRuntime.cpp:QuestBoardBuildProfile",
+          "field": "rowNameFormatter",
+          "profiles": {
+            "public": 4465392,
+            "beta2": 4469248,
+            "gog": 4469024
+          }
+        },
+        "ADD_ROW": {
+          "profiles": {
+            "public": 6672304,
+            "beta2": 6759440,
+            "gog": 6756608
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "ADD_ROW",
+          "alias": true
+        },
+        "ART_CTOR": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "ImageCtor",
+          "profiles": {
+            "public": 6760944,
+            "beta2": 6848080,
+            "gog": 6845248
+          }
+        },
+        "ART_KIND": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "ImageType",
+          "profiles": {
+            "public": 6759232,
+            "beta2": 6846368,
+            "gog": 6843536
+          }
+        },
+        "ART_ID": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "ImageId",
+          "profiles": {
+            "public": 6759312,
+            "beta2": 6846448,
+            "gog": 6843616
+          }
+        },
+        "ART_KEY": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "ImageSet",
+          "profiles": {
+            "public": 6761168,
+            "beta2": 6848304,
+            "gog": 6845472
+          }
+        },
+        "ART_FRAME": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "ImageFrame",
+          "profiles": {
+            "public": 6758208,
+            "beta2": 6845344,
+            "gog": 6842512
+          }
+        },
+        "ART_PLACE": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "ImageFlags",
+          "profiles": {
+            "public": 6758816,
+            "beta2": 6845952,
+            "gog": 6843120
+          }
+        },
+        "ART_RELEASE": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "ImageDtor",
+          "profiles": {
+            "public": 6759184,
+            "beta2": 6846320,
+            "gog": 6843488
+          }
+        },
+        "ART_LOAD": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "ImageCopy",
+          "profiles": {
+            "public": 6761424,
+            "beta2": 6848560,
+            "gog": 6845728
+          }
+        },
+        "ART_DRAW": {
+          "source": "runtime/MajestyModManagerRuntime.cpp:QuestBoardBuildProfile",
+          "field": "rowStatusDraw",
+          "profiles": {
+            "public": 6760528,
+            "beta2": 6847664,
+            "gog": 6844832
+          }
+        },
+        "ITEM_COLOUR": {
+          "profiles": {
+            "public": 6669696,
+            "beta2": 6756832,
+            "gog": 6754000
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "ITEM_COLOUR",
+          "alias": false
+        },
+        "TB_CTOR": {
+          "profiles": {
+            "public": 6743808,
+            "beta2": 6830944,
+            "gog": 6828112
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "TB_CTOR",
+          "alias": false
+        },
+        "TB_ALPHA": {
+          "profiles": {
+            "public": 6735744,
+            "beta2": 6822880,
+            "gog": 6820048
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "TB_ALPHA",
+          "alias": false
+        },
+        "TB_COLOUR": {
+          "profiles": {
+            "public": 6735728,
+            "beta2": 6822864,
+            "gog": 6820032
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "TB_COLOUR",
+          "alias": false
+        },
+        "TB_FONT": {
+          "profiles": {
+            "public": 6735680,
+            "beta2": 6822816,
+            "gog": 6819984
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "TB_FONT",
+          "alias": false
+        },
+        "TB_TEXT": {
+          "profiles": {
+            "public": 6748928,
+            "beta2": 6836064,
+            "gog": 6833232
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "TB_TEXT",
+          "alias": false
+        },
+        "TB_DRAW": {
+          "profiles": {
+            "public": 6743984,
+            "beta2": 6831120,
+            "gog": 6828288
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "TB_DRAW",
+          "alias": false
+        },
+        "TB_DTOR": {
+          "profiles": {
+            "public": 6746512,
+            "beta2": 6833648,
+            "gog": 6830816
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "TB_DTOR",
+          "alias": false
+        },
+        "FRAME_TALL": {
+          "profiles": {
+            "public": 4912160,
+            "beta2": 4914448,
+            "gog": 4915904
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "FRAME_TALL",
+          "alias": false
+        }
+      }
+    },
+    "script-functions": {
+      "sdkSource": "Script Functions/src/sf_functions.cpp",
+      "sdkSha256": "1c342d54eed816f5e85bdda326786d91cd82dea0e989caab56113e09eb1eba6b",
+      "functions": {
+        "YSTRING_CTOR": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "StringCtor",
+          "profiles": {
+            "public": 6453888,
+            "beta2": 6529568,
+            "gog": 6538096
+          }
+        },
+        "YSTRING_DTOR": {
+          "source": "runtime/FeatureParityProfiles.h",
+          "field": "StringDtor",
+          "profiles": {
+            "public": 6454320,
+            "beta2": 6530000,
+            "gog": 6538528
+          }
+        },
+        "AGENT_MGR": {
+          "source": "runtime/BooleanRuntimeProfiles.h",
+          "field": "context",
+          "profiles": {
+            "public": 5631728,
+            "beta2": 5722160,
+            "gog": 5718832
+          }
+        },
+        "REGISTER": {
+          "source": "runtime/MapQueryRuntime.cpp",
+          "field": "registerFunction",
+          "profiles": {
+            "public": 5684448,
+            "beta2": 5774576,
+            "gog": 5771248
+          }
+        },
+        "ARG_AT": {
+          "source": "runtime/BooleanRuntimeProfiles.h",
+          "field": "resultAt",
+          "profiles": {
+            "public": 4382192,
+            "beta2": 4386128,
+            "gog": 4385824
+          }
+        },
+        "AGENT_UNIT": {
+          "source": "runtime/MajestyModManagerRuntime.cpp:QuestBoardBuildProfile",
+          "field": "liveAgentResolver",
+          "profiles": {
+            "public": 5606176,
+            "beta2": 5696608,
+            "gog": 5693280
+          }
+        },
+        "STR_TEXT": {
+          "profiles": {
+            "public": 5647376,
+            "beta2": 5737792,
+            "gog": 5734464
+          },
+          "source": "profiles/panel-engine/sdk-clients.json",
+          "field": "STR_TEXT",
+          "alias": false
+        },
+        "ATTR_RAW": {
+          "source": "runtime/PaidSourceTargetProfiles.h",
+          "field": "component_lookup",
+          "profiles": {
+            "public": 4380016,
+            "beta2": 4384688,
+            "gog": 4383744
+          }
+        },
+        "AGENTREF_CTOR": {
+          "source": "runtime/PaidSourceTargetProfiles.h",
+          "field": "reference_ctor",
+          "profiles": {
+            "public": 5604896,
+            "beta2": 5695328,
+            "gog": 5692000
+          }
+        },
+        "AGENTREF_SET": {
+          "profiles": {
+            "public": 5586912,
+            "beta2": 5677344,
+            "gog": 5674016
+          },
+          "source": "profiles/panel-engine/sdk-clients.json",
+          "field": "AGENTREF_SET",
+          "alias": false
+        },
+        "AGENTREF_DTOR": {
+          "source": "runtime/PaidSourceTargetProfiles.h",
+          "field": "reference_destroy",
+          "profiles": {
+            "public": 4251456,
+            "beta2": 4255456,
+            "gog": 4252016
+          }
+        },
+        "TYPE_BY_NAME": {
+          "source": "runtime/AttackObservationNativeProfiles.h",
+          "field": "findName",
+          "profiles": {
+            "public": 5955680,
+            "beta2": 6041600,
+            "gog": 6038352
+          }
+        },
+        "LIST_CTOR": {
+          "profiles": {
+            "public": 4325792,
+            "beta2": 4329824,
+            "gog": 4326384
+          },
+          "source": "profiles/panel-engine/sdk-clients.json",
+          "field": "LIST_CTOR",
+          "alias": false
+        },
+        "LIST_SET": {
+          "profiles": {
+            "public": 6699472,
+            "beta2": 6786608,
+            "gog": 6783776
+          },
+          "source": "profiles/panel-engine/sdk-clients.json",
+          "field": "LIST_SET",
+          "alias": false
+        },
+        "LIST_DTOR": {
+          "profiles": {
+            "public": 4324400,
+            "beta2": 4328432,
+            "gog": 4324992
+          },
+          "source": "profiles/panel-engine/sdk-clients.json",
+          "field": "LIST_DTOR",
+          "alias": false
+        },
+        "FLAG_MAKE": {
+          "profiles": {
+            "public": 5092640,
+            "beta2": 5094192,
+            "gog": 5096048
+          },
+          "source": "profiles/panel-engine/sdk-clients.json",
+          "field": "FLAG_MAKE",
+          "alias": false
+        },
+        "SPELL_CAST": {
+          "source": "runtime/MajestyModManagerRuntime.cpp",
+          "field": "sovereignExecutorEntryRva",
+          "profiles": {
+            "public": 5087264,
+            "beta2": 5088816,
+            "gog": 5090672
+          }
+        },
+        "PLACE_SETTINGS": {
+          "profiles": {
+            "public": 4571936,
+            "beta2": 4576080,
+            "gog": 4575856
+          },
+          "source": "profiles/panel-engine/ui-providers.json",
+          "field": "PLACE_SETTINGS",
+          "alias": false
+        }
+      }
+    }
+  },
+  "extra": {
+    "public": {
+      "integerVtable": 7627764,
+      "listVtable": 7590404,
+      "cameraGlobal": 8131312,
+      "systemAlertGlobal": 8131476,
+      "runtimeGlobal": 8148044,
+      "unitCatalog": 8147716,
+      "boardExtents": 6015424,
+      "listCopy": 6700448,
+      "placeBuilding": 4994880,
+      "scriptContinuation": 4407392
+    },
+    "beta2": {
+      "integerVtable": 7734092,
+      "listVtable": 7691996,
+      "cameraGlobal": 8256936,
+      "systemAlertGlobal": 8257100,
+      "runtimeGlobal": 8273876,
+      "unitCatalog": 8273548,
+      "boardExtents": 6101296,
+      "listCopy": 6787584,
+      "placeBuilding": 4997504,
+      "scriptContinuation": 4411248
+    },
+    "gog": {
+      "integerVtable": 7729668,
+      "listVtable": 7688212,
+      "cameraGlobal": 8257608,
+      "systemAlertGlobal": 8257772,
+      "runtimeGlobal": 8274540,
+      "unitCatalog": 8274212,
+      "boardExtents": 6098048,
+      "listCopy": 6784752,
+      "placeBuilding": 4999040,
+      "scriptContinuation": 4411024
+    }
+  },
+  "reports": {
+    "agent-clients": "f00ad04ad73595d1ba4a3e348efa30efc18cefb078d566ae2ce8a65fab31d55c",
+    "constructors": "77d43652aad5ccc1bfd676aeb6886efeb301e4493f19dbe77ae1a7003d3f5bfd",
+    "data-clients": "45027b71473568193ac15bbfd846e3c134d18c5c46f57e889bebbceee18cae08",
+    "hook-sites": "bcb45a63b797e349b50cf42d43697dee4b59a9529c2bc5bc5d8781ddf5db8c43",
+    "navigation": "528d6c2ddaa72a044d888fa63eb92388e0d0e2369bcc946eb6d0175d67d4ff9d",
+    "provider-clients": "15217f5a986db76e92f716645d92d4fad1cf6ac9d3426d7df3d6912ab5aa0f2a",
+    "sdk-clients": "97ac4556de2f5e2d93150d157c5102ee1441717f540d8d2269d54efb1859c66e",
+    "ui-providers": "49d9c6d815555e433cbd65ef6a8ac30012d4ad46d0c24623f414f5a84450537d",
+    "vtables": "c697a2c54b58ce19c9e4d35535c78ee4837f4e78b208121dcba1ac4d0dfecae5"
+  },
+  "limits": "Fixed native API boundaries and reviewed normal caller/data contracts; no claim of recovered actor/VM/driver/exception implementations."
+}
