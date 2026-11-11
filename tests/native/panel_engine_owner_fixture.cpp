@@ -150,5 +150,8 @@ extern "C" void __cdecl mainCRTStartup() {
     const int beforeClasses=g_nclasses;
     REQUIRE(!wrap(controllerBytes));
     REQUIRE(g_nclasses==beforeClasses && *(void***)controllerBytes==unknownTable+1);
+#ifdef MMM_HANDOFF_FIXTURE
+    runHandoffFixture();
+#endif
     ExitProcess(0);
 }

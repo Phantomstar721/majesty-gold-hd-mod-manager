@@ -1,6 +1,12 @@
 """Brief player-facing patch history, newest first."""
 
 PATCH_HISTORY = (
+    ("0.3.14", (
+        "Combines more source-backed Standard mod changes without rewriting the author's scripts.",
+        "Custom panel presentation keeps existing hiring, research and spell handlers working together.",
+        "Fixes Standard-only scanning and preserves native text and quest XML during Prepare.",
+        "Fixes cleanup when timed effects start or cancel other effects.",
+    )),
     ("0.3.13", (
         "Optional patches support native custom building panels and scripted ground actions.",
         "Selected mods explain which optional patches they need before launch.",

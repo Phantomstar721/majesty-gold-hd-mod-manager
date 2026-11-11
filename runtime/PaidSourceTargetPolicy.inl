@@ -77,9 +77,7 @@ const char* PaidActorsRejection(const PaidRecord& record,const MajestyStockContr
         const auto* toolbar=ToolbarForControl(record.toolbarControl);
         if(!toolbar||toolbar->panelKey!=action.panelKey||toolbar->actionKey!=action.actionKey)
             return "toolbar-origin-mismatch";
-        const int completed=SelectedBuildingLevel(source)-
-            (ReadPackedAttributeValue(source,0x02425041,0)==0?1:0);
-        if(ReadPackedAttributeValue(source,0x01425041,0)==0||completed<static_cast<int>(toolbar->requiredLevel))
+        if(!BuildingActionMeetsLevel(source,toolbar->requiredLevel))
             return "toolbar-source-incomplete-or-level";
     }
     if(const char* reason=PaidIdentityRejection(target,record.target,world,true))return reason;

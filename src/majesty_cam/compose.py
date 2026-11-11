@@ -5067,6 +5067,7 @@ def merge_gpl_resources(
     standard_providers=None,
     script_review=None,
     script_dataset="any",
+    infer_reward_factors=False,
 ) -> GplComposeResult:
     parsed_by_owner: dict[str, list[ParsedSemanticSource]] = {}
     for inventory in inventories:
@@ -5400,6 +5401,13 @@ def merge_gpl_resources(
         if len(participants) > 1:
             compatibility_groups[key] = (tuple(owner_ids.get(owner, owner) for owner in participants),)
     unresolved_keys = {conflict.key for conflict in final.conflicts}
+    from .reward_contributions import KEY as reward_key
+    reward_requested=any(getattr(getattr(getattr(inventory.selected,'package',None),'definition',None),
+                                 'source_contributions',()) for inventory in inventories)
+    if standard_providers is not None:
+        from .standard_scripts import for_dataset
+        reward_requested=reward_requested or any(getattr(provider,'source_contributions',())
+            for provider in for_dataset(standard_providers.inputs,script_dataset))
     if final.conflicts and script_review is None:
         message = str(SemanticMergeConflictError(final.conflicts))
         for owner in sorted(labels, key=len, reverse=True):
@@ -5409,6 +5417,8 @@ def merge_gpl_resources(
     if final.conflicts:
         selected_items = list(final.items)
         for conflict in final.conflicts:
+            if reward_requested and conflict.key==reward_key:
+                continue # reviewed once, with its declared source-composition proof
             candidates = tuple(ScriptCandidate(labels.get(v.side_name, v.side_name), v.item,
                                                owner_ids.get(v.side_name, v.side_name))
                                for v in conflict.variants)
@@ -5450,12 +5460,56 @@ def merge_gpl_resources(
                 fallbacks.extend(source.items)
         try:
             final = standard_providers.reconcile(final, fallbacks,
-                review=script_review, skip_keys=unresolved_keys,
+                review=script_review, skip_keys=unresolved_keys | ({reward_key} if reward_requested else set()),
                 merge_candidates=authored_candidates,
                 merge_compatibility_groups=compatibility_groups)
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
         stock_function_loader = standard_providers.functions
+    # Source-only reward contributors retain their native Standard classification.
+    # Review their proven expansions with the real owners before any final emit.
+    from .reward_contributions import KEY as reward_key, review as review_rewards
+    reward_packages=[]
+    reward_inference=None
+    reward_candidates=list(authored_candidates.get(reward_key,()))
+    for inventory in inventories:
+        definition=getattr(getattr(inventory.selected,'package',None),'definition',None)
+        declarations=getattr(definition,'source_contributions',())
+        if declarations:
+            reward_packages.append((owner_ids[inventory.selected.alias],labels[inventory.selected.alias],
+                declarations,tuple(parsed_by_owner[inventory.selected.alias])))
+    if standard_providers is not None:
+        from .standard_scripts import for_dataset, verify as verify_standard
+        from .script_review import ScriptCandidate
+        for provider in for_dataset(standard_providers.inputs,script_dataset):
+            declarations=getattr(provider,'source_contributions',())
+            if not declarations:continue
+            owned=provider.owner(reward_key)
+            if owned is None or owned[1] is None:
+                raise ComposeError(provider.name+': reward source contribution needs its loaded standalone source')
+            verify_standard(provider,standard_providers.compiler,owned[0])
+            standard_providers.verified.add((provider.package.mod_id,owned[0]))
+            owner=provider.package.mod_id.strip('{}').casefold()
+            reward_packages.append((owner,provider.name,declarations,provider.parsed_sources))
+            reward_candidates.append(ScriptCandidate(provider.name,owned[1],owner))
+            for feature in declarations:
+                for _,symbol in feature.callbacks:
+                    standard_providers.lookup((DefinitionKind.FUNCTION,symbol.casefold()))
+        if reward_packages:
+            native=standard_providers.native_candidate(reward_key)
+            if native is not None:reward_candidates.append(native)
+    if reward_packages:
+        if script_review is None or stock_function_loader is None:
+            raise ComposeError('reward source contributions require the stock selector and preference review context')
+        try:
+            if infer_reward_factors and standard_providers is not None:
+                from .reward_factoring import InferenceScope
+                reward_inference=InferenceScope(standard_providers,inventories)
+            review_rewards(script_dataset,reward_packages,reward_candidates,
+                standard_providers.stock if standard_providers is not None else stock_function_loader,script_review,
+                inference=reward_inference)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
     damage_review = None
     from .damage_contributions import selected as has_damage, review_weapon
     if script_review is not None and has_damage(inventories):
@@ -5737,6 +5791,28 @@ def merge_gpl_resources(
                 final = standard_providers.prune(final)
             except ValueError as exc:
                 raise ComposeError(str(exc)) from exc
+        standard_instruction_merges = ()
+        if standard_providers is not None and not inventories:
+            final, standard_instruction_merges = standard_providers.compose_overlaps(final)
+        inferred_reward_receipts = ()
+        if reward_inference is not None:
+            from .gpl_function_merge import _tokens
+            selector=next((item for item in final.items if item.key==reward_key),None)
+            calls=set(_tokens(selector.text)) if selector is not None else set()
+            helpers=[];receipts=[]
+            for owner,proof in sorted(reward_inference.accepted.items()):
+                if '$'+proof.helper.normalized_name not in calls:
+                    continue  # Preferred complete bodies never acquire losing adapters.
+                if any(item.key==proof.helper.key for item in final.items):
+                    raise ComposeError('inferred reward helper collides with generated output')
+                helpers.append(proof.helper)
+                receipts.append({'function':'check_rewards','source_mod_id':owner,
+                    'automatic_reward_factor':True,'helper':proof.helper.name,
+                    'multiplier':proof.multiplier,'proof_scope':'stock SDK query contract and complete loaded source',
+                    'queries_once_per_original_flag':True})
+            if helpers:
+                final=SemanticMergeResult((*final.items,*helpers),final.conflicts)
+            inferred_reward_receipts=tuple(receipts)
         if dataset_dependency_resolver is not None:
             try:
                 final = dataset_dependency_resolver(final)
@@ -5782,7 +5858,7 @@ def merge_gpl_resources(
                 {"source_mod_id": binding.mod_id, **shared_feature_mapping(binding.feature)}
                 for binding in shared
             ),
-            function_instruction_merges=tuple(instruction_merges),
+            function_instruction_merges=(*instruction_merges, *standard_instruction_merges, *inferred_reward_receipts),
             mod_preference_resolutions=tuple({
                 "dataset": conflict.dataset, "kind": conflict.key[0].value,
                 "name": conflict.name, "identity": conflict.identity,
@@ -7839,6 +7915,8 @@ def prepare_final_gpl_resources(
     script_dataset="any",
     dataset_symbols=None,
     script_review=None,
+    standard_proof_failures=None,
+    infer_reward_factors=False,
 ) -> GplComposeResult:
     """Build the exact final GPL source set used by both Prepare and Build."""
 
@@ -7874,7 +7952,8 @@ def prepare_final_gpl_resources(
         providers = Providers(standard_script_inputs,
             stock_functions,
             game_path / 'SDK/Gplbcc.exe', script_dataset,
-            source_ancestor_loader=source_ancestors)
+            source_ancestor_loader=source_ancestors,
+            proof_failures=standard_proof_failures)
         if any(isinstance(feature, StockHeroQuestLifecycle) for inventory in inventories
                for feature in inventory.selected.package.definition.runtime_features):
             if script_dataset == 'any' and any(item.participants and any(base != 'any' for base in item.bases)
@@ -7935,6 +8014,7 @@ def prepare_final_gpl_resources(
         inventories,
         standard_providers=providers,
         script_review=script_review,
+        infer_reward_factors=infer_reward_factors,
         script_dataset=script_dataset,
         potion_plan=potion_plan,
         spell_policy_plan=spell_policy_plan,
@@ -7951,7 +8031,7 @@ def prepare_final_gpl_resources(
         stock_function_loader=stock_functions,
         source_ancestor_loader=source_ancestors,
         dataset_dependency_resolver=lambda result: close_dataset_dependencies(
-            result, stock_symbols(), provided=providers.lookup if providers else None,
+            result, stock_symbols(), provided=providers.has_native_definition if providers else None,
             dataset=script_dataset) if result.items else result,
         stock_integer_expression_sources=(
             (_load_stock_activity_text_expression_source(game_path),)
@@ -8038,11 +8118,13 @@ def prepare_gpl_bundle(game_path, inventories, *, standard_script_inputs=(),
         from .dataset_dependencies import load_dataset_symbols
         stock = load_dataset_symbols(game_path)
     views, failures = [], []
+    standard_proof_failures = {}
     for scope in scopes:
         try:
             views.append(prepare_final_gpl_resources(game_path, inventories,
                 standard_script_inputs=inputs, script_dataset=scope,
                 dataset_symbols=stock, script_review=review,
+                standard_proof_failures=standard_proof_failures,
                 **{**kwargs, **(description_plans or {}).get(scope, {})}))
         except (ComposeError, ValueError) as exc:
             failures.append(f'{scope}: {exc}')
@@ -8129,6 +8211,7 @@ def compose_package(
     inventory_death_drop_exclusions: Sequence[str] = (),
     runtime_capabilities: Sequence[str] = (),
     external_panel_behaviors: bool = False,
+    infer_reward_factors: bool = False,
     private_activity_texts: Sequence[PrivateActivityTextBinding] | None = None,
     prepared_inventories: Sequence[PackageInventory] | None = None,
     standard_script_inputs=(),
@@ -8146,7 +8229,7 @@ def compose_package(
         raise ComposeError(f"game path is not a directory: {game_path}")
     if not _PROFILE_SLUG.fullmatch(profile_slug):
         raise ComposeError(f"invalid profile slug: {profile_slug!r}")
-    if not selected_mods:
+    if not selected_mods and not standard_script_inputs:
         raise ComposeError("at least one mod must be selected")
     aliases = [selected.alias for selected in selected_mods]
     if len(set(aliases)) != len(aliases):
@@ -8379,6 +8462,7 @@ def compose_package(
         private_activity_texts=private_activity_texts,
         description_plans=description_plans,
         standard_script_inputs=standard_script_inputs,
+        infer_reward_factors=infer_reward_factors,
         script_review=script_review,
         script_conflict_resolver=script_conflict_resolver,
     )

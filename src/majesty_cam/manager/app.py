@@ -1787,7 +1787,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                 or not self.snapshot.can_build
                 or _missing_required_qol_helpers(self.snapshot)
             ):
-                if self.snapshot is not None and not self.snapshot.plan.has_merge:
+                if self.snapshot is not None and not self.snapshot.plan.requires_composition:
                     self._render_snapshot(self.snapshot)
                 return
             review_scripts = self.review_mod_preferences.isChecked()
@@ -2008,7 +2008,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                     return False
             profile = self.controller._profile_with_current_selections()
             store.save(profile, name=name)
-            if self.snapshot and self.snapshot.plan.has_merge and not self.snapshot.build_required and self.snapshot.managed_build:
+            if self.snapshot and self.snapshot.plan.requires_composition and not self.snapshot.build_required and self.snapshot.managed_build:
                 store.retain_build(profile, self.snapshot.plan.fingerprint)
             self._render_snapshot(self.controller.snapshot())
             return True
@@ -2120,9 +2120,8 @@ if _PYSIDE_IMPORT_ERROR is None:
                 return
             classic = self.classic_launch.isChecked()
             from ..engine_dependencies import missing
-            from .engine_patches import PATCH_KEYS
-            revisions={service:1 for service,key in PATCH_KEYS.items()
-                if any(row.key==key and row.installed is True for row in self.snapshot.qol_utilities)}
+            from .engine_patches import snapshot_revisions
+            revisions=snapshot_revisions(self.snapshot.qol_utilities)
             evidence=self.snapshot.engine_requirements
             if classic:
                 evidence,_=self.controller._engine_dependencies(classic=True)
@@ -2373,9 +2372,8 @@ if _PYSIDE_IMPORT_ERROR is None:
             from .edition import panel_alpha
             if self.snapshot is None:
                 return
-            from .engine_patches import PATCH_KEYS
-            revisions={service:1 for service,key in PATCH_KEYS.items()
-                       if any(row.key==key and row.installed is True for row in self.snapshot.qol_utilities)}
+            from .engine_patches import snapshot_revisions
+            revisions=snapshot_revisions(self.snapshot.qol_utilities)
             requirements = missing(self.snapshot.engine_requirements if evidence is None else evidence, revisions)
             if not requirements:
                 return
@@ -2544,13 +2542,13 @@ if _PYSIDE_IMPORT_ERROR is None:
                         for issue in snapshot.plan.issues
                     )
                 )
-            elif not snapshot.plan.has_merge:
+            elif not snapshot.plan.requires_composition:
                 self.build_state.setText("Ready — no combined setup is needed")
                 self.build_state.setToolTip(
                     "Your selected Standard mods can be loaded as they are."
                 )
             elif snapshot.build_required:
-                self.build_state.setText("Prepare your selected Merge mods before launching")
+                self.build_state.setText("Prepare your selected mods before launching")
                 self.build_state.setToolTip(
                     "The manager needs to combine these mods into one playable setup."
                 )
@@ -2591,8 +2589,8 @@ if _PYSIDE_IMPORT_ERROR is None:
                     if snapshot.plan.issues
                     else "Install the required patches on the Quality of Life tab first."
                     if not required_qol_ready
-                    else "Combine the selected Merge mods into one setup Majesty can load."
-                    if snapshot.plan.has_merge
+                    else "Combine the selected changes into one setup Majesty can load."
+                    if snapshot.plan.requires_composition
                     else "Select at least one supported Merge mod to build a setup."
                 )
             )
@@ -2650,7 +2648,7 @@ if _PYSIDE_IMPORT_ERROR is None:
 
         def _set_interactions_enabled(self, enabled: bool) -> None:
             enabled = enabled and self.snapshot is not None
-            self.review_mod_preferences.setEnabled(bool(enabled and self.snapshot.plan.has_merge))
+            self.review_mod_preferences.setEnabled(bool(enabled and self.snapshot.plan.requires_composition))
             self.search.setEnabled(enabled)
             self.expansion_quests.setEnabled(enabled)
             for catalog_page in self.pages.values():

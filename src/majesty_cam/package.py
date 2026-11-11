@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .engine_dependencies import PatchRequirement, parse_requirements, requirement_mapping
+from .reward_contributions import RewardContribution, parse as parse_reward_contribution, mapping as reward_contribution_mapping
 
 from .inventory_items import InventoryDeathDropExclusion, TYPE as INVENTORY_DEATH_TYPE, parse as parse_inventory_death, mapping as inventory_death_mapping
 
@@ -121,6 +122,7 @@ class GplLoad:
     files: Tuple[GplPath, ...]
     recovered_project: Optional[PackagePath] = None
     discovery_directories: Tuple[Path, ...] = ()
+    discovery_files: Tuple[Path, ...] = ()
 
     @property
     def target(self) -> PackagePath:
@@ -243,6 +245,7 @@ class ModDefinition:
     runtime_capabilities: Tuple[str, ...] = ()
     runtime_features: Tuple[PackageRuntimeFeature, ...] = ()
     external_patches: Tuple[PatchRequirement, ...] = ()
+    source_contributions: Tuple[RewardContribution, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -474,9 +477,17 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         expected = common_fields | {"runtime_features"}
     if schema_version >= 2 and "external_patches" in value:
         expected.add("external_patches")
+    if schema_version >= 2 and "source_contributions" in value:
+        expected.add("source_contributions")
     _require_exact_fields(value, expected, "mod definition")
     try:
         external_patches = parse_requirements(value.get("external_patches", ()))
+        raw_contributions=value.get('source_contributions',())
+        if not isinstance(raw_contributions,(list,tuple)):
+            raise ValueError('source_contributions must be an array')
+        source_contributions=tuple(parse_reward_contribution(v) for v in raw_contributions)
+        if len({c.feature_key.casefold() for c in source_contributions})!=len(source_contributions):
+            raise ValueError('duplicate source contribution feature_key')
     except ValueError as exc:
         raise PackageFormatError(str(exc)) from exc
 
@@ -853,6 +864,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         runtime_capabilities=tuple(capabilities),
         runtime_features=tuple(features),
         external_patches=external_patches,
+        source_contributions=source_contributions,
     )
 
 
@@ -1064,6 +1076,7 @@ def _parse_gpl_load(
     files = []
     recovered_project = None
     discovery_directories = []
+    discovery_files = []
     target_count = 0
     children = list(gpl_node)
     if not children and allow_direct_target:
@@ -1094,9 +1107,10 @@ def _parse_gpl_load(
             target,
             context,
             allow_sole_project_fallback=allow_sole_project_fallback,
+            discovery_files=discovery_files,
         )
         files.extend(recovered_sources)
-    return GplLoad(tuple(files), recovered_project, tuple(discovery_directories))
+    return GplLoad(tuple(files), recovered_project, tuple(discovery_directories), tuple(discovery_files))
 
 
 _GPL_PROJECT_ROW = re.compile(
@@ -1112,6 +1126,7 @@ def _recover_exact_project_sources(
     context: str,
     *,
     allow_sole_project_fallback: bool,
+    discovery_files: Optional[list[Path]] = None,
 ) -> tuple[Optional[PackagePath], list[GplPath]]:
     target_stem = target.absolute_path.stem.casefold()
     owner = manifest.parent
@@ -1139,12 +1154,50 @@ def _recover_exact_project_sources(
     if not candidates and allow_sole_project_fallback and len(projects) == 1:
         candidates = projects
     if not candidates:
-        return None, []
+        # Filenames are not a source identity. A renamed project may still
+        # describe this exact target. Compare declaration inventories only;
+        # actual use remains gated by the existing compiler/BCD proof.
+        from .bcd import definition_keys, BcdIndexError
+        from .gpl import parse_gpl, parse_dat, require_complete_semantic_coverage
+        try:
+            target_keys = definition_keys(target.absolute_path.read_bytes())
+        except (OSError, BcdIndexError):
+            return None, []
+        definitions = {}
+        for project in sorted(projects):
+            if discovery_files is not None: discovery_files.append(project)
+            try:
+                _, sources = _read_recovered_project(root, owner, foreign_roots, project, context)
+                keys = set()
+                for source in sources:
+                    path = source.file.absolute_path
+                    if discovery_files is not None: discovery_files.append(path)
+                    if path not in definitions:
+                        parser = parse_dat if path.suffix.casefold() == '.dat' else parse_gpl
+                        parsed = parser(path.read_text(encoding='cp1252'), str(path))
+                        require_complete_semantic_coverage(parsed)
+                        definitions[path] = frozenset(item.key for item in parsed.items)
+                    keys.update(definitions[path])
+                if keys and keys == target_keys:
+                    candidates.append(project)
+            except (OSError, UnicodeError, ValueError):
+                # An unrelated/incomplete author project is not a build input.
+                continue
+        if not candidates:
+            return None, []
+        if len(candidates) != 1:
+            # Inventories are a discovery filter, not proof of source identity.
+            # Ambiguous inferred sources remain opaque/native, never guessed.
+            return None, []
     if len(candidates) != 1:
         raise PackageFormatError(
             f"{context} has multiple matching source projects for {target.relative_path!r}"
         )
-    project = candidates[0].resolve(strict=True)
+    return _read_recovered_project(root, owner, foreign_roots, candidates[0], context)
+
+
+def _read_recovered_project(root, owner, foreign_roots, project, context):
+    project = project.resolve(strict=True)
     _ensure_inside_root(root, project, context)
     project_package_path = PackagePath(
         declared_path=project.name,
@@ -1320,6 +1373,8 @@ def mod_definition_mapping(definition: ModDefinition) -> dict:
         ]
     if definition.schema_version >= 2 and definition.external_patches:
         value["external_patches"] = [requirement_mapping(r) for r in definition.external_patches]
+    if definition.source_contributions:
+        value['source_contributions']=[reward_contribution_mapping(f) for f in definition.source_contributions]
     return value
 
 

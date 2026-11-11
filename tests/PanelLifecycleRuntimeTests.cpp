@@ -49,6 +49,22 @@ int fallbackCount = 0, submitCount = 0, refreshCount = 0, openCount = 0;
 int openResult = 0, deleteCount = 0, hideCount = 0;
 int packedValue = 0;
 int playerGold = 1000;
+int firstStageBuilt = 1, currentStageBuilt = 1;
+int spellRowPreparations = 0, spellTargetStarts = 0;
+unsigned char spellItemStorage[3][0x80] = {};
+int spellItemReads = 0;
+void* __fastcall FindSpellItem(void* dialog, void*, std::uint32_t control) {
+    assert(dialog == &streamedDialog);
+    const std::uint32_t ids[] = {4403,5403,3403};
+    for (unsigned i=0;i<3;++i) if (control==ids[i]) { ++spellItemReads;return spellItemStorage[i]; }
+    return nullptr;
+}
+void __cdecl PrepareSpellRow(void*, void*, std::uint32_t control, std::uint32_t) {
+    assert(control == 4403); ++spellRowPreparations;
+}
+void __cdecl BeginSpellTarget(std::uint32_t control) {
+    assert(control == 9003); ++spellTargetStarts;
+}
 int setIntegerCount = 0, questEventCount = 0, questNativeRefreshCount = 0;
 int questSharedRefreshCount = 0;
 int questNativeSetupCount = 0;
@@ -100,7 +116,8 @@ void* __fastcall PlayerAgent(void*, void*, std::uint32_t player) {
     return contextA;
 }
 int __fastcall ReadAttribute(void*, void*, std::uint32_t attribute, std::uint32_t) {
-    if (attribute == 0x01425041u || attribute == 0x02425041u) return 1;
+    if (attribute == 0x01425041u) return firstStageBuilt;
+    if (attribute == 0x02425041u) return currentStageBuilt;
     if (attribute == kCurrentResearchAttributeId) return savedResearchCommand;
     if (attribute == kResearchDurationAttributeId) return savedResearchDuration;
     if (attribute == 0x18425041) return researchComplete;
@@ -378,6 +395,8 @@ void Reset() {
     reenterParentEventOnSet = false;
     packedValue = 0; lastMessageControl = lastMessage = 0;
     playerGold = 1000; setIntegerCount = 0;
+    firstStageBuilt = currentStageBuilt = 1;
+    spellRowPreparations = spellTargetStarts = 0;
     questEventCount = questNativeRefreshCount = questSharedRefreshCount = 0;
     questNativeSetupCount = 0;
     selectedQuestIndex = -1;
@@ -458,6 +477,8 @@ void Initialize() {
     profile.getPlayerAgentRva = reinterpret_cast<std::uintptr_t>(&PlayerAgent);
     profile.readPackedAttributeRva = reinterpret_cast<std::uintptr_t>(&ReadAttribute);
     profile.refreshSingleResearchRowRva = reinterpret_cast<std::uintptr_t>(&Refresh);
+    profile.refreshSingleSpellRowRva = reinterpret_cast<std::uintptr_t>(&PrepareSpellRow);
+    profile.sovereignSpellClickRva = reinterpret_cast<std::uintptr_t>(&BeginSpellTarget);
     profile.canSubmitResearchRva = reinterpret_cast<std::uintptr_t>(&Eligible);
     profile.submitResearchCommandRva = reinterpret_cast<std::uintptr_t>(&Submit);
     profile.submitBuildingCommandRva =
@@ -531,6 +552,7 @@ void SovereignRowPresentation() {
     action.priceControlId = 3403;
     action.iconControlId = 5403;
     action.requiredLevel = 2;
+    action.privateControlId = 9003;
     action.sovereignGoldCost = 500;
     g_stockControllerRegistry.sovereignTargetActions = {action};
     // No panel reopening: level and treasury changes refresh the entire row,
@@ -546,8 +568,58 @@ void SovereignRowPresentation() {
             assert(disabledControls[7777] && disabledControls.size() == 4);
         }
     }
+    const auto oldBuild = profile.buildId;
+    for (auto build : {MajestyBuildId::SteamPublic, MajestyBuildId::SteamBeta2, MajestyBuildId::Gog}) {
+        // All external calls remain the same doubles; only the branch tag varies.
+        profile.buildId = build;
+        for (auto level : {1u, 2u, 3u}) {
+            *reinterpret_cast<std::uint32_t*>(contextA + 0x7C) = (0x30u + level) << 24;
+            for (auto built : {0, 1}) for (auto first : {0, 1}) {
+                currentStageBuilt = built; firstStageBuilt = first; playerGold = 500;
+                const bool available = first != 0 && level - (built ? 0 : 1) >= 2;
+                const int preparationsBefore = spellRowPreparations;
+                RefreshPrivateActionRows(reinterpret_cast<std::uint32_t>(&child), true);
+                assert(spellRowPreparations == preparationsBefore + (available ? 1 : 0));
+                for (auto id : {4403u, 3403u, 5403u}) {
+                    assert(visibleState[id] == available);
+                    assert(disabledControls[id] == !available);
+                }
+                const int startsBefore = spellTargetStarts;
+                g_pendingSovereignAction = nullptr; g_pendingSovereignBuilding = 0;
+                HandleSovereignTargetAction(reinterpret_cast<std::uint32_t>(&child), action);
+                assert(spellTargetStarts == startsBefore + (available ? 1 : 0));
+                assert((g_pendingSovereignAction != nullptr) == available);
+                assert((g_pendingSovereignBuilding != 0) == available);
+            }
+        }
+    }
+    g_pendingSovereignAction = nullptr; g_pendingSovereignBuilding = 0;
+    profile.buildId = oldBuild;
+    firstStageBuilt = currentStageBuilt = 1;
     *reinterpret_cast<std::uint32_t*>(contextA + 0x7C) = oldType;
     g_stockControllerRegistry.sovereignTargetActions = oldActions;
+}
+
+void SpellPanelSetupEvidenceIsBoundedAndReadOnly() {
+    ResearchPair();
+    const auto oldLookup=profile.streamControlLookupRva;
+    const auto oldActions=g_stockControllerRegistry.sovereignTargetActions;
+    profile.streamControlLookupRva=reinterpret_cast<std::uintptr_t>(&FindSpellItem);
+    MajestyStockControllers::SovereignTargetActionRecord action={};
+    action.panelKey=g_activePanelRecord->panelKey;action.visualControlId=4403;
+    action.iconControlId=5403;action.priceControlId=3403;action.requiredLevel=2;
+    g_stockControllerRegistry.sovereignTargetActions={action};
+    for(unsigned i=0;i<3;++i)*reinterpret_cast<int*>(spellItemStorage[i]+0x78)=static_cast<int>(i);
+    spellItemReads=0;
+    for(unsigned i=0;i<20;++i)LogPrivateSpellPanelSetup(&child,"fixture");
+#if defined(CAM_PANEL_ENGINE_ALPHA)
+    assert(spellItemReads==36); // twelve events, three direct control reads each
+#else
+    assert(spellItemReads==0); // beta has no panel-open diagnostic probes
+#endif
+    for(unsigned i=0;i<3;++i)assert(*reinterpret_cast<int*>(spellItemStorage[i]+0x78)==static_cast<int>(i));
+    profile.streamControlLookupRva=oldLookup;
+    g_stockControllerRegistry.sovereignTargetActions=oldActions;
 }
 void EmploymentPresentation() {
     ResearchPair();
@@ -989,12 +1061,73 @@ void RecruitmentChildLifecycle() {
 #include "ResearchSubmissionChecks.inl"
 #include "QueuedResearchChecks.inl"
 
+static void* handoffPresenter[12] = {};
+static int __cdecl HandoffView(void*) { return 1; }
+static int __cdecl HandoffInstance(void* value) {
+    return *static_cast<void***>(value) == handoffPresenter+1;
+}
+static int __cdecl HandoffBind(const PanelEngineHandoff::Callbacks*) { return 1; }
+static void ExistingActionOwnerHandoff() {
+    // Execute the Manager half with every build tag and the existing fixture's
+    // provider doubles. Actual provider bytes are checked by the profile tests;
+    // SDK wrapping/forwarding execute separately in the pinned SDK fixture.
+    static void* stockWithLocator[18] = {};
+    bool firstHandoff=true;
+    for (const auto* build : {&kPublicBuildProfile, &kBeta2BuildProfile, &kGogBuildProfile}) {
+        profile = kBeta2BuildProfile;
+        profile.buildId = build->buildId;
+        Initialize(); Reset();
+        stockWithLocator[0] = reinterpret_cast<void*>(0x1234);
+        std::memcpy(stockWithLocator+1,nativeTable,sizeof(nativeTable));
+        stockWithLocator[2]=reinterpret_cast<void*>(&NativeQuestSetup);
+        child.table=stockWithLocator+1;
+        if (firstHandoff) { g_stockAp69Setup=nullptr; firstHandoff=false; }
+        g_panelEngineModules.ownsView=&HandoffView;
+        g_panelEngineModules.ownsController=&HandoffInstance;
+        g_panelEngineModules.bindHandoff=&HandoffBind;
+        const auto& record=g_stockControllerRegistry.panels[0];
+        std::uint32_t creation[]={record.childDialogId,reinterpret_cast<std::uint32_t>(contextA),0,0};
+        ResolveDialogCreationRequest(creation);
+        std::uint32_t factory[]={record.childDialogId,reinterpret_cast<std::uint32_t>(&stream),reinterpret_cast<std::uint32_t>(contextA)};
+        ResolveDialogFactoryRequest(factory);
+        assert(factory[0]==kAp69DialogId && g_captureChildController==1);
+        CapturePanelEngineActionOwner(&child,&stream,contextA);
+        assert(g_captureChildController==0 && g_childController==reinterpret_cast<LONG>(&child));
+        unsigned count=0; void* locator=nullptr;
+        auto** managed=child.table;
+        assert(DescribePanelEngineActionOwner(managed,&count,&locator) && count==11 && locator==stockWithLocator[0]);
+        handoffPresenter[0]=locator;
+        std::memcpy(handoffPresenter+1,managed,count*sizeof(void*));
+        child.table=handoffPresenter+1;
+        assert(CompletePanelEngineHandoff(&child,managed,child.table));
+        CaptureSecondaryController(reinterpret_cast<std::uint32_t>(&child),0x123);
+        assert(g_secondaryPanelHandle==0x123 && ActivePanelContext()==contextA && g_activePanelRecord==&record);
+        // The existing private research executor still owns admission/queueing.
+        assert(SecondaryPanelControllerControl(&child,nullptr,0x6000)==0);
+        assert(submitCount==1 && seenContext==contextA && seenCommand==0x6000);
+        assert(SecondaryPanelControllerControl(&child,nullptr,0x6000)==0 && submitCount==1);
+        Destroy(child);
+        if (g_childController || g_activePanelRecord)
+            std::fprintf(stderr,"handoff teardown build=%u live=%08X actor=%p alias=%p canonical=%p managed=%p delete=%p\n",
+                static_cast<unsigned>(build->buildId),g_childController,&child,child.table,
+                MajestyControllerLifecycle::CanonicalManagedVtable(child.table),managed,child.table[0]);
+        assert(g_childController==0 && g_activePanelRecord==nullptr);
+        // Engine-only views keep the original bypass, without claiming MMCR.
+        g_captureParentController=0;g_captureChildController=0;
+        factory[0]=0x58585858;
+        ResolveDialogFactoryRequest(factory);
+        assert(factory[0]==0x58585858);
+        g_panelEngineModules={};
+    }
+}
+
 int main() {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     _set_error_mode(_OUT_TO_STDERR);
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
     Initialize();
     SovereignRowPresentation();
+    SpellPanelSetupEvidenceIsBoundedAndReadOnly();
     EmploymentPresentation();
     ResearchParentPresentation();
     SecondaryGatePresentation();
@@ -1961,5 +2094,6 @@ int main() {
     PaidChecks::Run();
     CompactChecks::Run();
     MessageChecks::Run();
+    ExistingActionOwnerHandoff();
     std::puts("Panel lifecycle x86 tests passed.");
 }

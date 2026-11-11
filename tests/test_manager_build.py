@@ -430,6 +430,7 @@ class ManagerBuildPlanTests(unittest.TestCase):
             executable.write_bytes(b"fixture")
             plan = SimpleNamespace(
                 has_merge=True,
+                requires_composition=True,
                 valid=True,
                 issues=(),
                 stock_compose_inputs=(("fixture", "0" * 64),),
@@ -1653,6 +1654,7 @@ class ManagerBuildPlanTests(unittest.TestCase):
                 composer.call_args.kwargs["private_activity_texts"],
                 plan.private_activity_texts,
             )
+            self.assertIs(composer.call_args.kwargs['infer_reward_factors'], True)
 
     def test_build_refuses_source_mutation_during_composition(self):
         registry = CompatibilityRegistry(specs={})

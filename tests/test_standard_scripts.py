@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 import struct
+import json
 from tempfile import TemporaryDirectory
 
 from majesty_cam.gpl import parse_gpl, SemanticMergeResult, DefinitionKind
@@ -27,6 +28,115 @@ def provider(text, name='Native'):
 
 
 class StandardScriptTests(TestCase):
+    def test_linkage_presence_never_requires_or_authorizes_source_replacement(self):
+        native=self.compiled_provider(((DefinitionKind.FUNCTION,'Example'),))
+        context=Providers((native,),None,Path('unused'),'majesty')
+        with patch('majesty_cam.standard_scripts.verify',side_effect=AssertionError('linkage only')):
+            self.assertIs(context.has_native_definition((DefinitionKind.FUNCTION,'example')),True)
+            self.assertIsNone(context.has_native_definition((DefinitionKind.FUNCTION,'other')))
+        with self.assertRaisesRegex(ValueError,'Source files are required'):
+            context.lookup((DefinitionKind.FUNCTION,'example'))
+        scoped=replace(native,bases=('majestyexpansion',))
+        self.assertIsNone(Providers((scoped,),None,Path('unused'),'majesty').has_native_definition((DefinitionKind.FUNCTION,'example')))
+        self.assertIsNone(Providers((scoped,),None,Path('unused'),'any').has_native_definition((DefinitionKind.FUNCTION,'example')))
+
+    def test_standard_only_source_plan_needs_no_merge_package(self):
+        from majesty_cam.manager.build import BuildPlan,refresh_standard_script_inputs
+        from majesty_cam.manager.catalog import CatalogEntry,CatalogKind,CatalogSource
+        from test_bcd import compiled
+        with TemporaryDirectory() as tmp:
+            entries=[];ids=('11111111-1111-1111-1111-111111111111','22222222-2222-2222-2222-222222222222')
+            for i,ident in enumerate(ids):
+                root=Path(tmp)/str(i);root.mkdir()
+                manifest=root/'mod.mmxml'
+                manifest.write_text(f'<Mod id="{ident}"><DisplayName>Example</DisplayName><DataConfiguration>'
+                    '<Dataset base="Any"><Load><GPL><Target>Runtime.bcd</Target><Source>Logic.gpl</Source>'
+                    '</GPL></Load></Dataset></DataConfiguration></Mod>')
+                (root/'Runtime.bcd').write_bytes(compiled((DefinitionKind.FUNCTION,'example')))
+                (root/'Logic.gpl').write_text(function(i+1))
+                entries.append(CatalogEntry(content_id=ident,raw_content_id=ident,display_name=ident,
+                    kind=CatalogKind.STANDARD,source=CatalogSource.LOCAL_MODS,package_root=root,
+                    manifest_path=manifest,has_cam=False,merge_ready=False,
+                    content_definitions=(('function:example',str(i)),)))
+            plan=refresh_standard_script_inputs(BuildPlan(ids,(),{},{},(),'initial',()),entries)
+            self.assertFalse(plan.has_merge);self.assertTrue(plan.standard_composition)
+            self.assertTrue(plan.requires_composition);self.assertEqual(plan.selected_merge,())
+            self.assertEqual(plan.selected_source_ids,ids)
+            self.assertEqual(plan.standard_script_entries,tuple(entries))
+            one=refresh_standard_script_inputs(replace(plan,selected_standard_ids=ids[:1]),entries)
+            self.assertFalse(one.requires_composition);self.assertEqual(one.standard_script_entries,())
+
+            # Scan uses the complete planner with a game installation, not just
+            # refresh_standard_script_inputs. No Merge inventories exist here.
+            from majesty_cam.manager.build import create_build_plan
+            from majesty_cam.manager.catalog import Catalog
+            from majesty_cam.manager.compatibility import CompatibilityRegistry
+            with patch('majesty_cam.manager.build._fingerprint_stock_compose_inputs',
+                       return_value=(('stock.cam','stock-hash'),)):
+                scanned=create_build_plan(Catalog(tuple(entries)),dict.fromkeys(ids,True),
+                    registry=CompatibilityRegistry({}),game_path=Path(tmp))
+            self.assertTrue(scanned.valid,scanned.issues)
+            self.assertTrue(scanned.requires_composition)
+            self.assertEqual(scanned.selected_merge,())
+            self.assertEqual(scanned.standard_script_entries,tuple(entries))
+            self.assertEqual(scanned.stock_compose_inputs,(('stock.cam','stock-hash'),))
+            self.assertEqual(scanned.private_activity_texts,())
+
+    def test_plain_standard_disjoint_edits_use_existing_composer(self):
+        base=provider(function(), 'Stock').items[(DefinitionKind.FUNCTION,'example')]
+        left=provider(function(2), 'Left')
+        right=provider(function(1, '$Initialize(ThisAgent);'), 'Right')
+        context=Providers((left,right),lambda names:{base.key:base},Path('unused'),'majesty')
+        with patch('majesty_cam.standard_scripts.verify',return_value=True):
+            output,receipt=context.compose_overlaps(SemanticMergeResult((),()))
+        self.assertEqual(len(output.items),1)
+        self.assertIn('initialize',output.items[0].text.lower())
+        self.assertIn('= 2',output.items[0].text)
+        self.assertTrue(receipt[0]['standard_source_composition'])
+        # A real overlapping edit keeps the selected native winner exactly.
+        context=Providers((provider(function(2),'Left'),provider(function(3),'Right')),
+                          lambda names:{base.key:base},Path('unused'),'majesty')
+        with patch('majesty_cam.standard_scripts.verify',return_value=True):
+            output,receipt=context.compose_overlaps(SemanticMergeResult((),()))
+        self.assertFalse(output.items);self.assertFalse(receipt)
+
+    def test_standard_composition_cannot_replace_generated_or_unproved_winner(self):
+        base=provider(function(),'Stock').items[(DefinitionKind.FUNCTION,'example')]
+        providers=(provider(function(2),'Left'),provider(function(1,'$Initialize(ThisAgent);'),'Right'))
+        context=Providers(providers,lambda names:{base.key:base},Path('unused'),'majesty')
+        generated=SemanticMergeResult((replace(base,text=function(9)),),())
+        with patch('majesty_cam.standard_scripts.verify',side_effect=AssertionError('excluded')):
+            self.assertEqual(context.compose_overlaps(generated),(generated,()))
+        context=Providers(providers,lambda names:{base.key:base},Path('unused'),'majesty')
+        with patch('majesty_cam.standard_scripts.verify',side_effect=ValueError('source mismatch')):
+            self.assertEqual(context.compose_overlaps(SemanticMergeResult((),()))[0].items,())
+
+    def test_failed_optional_proof_runs_once_across_functions_and_scopes(self):
+        stock=function()+function().replace('Example','Other')
+        left=provider(stock.replace('= 1','= 2'),'Left')
+        right=provider(stock.replace('begin','begin\n$Initialize(ThisAgent);'),'Right')
+        items=provider(stock,'Stock').items;failures={}
+        with patch('majesty_cam.standard_scripts.verify',side_effect=ValueError('source mismatch')) as proof:
+            for scope in ('majesty','majestyexpansion'):
+                context=Providers((left,right),lambda names:items,Path('unused'),scope,proof_failures=failures)
+                self.assertFalse(context.compose_overlaps(SemanticMergeResult((),()))[0].items)
+            self.assertEqual(proof.call_count,2)
+
+    def test_opaque_displaced_source_is_not_restored_or_allowed_to_block_proven_edits(self):
+        stock=provider(function(),'Stock').items
+        earlier=provider(function(7),'Opaque')
+        left=provider(function(2),'Left');right=provider(function(1,'$Initialize(ThisAgent);'),'Right')
+        def proof(item,*args,**kw):
+            if item is earlier:raise ValueError('source mismatch')
+            return True
+        with patch('majesty_cam.standard_scripts.verify',side_effect=proof):
+            context=Providers((earlier,left,right),lambda names:stock,Path('unused'),'majesty')
+            output,receipt=context.compose_overlaps(SemanticMergeResult((),()))
+            self.assertEqual(len(output.items),1);self.assertNotIn('Opaque',receipt[0]['owners'])
+            self.assertNotIn('= 7',output.items[0].text)
+            context=Providers((left,right,earlier),lambda names:stock,Path('unused'),'majesty')
+            self.assertFalse(context.compose_overlaps(SemanticMergeResult((),()))[0].items)
+
     def compiled_provider(self, definitions, text=None, name='Compiled'):
         from test_bcd import compiled
         path = Path(name + '.gpl')
@@ -456,7 +566,6 @@ class StandardScriptTests(TestCase):
     def test_installed_standard_potions_keep_native_forms_with_generic_policy(self):
         from majesty_cam.standard_scripts import read
         from majesty_cam.potion_policy import Plan, Action, POTIONS, parse_feature
-        from majesty_cam.private_phantom_policy import POLICY
         from majesty_cam.stock_gpl import load_stock_function_ancestors
         from majesty_cam.compose import compile_gpl, prepare_final_gpl_resources, prepare_gpl_bundle, ComposeError
         from tempfile import TemporaryDirectory
@@ -467,7 +576,12 @@ class StandardScriptTests(TestCase):
         native = read(SimpleNamespace(package_root=root, manifest_path=root/'Monster Kingdom.mmxml',
                       content_id='BFA127E5-3AE4-47BF-BEE0-BDC27BAEE50C', display_name='Native source fixture'))
         actions = tuple(Action(k,name,name+'_Effect','','P00'+str(n)) for n,(k,(_,name)) in enumerate(POTIONS.items()))
-        plan = Plan((parse_feature(POLICY),),actions)
+        # The application consumes the shipped declaration, not the staging-only
+        # helper that writes it. Exercise that same data under packaged imports.
+        definition=json.loads((Path(__file__).resolve().parents[1]/
+            'payload/mods/CustomGuildPhantomsHauntExpanded/mod-definition.json').read_text())
+        policy=next(f for f in definition['runtime_features'] if f['type']=='stock.bazaar-potion-policy.v1')
+        plan = Plan((parse_feature(policy),),actions)
         with self.assertRaisesRegex(ComposeError, 'scoped output'):
             prepare_final_gpl_resources(game, (), potion_plan=plan, standard_script_inputs=(native,))
         merged = prepare_final_gpl_resources(game, (), potion_plan=plan,

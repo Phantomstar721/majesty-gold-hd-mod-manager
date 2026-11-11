@@ -2315,6 +2315,51 @@ int SelectedBuildingLevel(const void* context) {
     return encoded == 0x33000000u ? 3 : 1;
 }
 
+int CompletedBuildingLevel(const void* context) {
+    if (context == nullptr) return 0;
+    // Stock stage presentation subtracts the unfinished current descriptor.
+    // Keep the raw AP99 research tier separate from action availability.
+    return SelectedBuildingLevel(context) -
+        (ReadPackedAttributeValue(const_cast<void*>(context), 0x02425041u, 0) == 0 ? 1 : 0);
+}
+
+bool BuildingActionMeetsLevel(const void* context, unsigned requiredLevel) {
+    return context != nullptr &&
+        ReadPackedAttributeValue(const_cast<void*>(context), 0x01425041u, 0) != 0 &&
+        CompletedBuildingLevel(context) >= static_cast<int>(requiredLevel);
+}
+
+void LogPrivateSpellPanelSetup(void* controller, const char* phase) {
+#if defined(CAM_PANEL_ENGINE_ALPHA)
+    // Alpha-only, panel-open evidence. No clock callback, actor enumeration or
+    // message-based probing: use the existing SDK GetItem/show-count contract.
+    static unsigned recorded = 0;
+    if (recorded >= 12 || !controller || !g_activePanelRecord) return;
+    auto* panel = *reinterpret_cast<unsigned char**>(static_cast<unsigned char*>(controller) + 0x24);
+    void* dialog = panel ? *reinterpret_cast<void**>(panel + 4) : nullptr;
+    if (!dialog) return;
+    using Find = void* (__thiscall*)(void*, std::uint32_t);
+    const auto find = reinterpret_cast<Find>(g_imageBase + g_buildProfile->streamControlLookupRva);
+    for (const auto& action : g_stockControllerRegistry.sovereignTargetActions) {
+        if (recorded >= 12 || action.panelKey != g_activePanelRecord->panelKey) continue;
+        int counts[3] = {-1,-1,-1};
+        const std::uint32_t ids[] = {action.visualControlId,action.iconControlId,action.priceControlId};
+        for (unsigned i=0;i<3;++i) {
+            auto* item = static_cast<unsigned char*>(find(dialog,ids[i]));
+            if (item) counts[i] = *reinterpret_cast<const int*>(item + 0x78);
+        }
+        char line[240] = {};
+        std::snprintf(line,sizeof(line),"Private spell panel setup %s: action=%u count=%d icon=%u count=%d price=%u count=%d completed=%d required=%u.",
+            phase,ids[0],counts[0],ids[1],counts[1],ids[2],counts[2],
+            CompletedBuildingLevel(ActivePanelContext()),action.requiredLevel);
+        ++recorded;
+        WriteLog(line);
+    }
+#else
+    (void)controller; (void)phase;
+#endif
+}
+
 const MajestyStockControllers::UpgradeGateRecord* ActiveUpgradeGate() {
     if (g_parentPanelRecord == nullptr) {
         return nullptr;
@@ -2523,11 +2568,12 @@ void RefreshPrivateActionRows(
     }
     for (const auto& action : g_stockControllerRegistry.sovereignTargetActions) {
         if (action.panelKey != g_activePanelRecord->panelKey) continue;
-        if (runStockPresenter) {
+        const bool levelAvailable = BuildingActionMeetsLevel(context, action.requiredLevel);
+        // Native preparation increments presentation state. Do not prepare a
+        // locked row which stock setup omitted and then try to undo it by hide.
+        if (runStockPresenter && levelAvailable) {
             refreshSingleSpellRow(panel, player, action.visualControlId, 0);
         }
-        const bool levelAvailable =
-            SelectedBuildingLevel(context) >= static_cast<int>(action.requiredLevel);
         SetControllerControlVisible(controller, action.visualControlId, levelAvailable);
         SetControllerControlVisible(controller, action.iconControlId, levelAvailable);
         SetControllerControlVisible(controller, action.priceControlId, levelAvailable && action.sovereignGoldCost != 0);
@@ -3149,8 +3195,7 @@ int HandleSovereignTargetAction(
     const MajestyStockControllers::SovereignTargetActionRecord& action) {
     g_pendingToolbarControl = 0;
     unsigned char* context = ActivePanelContext();
-    if (context == nullptr ||
-        SelectedBuildingLevel(context) < static_cast<int>(action.requiredLevel) ||
+    if (!BuildingActionMeetsLevel(context, action.requiredLevel) ||
         (action.sovereignGoldCost ? StockCurrentPlayerGold() < static_cast<int>(action.sovereignGoldCost) :
          ResourceStock(FindActiveMeter(action.resourceKey)) < static_cast<int>(action.resourceCost))) {
         RefreshPrivateActionRows(controller, false);
@@ -3549,9 +3594,7 @@ extern "C" const std::uint32_t* __stdcall ResolvePrivateSpellDescriptor(
                 *static_cast<const MajestyStockControllers::SovereignTargetActionRecord*>(
                     state.record);
             unsigned char* context = ActivePanelContext();
-            const bool levelMet = context != nullptr &&
-                SelectedBuildingLevel(context) >=
-                    static_cast<int>(action.requiredLevel);
+            const bool levelMet = BuildingActionMeetsLevel(context, action.requiredLevel);
             state.descriptor[3] = levelMet ? 0u : action.requiredLevel;
         }
         return descriptor;
@@ -4182,7 +4225,9 @@ bool InstallPrivateRageRoute() {
 }
 
 void __fastcall SecondaryPanelControllerSetup(void* controller, void*) {
+    LogPrivateSpellPanelSetup(controller, "before-stock");
     g_stockAp69Setup(controller);
+    LogPrivateSpellPanelSetup(controller, "after-stock");
     if (g_activePanelRecord == nullptr) {
         StopUnsafeManagerRuntimeLaunch(
             "A captured secondary controller has no resolved MMCR panel owner.");
@@ -4203,6 +4248,7 @@ void __fastcall SecondaryPanelControllerSetup(void* controller, void*) {
     RefreshTimedRageRows(value);
     RefreshPrivateResearchRows(value);
     UpdateSecondaryPanelPresentation(value);
+    LogPrivateSpellPanelSetup(controller, "after-private");
 }
 
 int ReturnToPrivateParent(void* controller, std::uint32_t parentDialogId) {
@@ -6933,7 +6979,7 @@ struct OccupantParentClass {
 };
 std::vector<OccupantParentClass*> g_occupantParentClasses;
 OccupantParentClass* FindOccupantParentClass(void* controller) {
-    auto** table = *static_cast<void***>(controller);
+    auto** table = MajestyControllerLifecycle::CanonicalManagedVtable(*static_cast<void***>(controller));
     for (auto* entry : g_occupantParentClasses) {
         if (entry->table == table) return entry;
     }
@@ -7314,6 +7360,12 @@ extern "C" void __stdcall CaptureSecondaryController(
     std::uint32_t creationHandle) {
     if (g_panelEngineModules.ownsController &&
         g_panelEngineModules.ownsController(reinterpret_cast<void*>(controller))) {
+        if (MajestyControllerLifecycle::CanonicalManagedVtable(*reinterpret_cast<void***>(controller)) !=
+            *reinterpret_cast<void***>(controller)) {
+            if (controller == static_cast<std::uint32_t>(g_childController))
+                InterlockedExchange(&g_secondaryPanelHandle, static_cast<LONG>(creationHandle));
+            return; // already captured before the outer presenter was installed
+        }
         InterlockedExchange(&g_captureParentController,0);
         InterlockedExchange(&g_captureChildController,0);
         return;
@@ -7461,6 +7513,8 @@ extern "C" void __stdcall LogSuppressedNullSecondaryController() {
     WriteLog("Suppressed a null secondary controller result without opening a diagnostic window.");
 }
 
+#include "PanelEngineHandoffRuntime.inl"
+
 void LogDialogFactoryRequest(
     const std::uint32_t* arguments,
     std::uint32_t requestedId,
@@ -7490,7 +7544,8 @@ void LogDialogFactoryRequest(
 
 extern "C" void __stdcall ResolveDialogFactoryRequest(std::uint32_t* idAddress) {
     if (g_panelEngineModules.ownsView &&
-        g_panelEngineModules.ownsView(reinterpret_cast<void*>(idAddress[1]))) {
+        g_panelEngineModules.ownsView(reinterpret_cast<void*>(idAddress[1])) &&
+        !(g_panelEngineModules.bindHandoff && (g_captureParentController || g_captureChildController))) {
         InterlockedExchange(&g_captureParentController,0);
         InterlockedExchange(&g_captureChildController,0);
         InterlockedExchange(&g_secondaryPanelArmed,0);
@@ -8400,6 +8455,9 @@ DWORD WINAPI InitializeRuntime(void*) {
     }
     if (!InitializePanelEngineModules()) {
         StopUnsafeManagerRuntimeLaunch("The optional panel engine module does not match its guarded engine ABI.");
+    }
+    if (!BindPanelEngineActionOwners()) {
+        StopUnsafeManagerRuntimeLaunch("The optional panel presenter could not retain the existing action owners.");
     }
     if (!InstallLargeModList()) {
         StopUnsafeManagerRuntimeLaunch("The selected-mod restore routine does not match the bundled persistence helper. Reinstall Remember Active Mods in Quality of Life.");

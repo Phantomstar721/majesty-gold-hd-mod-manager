@@ -124,6 +124,28 @@ int main() {
         secondCleanupCalls == 1 && cleanupCalls == 2,
         "independent controller types invalidate only their own state");
 
+    void* presenter[3] = {reinterpret_cast<void*>(0x4040), managedVtable[1], managedVtable[2]};
+    std::size_t count = 0;
+    void** original = nullptr;
+    passed &= Expect(MajestyControllerLifecycle::DescribeManagedVtable(managedVtable, &count, &original) &&
+        count == 3 && original == stockVtable, "only registered tables expose verified copy bounds");
+    passed &= Expect(MajestyControllerLifecycle::RegisterPresenterAlias(presenter, managedVtable) &&
+        MajestyControllerLifecycle::RegisterPresenterAlias(presenter, managedVtable), "presenter alias is idempotent");
+    passed &= Expect(!MajestyControllerLifecycle::RegisterPresenterAlias(presenter, secondManagedVtable),
+        "a presenter cannot change its action owner");
+    passed &= Expect(presenter[0] == reinterpret_cast<void*>(0x4040) &&
+        MajestyControllerLifecycle::CanonicalManagedVtable(presenter) == managedVtable &&
+        !MajestyControllerLifecycle::DescribeManagedVtable(presenter, &count, &original),
+        "alias preserves outer destructor and cannot authorize another wrapper layer");
+    FakeController olderPresented = {presenter}, newerPresented = {presenter};
+    liveController = static_cast<LONG>(reinterpret_cast<std::uintptr_t>(&newerPresented));
+    destroy(&olderPresented, 0x21);
+    passed &= Expect(cleanupCalls == 2 && liveController == static_cast<LONG>(
+        reinterpret_cast<std::uintptr_t>(&newerPresented)), "late presenter teardown preserves new instance");
+    destroy(&newerPresented, 0x22);
+    passed &= Expect(cleanupCalls == 3 && liveController == 0 && g_lastDeleteFlags == 0x22,
+        "presenter delegation retains existing cleanup, flags and stock destructor");
+
     if (!passed) {
         return 1;
     }

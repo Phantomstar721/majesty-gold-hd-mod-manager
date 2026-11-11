@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SDK_HASH = 'd6049b8021575241027677db2df441cdb50bd0038735c3fda6058b70d1a40b9b'
 
 
-def verify(sdk, work):
+def verify(sdk, work, handoff=False, candidate_labels=()):
     if hashlib.sha256(sdk.read_bytes()).hexdigest() != SDK_HASH:
         raise ValueError('SDK source changed; review the fixture substitutions')
     source = sdk.read_text(encoding='utf8')
@@ -34,10 +34,20 @@ def verify(sdk, work):
         raise ValueError('SDK logging gate changed')
     source=bounded_class_copy(source,17,76)
     source='static int MMWE_VtableLength(void**);\n'+source
+    if handoff:
+        from panel_engine_handoff_source import adapt
+        source = adapt(source)
+        source = '#define MMM_HANDOFF_FIXTURE 1\nstatic void runHandoffFixture();\n' + source
+        if candidate_labels:
+            if not 1<=len(candidate_labels)<=128: raise ValueError('Invalid candidate view count')
+            source = ('#define MMM_CANDIDATE_LABEL_COUNT '+str(len(candidate_labels))+'\n'
+                'static const char* candidateLabels[]={'+','.join(json.dumps(s) for s in candidate_labels)+'};\n') + source
     owner = ROOT / 'runtime/PanelEngineOwnerProbe.inl'
     fixture = ROOT / 'tests/native/panel_engine_owner_fixture.cpp'
     agent_client = ROOT / 'runtime/PanelEngineAgentClient.h'
     source += '\n#include ' + json.dumps(owner.as_posix()) + '\n#include ' + json.dumps(fixture.as_posix()) + '\n'
+    if handoff:
+        source += '\n#include ' + json.dumps((ROOT/'tests/native/panel_engine_handoff_fixture.cpp').as_posix()) + '\n'
     work = work.resolve()
     boundary=Path(os.environ.get('MMM_REGRESSION_TEMP',ROOT/'local/panel-engine-alpha')).resolve()
     if not work.is_relative_to(boundary):
@@ -57,7 +67,8 @@ def verify(sdk, work):
     tested = subprocess.run([str(executable)], capture_output=True, timeout=10)
     if tested.returncode:
         raise RuntimeError('SDK owner fixture failed, source line/exit=' + str(tested.returncode))
-    receipt = {'schema': 1, 'sdkSha256': SDK_HASH, 'compiler': str(compiler),
+    receipt = {'schema': 1, 'sdkSha256': SDK_HASH, 'compiler': str(compiler), 'handlerHandoff': handoff,
+        'candidateBehaviors':list(candidate_labels),
         'ownerProbeSha256': hashlib.sha256(owner.read_bytes()).hexdigest(),
         'fixtureSha256': hashlib.sha256(fixture.read_bytes()).hexdigest(),
         'agentClientSha256': hashlib.sha256(agent_client.read_bytes()).hexdigest(),

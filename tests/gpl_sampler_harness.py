@@ -9,7 +9,7 @@ import re
 from majesty_cam.gpl import parse_gpl
 
 _TOKENS = re.compile(r'"(?:\\.|[^"\\])*"|//[^\r\n]*|/\*[\s\S]*?\*/|'
-                     r"'s\b|[A-Za-z_][A-Za-z0-9_]*|\d+|==|!=|<=|>=|&&|\|\||<<|\+=|[^\s]")
+                     r"'s\b|[A-Za-z_][A-Za-z0-9_]*|\d+|==|!=|<=|>=|&&|\|\||<<|\+=|-=|[^\s]")
 
 
 class _Return(Exception):
@@ -64,6 +64,11 @@ class _Parser:
             return (token, condition, body, alternate)
         if token == "return":
             return (token, self.until(";"))
+        if token == "foreach":
+            name = self.take()
+            self.take("in")
+            values = self.until("do")
+            return (token, name, values, self.statement())
         self.pos -= 1
         return ("simple", self.until(";"))
 
@@ -175,6 +180,10 @@ class SamplerHarness:
         elif kind == "while":
             while self.value(node[1], env):
                 self.run(node[2], env)
+        elif kind == "foreach":
+            for value in list(self.value(node[2], env)):
+                env[node[1]] = value
+                self.run(node[3], env)
         elif kind == "return":
             raise _Return(self.value(node[1], env) if node[1] else None)
         elif kind == "simple":
@@ -182,7 +191,7 @@ class SamplerHarness:
             if "<<" in tokens:
                 pos = tokens.index("<<")
                 self.value(tokens[:pos], env).append(self.value(tokens[pos + 1:], env))
-            elif "=" in tokens or "+=" in tokens:
+            elif "=" in tokens or "+=" in tokens or "-=" in tokens:
                 exec(self.expression(tokens), {"__builtins__": {}, "F": self.calls}, env)
             else:
                 self.value(tokens, env)

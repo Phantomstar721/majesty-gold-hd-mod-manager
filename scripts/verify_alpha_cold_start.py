@@ -48,7 +48,7 @@ def verify(application=None, *, beta=False):
                         for path in (game/'Data').glob('UIData_*.dat'):
                             shutil.copyfile(path, path.with_name(names(path.name)))
                 case = root / 'case.json'
-                case.write_text(json.dumps(dict(branch=branch)), encoding='utf8')
+                case.write_text(json.dumps(dict(branch=branch,private=private)), encoding='utf8')
                 command = ([str(application / (application.name+'.exe'))] if application else
                     [sys.executable, str(ROOT/('scripts/mod_manager_entry.py' if beta else 'scripts/panel_engine_alpha_entry.py'))])
                 env = dict(os.environ, PYTHONPATH=str(ROOT/'src'), LOCALAPPDATA=str(root/'appdata'),

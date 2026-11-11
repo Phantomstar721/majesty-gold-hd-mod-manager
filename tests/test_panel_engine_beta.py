@@ -69,7 +69,7 @@ class BetaEngineIntegration(unittest.TestCase):
                             self.assertTrue(service.apply(key).installed)
                             self.assertEqual(source.read_bytes(), unchanged)
                         self.assertEqual(installed_revisions(ROOT, source),
-                            {'window-engine.v1': 1, 'script-functions.map-action.v1': 1})
+                            {'window-engine.v1': 2, 'script-functions.map-action.v1': 1})
                         for key in order:
                             self.assertFalse(service.remove(key).installed)
                         self.assertEqual(source.read_bytes(), before)

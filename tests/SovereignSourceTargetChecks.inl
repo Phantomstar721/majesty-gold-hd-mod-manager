@@ -4,7 +4,10 @@ std::uint32_t submitted[6] = {}, executed[7] = {};
 int nativeCalls = 0, callbackCalls = 0;
 void* callbackSource = nullptr;
 bool targetPresent = true, sourcePresent = true;
+int sourceFirstBuilt = 1, sourceCurrentBuilt = 1;
 int __fastcall ReadResource(void*, void*, std::uint32_t attribute, std::uint32_t) {
+    if (attribute == 0x01425041u) return sourceFirstBuilt;
+    if (attribute == 0x02425041u) return sourceCurrentBuilt;
     assert(attribute == 1);
     return packedValue;
 }
@@ -54,6 +57,7 @@ void Run() {
     record.resourceCost = 10; record.requiredLevel = 3;
     g_stockControllerRegistry.sovereignTargetActions.push_back(record);
     auto* action = &g_stockControllerRegistry.sovereignTargetActions[0];
+    sourceFirstBuilt = sourceCurrentBuilt = 1;
     for (auto* source : {sourceA, sourceB}) {
         *reinterpret_cast<std::uint32_t*>(source + 0x7C) = 0x33424C41;
         *reinterpret_cast<std::uint32_t*>(source + 0x80) = 1;
@@ -62,6 +66,13 @@ void Run() {
     g_sovereignUnitResolver = &Resolve;
     g_sourceTargetExecutor = &Execute;
     g_sourceTargetCallback = &Callback;
+    const int callsBeforeConstruction = nativeCalls;
+    sourceCurrentBuilt = 0;
+    ExecuteSourceTargetSovereignCommand(record.privateMode, 9, 1, 700, 800, 303, 101);
+    sourceCurrentBuilt = 1; sourceFirstBuilt = 0;
+    ExecuteSourceTargetSovereignCommand(record.privateMode, 9, 1, 700, 800, 303, 101);
+    sourceFirstBuilt = 1;
+    assert(nativeCalls == callsBeforeConstruction && callbackCalls == 0);
     g_pendingSovereignAction = action; g_pendingSovereignBuilding = 101;
     packedValue = 10;
     SubmitPrivateSovereignCommand(record.stockTargetMode, 1, 700, 800, 303, 1000);

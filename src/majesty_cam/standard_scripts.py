@@ -40,6 +40,7 @@ class StandardScripts:
     payloads: tuple[tuple[Path, bytes], ...] = ()
     compiled_payloads: tuple[tuple[Path, bytes], ...] = ()
     description_payloads: tuple[tuple[str, bytes], ...] = ()
+    source_contributions: tuple = ()
 
     @cached_property
     def parsed_sources(self):
@@ -154,6 +155,7 @@ def read(entry):
         if any(base not in ('any', 'majesty', 'majestyexpansion') for base, _ in pairs):
             raise ValueError(f'{entry.display_name}: unsupported Standard GPL dataset base')
         participants = ()
+        contributions = ()
         definition_path = root / 'mod-definition.json'
         if definition_path.is_file():
             try:
@@ -161,6 +163,7 @@ def read(entry):
             except ValueError as exc:
                 raise ValueError(f'{entry.display_name}: {exc}') from exc
             participants = definition.runtime_features
+            contributions = definition.source_contributions
         paths = tuple(inputs())
         payloads = {p: p.read_bytes() if p.is_file() else None for p in paths}
         if payloads[entry.manifest_path.resolve()] != manifest_bytes:
@@ -175,14 +178,19 @@ def read(entry):
                                      for block in loads),
                                tuple((d.base.casefold(), payloads[x.file.absolute_path])
                                      for d in package.datasets[:1] for b in d.loads
-                                     for x in b.directives if isinstance(x, DescriptionsLoad)))
+                                     for x in b.directives if isinstance(x, DescriptionsLoad)),
+                               source_contributions=contributions)
     def watched_inputs():
         files = inputs()
         directories = dict.fromkeys(directory for dataset in package.datasets[:1]
                                     for block in dataset.loads for directive in block.directives
                                     if isinstance(directive, GplLoad)
                                     for directory in directive.discovery_directories)
-        return (*files, *directories)
+        discovery_files = dict.fromkeys(path for dataset in package.datasets[:1]
+                                    for block in dataset.loads for directive in block.directives
+                                    if isinstance(directive, GplLoad)
+                                    for path in directive.discovery_files)
+        return (*files, *directories, *discovery_files)
 
     return _CACHE.get(root, (entry.content_id, str(entry.manifest_path)), watched_inputs, load)
 
@@ -190,7 +198,7 @@ def read(entry):
 def file_inputs(inputs):
     """Exact source/target identity, including absence of an optional declaration."""
     return tuple((item.package.mod_id, item.digests) for item in inputs
-                 if item.loads or item.participants or item.description_payloads)
+                 if item.loads or item.participants or item.description_payloads or item.source_contributions)
 
 
 def fingerprint(entries):
@@ -205,7 +213,7 @@ def for_dataset(inputs, dataset):
     return tuple(item for item in inputs if not item.bases or item.bases[0] in ('any', dataset))
 
 
-def verify(item, compiler, block_index=None):
+def verify(item, compiler, block_index=None, *, timeout=60):
     """Prove manifest sources reproduce loaded BCD; cache by bounded inputs."""
     from .compose import no_console_window_options
     def prove():
@@ -228,7 +236,7 @@ def verify(item, compiler, block_index=None):
                 def run(output):
                     try:
                         return subprocess.run((str(compiler), '-in', 'Proof.gplproj', '-out', output, '-stdout'),
-                            cwd=directory, capture_output=True, timeout=60, **no_console_window_options())
+                            cwd=directory, capture_output=True, timeout=timeout, **no_console_window_options())
                     except subprocess.TimeoutExpired as exc:
                         raise ValueError(f'{item.name}: source verification timed out for {block.target.relative_path}') from exc
                 process = run('Proof.bcd')
@@ -366,7 +374,8 @@ class Providers:
     the end. Scoped output is deliberately not manufactured here.
     """
 
-    def __init__(self, inputs, stock_loader, compiler, dataset='any', *, source_ancestor_loader=None):
+    def __init__(self, inputs, stock_loader, compiler, dataset='any', *, source_ancestor_loader=None,
+                 proof_failures=None):
         if dataset not in ('any', 'majesty', 'majestyexpansion'):
             raise ValueError(f'unsupported output dataset {dataset}')
         self.inputs = tuple(inputs)
@@ -379,9 +388,16 @@ class Providers:
         self.native_owners = {}
         self.ancestors = {}
         self.verified = set()
+        self.unproven = {} if proof_failures is None else proof_failures
 
     def _winner(self, key, dataset):
         return _native_winner(for_dataset(self.inputs, dataset), key)
+
+    def has_native_definition(self, key):
+        """Linkage presence from compiled ownership; never a source/body proof."""
+        scopes = ('majesty','majestyexpansion') if self.dataset == 'any' else (self.dataset,)
+        return True if all(any(key in provider.compiled_keys for provider in for_dataset(self.inputs, scope))
+                           for scope in scopes) else None
 
     def stock(self, names):
         missing = tuple(n for n in names if (DefinitionKind.FUNCTION, n.casefold()) not in self.ancestors)
@@ -518,6 +534,69 @@ class Providers:
                                      'that was not included in feature composition')
             output.append(item)
         return SemanticMergeResult(tuple(output), result.conflicts)
+
+    def compose_overlaps(self, result):
+        """Combine plain Standard function edits using their selected native order.
+
+        Existing generated definitions are excluded: their feature owners already
+        performed source reconciliation. Opaque/unproved providers stay native.
+        No resource, prototype, initializer or helper semantics are rewritten.
+        """
+        from .script_review import ScriptCandidate, ScriptConflict, ScriptReviewSession, pair_key
+        inputs = for_dataset(self.inputs, self.dataset)
+        groups = {}
+        for provider in inputs:
+            for key in provider.compiled_keys:
+                if key[0] is DefinitionKind.FUNCTION:
+                    groups.setdefault(key, []).append(provider)
+        excluded = {item.key for item in result.items}
+        additions, receipts = [], []
+        for key, providers in sorted(groups.items(), key=lambda pair: pair[0][1]):
+            if key in excluded or len(providers) < 2:
+                continue
+            candidates = []
+            try:
+                loader = self.source_ancestor_loader or self.stock
+                base = loader((key[1],)).get(key)
+                if base is None: continue # no common stock ancestor: native winner
+                for provider in providers:
+                    block, item = provider.owner(key)
+                    if item is None: continue
+                    identity = provider.package.mod_id, block
+                    if identity in self.unproven: continue
+                    if identity not in self.verified:
+                        try:
+                            verify(provider, self.compiler, block, timeout=10)
+                        except (ValueError, OSError) as exc:
+                            self.unproven[identity] = str(exc)
+                            continue
+                        self.verified.add(identity)
+                    candidates.append(ScriptCandidate(provider.name, item,
+                        provider.package.mod_id.strip('{}').casefold()))
+                # An unproved earlier definition is already displaced by native
+                # order. Never restore it; equally, never replace an opaque winner.
+                if len(candidates) < 2 or candidates[-1].owner != providers[-1].package.mod_id.strip('{}').casefold():
+                    continue
+                if len({_tokens(c.item.text) for c in candidates}) == 1: continue
+                decisions = {pair_key(a.owner, b.owner): b.owner
+                    for i, a in enumerate(candidates) for b in candidates[i + 1:]}
+                session = ScriptReviewSession(decisions)
+                conflict = ScriptConflict(self.dataset, key, candidates[-1].item.name,
+                    'Source-backed Standard function changes', base, tuple(candidates))
+                combined = session.resolve(conflict)
+                native = self.lookup(key) # prove/cache the actual load-order winner
+                if combined is None or _tokens(combined.text) == _tokens(native.text): continue
+            except (ValueError, OSError):
+                # Discovery or source proof cannot authorize replacing an opaque
+                # winner. Preserve normal Standard load order in that case.
+                continue
+            additions.append(combined)
+            receipts.append({'function': combined.name, 'owners': [c.label for c in candidates],
+                'retained_mod_ids': list(session.selected_owners(conflict)),
+                'stock_source': base.source_name,
+                'stock_function_sha256': hashlib.sha256(base.text.encode('utf8')).hexdigest(),
+                'standard_source_composition': True})
+        return SemanticMergeResult((*result.items, *additions), result.conflicts), tuple(receipts)
 
 
 def _align_parameters(base_text, text):

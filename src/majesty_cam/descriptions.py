@@ -150,6 +150,22 @@ def parse_descriptions(
     are rejected before parsing, keys are case-sensitive, and duplicate keys
     fail closed even when their payloads happen to be identical.
     """
+    return _parse_description_xml(data, source=source, native_projection=False)
+
+
+def parse_native_descriptions(
+    data: XmlSource, *, source: str = "<memory>"
+) -> DescriptionsDocument:
+    """Index direct Description records from an independently loaded file.
+
+    Native Standard files remain loaded in full by their original packages.
+    Other XML record families are not Description candidates and are never
+    emitted by this projection. Authored Merge files retain the strict parser.
+    """
+    return _parse_description_xml(data, source=source, native_projection=True)
+
+
+def _parse_description_xml(data, *, source, native_projection):
 
     raw = _xml_bytes(data, source)
     if len(raw) > _MAX_XML_BYTES:
@@ -198,6 +214,8 @@ def parse_descriptions(
                 f"{source} contains an unsupported processing instruction"
             )
         if child.tag != "Description":
+            if native_projection:
+                continue
             raise DescriptionFormatError(
                 f"{source} contains unsupported top-level element {child.tag!r}"
             )

@@ -293,6 +293,7 @@ class QolUtilityStatus:
     applicable: bool
     installed: bool | None
     detail: str
+    installed_revision: int | None = None
 
     @property
     def key(self) -> str:
@@ -540,9 +541,9 @@ class QolService:
         if spec.key in ("panel-engine", "scripted-ground-actions"):
             from .engine_patches import inspect_patch
             try:
-                installed=inspect_patch(self.repo_root,self.game_executable,spec.key,branch)
+                installed,revision=inspect_patch(self.repo_root,self.game_executable,spec.key,branch,with_revision=True)
                 return QolUtilityStatus(patch,QolUtilityState.INSTALLED if installed else QolUtilityState.AVAILABLE,
-                                        True,True,installed,'Installed.' if installed else 'Available.')
+                                        True,True,installed,'Installed.' if installed else 'Available.',revision)
             except (OSError,ValueError,KeyError) as exc:
                 return QolUtilityStatus(patch,QolUtilityState.UNSUPPORTED,False,False,None,str(exc))
         if not patch.apply_available:

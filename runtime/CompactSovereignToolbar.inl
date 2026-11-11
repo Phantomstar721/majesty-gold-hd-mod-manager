@@ -49,8 +49,7 @@ unsigned Source(const MajestyStockControllers::ToolbarActionRecord& row) {
     if(level<static_cast<int>(row.requiredLevel)||!source)return 0;
     const auto id=PaidWord(source,0x70);
     if(!PaidIdentity(source,id,g_paidWorld(),true))return 0;
-    const int completed=SelectedBuildingLevel(source)-(ReadPackedAttributeValue(source,0x02425041,0)==0?1:0);
-    if(ReadPackedAttributeValue(source,0x01425041,0)==0||completed<static_cast<int>(row.requiredLevel))return 0;
+    if(!BuildingActionMeetsLevel(source,row.requiredLevel))return 0;
     return id;
 }
 void Refresh(void* object) {

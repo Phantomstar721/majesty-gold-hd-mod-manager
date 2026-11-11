@@ -88,7 +88,9 @@ from ..script_review import ScriptReviewSession, ScriptReviewCancelled, validate
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
-PLAN_SCHEMA_VERSION = 28
+# Generated reward composition and terminal activity ordering changed. Existing
+# source inputs can be identical while their prepared output needs regeneration.
+PLAN_SCHEMA_VERSION = 29
 STANDARD_SELECTION_ISSUE_CODES = frozenset(
     {
         "mutually_exclusive_mods",
@@ -274,6 +276,7 @@ class BuildPlan:
     standard_script_entries: tuple[CatalogEntry, ...] = ()
     standard_script_signature: str = ""
     merge_fingerprint: str = ""
+    standard_composition: bool = False
 
     @property
     def stock_activity_text_inputs(self) -> tuple[tuple[str, str], ...]:
@@ -286,12 +289,21 @@ class BuildPlan:
         return bool(self.selected_merge)
 
     @property
+    def requires_composition(self) -> bool:
+        return self.has_merge or self.standard_composition
+
+    @property
     def valid(self) -> bool:
         return not self.issues and all(item.ready for item in self.selected_merge)
 
     @property
     def selected_merge_source_ids(self) -> tuple[str, ...]:
         return tuple(item.content_id for item in self.selected_merge)
+
+    @property
+    def selected_source_ids(self) -> tuple[str, ...]:
+        return self.selected_merge_source_ids if self.has_merge else (
+            self.selected_standard_ids if self.standard_composition else ())
 
 
 @dataclass(frozen=True)
@@ -612,6 +624,7 @@ def create_build_plan(
 
     runtime_feature_registry = RuntimeFeatureRegistry()
     controller_registry = _EMPTY_CONTROLLER_REGISTRY
+    inventories = ()
     if prepared and all(
         item.ready and isinstance(item.package, ModPackage) for item in prepared
     ):
@@ -676,15 +689,15 @@ def create_build_plan(
 
     private_activity_texts: tuple[PrivateActivityTextBinding, ...] = ()
     stock_compose_inputs: tuple[tuple[str, str], ...] = ()
-    if game_path is not None and prepared and all(item.ready for item in prepared):
+    if game_path is not None and (prepared or _standard_source_overlap(standards)) and all(item.ready for item in prepared):
         try:
             stock_compose_inputs = _fingerprint_stock_compose_inputs(game_path, prepared)
-            if all(item.inventory is not None for item in prepared):
+            if prepared and all(item.inventory is not None for item in prepared):
                 private_activity_texts = discover_private_activity_texts(
                     game_path,
                     inventories,
                 )
-            else:
+            elif prepared:
                 private_activity_texts = discover_selected_private_activity_texts(
                     game_path,
                     tuple(item.selected_mod for item in prepared),
@@ -760,10 +773,12 @@ def _with_standard_fingerprint(merge_fingerprint: str, signature: str) -> str:
 def refresh_standard_script_inputs(plan: BuildPlan, entries: Sequence[CatalogEntry]) -> BuildPlan:
     """Refresh selected source identity without repeating Merge preflight."""
     by_id = {entry.content_id: entry for entry in entries}
-    selected = tuple(by_id[key] for key in plan.selected_standard_ids) if plan.has_merge else ()
+    ordered = tuple(by_id[key] for key in plan.selected_standard_ids)
+    standard_composition = not plan.has_merge and _standard_source_overlap(ordered)
+    selected = ordered if plan.has_merge or standard_composition else ()
     issues = tuple(issue for issue in plan.issues if issue.code not in ("standard_script_inputs", "active_id_limit"))
     from .launch import CURRENT_PERSISTENCE_LIMIT
-    minimum = len(plan.selected_standard_ids) + int(plan.has_merge)
+    minimum = len(plan.selected_standard_ids) + int(plan.has_merge or standard_composition)
     if minimum > CURRENT_PERSISTENCE_LIMIT:
         issues += (BuildIssue('active_id_limit', f'This selection needs at least {minimum} active Mod IDs; '
                     f'the limit is {CURRENT_PERSISTENCE_LIMIT}. Deselect some Standard mods.'),)
@@ -774,7 +789,40 @@ def refresh_standard_script_inputs(plan: BuildPlan, entries: Sequence[CatalogEnt
         issues += (BuildIssue("standard_script_inputs", str(exc)),)
     base = plan.merge_fingerprint or plan.fingerprint
     return replace(plan, standard_script_entries=selected, standard_script_signature=signature,
-                   merge_fingerprint=base, fingerprint=_with_standard_fingerprint(base, signature), issues=issues)
+                   merge_fingerprint=base, fingerprint=_with_standard_fingerprint(base, signature), issues=issues,
+                   standard_composition=standard_composition)
+
+
+def _standard_source_overlap(entries):
+    """Cheap admission hint from cached catalog keys and source availability.
+
+    No compilation runs during planning. Prepare proves each loaded source
+    before a disjoint edit can replace normal native load-order behavior.
+    """
+    groups, snapshots = {}, {}
+    for entry in entries:
+        for key, digest in entry.content_definitions:
+            if key.startswith('function:'):
+                groups.setdefault(key, []).append((entry, digest))
+    for name, group in groups.items():
+        if len({digest for _, digest in group}) < 2: continue
+        source_owners = 0
+        key = DefinitionKind.FUNCTION, name.split(':', 1)[1].casefold()
+        for entry, _ in group:
+            try:
+                if entry.content_id not in snapshots:
+                    snapshots[entry.content_id] = standard_scripts.read(entry)
+                provider = snapshots[entry.content_id]
+                if provider is None: continue
+                for index in reversed(range(len(provider.loads))):
+                    if key in provider._block_keys(index):
+                        source_owners += bool(provider.loads[index].sources)
+                        break
+            except (OSError, ValueError):
+                snapshots[entry.content_id] = None
+                continue # opaque Standard content keeps its normal load order
+        if source_owners > 1: return True
+    return False
 
 
 def standard_selection_issues(
@@ -972,8 +1020,8 @@ def build_merged_package(
     script_conflict_resolver=None,
     review_scripts: bool = False,
 ) -> ManagerBuildResult:
-    if not plan.has_merge:
-        raise ManagerBuildError("No Merge mods are selected; a build is not required.")
+    if not plan.requires_composition:
+        raise ManagerBuildError("These selections do not require composition.")
     if not plan.valid:
         labels = "; ".join(issue.message for issue in plan.issues)
         raise ManagerBuildError(f"Build plan is not safe: {labels}")
@@ -1044,6 +1092,7 @@ def build_merged_package(
             standard_script_inputs=tuple(standard_scripts.read(e) for e in plan.standard_script_entries),
             max_generated_mods=_remaining_generated_slots(plan),
             external_panel_behaviors=True,
+            infer_reward_factors=True,
             script_review=script_review,
             script_conflict_resolver=review if script_conflict_resolver is not None else None,
         )
@@ -1078,7 +1127,7 @@ def build_merged_package(
             "mod_preferences": script_review.applicable_decisions,
             "mod_id": normalize_guid(result.mod_id),
             "generated_mod_ids": [normalize_guid(i) for i in (result.generated_mod_ids or (result.mod_id,))],
-            "selected_source_ids": list(plan.selected_merge_source_ids),
+            "selected_source_ids": list(plan.selected_source_ids),
             "intent_registry": {
                 "path": INTENT_REGISTRY_RELATIVE_PATH,
                 "sha256": registry_sha256,
@@ -1140,7 +1189,7 @@ def build_merged_package(
         / Path(RUNTIME_CAPABILITY_MANIFEST_RELATIVE_PATH),
         mod_id=normalize_guid(result.mod_id),
         fingerprint=plan.fingerprint,
-        selected_source_ids=plan.selected_merge_source_ids,
+        selected_source_ids=plan.selected_source_ids,
         generated_mod_ids=tuple(normalize_guid(i) for i in (result.generated_mod_ids or (result.mod_id,))),
     )
 
@@ -1537,6 +1586,7 @@ def _plan_fingerprint(
             for binding in private_activity_texts
         ],
     }
+    payload['automatic_reward_factors'] = 1
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return _with_standard_fingerprint(hashlib.sha256(encoded).hexdigest(), standard_signature)
 
@@ -1550,7 +1600,7 @@ def _canonical_mod_definition(definition: ModDefinition | None) -> dict | None:
 def _require_current_plan_sources(
     plan: BuildPlan, *, game_path: Path, phase: str
 ) -> None:
-    if plan.has_merge and tuple(e.content_id for e in plan.standard_script_entries) != plan.selected_standard_ids:
+    if plan.requires_composition and tuple(e.content_id for e in plan.standard_script_entries) != plan.selected_standard_ids:
         raise ManagerBuildError("Standard script inputs do not match the active Mod selection. Prepare again.")
     try:
         standard_signature = standard_scripts.fingerprint(plan.standard_script_entries)

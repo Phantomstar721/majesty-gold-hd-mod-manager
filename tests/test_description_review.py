@@ -20,6 +20,37 @@ def conflict(*values, base=None):
 
 
 class DescriptionReviewTests(unittest.TestCase):
+    def test_native_mixed_xml_indexes_only_direct_descriptions(self):
+        from majesty_cam.descriptions import parse_native_descriptions, DescriptionFormatError
+        payload=(b'<Majesty><Language id="en_US"><Text id="name">A name</Text></Language>'
+                 +record(20).payload+b'<Quest><Description lang="en_US"><Short>Quest text</Short>'
+                 b'</Description></Quest></Majesty>')
+        with self.assertRaisesRegex(DescriptionFormatError,'unsupported top-level'):
+            parse_descriptions(payload)
+        projected=parse_native_descriptions(payload)
+        self.assertEqual(tuple(projected.index),(('Unit','HALL'),))
+        source=NS(package=NS(mod_id='Native'),name='Native',description_payloads=(('any',payload),))
+        for scope in ('majesty','majestyexpansion'):
+            variants,_=native_descriptions((source,),scope)
+            self.assertEqual(variants[0][1].records[0]._fingerprint,record(20)._fingerprint)
+        quest=b'<Majesty><Quest><Description lang="en_US">Text</Description></Quest></Majesty>'
+        self.assertFalse(parse_native_descriptions(quest).records)
+        for unsafe in (b'<!DOCTYPE Majesty [<!ENTITY x "y">]><Majesty/>',
+                       b'<Majesty><Description type="Unit"/></Majesty>'):
+            with self.assertRaises(DescriptionFormatError):
+                parse_native_descriptions(unsafe)
+
+    def test_script_only_composition_does_not_repackage_native_xml(self):
+        class Native:
+            @property
+            def description_payloads(self):
+                raise AssertionError('Script-only composition must leave native XML loading alone')
+        common,patches,keys=prepare_description_views(Path('.'),(),(Native(),),
+            ScriptReviewSession(),None,stock_views={'majesty':{},'majestyexpansion':{}})
+        self.assertFalse(common.document.records)
+        self.assertFalse(patches)
+        self.assertFalse(keys)
+
     def test_development_scoped_records_keep_preferences_and_generated_fields(self):
         from dataclasses import dataclass, replace
         from majesty_cam.descriptions import serialize_descriptions

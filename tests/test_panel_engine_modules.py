@@ -65,4 +65,47 @@ class EngineModules(unittest.TestCase):
             with self.assertRaises(module.EngineModuleError):module.install(installed,bundle,branch)
 
 
+class HandoffEngineModules(EngineModules):
+    def test_dependency_snapshot_retains_actual_revision(self):
+        from types import SimpleNamespace
+        from majesty_cam.manager.engine_patches import snapshot_revisions
+        from majesty_cam.engine_dependencies import RequirementEvidence, PatchRequirement, missing
+        evidence=(RequirementEvidence(PatchRequirement('window-engine.v1',2),'id','test','Any','test'),)
+        rows=[SimpleNamespace(key='panel-engine',installed=True,installed_revision=2)]
+        self.assertFalse(missing(evidence,snapshot_revisions(rows)))
+        rows[0].installed_revision=1
+        self.assertTrue(missing(evidence,snapshot_revisions(rows)))
+
+    def bundle(self,service,branch):
+        if service=='window-engine':
+            return (ROOT/'local/panel-engine-alpha/handoff-native-modules'/(service+'-'+branch+'.mmne')).read_bytes()
+        return super().bundle(service,branch)
+
+    def test_handoff_extension_and_transactional_legacy_upgrade(self):
+        from unittest.mock import patch
+        from majesty_cam.manager.engine_patches import _install_revision
+        from majesty_cam.manager.qol_service import SUPPORTED_BRANCHES
+        for branch,original in self.images.items():
+            profile=next(b for b in SUPPORTED_BRANCHES if ('gog' if b.key.startswith('gog') else b.key)==branch)
+            for order in (('window-engine','script-functions'),('script-functions','window-engine')):
+                data=original
+                for service in order:
+                    old=(ROOT/'local/fixtures/panel-engine-revision1'/(service+'-'+branch+'.mmne')).read_bytes()
+                    self.assertEqual(module.decode_bundle(old)[0]['revision'],1)
+                    data=module.install(data,old,branch)
+                def bundled(_,key,unused):
+                    service='window-engine' if key=='panel-engine' else 'script-functions'
+                    return self.bundle(service,branch),branch
+                with patch('majesty_cam.manager.engine_patches.load_bundle',side_effect=bundled):
+                    changed=_install_revision(ROOT,data,'panel-engine',profile,self.bundle('window-engine',branch),branch)
+                h=module.inspect(changed,'window-engine',branch)
+                self.assertEqual(h['revision'],2)
+                self.assertLess(h['bindHandoff'],len(h['blob']))
+                self.assertTrue(module.inspect(changed,'script-functions',branch)['active'])
+                self.assertEqual(original,module.remove(module.remove(changed,'window-engine',branch),'script-functions',branch))
+                for offset in (160,164,168):
+                    bad=bytearray(changed);bad[h['section'].raw_offset+offset]^=1
+                    with self.assertRaises(module.EngineModuleError):module.inspect(bad,'window-engine',branch)
+
+
 if __name__=='__main__':unittest.main()

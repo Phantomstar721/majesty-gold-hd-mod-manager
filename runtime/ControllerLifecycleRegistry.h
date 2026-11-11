@@ -30,4 +30,11 @@ bool RegisterManagedVtable(
     ControllerCleanup cleanup,
     void* cleanupContext);
 
+// Internal presentation handoff. Only tables already registered by an existing
+// Manager controller may be wrapped. An alias leaves the presenter's destructor
+// intact, but lets its delegated Manager destructor find the same cleanup owner.
+bool DescribeManagedVtable(void** table, std::size_t* entries, void*** stock);
+bool RegisterPresenterAlias(void** presenter, void** managed);
+void** CanonicalManagedVtable(void** table);
+
 }  // namespace MajestyControllerLifecycle

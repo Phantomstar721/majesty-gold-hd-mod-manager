@@ -5,6 +5,27 @@ import unittest
 from majesty_cam.standard_scripts import read
 
 class ProjectRecoveryTests(unittest.TestCase):
+    def test_renamed_project_requires_unique_definition_inventory(self):
+        from test_bcd import compiled
+        from majesty_cam.gpl import DefinitionKind
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp); (root/'GPL').mkdir()
+            manifest=root/'mod.mmxml'; ident='11111111-1111-1111-1111-111111111111'
+            manifest.write_text(f'<Mod id="{ident}"><DisplayName>Example</DisplayName><DataConfiguration>'
+                '<Dataset base="Any"><Load><GPL>Runtime.bcd</GPL></Load></Dataset></DataConfiguration></Mod>')
+            (root/'Runtime.bcd').write_bytes(compiled((DefinitionKind.FUNCTION,'example')))
+            for name,symbol in (('Renamed','Example'),('Unrelated','Other')):
+                (root/'GPL'/f'{name}.gplproj').write_text(f'source="{name}.gpl"')
+                (root/'GPL'/f'{name}.gpl').write_text(f'function {symbol}()\nbegin\nend')
+            entry=SimpleNamespace(package_root=root,manifest_path=manifest,content_id=ident,display_name='Example')
+            recovered=read(entry)
+            self.assertEqual(recovered.loads[0].recovered_project.relative_path,'GPL/Renamed.gplproj')
+            self.assertIn(root/'GPL/Unrelated.gpl',recovered.loads[0].discovery_files)
+            # A previously unrelated project's body can change without a directory
+            # change. It must invalidate discovery rather than retain a stale match.
+            (root/'GPL/Unrelated.gpl').write_text('function Example()\nbegin\nend')
+            self.assertFalse(read(entry).loads[0].sources)
+
     def test_matching_project_under_source_directory_is_snapshotted(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

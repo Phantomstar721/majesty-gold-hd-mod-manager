@@ -11,7 +11,12 @@ void* World(){return world;}
 void* ResolvePaid(std::uint32_t id){if(id==404 && !retireSpell)return spell;return Resolve(id);}
 bool Lair(void*){return lair;}
 bool Hostile(void*,std::uint32_t,void*){return hostile && visible;}
-int __fastcall Attributes(void*,void*,std::uint32_t key,std::uint32_t){return key==0x0A555041 ? 0 : 100;}
+int paidFirstBuilt=1,paidCurrentBuilt=1;
+int __fastcall Attributes(void*,void*,std::uint32_t key,std::uint32_t){
+    if(key==0x01425041u)return paidFirstBuilt;
+    if(key==0x02425041u)return paidCurrentBuilt;
+    return key==0x0A555041 ? 0 : 100;
+}
 std::uint32_t ContextPaid(std::uint32_t,std::uint32_t){return 9;}
 void SubmitPaid(const PaidRecord& r){submittedPaid=r;}
 void Release(PaidReference*){++releases;}
@@ -138,6 +143,18 @@ void Run(){
     // Diagnostic reasons reuse the admission checks, without another query or
     // changing whether submission is allowed.
     assert(PaidActorsRejection(submittedPaid,action,sourceA,victim,world)==nullptr);
+    const auto sourceType=PaidWord(sourceA,0x7C);
+    const int callsBeforeIncomplete=nativeCalls,debitsBeforeIncomplete=debits;
+    *reinterpret_cast<std::uint32_t*>(sourceA+0x7C)=(sourceType&0x00FFFFFFu)|0x32000000u;
+    paidCurrentBuilt=0;
+    assert(std::strcmp(PaidActorsRejection(submittedPaid,action,sourceA,victim,world),"source-family-owner-or-level")==0);
+    Dispatch(submittedPaid);
+    paidCurrentBuilt=1;paidFirstBuilt=0;
+    Dispatch(submittedPaid);
+    paidFirstBuilt=1;
+    assert(nativeCalls==callsBeforeIncomplete && debits==debitsBeforeIncomplete && gold==1000);
+    assert(PaidActorsRejection(submittedPaid,action,sourceA,victim,world)==nullptr);
+    *reinterpret_cast<std::uint32_t*>(sourceA+0x7C)=sourceType;
     lair=false;
     assert(std::strcmp(PaidActorsRejection(submittedPaid,action,sourceA,victim,world),"target-not-lair")==0);
     lair=true;hostile=false;

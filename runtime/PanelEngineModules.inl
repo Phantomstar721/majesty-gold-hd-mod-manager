@@ -31,6 +31,11 @@ bool InitializePanelEngineModules() {
         if (!d.active) continue;
         if (service==1) {
             g_panelEngineModules.windowEngine=true;
+            if (d.revision==2) {
+                std::uint32_t bind=0;
+                std::memcpy(&bind,bytes+160,4);
+                g_panelEngineModules.bindHandoff=reinterpret_cast<PanelEngineHandoff::Bind>(g_imageBase+rva+256+bind);
+            }
             g_panelEngineModules.ownsView=reinterpret_cast<PanelEngineModules::Probe>(
                 g_imageBase+rva+256+d.ownsView);
             g_panelEngineModules.ownsController=reinterpret_cast<PanelEngineModules::Probe>(

@@ -205,6 +205,13 @@ class StartupCache:
                 applicable = row.get("applicable")
                 if type(supported) is not bool or type(applicable) is not bool:
                     return None
+                revision = row.get("installed_revision")
+                if revision is not None and (type(revision) is not int or revision < 1 or installed is not True):
+                    return None
+                # Old optional-engine cache rows cannot establish their native
+                # revision. Inspect once, rather than silently treating v2 as v1.
+                if installed and spec.key in ("panel-engine", "scripted-ground-actions") and revision is None:
+                    return None
                 utilities.append(
                     QolUtilityStatus(
                         patch=resolve_qol_patch(service.repo_root, spec),
@@ -213,6 +220,7 @@ class StartupCache:
                         applicable=applicable,
                         installed=installed,
                         detail=_required_string(row.get("detail"), allow_empty=True),
+                        installed_revision=revision,
                     )
                 )
         except (KeyError, TypeError, ValueError):
@@ -243,6 +251,7 @@ class StartupCache:
                     "supported": status.supported,
                     "applicable": status.applicable,
                     "installed": status.installed,
+                    "installed_revision": status.installed_revision,
                     "detail": status.detail,
                 }
                 for status in snapshot.utilities
@@ -888,6 +897,7 @@ def _manager_cache_identity_paths() -> tuple[Path, ...]:
         "stock_gpl.py", "stock_art.py", "strt.py",
         "gpl.py", "gpl_function_merge.py", "script_review.py", "compose.py", "gameplay_events.py",
         "event_boundaries.py", "potion_policy.py", "source_context.py", "dataset_dependencies.py", "native_impact.py", "native_impact_profiles.py", "damage_contributions.py",
+        "reward_contributions.py", "reward_factoring.py", "activity_time.py",
         "inventory_spell_display.py", "runtime_features.py", "stock_controller_features.py",
         "building_employment.py", "action_callback_bridge.py", "stock_controller_registry.py",
         "scoped_descriptions.py", "scoped_output.py", "checked_placement.py", "attack_observation.py", "placement_art.py",

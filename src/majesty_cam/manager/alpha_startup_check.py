@@ -25,6 +25,7 @@ def run(case_path):
         from .paths import detect_manager_paths
         from .controller import ManagerController
         from .qol_service import QolService, QolUtilityState
+        from .engine_patches import snapshot_revisions
         from .app import QApplication, _QolPage, ManagerWindow
         from types import SimpleNamespace
         paths = replace(detect_manager_paths(game_path=game,
@@ -52,6 +53,11 @@ def run(case_path):
                    if not item.applicable or item.installed is None}
             if bad:
                 raise ValueError('QoL inspection failed: ' + repr(bad))
+            revisions=snapshot_revisions(snapshot.qol_utilities)
+            expected_revisions=({'window-engine.v1':2,'script-functions.map-action.v1':1}
+                                if case.get('private') else {})
+            if revisions!=expected_revisions:
+                raise ValueError('Startup lost actual native engine revisions: '+repr(revisions))
             # Exercise the real main-window renderer, not only the cards.
             # Ready/blocked snapshots are synthetic UI inputs: no merged
             # package is constructed and no launch action is invoked.
@@ -74,6 +80,7 @@ def run(case_path):
                 window.close()
             captures.append(dict(branch=snapshot.game_build.key,
                 rows={item.key: item.state.value for item in snapshot.qol_utilities},
+                engineRevisions=revisions,
                 launchRendering='synthetic-ready-and-blocked'))
         if before != _files(game) or paths.merged_output_root.exists():
             raise ValueError('Startup mutated game inputs or constructed an output profile')

@@ -5,6 +5,9 @@ namespace {
 
 struct Registration {
     void** managedVtable;
+    void** stockVtable;
+    std::size_t entries;
+    void** canonical;
     StockControllerDestructor stockDestructor;
     volatile LONG* liveController;
     ControllerCleanup cleanup;
@@ -93,7 +96,9 @@ bool RegisterManagedVtable(
     RegistrationLock lock;
     Registration* existing = FindRegistration(managedVtable);
     if (existing != nullptr) {
-        return existing->stockDestructor ==
+        return existing->canonical == managedVtable &&
+            existing->stockVtable == stockVtable && existing->entries == vtableEntries &&
+            existing->stockDestructor ==
                 reinterpret_cast<StockControllerDestructor>(stockVtable[0]) &&
             existing->liveController == liveController &&
             existing->cleanup == cleanup &&
@@ -107,6 +112,9 @@ bool RegisterManagedVtable(
     }
 
     registration->managedVtable = managedVtable;
+    registration->stockVtable = stockVtable;
+    registration->entries = vtableEntries;
+    registration->canonical = managedVtable;
     registration->stockDestructor =
         reinterpret_cast<StockControllerDestructor>(stockVtable[0]);
     registration->liveController = liveController;
@@ -118,6 +126,36 @@ bool RegisterManagedVtable(
         reinterpret_cast<PVOID volatile*>(&g_registrations), registration);
 
     managedVtable[0] = reinterpret_cast<void*>(&ManagedControllerDestructor);
+    return true;
+}
+
+bool DescribeManagedVtable(void** table, std::size_t* entries, void*** stock) {
+    auto* row = FindRegistration(table);
+    if (!row || row->canonical != table || !entries || !stock) return false;
+    *entries = row->entries;
+    *stock = row->stockVtable;
+    return true;
+}
+
+void** CanonicalManagedVtable(void** table) {
+    auto* row = FindRegistration(table);
+    return row ? row->canonical : table;
+}
+
+bool RegisterPresenterAlias(void** presenter, void** managed) {
+    if (!presenter || presenter == managed) return false;
+    RegistrationLock lock;
+    auto* owner = FindRegistration(managed);
+    if (!owner || owner->canonical != managed) return false;
+    auto* prior = FindRegistration(presenter);
+    if (prior) return prior->canonical == managed;
+    auto* row = static_cast<Registration*>(HeapAlloc(GetProcessHeap(), 0, sizeof(Registration)));
+    if (!row) return false;
+    *row = *owner;
+    row->managedVtable = presenter;
+    row->next = g_registrations;
+    MemoryBarrier();
+    InterlockedExchangePointer(reinterpret_cast<PVOID volatile*>(&g_registrations), row);
     return true;
 }
 

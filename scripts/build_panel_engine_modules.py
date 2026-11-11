@@ -80,7 +80,7 @@ def transform(source, component, branch, bindings, tables):
         source,count=re.subn(r'^#define GPL_DEBUGGER_ON .*$', '#define GPL_DEBUGGER_ON 0',source,flags=re.M)
         if count!=1:raise ValueError('SDK diagnostic gate changed')
         maximum=max(p['maximumEntries'] for p in tables['profiles'].values())
-        classes=max(len(p['tables']) for p in tables['profiles'].values())
+        classes=50  # retain the SDK's bounded class capacity for composed tables
         source=bounded_class_copy(source,maximum,classes)
         header=cpp_tables(tables['profiles'][branch],maximum)
         agent_header=ROOT/'runtime/PanelEngineAgentClient.h'
@@ -88,6 +88,8 @@ def transform(source, component, branch, bindings, tables):
         raw=functions['AGENT_UNIT']['profiles'][branch]
         source+='\nstatic void* __fastcall MMWE_LiveAgentUnit(void* agent,void*) { return MajestyPanelEngine::ResolveLiveAgentUnit(agent,(MajestyPanelEngine::AssociatedUnit)'+hex(raw)+'); }\n'
         source+='\n#include '+json.dumps((ROOT/'runtime/PanelEngineOwnerProbe.inl').as_posix())+'\n'
+        from panel_engine_handoff_source import adapt
+        source=adapt(source)
     else:
         for original,key in (('0x7c5304','unitCatalog'),('0x7c544c','runtimeGlobal'),
                              ('0x5bc9c0','boardExtents'),('0x663da0','listCopy'),('0x4c3740','placeBuilding')):
@@ -196,6 +198,7 @@ def build(sdk_root,work,fixtures):
                 struct.pack_into('<I',replay,offset,(value+direction*delta)&0xffffffff)
             if bytes(replay)!=alternate:raise ValueError('Module relocation replay differs from COFF linker')
             names=({'entry':'@WE_Factory@24','ownsView':'_MMWE_OwnsView','ownsController':'_MMWE_OwnsController'} if component=='window-engine' else {'entry':'_SF_Hook'})
+            if component=='window-engine': names['bindHandoff']='_MMWE_BindHandoff'
             # MSVC decorates fastcall entries with the physical stack/type
             # signature; resolve one exact name, never an approximate symbol.
             if component=='window-engine' and names['entry'] not in exports:
@@ -203,7 +206,8 @@ def build(sdk_root,work,fixtures):
             for symbol in names.values():
                 if symbol not in exports:raise ValueError('Missing module export '+symbol+'; available='+str(sorted(exports)))
             h=hooks['profiles'][branch]['windowFactoryCall' if component=='window-engine' else 'scriptRegistrationTail']
-            metadata={'schema':1,'service':component,'branch':branch,'revision':1,'ownershipABI':1,
+            revision=2 if component=='window-engine' else 1
+            metadata={'schema':1,'service':component,'branch':branch,'revision':revision,'ownershipABI':1,
                 'base':LINK_BASE,'blobSize':len(blob),'blobSha256':hashlib.sha256(blob).hexdigest(),
                 'exports':{k:exports[v]-LINK_BASE for k,v in names.items()},'relocations':relocations,
                 'hookRva':h['rva'],'originalHook':h['bytes'],
@@ -215,7 +219,7 @@ def build(sdk_root,work,fixtures):
             artifact=MAGIC+struct.pack('<II',len(encoded),len(blob))+encoded+blob
             path=work/(name+'.mmne');path.write_bytes(artifact)
             index['modules'][name]={'file':path.name,'sha256':hashlib.sha256(artifact).hexdigest(),
-                'blobSha256':metadata['blobSha256'],'service':component,'branch':branch,'revision':1}
+                'blobSha256':metadata['blobSha256'],'service':component,'branch':branch,'revision':revision}
     (work/'modules.json').write_text(json.dumps(index,indent=2)+'\n',encoding='utf8')
     return index
 

@@ -116,7 +116,12 @@ try {
     # support material, not Workshop content; leave the originals untouched.
     $contentBoundary = [IO.Path]::GetFullPath($contentPath).TrimEnd('\') + '\'
     Get-ChildItem -LiteralPath $contentPath -Recurse -File -Force |
-        Where-Object { $_.Extension -in @('.log', '.dmp', '.mdmp') } |
+        Where-Object {
+            $_.Extension -in @('.log', '.dmp', '.mdmp') -or
+            $_.Name -match '^MajestyBuildingRuntime\.log(?:\.(?:[12]|fault)(?:\.[12])?)?$' -or
+            $_.Name -match '^manager-launch\.json(?:\.[12])?$' -or
+            $_.Name -match '^manager-error\.txt(?:\.1)?$'
+        } |
         ForEach-Object {
             $diagnosticPath = [IO.Path]::GetFullPath($_.FullName)
             if (-not $diagnosticPath.StartsWith($contentBoundary, [StringComparison]::OrdinalIgnoreCase)) {

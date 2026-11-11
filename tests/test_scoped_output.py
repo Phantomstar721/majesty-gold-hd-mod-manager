@@ -277,9 +277,10 @@ class ScopedOutputTests(unittest.TestCase):
             self.assertEqual(controller._expand_generated_profile_ids((ids[2],)), (HAUNT_ID,))
 
     def test_active_id_limit_includes_every_generated_record(self):
+        from majesty_cam.manager.launch import CURRENT_PERSISTENCE_LIMIT
         with TemporaryDirectory() as tmp:
             plan = _merge_plan(_manager_paths(Path(tmp)), fingerprint='current')
-            plan = replace(plan, selected_standard_ids=tuple(str(i) for i in range(24)))
+            plan = replace(plan, selected_standard_ids=tuple(str(i) for i in range(CURRENT_PERSISTENCE_LIMIT - 2)))
             self.assertEqual(_remaining_generated_slots(plan), 2)
 
     def test_owned_bundle_readback_requires_scope_report_and_every_file(self):

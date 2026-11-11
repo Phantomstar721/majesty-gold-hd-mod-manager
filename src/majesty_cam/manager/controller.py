@@ -507,7 +507,7 @@ class ManagerController:
                 raise ManagerBuildError(self._required_qol_message("preparing mods"))
             details = "; ".join(issue.message for issue in self.plan.issues)
             raise ManagerBuildError(
-                details or "Select at least one supported Merge mod before preparing mods."
+                details or "Select mods with source-backed changes before preparing."
             )
         review = {}
         if script_conflict_resolver is not None:
@@ -596,7 +596,7 @@ class ManagerController:
         except (OSError,ValueError,KeyError) as exc:raise ManagerLaunchError(str(exc)) from exc
         profile_lock = None
         try:
-            if self.plan.has_merge and not classic:
+            if self.plan.requires_composition and not classic:
                 try:
                     profile_lock = acquire_merged_profile_lock(
                         self.paths.merged_output_root
@@ -632,7 +632,7 @@ class ManagerController:
             capability_manifest = self.paths.empty_runtime_capability_manifest
             runtime_feature_registry = self.paths.empty_runtime_feature_registry
             controller_registry = self.paths.empty_controller_registry
-            if self.plan.has_merge and not classic:
+            if self.plan.requires_composition and not classic:
                 try:
                     _require_current_plan_sources(
                         self.plan,
@@ -695,7 +695,7 @@ class ManagerController:
         requirements, dependency_issues = self._engine_dependencies()
         managed = self._managed_build_cache
         build_required = bool(
-            self.plan.has_merge
+            self.plan.requires_composition
             and (
                 managed is None
                 or managed.fingerprint != self.plan.fingerprint
@@ -715,7 +715,7 @@ class ManagerController:
         if alpha_launch_blocker():
             runtime_ready = False
         qol_ready = self._required_qol_ready()
-        can_build = self.plan.has_merge and self.plan.valid and qol_ready
+        can_build = self.plan.requires_composition and self.plan.valid and qol_ready
         can_launch = self.plan.valid and runtime_ready and qol_ready and not build_required
         return ControllerSnapshot(
             catalog=self.catalog,
@@ -746,7 +746,7 @@ class ManagerController:
         evidence, issues = [], []
         entries=list(self.catalog.entries)
         managed=getattr(self,'_managed_build_cache',None)
-        finalized=bool(not classic and self.plan.has_merge and managed is not None
+        finalized=bool(not classic and self.plan.requires_composition and managed is not None
                        and managed.fingerprint==self.plan.fingerprint and managed.manifest.is_file())
         if finalized:
             from types import SimpleNamespace
@@ -995,6 +995,9 @@ class ManagerController:
             ),
         )
         self.plan = refresh_standard_script_inputs(self.plan, selected)
+        if self.plan.standard_composition and not self.plan.stock_compose_inputs:
+            self._replan()
+            return
         self._discard_stale_script_preferences()
 
     def _enforce_catalog_exclusivity(self) -> None:

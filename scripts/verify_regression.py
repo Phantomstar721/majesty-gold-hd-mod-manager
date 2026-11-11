@@ -26,6 +26,9 @@ COMMON = (
     "test_stock_input_cache", "test_regression_gate",
 )
 PANEL_ALPHA = (
+    "test_panel_engine_resource_contracts",
+    "test_reward_contributions", "test_reward_factoring", "test_package", "test_standard_scripts",
+    "test_shared_services",
     "test_panel_engine_alpha",
     "test_panel_engine_owner_fixture",
     "test_panel_engine_modules", "test_panel_engine_installation",

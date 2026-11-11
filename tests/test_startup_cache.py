@@ -30,6 +30,7 @@ from majesty_cam.manager.qol_service import (
     QolService,
     QolUtilityState,
     QolUtilityStatus,
+    PANEL_ENGINE_PATCHES,
     resolve_qol_patch,
 )
 from majesty_cam.manager.startup_cache import (
@@ -46,6 +47,27 @@ MOD_ID = "8C48289E-7C70-4426-8913-133F3544A182"
 
 
 class StartupCacheTests(unittest.TestCase):
+    def test_native_engine_revision_survives_cache_and_legacy_rows_require_inspection(self):
+        from majesty_cam.manager.engine_patches import snapshot_revisions
+        with TemporaryDirectory() as temp:
+            root=Path(temp)
+            spec=next(s for s in PANEL_ENGINE_PATCHES if s.key=='panel-engine')
+            service=QolService(repo_root=root,game_executable=root/'MajestyHD.exe',
+                prefs_path=root/'prefs',specs=(spec,))
+            status=QolUtilityStatus(resolve_qol_patch(root,spec),QolUtilityState.INSTALLED,
+                True,True,True,'Installed',installed_revision=2)
+            snapshot=QolCatalogSnapshot(service.game_executable,PUBLIC_BRANCH,(status,))
+            cache=StartupCache.load(root/'cache.json')
+            cache.set_qol('fixture',snapshot);cache.save()
+            restored=StartupCache.load(root/'cache.json')
+            self.assertEqual(snapshot_revisions(restored.get_qol('fixture',service).utilities),{'window-engine.v1':2})
+            row=restored.qol['installations'][0]['utilities'][0]
+            for bad in (True,0,-1,'2'):
+                row['installed_revision']=bad
+                self.assertIsNone(restored.get_qol('fixture',service))
+            row.pop('installed_revision')
+            self.assertIsNone(restored.get_qol('fixture',service))
+
     def test_game_evidence_tracks_declared_inputs_without_reading_large_payloads(self):
         from majesty_cam.stock_gpl import STOCK_GPL_RUNTIME_PAIRS
 
@@ -356,6 +378,7 @@ class StartupCacheTests(unittest.TestCase):
                 paths = _manager_cache_identity_paths()
                 for name in ("compose.py", "gameplay_events.py", "event_boundaries.py",
                              "potion_policy.py", "source_context.py", "dataset_dependencies.py",
+                             "reward_contributions.py", "activity_time.py",
                              "inventory_spell_display.py", "runtime_features.py", "stock_controller_features.py"):
                     with self.subTest(module=name):
                         before = metadata_signature(paths)

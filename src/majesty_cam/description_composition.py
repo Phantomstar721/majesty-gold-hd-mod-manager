@@ -1,7 +1,7 @@
 """Dataset-scoped XML review using authored snapshots and native load order."""
 from dataclasses import replace
 
-from .descriptions import DescriptionsDocument, parse_descriptions, serialize_descriptions
+from .descriptions import DescriptionsDocument, parse_native_descriptions, serialize_descriptions
 from .description_review import DescriptionReviewCandidate, DescriptionReviewConflict
 from .script_review import ScriptReviewCancelled
 
@@ -12,12 +12,13 @@ def native_descriptions(inputs, scope):
     for source in inputs:
         owner = source.package.mod_id.strip('{}').casefold()
         labels[owner] = source.name
-        for base, payload in source.description_payloads:
+        for number, (base, payload) in enumerate(source.description_payloads, 1):
             if base not in ('any', 'majesty', 'majestyexpansion'):
                 raise ValueError('Unsupported Standard XML dataset: ' + base)
             if base not in ('any', scope):
                 continue
-            for record in parse_descriptions(payload).records:
+            for record in parse_native_descriptions(payload,
+                    source=f'{source.name}: native Descriptions XML #{number} ({base})').records:
                 effective[record.key] = (owner, record)
     grouped = {}
     for owner, record in effective.values():
@@ -35,7 +36,11 @@ def subset(result, keys):
 def prepare_description_views(game_path, inventories, inputs, review, resolver, *, finalize_views=None, stock_views=None, **kwargs):
     from .compose import merge_description_resources, _load_effective_stock_descriptions
     scopes = ('majesty', 'majestyexpansion')
-    native = {scope: native_descriptions(inputs, scope) for scope in scopes}
+    # A script-only overlay has no Description edits to reconcile. Keep all
+    # original XML loading with the enabled Standard packages, including text,
+    # quest metadata and records belonging to other native resource families.
+    native_inputs = inputs if inventories else ()
+    native = {scope: native_descriptions(native_inputs, scope) for scope in scopes}
     external_keys = {r.key for variants, _ in native.values() for _, doc in variants
                      for r in doc.records if r.to_element().get('subType') == 'Building'}
     labels = {i.selected.alias: (i.selected.package.mod_id.strip('{}').casefold(),

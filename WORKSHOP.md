@@ -1,4 +1,12 @@
-Version 0.3.13 (beta) adds optional Custom Building Panels and Scripted Ground
+Version 0.3.14 (beta) combines more original source-backed scripts without an
+author rewrite and lets custom panel presentation keep existing hiring,
+research and spell handlers. It also fixes Standard-only scans and native text
+XML handling. Unsupported overlaps keep the usual preferred-mod choices.
+Update optional patches through Quality of Life when selected content requires
+a newer revision; patches are never installed automatically. Prepare Again after
+updating. Supports Default Steam, beta2 and GOG.
+
+Version 0.3.13 (beta) added optional Custom Building Panels and Scripted Ground
 Actions, with credit to mikmak300 on each patch's Quality of Life row. Selected
 content explains its detected or declared patch requirements before launch;
 install the patches you need from Quality of Life. Native engine mods keep

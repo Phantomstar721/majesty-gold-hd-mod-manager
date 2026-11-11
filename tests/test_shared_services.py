@@ -18,7 +18,7 @@ from majesty_cam.package import parse_mod_definition, mod_definition_mapping
 from majesty_cam.shared_composition import SharedBinding, validate_shared_bindings, event_subscribers
 from majesty_cam.shared_features import (StockActivityDuration, StockGameplayEventObserver,
                                         EVENT_SIGNATURES, parse_shared_feature, shared_feature_mapping)
-from gpl_sampler_harness import Agent, SamplerHarness
+from gpl_sampler_harness import Agent, SamplerHarness, _Return
 
 GAME = Path("C:/Program Files (x86)/Steam/steamapps/common/Majesty HD")
 MOD = "12345678-1234-1234-1234-123456789abc"
@@ -246,7 +246,8 @@ class SharedServiceTests(unittest.TestCase):
                 vm.calls["nullagent"] = null_agent
                 self.assertEqual(vm.root.fields, {})
                 self.assertEqual(vm.call("Example_Duty_Start", owner, subject, context, 1, 1000), 1)
-                self.assertEqual(native_calls, [()])
+                self.assertTrue(native_calls)
+                self.assertTrue(all(args == () for args in native_calls))
                 records = vm.root["MM_ActivityRecords_v1"]
                 self.assertEqual(len(records), RECORD_WIDTH)
                 self.assertIs(records[3], context)
@@ -332,6 +333,79 @@ class SharedServiceTests(unittest.TestCase):
         self.assertEqual(vm.call("Example_Duty_Elapsed", owner, 1), 0)
         self.assertTrue(vm.scheduled)
         self.assertEqual(vm.stops, 0)
+
+    def test_terminal_cancel_finishes_cleanup_before_reentrant_consumer(self):
+        # Fault-inject loss of the outer Change's locals on same-function
+        # re-entry. This models the reported null Root; it is not a VM claim.
+        class ReusedChangeLocals(SamplerHarness):
+            def call(self, name, *args):
+                if name.lower() != 'mm_ad_change':
+                    return super().call(name, *args)
+                params, defaults, body = self.functions[name.lower()]
+                if not hasattr(self, 'change_frame'):
+                    self.change_frame = {}
+                env = self.change_frame
+                env.clear()
+                env.update((key, factory()) for key, factory in defaults.items())
+                env.update(zip(params, args))
+                try:
+                    self.run(body, env)
+                except _Return as result:
+                    return result.value
+                finally:
+                    env.clear()
+                    env.update((key, factory()) for key, factory in defaults.items())
+
+        for nested_key, restart in ((1, False), (2, False), (1, True)):
+            with self.subTest(nested_key=nested_key, restart=restart):
+                vm = ReusedChangeLocals(activity_source((SharedBinding(MOD, ACTIVITY),)))
+                owner, subject = Agent(), Agent()
+                vm.calls['example_qualifies'] = lambda *args: True
+                vm.call('Example_Duty_Start', owner, subject, None, 1, 5000)
+                if nested_key == 2:
+                    vm.call('Example_Duty_Start', owner, subject, None, 2, 5000)
+                seen = []
+                def cancel(o, s, c, key, reason):
+                    seen.append(key)
+                    if key == 1:
+                        if nested_key == 1:
+                            self.assertFalse(vm.scheduled)
+                            self.assertEqual(vm.stops, 1)
+                        self.assertEqual(vm.call('Example_Duty_Cancel', owner, nested_key),
+                                         0 if nested_key == 1 else 1)
+                        if restart:
+                            self.assertEqual(vm.call('Example_Duty_Start', owner, subject, None, 3, 5000), 1)
+                vm.calls['example_cancelled'] = cancel
+                self.assertEqual(vm.call('Example_Duty_Cancel', owner, 1), 1)
+                self.assertEqual(seen, [1] if nested_key == 1 else [1, 2])
+                self.assertEqual(vm.scheduled, restart)
+                self.assertEqual(vm.stops, 1)
+                self.assertEqual(len(vm.root['MM_ActivityRecords_v1']), RECORD_WIDTH if restart else 0)
+
+    def test_absent_root_and_terminal_root_replacement(self):
+        vm, owner, subject, _, _ = self.harness()
+        vm.root = None
+        self.assertEqual(vm.call('Example_Duty_Start', owner, subject, None, 1, 1000), -1)
+        self.assertEqual(vm.call('Example_Duty_Cancel', owner, 1), 0)
+        self.assertEqual(vm.call('Example_Duty_State', owner, 1), 0)
+        self.assertEqual(vm.call('Example_Duty_Elapsed', owner, 1), -1)
+        vm.call('MM_AD_Tick')
+        vm.call('MM_AD_StopIfEmpty', None)
+        for replace_root in (False, True):
+            vm, owner, subject, _, _ = self.harness()
+            vm.call('Example_Duty_Start', owner, subject, None, 1, 1000)
+            retired = vm.root
+            replacement = Agent() if replace_root else None
+            def finish(*args):
+                vm.root = replacement
+                vm.scheduled = False  # quest lifetime, not service deletion
+            vm.calls['example_complete'] = finish
+            vm.tick()
+            vm.tick()
+            self.assertEqual(retired['MM_ActivityRecords_v1'], [])
+            self.assertEqual(vm.stops, 0)
+            if replacement is not None:
+                self.assertEqual(replacement.fields, {})
 
     def test_emitted_bounds_and_condition_cannot_mutate_ledger(self):
         vm, owner, subject, _, _ = self.harness()
@@ -439,7 +513,9 @@ end
         self.assertEqual(len(copies), 1)
         self.assertEqual(copies[0].count('$PrivateReagentAward('), 1)
         self.assertIn('$MM_Event_RewardPaid(MM_SourceContext,', copies[0])
-        self.assertEqual(functions['regeneration_elixer_effect'].count('$Example_Event0('), 2)
+        from majesty_cam.gpl_function_merge import _tokens
+        potion_callback = '$' + next(f.callback_symbol.casefold() for f in events() if f.event == 'potion-consumed')
+        self.assertEqual(_tokens(functions['regeneration_elixer_effect']).count(potion_callback), 2)
         self.assertNotIn('Phantom', functions['regeneration_elixer_effect'])
         with TemporaryDirectory(prefix="manager-event-wrapper-compiler-") as tmp:
             compile_gpl(final.emit_project_source_set("Fixture.gpl", "Fixture.dat"),
@@ -455,20 +531,26 @@ end
         observed = add_gameplay_event_observers(initial, subscribers, stock)
         final = add_activity_service(observed, bindings)
         functions = {item.normalized_name: item.text for item in final.items}
+        from majesty_cam.gpl_function_merge import _tokens
+        calls = {name: _tokens(text) for name, text in functions.items()}
+        callback = {f.event: '$' + f.callback_symbol.casefold() for f in events()}
         self.assertNotIn("dropgoldinradius", functions)
         self.assertNotIn("exit_fair", functions)
         self.assertNotIn("dump_contestants", functions)
-        self.assertIn("$MM_Event_FairFinished", functions["enter_tourney"])
-        self.assertLess(functions["mm_event_fairfinished"].index("$Exit_Fair("),
-                        functions["mm_event_fairfinished"].index("$Example_Event3("))
+        self.assertIn('$mm_event_fairfinished', calls['enter_tourney'])
+        self.assertLess(calls['mm_event_fairfinished'].index('$exit_fair'),
+                        calls['mm_event_fairfinished'].index(callback['tournament-completed']))
         for name in ("heal_self", "heal_self_fleeing"):
-            self.assertEqual(functions[name].count("$Example_Event0("), 1)
-        caravan = functions["caravan_go_trade"]
-        self.assertLess(caravan.casefold().index("$transfer_gold"), caravan.index("$Example_Event2("))
-        self.assertLess(caravan.index("$Example_Event2("), caravan.casefold().index("$henchman_dead"))
+            self.assertEqual(calls[name].count(callback['potion-consumed']), 1)
+        caravan = calls['caravan_go_trade']
+        self.assertLess(caravan.index('$transfer_gold'), caravan.index(callback['caravan-delivered']))
+        self.assertLess(caravan.index(callback['caravan-delivered']), caravan.index('$henchman_dead'))
         self.assertFalse(find_foreach_return_violations(final.emit_project_source_set().gpl_text))
         changed = stock["heal_self"]
-        changed = replace(changed, text=changed.text.replace("#ATTRIB_NumHealingPotions", "#ATTRIB_HitPoints"))
+        import re
+        tampered = re.sub('#ATTRIB_NumHealingPotions', '#ATTRIB_HitPoints', changed.text, flags=re.I)
+        self.assertNotEqual(tampered, changed.text)
+        changed = replace(changed, text=tampered)
         with self.assertRaisesRegex(ValueError, "success/cleanup boundary"):
             add_gameplay_event_observers(SemanticMergeResult((*callbacks.items, changed), ()), subscribers, stock)
         # This compiles only a disposable language fixture, not a mod/profile.

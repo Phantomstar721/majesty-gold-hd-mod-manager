@@ -69,7 +69,7 @@ bool SourceMatchesAction(void* source, std::uint32_t player,
     if ((panel->buildingFamilyId & 0xFFFFFF00u) == 0) mask = 0x000000FFu;
     return *reinterpret_cast<const std::uint32_t*>(data + 0x80) == player &&
         (type & mask) == panel->buildingFamilyId &&
-        SelectedBuildingLevel(source) >= static_cast<int>(action.requiredLevel);
+        BuildingActionMeetsLevel(source, action.requiredLevel);
 }
 
  #include "PaidSourceTargetPolicy.inl"

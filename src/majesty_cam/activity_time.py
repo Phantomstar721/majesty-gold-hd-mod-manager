@@ -26,6 +26,7 @@ declare
     agent Root;
 begin
     Root = $RetrieveAgent("GplAIRoot");
+    if (Root == $NullAgent()) return Root;
     if ($HasAttribute("MM_ActivityRecords_v1", Root) == False)
         begin
             $AddAttribute(Root, "MM_ActivityRecords_v1", "list");
@@ -55,6 +56,8 @@ end
 function MM_AD_StopIfEmpty(agent Root)
 declare
 begin
+    if (Root == $NullAgent()) return;
+    if ($RetrieveAgent("GplAIRoot") != Root) return;
     if (Root's "MM_ActivityTicking_v1") return;
     if ($ListSize(Root's "MM_ActivityRecords_v1") == 0)
         if (Root's "MM_ActivityRunning_v1")
@@ -77,6 +80,7 @@ begin
     Required = (Context != $NullAgent());
     if (Required) if ($MM_AD_Alive(Context) == False) return -1;
     Root = $MM_AD_Root();
+    if (Root == $NullAgent()) return -1;
     if (Root's "MM_ActivityBusy_v1") return -3;
     Root's "MM_ActivityBusy_v1" = True;
     Records = Root's "MM_ActivityRecords_v1";
@@ -117,6 +121,11 @@ declare
     integer Index;
 begin
     Root = $MM_AD_Root();
+    if (Root == $NullAgent())
+        begin
+            if (State) return 0;
+            return -1;
+        end
     Records = Root's "MM_ActivityRecords_v1";
     Index = $MM_AD_Find(Records, Identity, Owner, Key);
     if (Index == 0)
@@ -141,6 +150,7 @@ declare
     boolean Enabled;
 begin
     Root = $MM_AD_Root();
+    if (Root == $NullAgent()) return 0;
     if (Root's "MM_ActivityBusy_v1") return -3;
     Root's "MM_ActivityBusy_v1" = True;
     Records = Root's "MM_ActivityRecords_v1";
@@ -175,11 +185,13 @@ begin
         end
     Root's "MM_ActivityRecords_v1" = Kept;
     Root's "MM_ActivityBusy_v1" = False;
-    // Commit removal before cancellation; callbacks may start a new identity.
+    // Finish this removal's scheduler cleanup before calling consumer GPL.
+    // A cancellation callback may synchronously enter this function again.
+    // Do not retain or dereference this invocation's locals after that call.
     if (Action == 0)
         begin
-            $MM_AD_Notify(Identity, Owner, Subject, Context, Key, 1);
             $MM_AD_StopIfEmpty(Root);
+            $MM_AD_Notify(Identity, Owner, Subject, Context, Key, 1);
         end
     return 1;
 end
@@ -193,6 +205,7 @@ declare
     boolean Enabled, Qualifying, Previous, Required;
 begin
     Root = $MM_AD_Root();
+    if (Root == $NullAgent()) return;
     if (Root's "MM_ActivityBusy_v1") return;
     if (Root's "MM_ActivityTicking_v1") return;
     Root's "MM_ActivityTicking_v1" = True;
@@ -260,6 +273,10 @@ begin
                 $ListMember(Finished, Index + 4), $ListMember(Finished, Index + 5));
             Index += 6;
         end
+    // A terminal callback may have ended the quest. Do not touch a retired
+    // root, initialize a replacement root, or recreate its schedule here.
+    if (Root == $NullAgent()) return;
+    if ($RetrieveAgent("GplAIRoot") != Root) return;
     Root's "MM_ActivityTicking_v1" = False;
     $MM_AD_StopIfEmpty(Root);
 end

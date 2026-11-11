@@ -9,12 +9,13 @@ subscribed to through Steam Workshop.
 It also combines compatible Merge mods and supplies the game-side support
 needed by custom buildings, panels, and other advanced features.
 
-Current release candidate: **0.3.13 (beta)**. [What changed](release/v0.3.13.md).
+Current release candidate: **0.3.14 (beta)**. [What changed](release/v0.3.14.md).
 
-The **0.3.13 beta** adds optional Custom Building Panels and Scripted
-Ground Actions, credited to mikmak300. Install either from Quality of Life
-when selected content needs it. Native engine mods retain their normal
-Standard packaging and dataset scope. [Beta changes](release/v0.3.13.md).
+The **0.3.14 beta** combines more original source-backed scripts and lets
+Custom Building Panels work with existing action handlers. Optional panel and
+ground-action patches remain credited to mikmak300 and are installed through
+Quality of Life when needed. Native engine mods retain their Standard packaging
+and dataset scope. [Beta changes](release/v0.3.14.md).
 
 ## Features
 
@@ -263,6 +264,10 @@ These features are package-declared, not tied to particular mod names or UUIDs:
   [private hero integration](docs/private-hero-integration.md). Standard mod
   variants can share hero declarations through an explicit
   [list of component IDs](docs/standard-script-providers.md#shared-declarations-for-standard-variants).
+- **Declared reward selection (alpha):** authors can combine membership rules,
+  attack incentives and flag priority through explicit source contributions.
+  Player reward flags retain stock dispatch; undeclared overlaps retain the
+  preferred-mod choice. See [reward source contributions](docs/reward-source-contributions.md).
 - **Events and timing:** shared gameplay notifications, activity duration,
   stock simulation-time queries, effect duration, and declared spell cooldown
   completion. See [shared events and activity timers](docs/stock-events-and-activity-time.md)
@@ -350,10 +355,13 @@ The detected version and installation folder are shown at the top of the app.
 Use **Choose…** if you want the manager to use a different supported
 `MajestyHD.exe`.
 
-**Standard mods are not folded into the Merge package.** They retain Majesty's
-normal load order and may overlap one another or the prepared package. A
-Standard label does not mean conflict-free; follow the authors' requirements
-and review detected conflicts.
+**Standard mods keep their native packages and resources.** In the updated local
+beta tester and panel-engine alpha, normal Prepare can
+combine source-backed, independent function edits even when no Merge mod is
+selected. Actual conflicting edits retain the preferred mod's native precedence;
+Classic Launch uses native load order without this composition. A Standard label
+does not mean conflict-free; follow the authors' requirements and review detected
+conflicts. See [source-backed Standard composition](docs/standard-only-source-composition.md).
 
 For compatible Merge mods, independent script instructions and Description
 fields can combine against stock content. Competing edits still require an
