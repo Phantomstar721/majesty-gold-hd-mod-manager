@@ -14,8 +14,10 @@ Current release candidate: **0.3.14 (beta)**. [What changed](release/v0.3.14.md)
 The **0.3.14 beta** combines more original source-backed scripts and lets
 Custom Building Panels work with existing action handlers. Optional panel and
 ground-action patches remain credited to mikmak300 and are installed through
-Quality of Life when needed. Native engine mods retain their Standard packaging
-and dataset scope. [Beta changes](release/v0.3.14.md).
+Quality of Life when needed. The updated native engine SDK supports additional
+panel records and script functions, with corrected GOG panel text handling.
+Native engine mods retain their Standard packaging and dataset scope.
+[Beta changes](release/v0.3.14.md).
 
 ## Features
 

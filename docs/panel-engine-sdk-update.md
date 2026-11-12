@@ -73,7 +73,7 @@ not distributed runtime files. The user's local in-game test was reported workin
 on November 11, 2026. That report does not establish separate playtests on all
 three executables.
 
-This SDK update is separate from the existing 0.3.14 Workshop stage. That older
-stage retains its original runtime and is held pending correction of its GOG
-text/message bindings; cleaning its generated build files does not update those
-bindings.
+The updated 0.3.14 release candidate includes the corrected GOG text/message
+bindings with these SDK modules. It replaces the earlier held Workshop stage;
+cleaning that older stage's generated build files alone did not provide the
+binding correction.

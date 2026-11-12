@@ -2,6 +2,9 @@ Version 0.3.14 (beta) combines more original source-backed scripts without an
 author rewrite and lets custom panel presentation keep existing hiring,
 research and spell handlers. It also fixes Standard-only scans and native text
 XML handling. Unsupported overlaps keep the usual preferred-mod choices.
+Includes the updated native panel/script engine SDK, newer panel records and
+script functions, and corrected GOG panel text handling. Original native engine
+packages keep their Standard packaging without a Manager-specific copy.
 Update optional patches through Quality of Life when selected content requires
 a newer revision; patches are never installed automatically. Prepare Again after
 updating. Supports Default Steam, beta2 and GOG.
