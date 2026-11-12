@@ -59,6 +59,8 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $managerIcon -PathType Leaf)) {
     throw "The Majesty Mod Manager icon was not found: $managerIcon"
 }
+& $python (Join-Path $PSScriptRoot 'build_updated_panel_engine_modules.py') --work (Join-Path $repoRoot 'local/panel-engine-alpha/native-modules')
+if ($LASTEXITCODE -ne 0) { throw 'Updated three-version engine module build failed.' }
 & $python (Join-Path $PSScriptRoot 'verify_regression.py') --mode $Mode
 if ($LASTEXITCODE -ne 0) { throw 'Source regression gate failed; application packaging was not started.' }
 $releaseFiles = @(

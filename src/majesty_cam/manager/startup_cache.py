@@ -402,7 +402,7 @@ def qol_input_signature(service: QolService) -> str:
         paths.append(service.repo_root/'profiles/panel-engine/alpha-ui-layouts.json')
     from .engine_patches import bundle_root
     modules=bundle_root(service.repo_root)
-    paths.extend((modules/'modules.json',*sorted(modules.glob('*.mmne'))))
+    paths.extend((modules/'modules.json',*sorted(modules.rglob('*.mmne'))))
     data = service.game_executable.parent / "Data"
     paths.extend(data.glob("UIData_*.dat"))
     if panel_alpha():paths.extend(data.glob('UIAlfa_*.dat'))
@@ -898,6 +898,7 @@ def _manager_cache_identity_paths() -> tuple[Path, ...]:
         "gpl.py", "gpl_function_merge.py", "script_review.py", "compose.py", "gameplay_events.py",
         "event_boundaries.py", "potion_policy.py", "source_context.py", "dataset_dependencies.py", "native_impact.py", "native_impact_profiles.py", "damage_contributions.py",
         "reward_contributions.py", "reward_factoring.py", "activity_time.py",
+        "panel_engine.py", "panel_engine_composition.py", "engine_dependencies.py", "engine_module.py",
         "inventory_spell_display.py", "runtime_features.py", "stock_controller_features.py",
         "building_employment.py", "action_callback_bridge.py", "stock_controller_registry.py",
         "scoped_descriptions.py", "scoped_output.py", "checked_placement.py", "attack_observation.py", "placement_art.py",
@@ -908,6 +909,7 @@ def _manager_cache_identity_paths() -> tuple[Path, ...]:
             "catalog.py",
             "preflight.py",
             "qol_service.py",
+            "engine_patches.py",
             "controller.py",
         )
     )

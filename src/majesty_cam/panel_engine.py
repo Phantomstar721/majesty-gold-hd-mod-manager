@@ -20,6 +20,14 @@ SIMPLE_KINDS = frozenset(("HIDE", "BACK", "HIDEBUSY", "TFOLLOW", "TOPEN", "TALL"
 NUMERIC_KINDS = frozenset(("RECRUIT", "COST", "DOES", "HIDEWHEN"))
 LABEL_KINDS = frozenset(("LABEL", "CHOICE"))
 COLUMN_VALUES = frozenset(("count", "level", "hp", "maxhp", "gold"))
+VALUE_KINDS = frozenset(("TEXT", "HINT", "STATE", "STATEHINT", "SHOWIF", "HIDEIF",
+    "BAR", "TICK", "CHOSEN", "PICTURE", "TEXTPICK", "HINTPICK"))
+ROW_KINDS = frozenset(("RTEXT", "RTEXTPICK", "RICON", "RHINT", "RHINTPICK"))
+UPDATED_KINDS = ROW_KINDS | frozenset(("PICTURE", "BKG", "TEXTPICK", "HINTPICK",
+    "TITLE", "SPELL", "EFFECT"))
+# Manager revisions, independent of the upstream release dates. Revision 2
+# added the managed-panel handoff, without changing the original WE|1 grammar.
+UPDATED_PANEL_REVISION = 3
 
 
 class PanelEngineError(ValueError):
@@ -51,6 +59,7 @@ class Reference:
     value: str
     # TABLE stores its scrollbar and mode together as "bar~mode".
     component: int | None = None
+    prefix: str = ""
 
 
 @dataclass(frozen=True)
@@ -65,19 +74,32 @@ class Behavior:
     def text(self):
         return "|".join(self.fields)
 
-    def remap(self, *, panels=None, callbacks=None, images=None, controls=None):
+    @property
+    def minimum_revision(self):
+        updated_table = self.kind == "TABLE" and (
+            len(self.fields[5].split("~")) > 2 or self.fields[5].split("~")[1] == "2")
+        if (self.kind in UPDATED_KINDS or any(r.kind == "attribute" for r in self.references)
+                or updated_table
+                or self.kind == "TCOL" and self.fields[4] == "#"
+                or self.kind in ("TEXT", "HINT") and len(self.fields) > 5 and "%t" in self.fields[5]):
+            return UPDATED_PANEL_REVISION
+        return 1
+
+    def remap(self, *, panels=None, callbacks=None, images=None, controls=None,
+              attributes=None, codes=None):
         maps = {"panel": panels or {}, "callback": callbacks or {},
-                "image": images or {}, "control": controls or {}}
+                "image": images or {}, "control": controls or {},
+                "attribute": attributes or {}, "code": codes or {}}
         fields = list(self.fields)
         for reference in self.references:
             replacement = maps[reference.kind].get(reference.value)
             if replacement is None:
                 continue
             if reference.component is None:
-                fields[reference.field] = str(replacement)
+                fields[reference.field] = reference.prefix + str(replacement)
             else:
                 pieces = fields[reference.field].split("~")
-                pieces[reference.component] = str(replacement)
+                pieces[reference.component] = reference.prefix + str(replacement)
                 fields[reference.field] = "~".join(pieces)
         return parse_behavior("|".join(fields))
 
@@ -101,6 +123,19 @@ def parse_behavior(text):
         need(index + 1)
         _symbol(fields[index])
         refs.append(Reference("callback", index, fields[index]))
+    def value(index, *, row=False):
+        need(index + 1)
+        if fields[index].startswith("@"):
+            number = fields[index][1:]
+            _number(number)
+            refs.append(Reference("attribute", index, number, prefix="@"))
+        elif not (row and fields[index] == "#"):
+            callback(index)
+    def image(index, *, component=None):
+        need(index + 1)
+        image_id = fields[index] if component is None else fields[index].split("~")[component]
+        _fourcc(image_id)
+        refs.append(Reference("image", index, image_id, component))
     def control(index, *, component=None):
         need(index + 1)
         value = fields[index] if component is None else fields[index].split("~")[component]
@@ -114,16 +149,45 @@ def parse_behavior(text):
             raise PanelEngineError("Unsupported WE1 class: " + fields[3])
     else:
         _number(fields[3], nonzero=True)
-        if kind != "TALL":
+        if kind not in ("TALL", "BKG"):
             control(3)
-        if kind in SIMPLE_KINDS:
+        if kind in SIMPLE_KINDS or kind == "TITLE":
             pass
+        elif kind == "BKG":
+            image(4)
+        elif kind in ROW_KINDS or kind in ("PICTURE", "TEXTPICK", "HINTPICK"):
+            value(4, row=kind in ROW_KINDS)
+            need(6)
+            if kind in ("PICTURE", "RICON"):
+                image(5)
+        elif kind in ("SPELL", "EFFECT"):
+            need(6)
+            _fourcc(fields[4])
+            refs.append(Reference("code", 4, fields[4]))
+            pieces = fields[5].split("~")
+            if not fields[5] or len(pieces) > 5:
+                raise PanelEngineError("WE1 spell/effect expects SET~KEY~name~hint~hide")
+            if pieces[0]:
+                image(5, component=0)
+            if len(pieces) > 1 and pieces[1]:
+                _number(pieces[1])
+            if len(pieces) > 4 and pieces[4] not in ("", "0", "1"):
+                raise PanelEngineError("WE1 spell/effect hide expects 0 or 1")
         elif kind == "PANEL":
             need(5)
             _fourcc(fields[4])
             refs.append(Reference("panel", 4, fields[4]))
         elif kind in FUNCTION_KINDS:
-            callback(4)
+            if kind == "TABLE" and fields[4:5] and fields[4].startswith("*"):
+                source = fields[4][1:].split("+")
+                if (source[0] not in ("spells", "effects", "items")
+                        or len(source[1:]) != len(set(source[1:]))
+                        or any(flag not in ("all", "anylevel") for flag in source[1:])):
+                    raise PanelEngineError("WE1 TABLE has an unsupported hero source")
+            elif kind in VALUE_KINDS:
+                value(4)
+            else:
+                callback(4)
             if kind in ("BAR", "STATE", "STATEHINT", "TABLE"):
                 need(6)
                 if not fields[5]:
@@ -132,11 +196,15 @@ def parse_behavior(text):
                 if fields[5].isdigit():
                     _number(fields[5], nonzero=True)
                 else:
-                    callback(5)
+                    value(5)
             elif kind == "TABLE":
                 pieces = fields[5].split("~")
-                if len(pieces) != 2 or pieces[1] not in ("0", "1"):
-                    raise PanelEngineError("WE1 TABLE expects scrollbar~mode (0 or 1)")
+                if not 2 <= len(pieces) <= 4 or pieces[1] not in ("0", "1", "2"):
+                    raise PanelEngineError("WE1 TABLE expects scrollbar~mode (0, 1 or 2) and optional row height/icon width")
+                if fields[4].startswith("*") and pieces[1] != "2":
+                    raise PanelEngineError("WE1 TABLE hero sources require rows mode 2")
+                if any(not 0 <= _number(size) <= 100 for size in pieces[2:]):
+                    raise PanelEngineError("WE1 TABLE row height/icon width must be 0..100")
                 if _number(pieces[0]):
                     control(5, component=0)
             elif kind == "TICK" and len(fields) > 5 and fields[5] != "-":
@@ -152,7 +220,7 @@ def parse_behavior(text):
         elif kind == "TCOL":
             need(6)
             if fields[4] not in COLUMN_VALUES:
-                callback(4)
+                value(4, row=True)
             if not 10 <= _number(fields[5]) <= 120:
                 raise PanelEngineError("WE1 table column width must be 10..120")
         elif kind in ("TSEP", "TLINE"):

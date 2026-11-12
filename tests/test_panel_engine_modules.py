@@ -93,8 +93,10 @@ class HandoffEngineModules(EngineModules):
                     old=(ROOT/'local/fixtures/panel-engine-revision1'/(service+'-'+branch+'.mmne')).read_bytes()
                     self.assertEqual(module.decode_bundle(old)[0]['revision'],1)
                     data=module.install(data,old,branch)
-                def bundled(_,key,unused):
+                def bundled(_,key,unused,*,revision=None):
                     service='window-engine' if key=='panel-engine' else 'script-functions'
+                    if revision==1:
+                        return (ROOT/'local/fixtures/panel-engine-revision1'/(service+'-'+branch+'.mmne')).read_bytes(),branch
                     return self.bundle(service,branch),branch
                 with patch('majesty_cam.manager.engine_patches.load_bundle',side_effect=bundled):
                     changed=_install_revision(ROOT,data,'panel-engine',profile,self.bundle('window-engine',branch),branch)

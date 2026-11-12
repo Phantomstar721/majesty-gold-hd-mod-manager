@@ -54,7 +54,7 @@ def run(case_path):
             if bad:
                 raise ValueError('QoL inspection failed: ' + repr(bad))
             revisions=snapshot_revisions(snapshot.qol_utilities)
-            expected_revisions=({'window-engine.v1':2,'script-functions.map-action.v1':1}
+            expected_revisions=({'window-engine.v1':3,'script-functions.map-action.v1':2}
                                 if case.get('private') else {})
             if revisions!=expected_revisions:
                 raise ValueError('Startup lost actual native engine revisions: '+repr(revisions))

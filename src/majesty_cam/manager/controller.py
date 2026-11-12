@@ -744,6 +744,8 @@ class ManagerController:
     def _engine_dependencies(self,*,classic=False):
         from .engine_patches import discover, signature
         evidence, issues = [], []
+        compiler=self.paths.game_path/'SDK/Gplbcc.exe'
+        if not compiler.is_file():compiler=None
         entries=list(self.catalog.entries)
         managed=getattr(self,'_managed_build_cache',None)
         finalized=bool(not classic and self.plan.requires_composition and managed is not None
@@ -759,10 +761,12 @@ class ManagerController:
             if classic and entry.kind is not CatalogKind.STANDARD:continue
             if finalized and entry.kind is CatalogKind.MERGE and not getattr(entry,'_finalized_engine',False):continue
             key = (str(entry.manifest_path), entry.content_id)
+            source_proof=compiler is not None and entry.kind is CatalogKind.STANDARD
+            if source_proof:key=(*key,str(compiler))
             cached = self._engine_dependency_cache.get(key)
             try:
                 if cached is None or signature(cached[0].paths) != cached[1]:
-                    result = discover(entry)
+                    result = discover(entry,compiler=compiler) if source_proof else discover(entry)
                     cached = result, signature(result.paths)
                     self._engine_dependency_cache[key] = cached
                 evidence.extend(cached[0].evidence)

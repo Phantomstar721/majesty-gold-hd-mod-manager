@@ -164,7 +164,7 @@ class PanelEngineTests(unittest.TestCase):
 
     def test_malformed_or_unsupported_protocol_is_not_a_missing_patch(self):
         for text in ("WE|2|HIDE|200", "WE|1|CLASS|unknown", "WE|1|PANEL|0|AB01",
-                     "WE|1|CLICK|200|" + "A" * 48, "WE|1|TABLE|200|Units|5~2"):
+                     "WE|1|CLICK|200|" + "A" * 48, "WE|1|TABLE|200|Units|5~3"):
             with self.subTest(text=text), self.assertRaises(PanelEngineError):
                 parse_behavior(text)
         with self.assertRaises(PanelEngineError):

@@ -153,5 +153,8 @@ extern "C" void __cdecl mainCRTStartup() {
 #ifdef MMM_HANDOFF_FIXTURE
     runHandoffFixture();
 #endif
+#ifdef MMM_UPDATED_SDK_FIXTURE
+    runUpdatedFixture();
+#endif
     ExitProcess(0);
 }

@@ -36,6 +36,7 @@ PANEL_ALPHA = (
     "test_panel_engine_persistence_fixture",
 )
 DEVELOPMENT = (
+    "test_panel_engine_updated_protocol", "test_updated_panel_engine_modules",
     "test_panel_engine_beta",
     "test_message_flag_controls", "test_message_flag_profiles",
     "test_queued_building_action", "test_panel_commands",

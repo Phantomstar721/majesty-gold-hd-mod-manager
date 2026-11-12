@@ -16,6 +16,7 @@ SECTION_MAGIC = b'MMENG001'
 HEADER_SIZE = 256
 BRANCH_IDS = {'public':0,'beta2':1,'gog':2}
 SERVICE_IDS = {'window-engine':1,'script-functions':2}
+SERVICE_REVISIONS = {'window-engine':(1,2,3),'script-functions':(1,2)}
 SECTIONS = {'window-engine':b'.weng','script-functions':b'.sfun'}
 # Fixed native header layout, also consumed by PanelEngineModules.h.
 HEADER = struct.Struct('<8s12I5s5s2x32s32s6I')
@@ -75,6 +76,36 @@ def _strict(pairs):
     return result
 
 
+def runtime_files(root):
+    """The module index is the runtime allowlist; build sources never ship."""
+    from pathlib import Path
+    root=Path(root).resolve()
+    index=json.loads((root/'modules.json').read_bytes(),object_pairs_hook=_strict)
+    if index.get('schema')!=1 or index.get('ownershipABI')!=1:
+        raise EngineModuleError('Unsupported engine runtime index')
+    required={service+'-'+branch for service in SERVICE_IDS for branch in BRANCH_IDS}
+    if set(index.get('modules',{}))!=required:
+        raise EngineModuleError('Incomplete three-version engine runtime index')
+    files=['modules.json']
+    for history,rows in ((False,index['modules']),(True,index.get('history',{}))):
+        for name,row in rows.items():
+            service,branch,revision=row['service'],row['branch'],row['revision']
+            if service not in SERVICE_IDS or branch not in BRANCH_IDS or revision not in SERVICE_REVISIONS[service]:
+                raise EngineModuleError('Invalid indexed engine identity')
+            stem=service+'-'+branch+('-r'+str(revision) if history else '')
+            relative=('history/' if history else '')+stem+'.mmne'
+            if name!=stem or row['file']!=relative:
+                raise EngineModuleError('Invalid indexed engine runtime path')
+            data=(root/relative).read_bytes()
+            if hashlib.sha256(data).hexdigest()!=row['sha256']:
+                raise EngineModuleError('Indexed engine runtime changed')
+            meta,_=decode_bundle(data)
+            if (meta['service'],meta['branch'],meta['revision'])!=(service,branch,revision):
+                raise EngineModuleError('Indexed engine runtime build differs')
+            files.append(relative)
+    return tuple(files)
+
+
 def decode_bundle(data):
     if len(data)<16 or data[:8]!=BUNDLE_MAGIC:raise EngineModuleError('Unsupported engine module bundle')
     metadata_size,blob_size=struct.unpack_from('<II',data,8)
@@ -88,7 +119,7 @@ def decode_bundle(data):
         raise EngineModuleError('Unsupported engine module revision')
     service,branch=metadata.get('service'),metadata.get('branch')
     revision=metadata.get('revision')
-    if revision!=1 and not (service=='window-engine' and revision==2):
+    if revision not in SERVICE_REVISIONS.get(service, ()):
         raise EngineModuleError('Unsupported engine module revision')
     if service not in SERVICE_IDS or branch not in BRANCH_IDS or metadata.get('blobSize')!=blob_size:
         raise EngineModuleError('Invalid engine module service/build')
@@ -96,7 +127,7 @@ def decode_bundle(data):
     if type(metadata.get('base'))is not int or metadata['base']!=0x10000000 or type(metadata.get('hookRva'))is not int or not 0<metadata['hookRva']<0x400000:
         raise EngineModuleError('Invalid native engine address contract')
     required={'entry','ownsView','ownsController'} if service=='window-engine' else {'entry'}
-    if revision==2: required.add('bindHandoff')
+    if service=='window-engine' and revision>=2: required.add('bindHandoff')
     if set(metadata.get('exports',{}))!=required or any(type(v)is not int or not 0<=v<blob_size for v in metadata['exports'].values()):
         raise EngineModuleError('Invalid native engine exports')
     seen=set()
@@ -146,11 +177,12 @@ def _header(data,section):
     if magic!=SECTION_MAGIC:raise EngineModuleError('Existing engine section is not a recognized Manager module; restore it with its original installer first')
     (schema,service,branch,revision,header_size,blob_size,entry,view,controller,hook,active,ownership,
      original,patched,source,digest,checksum,old_file,old_image,old_code,old_count,old_checksum)=rest
-    if (schema,header_size,ownership)!=(1,HEADER_SIZE,1) or (revision!=1 and not (service==1 and revision==2)) or service not in SERVICE_IDS.values() or branch not in BRANCH_IDS.values() or active not in (0,1):
+    revisions = {1:(1,2,3),2:(1,2)}
+    if (schema,header_size,ownership)!=(1,HEADER_SIZE,1) or revision not in revisions.get(service,()) or service not in SERVICE_IDS.values() or branch not in BRANCH_IDS.values() or active not in (0,1):
         raise EngineModuleError('Unknown native engine section version')
     padding=section.raw_offset+160
     bind=0
-    if revision==2:
+    if service==1 and revision>=2:
         bind,seal=struct.unpack_from('<II',data,padding)
         if bind>=blob_size or seal!=fnv(data[section.raw_offset:padding+4]):
             raise EngineModuleError('Native engine handoff descriptor changed')
@@ -230,7 +262,7 @@ def install(data,bundle,branch):
         struct.unpack_from('<I',data,nt+80)[0],struct.unpack_from('<I',data,nt+28)[0],len(sections),struct.unpack_from('<I',data,nt+88)[0])
     result=bytearray(data);result+=b'\0'*(offset-len(result))
     descriptor=bytearray(header+struct.pack('<I',fnv(header))+b'\0'*(HEADER_SIZE-len(header)-4))
-    if metadata['revision']==2:
+    if service=='window-engine' and metadata['revision']>=2:
         struct.pack_into('<I',descriptor,160,metadata['exports']['bindHandoff'])
         struct.pack_into('<I',descriptor,164,fnv(descriptor[:164]))
     result+=descriptor+linked+b'\0'*(raw_size-virtual_size)
@@ -269,5 +301,7 @@ def remove(data,service,branch):
 
 def _seal_header(data,offset):
     struct.pack_into('<I',data,offset+HEADER.size,fnv(data[offset:offset+HEADER.size]))
-    if struct.unpack_from('<I',data,offset+20)[0]==2:
+    service=struct.unpack_from('<I',data,offset+12)[0]
+    revision=struct.unpack_from('<I',data,offset+20)[0]
+    if service==1 and revision>=2:
         struct.pack_into('<I',data,offset+164,fnv(data[offset:offset+164]))

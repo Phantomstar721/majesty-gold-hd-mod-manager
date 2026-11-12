@@ -115,7 +115,7 @@ const unsigned char* in=(const unsigned char*)s; while(n--) *out++=*in++; return
     return source
 
 
-def relocation_records(linker,obj):
+def relocation_records(linker,obj,module_symbols=()):
     secs,syms=linker.read_coff(obj)
     order=[i for i,s in enumerate(secs) if linker.keep(s) and s['ch']&linker.IMAGE_SCN_CNT_CODE]+[
         i for i,s in enumerate(secs) if linker.keep(s) and not s['ch']&linker.IMAGE_SCN_CNT_CODE and not s['ch']&linker.IMAGE_SCN_CNT_UNINITIALIZED_DATA]+[
@@ -130,7 +130,7 @@ def relocation_records(linker,obj):
         for offset,index,kind in secs[i]['relocs']:
             symbol=syms[index]
             if symbol['sec']==0 and symbol['name'] in defined:symbol=defined[symbol['name']]
-            internal=symbol['sec']>0
+            internal=symbol['sec']>0 or symbol['name'] in module_symbols
             if kind in (6,7) and internal:records.append([place[i]+offset,1])
             elif kind==0x14 and not internal:records.append([place[i]+offset,-1])
             elif kind not in (6,7,0x14):raise ValueError('Unsupported module relocation')

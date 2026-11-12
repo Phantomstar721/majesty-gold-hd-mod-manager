@@ -564,6 +564,7 @@ def _parse_content_node(
         # Positive native protocol evidence permits ordinary independently
         # loadable engine mods. A CAM filename or title is never admission.
         from .engine_patches import discover, _selected_definition
+        from ..panel_engine import PanelEngineError
         from types import SimpleNamespace
         try:
             probe=SimpleNamespace(package_root=candidate.package_root,manifest_path=manifest,
@@ -574,6 +575,14 @@ def _parse_content_node(
             native_contract=(not definition_path.is_file() or definition is not None and
                 not (definition.custom_buildings or definition.runtime_features or definition.runtime_capabilities))
             native_engine_component=native_contract and bool(discover(probe).evidence)
+        except PanelEngineError as exc:
+            # A recognized paired WE protocol that needs newer/valid grammar
+            # is still native content. Do not tell its author to convert it
+            # into a Manager-only Merge package to repair that parser error.
+            native_engine_component=True
+            issues.append(CatalogIssue(code='invalid_native_panel_protocol',
+                message='Window Engine panel data needs attention: '+str(exc),
+                severity=IssueSeverity.ERROR,path=manifest,content_id=content_id))
         except (OSError,ValueError):
             native_engine_component=False
     kind = (

@@ -96,15 +96,16 @@ def verify(merge_root,native_root,work,*,infer=False,input_receipt=None):
         assert input_receipt is not None,'Unchanged-input proof requires the owning candidate pins'
         pins=json.loads(Path(input_receipt).read_text())
         assert frozen[str(merge_root)]==pins['records']['witch_candidate']['files']
-        assert frozen[str(native_root)]==pins['unchanged_alpha_candidate']['files']
-        assert len(frozen[str(native_root)])==9
+        native_pins=pins.get('native_candidate') or pins['unchanged_alpha_candidate']
+        assert frozen[str(native_root)]==native_pins['files']
     implementation={str(p.relative_to(repo)):hashlib.sha256(p.read_bytes()).hexdigest()
                     for p in (repo/'src').rglob('*.py')}
     package=load_package(merge_root)
     manifest=next(Path(native_root).glob('*.mmxml'))
-    native_package=load_package(native_root,manifest_path=manifest)
-    native=read(N(package_root=Path(native_root),manifest_path=manifest,
-        content_id=native_package.mod_id,display_name=native_package.display_name))
+    from majesty_cam.manager.catalog import scan_catalog,CatalogKind
+    native_entry,=scan_catalog(workshop_roots=[native_root]).entries
+    assert native_entry.kind==CatalogKind.STANDARD and native_entry.selectable
+    native=read(native_entry)
     assert bool(native.source_contributions)!=infer
     if not infer:assert not native.package.definition.runtime_features
     loads=tuple(g for d in package.datasets for load in d.loads for g in load.gpl)

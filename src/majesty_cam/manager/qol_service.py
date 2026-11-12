@@ -253,11 +253,11 @@ QOL_PATCHES = (
 
 PANEL_ENGINE_PATCHES = (
     QolPatchSpec("panel-engine", "Custom Building Panels",
-        "Runs version-1 Window Engine building panels required by selected mods.\n(Credit to mikmak300)",
+        "Runs Window Engine panels, including custom unit windows, row lists and dynamic text required by selected mods.\n(Credit to mikmak300)",
         "majesty-gold-hd-cam-merger", "Custom Building Panels", "panel-engine",
         "Install-PanelEngine.ps1", "Restore-PanelEngine.ps1", license_identifier="Author SDK; terms pending"),
     QolPatchSpec("scripted-ground-actions", "Scripted Ground Actions",
-        "Provides the SF_MapAction native function required by selected mods.\n(Credit to mikmak300)",
+        "Provides native scripted ground actions, unit-window selection and unexplored-area searches required by selected mods.\n(Credit to mikmak300)",
         "majesty-gold-hd-cam-merger", "Scripted Ground Actions", "scripted-ground-actions",
         "Install-ScriptedGroundActions.ps1", "Restore-ScriptedGroundActions.ps1", license_identifier="Author SDK; terms pending"),
 )

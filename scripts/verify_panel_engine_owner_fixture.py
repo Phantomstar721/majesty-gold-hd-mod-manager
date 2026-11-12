@@ -17,8 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SDK_HASH = 'd6049b8021575241027677db2df441cdb50bd0038735c3fda6058b70d1a40b9b'
 
 
-def verify(sdk, work, handoff=False, candidate_labels=()):
-    if hashlib.sha256(sdk.read_bytes()).hexdigest() != SDK_HASH:
+def verify(sdk, work, handoff=False, candidate_labels=(), updated=False):
+    expected_hash = SDK_HASH
+    if updated:
+        from updated_panel_engine_sources import SOURCE_PINS
+        expected_hash = SOURCE_PINS['src/we_engine.cpp']
+    if hashlib.sha256(sdk.read_bytes()).hexdigest() != expected_hash:
         raise ValueError('SDK source changed; review the fixture substitutions')
     source = sdk.read_text(encoding='utf8')
     substitutions = []
@@ -27,13 +31,15 @@ def verify(sdk, work, handoff=False, candidate_labels=()):
         substitutions.append(name)
         return 'static ' + type_name + ' fixture_' + name + ';\n#define ' + name + ' fixture_' + name
     source = re.sub(r'^#define\s+(\w+)\s+\(\((\w+_t)\)0x[0-9a-fA-F]+\)', replace, source, flags=re.M)
-    if len(substitutions) != 56:
+    if len(substitutions) != (60 if updated else 56):
         raise ValueError('Native provider inventory changed')
     source, count = re.subn(r'^#define GPL_DEBUGGER_ON .*$', '#define GPL_DEBUGGER_ON 0', source, flags=re.M)
     if count != 1:
         raise ValueError('SDK logging gate changed')
     source=bounded_class_copy(source,17,76)
     source='static int MMWE_VtableLength(void**);\n'+source
+    if updated:
+        source = '#define MMM_UPDATED_SDK_FIXTURE 1\nstatic void runUpdatedFixture();\n'+source
     if handoff:
         from panel_engine_handoff_source import adapt
         source = adapt(source)
@@ -48,6 +54,8 @@ def verify(sdk, work, handoff=False, candidate_labels=()):
     source += '\n#include ' + json.dumps(owner.as_posix()) + '\n#include ' + json.dumps(fixture.as_posix()) + '\n'
     if handoff:
         source += '\n#include ' + json.dumps((ROOT/'tests/native/panel_engine_handoff_fixture.cpp').as_posix()) + '\n'
+    if updated:
+        source += '\n#include '+json.dumps((ROOT/'tests/native/panel_engine_updated_fixture.cpp').as_posix())+'\n'
     work = work.resolve()
     boundary=Path(os.environ.get('MMM_REGRESSION_TEMP',ROOT/'local/panel-engine-alpha')).resolve()
     if not work.is_relative_to(boundary):
@@ -67,7 +75,8 @@ def verify(sdk, work, handoff=False, candidate_labels=()):
     tested = subprocess.run([str(executable)], capture_output=True, timeout=10)
     if tested.returncode:
         raise RuntimeError('SDK owner fixture failed, source line/exit=' + str(tested.returncode))
-    receipt = {'schema': 1, 'sdkSha256': SDK_HASH, 'compiler': str(compiler), 'handlerHandoff': handoff,
+    receipt = {'schema': 1, 'sdkSha256': expected_hash, 'compiler': str(compiler), 'handlerHandoff': handoff,
+        'updatedProtocol':updated,
         'candidateBehaviors':list(candidate_labels),
         'ownerProbeSha256': hashlib.sha256(owner.read_bytes()).hexdigest(),
         'fixtureSha256': hashlib.sha256(fixture.read_bytes()).hexdigest(),

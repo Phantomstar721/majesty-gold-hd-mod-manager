@@ -48,7 +48,8 @@ def from_effective_resources(resources, *, owner_id, owner_name, dataset):
     panels = find_panels(resources)
     if not panels:
         return ()
-    return (RequirementEvidence(PatchRequirement(PANEL_SERVICE), owner_id, owner_name,
+    revision = max(row.minimum_revision for rows in panels.values() for row in rows)
+    return (RequirementEvidence(PatchRequirement(PANEL_SERVICE, revision), owner_id, owner_name,
         dataset, "loaded SMNU/STRT " + ", ".join(key.decode("latin1") for key in sorted(panels))),)
 
 
@@ -60,15 +61,22 @@ def from_verified_sources(sources, *, owner_id, owner_name, dataset):
     """
     from .gpl import parse_gpl,DefinitionKind
     sources=tuple(sources)
-    if any(parse_gpl(source,name).get(DefinitionKind.FUNCTION,'SF_MapAction') is not None
-           for name,source in sources):return ()
+    functions = {'sf_mapaction': 1, 'sf_setwindow': 2, 'sf_resetwindow': 2,
+                 'sf_unexploredarea': 2}
+    parsed = tuple(parse_gpl(source, name) for name, source in sources)
+    local = {symbol for symbol in functions if any(
+        source.get(DefinitionKind.FUNCTION, symbol) is not None for source in parsed)}
+    result = []
     for name, source in sources:
         tokens = _tokens(source)
-        if any(token == "$sf_mapaction" and tokens[index + 1:index + 2] == ("(",)
-               for index, token in enumerate(tokens)):
-            return (RequirementEvidence(PatchRequirement(ACTION_SERVICE), owner_id, owner_name,
-                dataset, "verified loaded GPL call in " + name),)
-    return ()
+        calls = {token[1:] for index, token in enumerate(tokens)
+                 if token.startswith("$") and token[1:] in functions and token[1:] not in local
+                 and tokens[index + 1:index + 2] == ("(",)}
+        if calls:
+            result.append(RequirementEvidence(PatchRequirement(ACTION_SERVICE,
+                max(functions[call] for call in calls)), owner_id, owner_name,
+                dataset, "verified loaded GPL call in " + name + ": " + ", ".join(sorted(calls))))
+    return tuple(result)
 
 
 def aggregate(evidence):

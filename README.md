@@ -390,11 +390,15 @@ projects. The [payload staging script](scripts/Stage-ModManagerPayload.ps1)
 lists the required repositories and their default sibling-directory names.
 
 Building the optional native engines also requires mikmak300's pinned Window
-Engine/Script Functions SDK, kept separately from this repository. The default
-input is `../.audits/flamey-window-engine-sdk-20261109/sdk`; see
-`scripts/build_panel_engine_modules.py` for the SDK-root option. Its native API
-inventory and three-version profiles are included under `profiles/panel-engine`.
-Raw SDK sources and stock game executable fixtures are not redistributed here.
+Engine/Script Functions SDK, kept separately from this repository. Current builds
+use `scripts/build_updated_panel_engine_modules.py` and its `--sdk-root` option;
+the default input is the SDK under `../.audits/flamey-sdk-update-20261111/sdk`.
+The legacy builder and its November 9 SDK contract remain available for older
+module reproduction. Native API inventories and three-version profiles are under
+`profiles/panel-engine`; the updated builder verifies its additional bindings
+against all three executable fixtures. See [updated engine support](docs/panel-engine-sdk-update.md)
+for patch revisions, upgrade behavior and verification limits. Raw SDK sources
+and stock game executable fixtures are not redistributed here.
 
 `scripts\Stage-ModManagerPayload.ps1` and
 `scripts\Build-ModManagerExe.ps1` also accept explicit paths for each dependency

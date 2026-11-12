@@ -1259,7 +1259,13 @@ def merge_text_resources(
     rename_map = {(owner, old): new for owner, old, new in dialog_renames}
     panel_text_transform = None
     if external_panel_behaviors:
-        from .panel_engine_composition import text_relocator
+        from .panel_engine_composition import text_relocator, validate_script_panel_references
+        rename_owners={owner for owner,old,new in dialog_renames if old!=new}
+        try:
+            validate_script_panel_references({inventory.selected.alias:_parse_inventory_gpl_sources(inventory)
+                for inventory in inventories if inventory.selected.alias in rename_owners},dialog_renames)
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
         panel_text_transform = text_relocator(resources, dialog_renames)
 
     whole: dict[bytes, StrtMergeSelection] = {}

@@ -115,6 +115,21 @@ try {
     # Playtesting writes diagnostics beside the runtime DLL. They are local
     # support material, not Workshop content; leave the originals untouched.
     $contentBoundary = [IO.Path]::GetFullPath($contentPath).TrimEnd('\') + '\'
+    # Older application builds included the SDK build work files alongside
+    # the indexed modules. Strip only those generated source/object names
+    # from this new staged copy, preserving the original application.
+    $engineModules = Join-Path $contentPath '_internal/payload/panel-engine/modules'
+    if (Test-Path -LiteralPath $engineModules -PathType Container) {
+        Get-ChildItem -LiteralPath $engineModules -File |
+            Where-Object { $_.Name -match '^(window-engine|script-functions)-(public|beta2|gog)\.(cpp|obj)$' } |
+            ForEach-Object {
+                $buildFile = [IO.Path]::GetFullPath($_.FullName)
+                if (-not $buildFile.StartsWith($contentBoundary, [StringComparison]::OrdinalIgnoreCase)) {
+                    throw "Engine build file escapes Workshop content: $buildFile"
+                }
+                Remove-Item -LiteralPath $buildFile -Force
+            }
+    }
     Get-ChildItem -LiteralPath $contentPath -Recurse -File -Force |
         Where-Object {
             $_.Extension -in @('.log', '.dmp', '.mdmp') -or

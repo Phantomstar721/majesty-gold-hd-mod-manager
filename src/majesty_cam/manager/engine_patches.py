@@ -29,7 +29,7 @@ def bundle_root(repo_root):
             else repo_root/'local/panel-engine-alpha/native-modules')
 
 
-def load_bundle(repo_root,key,branch):
+def load_bundle(repo_root,key,branch,*,revision=None):
     service=SERVICES[key]
     branch_key='gog' if branch.key.startswith('gog') else branch.key
     root=bundle_root(repo_root)
@@ -38,13 +38,28 @@ def load_bundle(repo_root,key,branch):
         raise ValueError('Unsupported bundled native engine index')
     name=service+'-'+branch_key
     row=index['modules'][name]
-    if row['file']!=name+'.mmne' or row['service']!=service or row['branch']!=branch_key or row['revision'] not in (1,2):
+    expected_file=name+'.mmne'
+    if revision is not None and row['revision']!=revision:
+        name += '-r'+str(revision)
+        row=index.get('history',{}).get(name)
+        if row is None:raise ValueError('No reviewed bundle for installed native engine revision')
+        expected_file='history/'+name+'.mmne'
+    if row['file']!=expected_file or row['service']!=service or row['branch']!=branch_key or row['revision'] not in engine_module.SERVICE_REVISIONS[service]:
         raise ValueError('Bundled native engine index identity differs')
     data=(root/row['file']).read_bytes()
     if hashlib.sha256(data).hexdigest()!=row['sha256']:raise ValueError('Bundled native engine changed')
     metadata,_=engine_module.decode_bundle(data)
     if metadata['service']!=service or metadata['branch']!=branch_key or metadata['revision']!=row['revision']:raise ValueError('Bundled engine build differs')
     return data,branch_key
+
+
+def _reviewed_installed_bundle(repo_root,key,branch,header):
+    payload,_=load_bundle(repo_root,key,branch,revision=header['revision'])
+    metadata,blob=engine_module.decode_bundle(payload)
+    expected=engine_module.relocated(metadata,blob,0x400000+header['section'].rva+256)
+    if expected!=header['blob'] or header['source']!=metadata['sdkSha256']:
+        raise engine_module.EngineModuleError('Cannot upgrade a changed native engine module')
+    return payload
 
 
 def inspect_patch(repo_root,executable,key,branch,*,with_revision=False):
@@ -81,6 +96,9 @@ def _install_revision(repo_root,data,key,branch,bundle,branch_key):
     if peer:
         peer_bundle,_=load_bundle(repo_root,other,branch)
         peer_meta,peer_blob=engine_module.decode_bundle(peer_bundle)
+        if peer_meta['revision']!=peer['revision']:
+            peer_bundle=_reviewed_installed_bundle(repo_root,other,branch,peer)
+            peer_meta,peer_blob=engine_module.decode_bundle(peer_bundle)
         expected=engine_module.relocated(peer_meta,peer_blob,0x400000+peer['section'].rva+256)
         if expected!=peer['blob'] or peer['source']!=peer_meta['sdkSha256']:
             raise engine_module.EngineModuleError('Cannot upgrade alongside a different native engine module')
@@ -143,8 +161,13 @@ def _selected_definition(path, mod_id):
     return parse_mod_definition(value)
 
 
-def discover(entry):
-    """Read one exact manifest component; no directory/text-content scanning."""
+def discover(entry, *, compiler=None):
+    """Read one exact manifest component; source call proof is explicitly opt-in.
+
+    Catalog admission stays data-only. The selected-content dependency scan can
+    additionally prove recovered loaded sources, including for Classic Launch
+    where no generated package will supply inferred declarations.
+    """
     package = load_standard_component(entry.package_root, manifest_path=entry.manifest_path,
                                      mod_id=entry.content_id, recover_project_sources=False)
     paths = [entry.manifest_path, entry.package_root / DEFINITION_FILE_NAME]
@@ -168,6 +191,28 @@ def discover(entry):
                 dataset.base, "explicit external_patches declaration") for r in definition.external_patches)
         evidence.extend(from_effective_resources(effective, owner_id=entry.content_id,
             owner_name=entry.display_name, dataset=dataset.base))
+    if compiler is not None and any(load.gpl for d in package.datasets[:1] for load in d.loads):
+        paths.append(compiler)
+        try:
+            from ..standard_scripts import read, verify
+            from ..engine_dependencies import from_verified_sources
+            provider=read(entry)
+            paths.extend(provider.paths)
+            for load in provider.loads:
+                paths.extend((*load.discovery_directories,*load.discovery_files))
+            # The native manifest's load order decides the effective symbol
+            # bodies. Source examples and superseded definitions cannot add
+            # requirements to the selected component.
+            source='\n'.join(item.text for item in provider.items.values())
+            calls=from_verified_sources(((str(entry.manifest_path),source),),
+                owner_id=entry.content_id,owner_name=entry.display_name,
+                dataset=provider.package.datasets[0].base)
+            if calls and verify(provider,compiler):
+                evidence.extend(calls)
+                verified={load.target.relative_path for load in provider.loads}
+                unknown=[row for row in unknown if not any(row.endswith(path) for path in verified)]
+        except (OSError,ValueError) as exc:
+            unknown.append('Native GPL call source proof unavailable: '+str(exc))
     return DependencyScan(tuple(evidence), tuple(unknown), tuple(dict.fromkeys(paths)))
 
 

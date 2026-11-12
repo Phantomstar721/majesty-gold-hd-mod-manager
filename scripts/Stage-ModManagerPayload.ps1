@@ -76,11 +76,11 @@ if ($Mode -eq "release") {
 }
 & (Join-Path $repoRoot "scripts/Test-EffectSequence.ps1") -FadeLifecycle
 if ($LASTEXITCODE -ne 0) { throw "Three-version effect lifecycle verification failed" }
-& $releasePython (Join-Path $PSScriptRoot 'build_panel_engine_modules.py')
+& $releasePython (Join-Path $PSScriptRoot 'build_updated_panel_engine_modules.py') --work (Join-Path $repoRoot 'local/panel-engine-alpha/native-modules')
 if ($LASTEXITCODE -ne 0) { throw 'Native engine module build failed.' }
 & $releasePython (Join-Path $PSScriptRoot 'prepare_panel_engine_descriptor_fixtures.py')
 if ($LASTEXITCODE -ne 0) { throw 'Native engine descriptor fixtures failed.' }
-$runtimeArguments = @{ EngineModules = $true; AttackObservationTests = $true; CheckedPlacementTests = $true; OutputRoot = $runtimeSource; RegistrationTests = ($Mode -eq "release"); FeatureTests = $true; ExplorationTests = $true }
+$runtimeArguments = @{ EngineModules = $true; AttackObservationTests = $true; CheckedPlacementTests = $true; OutputRoot = $runtimeSource; RegistrationTests = $true; FeatureTests = $true; ExplorationTests = $true }
 if ($MsvcToolRoot) { $runtimeArguments.MsvcToolRoot = $MsvcToolRoot }
 if ($WindowsSdkRoot) { $runtimeArguments.WindowsSdkRoot = $WindowsSdkRoot }
 & $runtimeBuild @runtimeArguments
@@ -108,7 +108,8 @@ try {
 
     $engineTarget = Join-Path $stage 'panel-engine'
     New-Item -ItemType Directory -Path $engineTarget | Out-Null
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'local/panel-engine-alpha/native-modules') -Destination (Join-Path $engineTarget 'modules') -Recurse
+    & (Join-Path $repoRoot '.venv/Scripts/python.exe') -B (Join-Path $PSScriptRoot 'copy_engine_runtime_bundle.py') --source (Join-Path $repoRoot 'local/panel-engine-alpha/native-modules') --target (Join-Path $engineTarget 'modules')
+    if ($LASTEXITCODE -ne 0) { throw 'Engine runtime payload validation failed.' }
     Copy-Item -Path (Join-Path $repoRoot 'helpers/panel-engine/scripts/Publish-*Executable.ps1') -Destination $engineTarget
 
     $visitorTarget = Join-Path $stage "qol\generic-visitor-lists"
