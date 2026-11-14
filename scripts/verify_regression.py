@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 import types
@@ -75,6 +76,26 @@ def normalized(code):
     return code.replace(co_filename="<bundle>", co_consts=tuple(
         normalized(v) if isinstance(v, types.CodeType) else v for v in code.co_consts))
 
+
+def artifact_files(root, *, exclude_runtime_outputs=True):
+    """Inventory shipped inputs, preserving live bounded support reports in place."""
+    result = {}
+    for path in sorted(root.rglob('*')):
+        if not path.is_file() or path.suffix == '.log':
+            continue
+        relative = path.relative_to(root)
+        owned = relative.as_posix()
+        if owned.startswith('_internal/payload/'):
+            owned = owned[len('_internal/payload/'):]
+        parent, _, name = owned.rpartition('/')
+        if exclude_runtime_outputs and parent in ('runtime', 'panel-engine/runtime'):
+            if path.suffix in ('.dmp', '.mdmp') or re.fullmatch(
+                    r'(?:MajestyBuildingRuntime\.log(?:\.(?:[12]|fault)(?:\.[12])?)?'
+                    r'|manager-launch\.json(?:\.[12])?|manager-error\.txt(?:\.1)?)', name):
+                continue
+        result[str(relative)] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return result
+
 class BundleLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     def __init__(self, executable):
         from PyInstaller.archive.readers import CArchiveReader
@@ -122,10 +143,8 @@ class BundleLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
             source = ROOT / folder
             if alpha and folder=='payload':source=ROOT/'local/panel-engine-alpha/package-payload'
             bundled = application / "_internal" / folder
-            expected = {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest()
-                        for p in source.rglob("*") if p.is_file() and p.suffix != '.log'}
-            actual = {str(p.relative_to(bundled)): hashlib.sha256(p.read_bytes()).hexdigest()
-                      for p in bundled.rglob("*") if p.is_file() and p.suffix != '.log'}
+            expected = artifact_files(source, exclude_runtime_outputs=folder == 'payload')
+            actual = artifact_files(bundled, exclude_runtime_outputs=folder == 'payload')
             if expected != actual:
                 different = sorted(k for k in set(expected) | set(actual) if expected.get(k) != actual.get(k))
                 raise ValueError("Packaged " + folder + " differs from build inputs: " + repr(different[:10]))
@@ -199,8 +218,7 @@ def main():
         receipt = json.loads((args.receipt_root / (args.mode + "-package.json")).read_text())
         if receipt.get("mode") != args.mode or not receipt.get("packaged"):
             raise ValueError("Not a packaged regression receipt for this mode")
-        files = {str(p.relative_to(args.application)): hashlib.sha256(p.read_bytes()).hexdigest()
-                 for p in sorted(args.application.rglob("*")) if p.is_file() and p.suffix != '.log'}
+        files = artifact_files(args.application)
         if files != receipt.get("application") or test_inputs() != receipt.get("testInputs"):
             raise ValueError("Application or regression inputs changed since verification")
         return 0
@@ -243,8 +261,7 @@ def main():
                 "modules": names, "packaged": bool(bundle), "liveGameplayAcceptance": False,
                 "testInputs": initial_inputs}
     if bundle:
-        evidence["application"] = {str(p.relative_to(args.application)): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted(args.application.rglob("*")) if p.is_file() and p.suffix != '.log'}
+        evidence["application"] = artifact_files(args.application)
     receipt.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     return 0
 

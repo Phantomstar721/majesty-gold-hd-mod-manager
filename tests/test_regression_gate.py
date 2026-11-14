@@ -12,6 +12,53 @@ gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
 
 class GateTests(unittest.TestCase):
+    def test_bounded_runtime_reports_do_not_change_shipped_input_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app = Path(tmp)
+            runtime = app / '_internal/payload/runtime'
+            runtime.mkdir(parents=True)
+            dll = runtime / 'MajestyBuildingRuntime.dll'
+            dll.write_bytes(b'production runtime')
+            before = gate.artifact_files(app)
+            for name in ('manager-launch.json', 'manager-launch.json.1', 'manager-launch.json.2',
+                         'manager-error.txt', 'manager-error.txt.1',
+                         'MajestyBuildingRuntime.log.fault.2', 'failure.mdmp'):
+                (runtime / name).write_bytes(b'preserved user support evidence')
+            self.assertEqual(gate.artifact_files(app), before)
+            dll.write_bytes(b'changed runtime')
+            self.assertNotEqual(gate.artifact_files(app), before)
+
+    def test_similar_names_outside_owned_runtime_directories_remain_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            names = ('_internal/profiles/runtime/manager-launch.json',
+                     '_internal/payload/mods/example/runtime/manager-launch.json',
+                     '_internal/payload/runtime/manager-launch.json.3',
+                     '_internal/payload/runtime/manager-error.txt.2',
+                     '_internal/payload/runtime/generated.cpp')
+            for name in names:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'checked input')
+            self.assertEqual(set(gate.artifact_files(root)), {str(Path(p)) for p in names})
+
+    def test_payload_proof_preserves_support_files_but_rejects_changed_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app = root / 'app'
+            for parent in (root / 'payload', app / '_internal/payload'):
+                (parent / 'runtime').mkdir(parents=True)
+                (parent / 'runtime/runtime.dll').write_bytes(b'runtime')
+            (root / 'profiles').mkdir()
+            (app / '_internal/profiles').mkdir()
+            (app / '_internal/payload/runtime/manager-launch.json').write_text('user context')
+            loader = object.__new__(gate.BundleLoader)
+            with patch.object(gate, 'ROOT', root):
+                loader.verify_data(app)
+                (app / '_internal/payload/runtime/runtime.dll').write_bytes(b'changed')
+                with self.assertRaisesRegex(ValueError, 'Packaged payload differs'):
+                    loader.verify_data(app)
+
     def test_write_guard_allows_only_fixture_tree(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

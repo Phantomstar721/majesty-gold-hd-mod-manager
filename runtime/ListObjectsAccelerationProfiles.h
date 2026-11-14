@@ -21,8 +21,8 @@ constexpr Profile kProfiles[] = {
         0xF98E8B9A, 0xDD6CFAEA, 0x87381384, 0x2E7ECBE4, 0x0BE4E1D3, 0x831E74FA},
     {MajestyBuildId::SteamBeta2, 0x39F60, 0x39C80,
         0x59E8EA25, 0x47263EA4, 0x4CA3B34C, 0x397A71F6, 0xFB4D3B73, 0xFC558268},
-    // GOG 1.5.2.28 is not audited yet: without a row, Install() leaves the
-    // stock callback untouched on that build.
+    {MajestyBuildId::Gog, 0x39E80, 0x39BA0,
+        0x5658D174, 0xD15F4A84, 0x89A15D4E, 0x941CD4DA, 0xFB4D3B73, 0x38FCFDEE},
 };
 
 // Guarded body sizes and decode offsets: the instruction layout is identical

@@ -4,8 +4,8 @@ runtime/ListObjectsAccelerationProfiles.h holds one row per audited build. This
 test re-derives each row the way ListObjectsAcceleration::Install() checks it at
 launch, and compares it with the independent signature-based audit in
 scripts/audit_listobjects_acceleration.py. Executables are only read. A build
-without a row keeps the stock callback (Install() refuses it); adding its row
-makes this test cover it. See docs/listobjects-acceleration.md.
+without a row keeps the stock callback (Install() refuses it), but release
+verification requires all three supported rows. See docs/listobjects-acceleration.md.
 """
 import importlib.util
 import os
@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import struct
 import unittest
+from unittest.mock import patch
 
 from test_occupant_runtime_profiles import PeImage
 
@@ -110,11 +111,22 @@ class ListObjectsAccelerationProfiles(unittest.TestCase):
 
     def test_rows_name_distinct_supported_builds(self):
         builds = [build for build, _ in self.rows]
-        self.assertTrue(builds, "no audited profile rows")
+        self.assertEqual(set(builds), set(FIXTURES), "all three supported profiles are required")
         self.assertEqual(len(builds), len(set(builds)))
         for build, values in self.rows:
             self.assertIn(build, FIXTURES)
             self.assertEqual(len(values), 8, build)
+
+    def test_all_supported_executable_fixtures_are_required(self):
+        for build in FIXTURES:
+            with self.subTest(build=build):
+                self.assertTrue(Path(self.fixture(build)).is_file(), FIXTURES[build])
+
+    def test_missing_fixture_is_rejected_for_each_build(self):
+        for build, key in FIXTURES.items():
+            with self.subTest(build=build), patch.dict(os.environ, {key: ""}):
+                with self.assertRaisesRegex(AssertionError, key):
+                    self.fixture(build)
 
     def test_rows_hold_for_their_executables_as_install_checks_them(self):
         for build, values in self.rows:

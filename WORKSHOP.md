@@ -1,3 +1,9 @@
+Version 0.3.15 (beta) speeds up existing native unit searches used by AI and
+quests, particularly in busy games. Supports Default Steam, beta2 and GOG, and
+improves cleanup when a search encounters a script error. Close Majesty and the
+Manager before updating, then relaunch normally; this update does not require
+Prepare or a Quality of Life patch reinstall. Unit-search contribution by Veligon.
+
 Version 0.3.14 (beta) combines more original source-backed scripts without an
 author rewrite and lets custom panel presentation keep existing hiring,
 research and spell handlers. It also fixes Standard-only scans and native text

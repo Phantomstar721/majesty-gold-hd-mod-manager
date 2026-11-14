@@ -198,15 +198,27 @@ void NoteActive() {
 }
 
 #if !defined(MAJESTY_LISTOBJECTS_DIFFERENTIAL)
+// Match the stock scoped temporary: assignment can throw a GPL error, and
+// the successfully constructed reference must be destroyed during unwinding.
+class AgentReference {
+public:
+    explicit AgentReference(void* component) { g.agentRefCtor(storage_, component); }
+    ~AgentReference() { g.agentRefDtor(storage_); }
+    void* data() { return storage_; }
+    AgentReference(const AgentReference&) = delete;
+    AgentReference& operator=(const AgentReference&) = delete;
+private:
+    alignas(4) unsigned char storage_[16]{};
+};
 // The stock match tail: a new agent GPL value set from a stock agent reference,
 // then the {distance, component, value} record through the stock push_back.
 int Emit(const Decision& decision) {
     void* const factory = At<void*>(g.gplManager(), 0x1C);
     void* const value = g.valueNew(factory, kAgentValueKind);
-    alignas(4) unsigned char reference[16]{};
-    g.agentRefCtor(reference, decision.component);
-    Virtual<SetFromReferenceFn>(value, 0x18)(value, reference);
-    g.agentRefDtor(reference);
+    {
+        AgentReference reference(decision.component);
+        Virtual<SetFromReferenceFn>(value, 0x18)(value, reference.data());
+    }
     const Record record{decision.distance, decision.component, value};
     g.pushBack(g.results, &record);
     return *g.firstOnly != 0 ? 1 : 0;

@@ -243,6 +243,11 @@ if ($CheckedPlacementTests) {
 }
 foreach ($fixtureName in $fixtureNames) {
     $fixtureLinkOptions = @()
+    # The ListObjects fixture executes stock callback frames in its private
+    # mapped image. Their native EH entrypoints are not linked fixture symbols.
+    # This affects this test executable only, never the runtime DLL or game.
+    $fixtureExceptionOptions = @()
+    if ($fixtureName -eq 'ListObjectsAccelerationTests') { $fixtureExceptionOptions += '/SAFESEH:NO' }
     $fixtureArguments = @()
     $fixedImageFixture = $fixtureName -in @("SharedRegistrationRuntimeTests", "NativeRegistrationLifecycleTests", "LargeModListTests", "ListObjectsAccelerationTests")
     if ($PanelEngineAlpha -and $fixtureName -eq 'LargeModListTests') {
@@ -273,7 +278,7 @@ foreach ($fixtureName in $fixtureNames) {
     }
     & $compiler /nologo /W4 /O2 /EHsc @commonIncludes @runtimeDefines `
         @fixtureSources (Join-Path $repoRoot "tests\$fixtureName.cpp") `
-        "/Fo$output\" "/Fe:$output\$fixtureName.exe" /link @commonLibPaths @runtimeLibraries @fixtureLinkOptions
+        "/Fo$output\" "/Fe:$output\$fixtureName.exe" /link @commonLibPaths @runtimeLibraries @fixtureLinkOptions @fixtureExceptionOptions
     if ($LASTEXITCODE -ne 0) { throw "$fixtureName build failed" }
     if ($fixedImageFixture) {
         # Same fixed-address, data-only fixture layout used by GOG profile tests.
@@ -295,7 +300,7 @@ foreach ($fixtureName in $fixtureNames) {
         $testBase = '0x{0:X}' -f (0x400000 - $fixtureRva)
         $objects = @($fixtureSources | ForEach-Object { Join-Path $output (([IO.Path]::GetFileNameWithoutExtension($_)) + '.obj') })
         $objects += (Join-Path $output "$fixtureName.obj")
-        & $compiler /nologo @objects "/Fe:$testExe" /link "/BASE:$testBase" /ALIGN:65536 /DYNAMICBASE:NO @commonLibPaths @runtimeLibraries
+        & $compiler /nologo @objects "/Fe:$testExe" /link "/BASE:$testBase" /ALIGN:65536 /DYNAMICBASE:NO @commonLibPaths @runtimeLibraries @fixtureExceptionOptions
         if ($LASTEXITCODE -ne 0) { throw "Registration fixture layout did not link" }
     }
     if ($fixtureName -eq "NativeRegistrationLifecycleTests") {

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -37,13 +38,17 @@
 // side effect (attribute lookups, unit attribute reads, GPL value creation,
 // value assignment, push_back).
 //
-// A missing or deleted agent makes the stock property getter raise a script
-// error, which cannot unwind through mapped game frames here. For those units
-// the fixture records whether the stock callback reaches its property getter,
-// and requires the accelerated callback to hand the unit to the stock callback
-// in exactly those cases.
+// The error suite binds the mapped callback's exception-dispatch import to
+// the fixture CRT, then throws real C++ provider faults through native frames.
+// Actual stock reference construction/destruction is observed during unwind.
+// Missing/deleted agents use a throwing property boundary and original callback,
+// not a return-token replacement. The game's error formatter/whole VM remains
+// opaque: fault identity, payload and propagation are verified here.
 
 extern "C" unsigned char GogFixtureBytes[0x500000];
+// The fixture uses its linked CRT to unwind the mapped stock callback frames.
+// Only the exception-dispatch import is bound; no game error implementation runs.
+extern "C" void __cdecl __CxxFrameHandler3();
 
 namespace {
 namespace P = ListObjectsAccelerationProfiles;
@@ -93,6 +98,28 @@ std::uint32_t Word(std::uintptr_t va) {
 void PutWord(std::uintptr_t va, std::uintptr_t value) {
     const auto word = static_cast<std::uint32_t>(value);
     std::memcpy(Bytes(va), &word, sizeof(word));
+}
+
+bool BindExceptionDispatch() {
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(GogFixtureBytes);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(GogFixtureBytes + dos->e_lfanew);
+    const auto rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    auto* library = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(GogFixtureBytes + rva);
+    unsigned bound = 0;
+    for (; library->Name; ++library) {
+        auto* names = reinterpret_cast<IMAGE_THUNK_DATA32*>(GogFixtureBytes + library->OriginalFirstThunk);
+        auto* slots = reinterpret_cast<IMAGE_THUNK_DATA32*>(GogFixtureBytes + library->FirstThunk);
+        for (; names->u1.AddressOfData; ++names, ++slots) {
+            if (IMAGE_SNAP_BY_ORDINAL32(names->u1.Ordinal)) continue;
+            const auto* name = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(
+                GogFixtureBytes + names->u1.AddressOfData);
+            if (std::strcmp(reinterpret_cast<const char*>(name->Name), "__CxxFrameHandler3") == 0) {
+                slots->u1.Function = static_cast<DWORD>(Code(&__CxxFrameHandler3));
+                ++bound;
+            }
+        }
+    }
+    return bound == 1;
 }
 std::uintptr_t Relative(std::uintptr_t function, std::uint32_t operand) {
     return function + operand + 4 +
@@ -178,11 +205,16 @@ void Restore(const Diversion& saved) {
 std::vector<std::string> g_lines;
 bool g_sawActive = false;
 bool g_sawMismatch = false;
+bool g_expectedFault = false;
+int g_faultReports = 0;
+int g_completedFaultCases = 0;
 
 void Capture(const char* line) {
     g_lines.emplace_back(line);
     if (std::strstr(line, "accelerated filter active") != nullptr) g_sawActive = true;
-    if (std::strstr(line, "MISMATCH") != nullptr || std::strstr(line, "raised exception") != nullptr) {
+    if (std::strstr(line, "raised exception") != nullptr && g_expectedFault) {
+        ++g_faultReports;
+    } else if (std::strstr(line, "MISMATCH") != nullptr || std::strstr(line, "raised exception") != nullptr) {
         g_sawMismatch = true;
     }
 }
@@ -268,6 +300,14 @@ struct Globals {
 Globals G{};
 
 std::vector<Event> g_events;
+enum class FaultSite { None, Type, Title, TypeConversion, TitleConversion,
+                       UnitAttribute, ValueNew, ValueSet, PushBack, MissingAgent, DeletedAgent };
+struct ProviderFault { FaultSite site; std::uintptr_t argument; };
+FaultSite g_faultSite = FaultSite::None;
+FaultSite g_textFaultSite = FaultSite::None;
+void Fault(FaultSite site, std::uintptr_t argument = 0) {
+    if (site != FaultSite::None && g_faultSite == site) throw ProviderFault{site, argument};
+}
 std::vector<const FakeUnit*> g_distances;
 int g_helperErrors = 0;
 
@@ -327,6 +367,8 @@ FakeAgent* __fastcall ResolveAgent(void* manager, void*, FakeComponent* componen
 }
 FakeValue* __fastcall AttributeLookup(FakeAgent* agent, void*, const void* key) {
     g_events.push_back({'L', Address(agent), Address(key), 0});
+    Fault(Address(key) == G.typeKey ? FaultSite::Type : FaultSite::Title, Address(key));
+    g_textFaultSite = Address(key) == G.typeKey ? FaultSite::TypeConversion : FaultSite::TitleConversion;
     if (agent == nullptr || agent->deleted != 0) {  // stock raises a script error here
         ++g_helperErrors;
         return &g_noValue;
@@ -339,10 +381,12 @@ FakeValue* __fastcall AttributeLookup(FakeAgent* agent, void*, const void* key) 
 int __fastcall UnitAttribute(FakeUnit* unit, void*, int id, int zero) {
     g_events.push_back(
         {'U', Address(unit), static_cast<std::uintptr_t>(id), static_cast<std::uintptr_t>(zero)});
+    Fault(FaultSite::UnitAttribute, static_cast<std::uintptr_t>(id));
     return id == kAttributeA ? unit->attributeA : id == kAttributeB ? unit->attributeB : -1;
 }
 FakeValue* __fastcall ValueNew(void* factory, void*, int kind) {
     g_events.push_back({'N', static_cast<std::uintptr_t>(kind), 0, 0});
+    Fault(FaultSite::ValueNew, static_cast<std::uintptr_t>(kind));
     if (factory != g_factory || g_createdCount == 8) {
         ++g_helperErrors;
         return &g_noValue;
@@ -356,14 +400,17 @@ FakeValue* __fastcall ValueNew(void* factory, void*, int kind) {
 void __fastcall ValueSet(FakeValue* value, void*, const std::uint32_t* reference) {
     g_events.push_back({'S', static_cast<std::uintptr_t>(value->serial), reference[2], reference[3]});
     if (reference[1] != 5) ++g_helperErrors;
+    Fault(FaultSite::ValueSet, reference[2]);
 }
 const char* const* __fastcall ValueText(FakeValue* value, void*) {
+    Fault(g_textFaultSite, Address(value));
     return &value->text;
 }
 void __fastcall PushBack(void* results, void*, const Record* record) {
     const auto* value = static_cast<const FakeValue*>(record->value);
     g_events.push_back({'P', static_cast<std::uint32_t>(record->distance), Address(record->component),
                         static_cast<std::uintptr_t>(value != nullptr ? value->serial : -1)});
+    Fault(FaultSite::PushBack, Address(record->component));
     const std::uintptr_t last = Word(G.results + 0x10);
     if (Address(results) != G.results || last >= Address(g_stored + 64)) {
         ++g_helperErrors;
@@ -390,6 +437,13 @@ int __cdecl FakeStock(void* unit, void* first, void* second) {
 FakeValue* __fastcall ProbeGetProperty(void*, void*, const void*) {
     g_reachedGetter = true;
     return &g_noValue;
+}
+FakeValue* __fastcall FaultingGetProperty(const std::uint32_t* reference, void*, const void* key) {
+    g_events.push_back({'L', reference[2], Address(key), 0});
+    const auto* agent = reinterpret_cast<const FakeAgent*>(reference[3]);
+    const auto site = agent == nullptr ? FaultSite::MissingAgent : FaultSite::DeletedAgent;
+    CHECK(agent == nullptr || agent->deleted != 0);
+    throw ProviderFault{site, reference[2]};
 }
 
 // ---- units and search states -----------------------------------------------
@@ -522,6 +576,125 @@ struct Tally {
     int live, matches, pointMatches, unlimitedMatches, limitedMatches, stops, lookups, reads;
     int dead, delegated, rejectedFirst;
 };
+
+Diversion g_referenceCtor{}, g_referenceDtor{};
+std::set<void*> g_liveReferences;
+void* __fastcall ObserveReferenceConstruct(void* reference, void*, void* component) {
+    using Constructor = void*(__thiscall*)(void*, void*);
+    Restore(g_referenceCtor);
+    void* result = reinterpret_cast<Constructor>(g_referenceCtor.at)(reference, component);
+    g_referenceCtor = Divert(g_referenceCtor.at, Code(&ObserveReferenceConstruct));
+    CHECK(g_liveReferences.insert(reference).second);
+    return result;
+}
+void __fastcall ObserveReferenceDestroy(void* reference, void*) {
+    using Destructor = void(__thiscall*)(void*);
+    CHECK(g_liveReferences.erase(reference) == 1);
+    Restore(g_referenceDtor);
+    reinterpret_cast<Destructor>(g_referenceDtor.at)(reference);
+    g_referenceDtor = Divert(g_referenceDtor.at, Code(&ObserveReferenceDestroy));
+}
+struct FaultRun {
+    bool caught;
+    ProviderFault fault;
+    std::vector<Event> events;
+    std::uint32_t records;
+    unsigned referencesLeft;
+};
+FaultRun ExecuteFault(FilterFn filter, FakeUnit* unit) {
+    g_events.clear();
+    g_distances.clear();
+    g_createdCount = 0;
+    CHECK(g_liveReferences.empty());
+    PutWord(G.results + 0x0C, Address(g_stored));
+    PutWord(G.results + 0x10, Address(g_stored));
+    FaultRun run{};
+    try {
+        filter(unit, kFirst, kSecond);
+    } catch (const ProviderFault& fault) {
+        run.caught = true;
+        run.fault = fault;
+    } catch (...) {
+        Fail("unexpected native exception", __LINE__);
+    }
+    run.events = g_events;
+    run.records = (Word(G.results + 0x10) - Word(G.results + 0x0C)) / sizeof(Record);
+    run.referencesLeft = static_cast<unsigned>(g_liveReferences.size());
+    g_liveReferences.clear();
+    return run;
+}
+void CheckFaultUnwind(FilterFn stock, FilterFn accelerated, std::uintptr_t filter) {
+    g_phase = "native provider-fault unwind";
+    g_referenceCtor = Divert(Relative(filter, F::AgentRefCtor), Code(&ObserveReferenceConstruct));
+    g_referenceDtor = Divert(Relative(filter, F::AgentRefDtor), Code(&ObserveReferenceDestroy));
+    const State state{false, false, false, -1, 0, 0, 2, "Hero", {true, "Warrior"}};
+    const int reportsBefore = g_faultReports;
+    g_expectedFault = true;
+    for (FaultSite site : {FaultSite::Type, FaultSite::Title, FaultSite::TypeConversion,
+                           FaultSite::TitleConversion, FaultSite::UnitAttribute,
+                           FaultSite::ValueNew, FaultSite::ValueSet, FaultSite::PushBack}) {
+        Apply(state);
+        g_faultSite = site;
+        const auto expected = ExecuteFault(stock, &g_units[1]);
+        const auto actual = ExecuteFault(accelerated, &g_units[1]);
+        CHECK(expected.caught && actual.caught);
+        CHECK(expected.fault.site == site && actual.fault.site == site);
+        CHECK(actual.fault.argument == expected.fault.argument);
+        CHECK(expected.records == 0 && actual.records == 0);
+        if (expected.referencesLeft || actual.referencesLeft) std::fprintf(stderr,
+            "fault site %d: stock references left=%u, accelerated=%u\n",
+            static_cast<int>(site), expected.referencesLeft, actual.referencesLeft);
+        CHECK(expected.referencesLeft == 0 && actual.referencesLeft == 0);
+#if !defined(MAJESTY_LISTOBJECTS_DIFFERENTIAL)
+        CHECK(actual.events == expected.events);
+#else
+        CHECK(Effects(actual.events) == Effects(expected.events));
+#endif
+        // A subsequent valid invocation must still work after each unwind.
+        g_faultSite = FaultSite::None;
+        const auto recoveredStock = Execute(stock, &g_units[1]);
+        const auto recoveredActual = Execute(accelerated, &g_units[1]);
+        CHECK(recoveredStock.result == recoveredActual.result);
+        CHECK(Pushed(recoveredStock.events) && Pushed(recoveredActual.events));
+        CHECK(Effects(recoveredStock.events) == Effects(recoveredActual.events));
+        CHECK(g_liveReferences.empty());
+        ++g_completedFaultCases;
+    }
+    g_faultSite = FaultSite::None;
+    // Unlike the earlier return-token probe, both sides now run the actual
+    // stock callback and unwind real C++ faults from its property boundary.
+    const auto property = Divert(Relative(filter, F::GetProperty), Code(&FaultingGetProperty));
+    for (int unit : {9, 10}) {
+        Apply(state);
+        const auto expected = ExecuteFault(stock, &g_units[unit]);
+        const auto actual = ExecuteFault(accelerated, &g_units[unit]);
+        const auto site = unit == 9 ? FaultSite::MissingAgent : FaultSite::DeletedAgent;
+        CHECK(expected.caught && actual.caught);
+        CHECK(expected.fault.site == site && actual.fault.site == site);
+        CHECK(actual.fault.argument == expected.fault.argument);
+        CHECK(actual.events == expected.events);
+        CHECK(expected.records == 0 && actual.records == 0);
+        CHECK(expected.referencesLeft == 0 && actual.referencesLeft == 0);
+        Restore(property);
+        const auto recoveredStock = Execute(stock, &g_units[1]);
+        const auto recoveredActual = Execute(accelerated, &g_units[1]);
+        CHECK(recoveredStock.result == recoveredActual.result);
+        CHECK(Pushed(recoveredStock.events) && Pushed(recoveredActual.events));
+        CHECK(Effects(recoveredStock.events) == Effects(recoveredActual.events));
+        CHECK(g_liveReferences.empty());
+        Divert(Relative(filter, F::GetProperty), Code(&FaultingGetProperty));
+        ++g_completedFaultCases;
+    }
+    Restore(property);
+#if defined(MAJESTY_LISTOBJECTS_DIFFERENTIAL)
+    CHECK(g_faultReports - reportsBefore == 10);
+#else
+    CHECK(g_faultReports == reportsBefore);
+#endif
+    g_expectedFault = false;
+    Restore(g_referenceCtor);
+    Restore(g_referenceDtor);
+}
 
 void CompareLive(FilterFn stock, FilterFn accelerated, FakeUnit* unit, const State& state,
                  Tally& tally) {
@@ -666,6 +839,7 @@ void CheckBuild(MajestyBuildId build, const P::Profile& profile, std::uint32_t i
                       Row(other) != nullptr ? "does not match the audited bytes" : "no audited profile");
     }
     ExpectRefusal(kBase + 0x10000, build, image, "unexpected image layout");
+    ExpectRefusal(kBase, static_cast<MajestyBuildId>(0xFF), image, "no audited profile");
     PutWord(importSlot, 0);
     std::memset(&image[importSlot - kBase], 0, 4);
     ExpectRefusal(kBase, build, image, "import is unresolved");
@@ -742,6 +916,7 @@ void CheckBuild(MajestyBuildId build, const P::Profile& profile, std::uint32_t i
     Tally tally{};
     RunMatrix(reinterpret_cast<FilterFn>(filter), reinterpret_cast<FilterFn>(callback), filter,
               getProperty, tally);
+    CheckFaultUnwind(reinterpret_cast<FilterFn>(filter), reinterpret_cast<FilterFn>(callback), filter);
     g_phase = "coverage";
     CHECK(tally.matches > 0);
     CHECK(tally.pointMatches > 0);
@@ -760,6 +935,7 @@ void CheckBuild(MajestyBuildId build, const P::Profile& profile, std::uint32_t i
 }  // namespace
 
 int main(int argc, char** argv) {
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     if (argc != 4) {
         std::fprintf(stderr,
                      "usage: ListObjectsAccelerationTests <default Steam exe> <Steam beta2 exe> <GOG exe>\n");
@@ -779,13 +955,13 @@ int main(int argc, char** argv) {
         g_build = names[index];
         g_phase = "map";
         const std::uint32_t size = Map(LoadFile(argv[index + 1]));
+        if (size && !BindExceptionDispatch()) {
+            Fail("missing stock exception-dispatch import", __LINE__);
+            continue;
+        }
         const P::Profile* row = Row(builds[index]);
         if (row == nullptr) {
-            // Without an audited row Install() must refuse before reading anything.
-            g_phase = "unaudited build";
-            ExpectRefusal(kBase, builds[index], Snapshot(size != 0 ? size : sizeof(GogFixtureBytes)),
-                          "no audited profile");
-            std::printf("%s: no audited profile; Install() keeps the stock callback.\n", g_build);
+            Fail("missing required supported profile", __LINE__);
             continue;
         }
         if (size == 0) {
@@ -798,6 +974,7 @@ int main(int argc, char** argv) {
     g_phase = "log";
     CHECK(g_sawActive);
     CHECK(!g_sawMismatch);
+    CHECK(g_completedFaultCases == 30);
     if (g_failures != 0) return 1;
     std::printf("ListObjects acceleration fixture passed.\n");
     return 0;

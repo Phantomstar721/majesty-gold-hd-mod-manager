@@ -1,6 +1,10 @@
 """Brief player-facing patch history, newest first."""
 
 PATCH_HISTORY = (
+    ("0.3.15", (
+        "Speeds up the unit searches used by AI and quests on all three supported game versions.",
+        "Improves cleanup when a unit search encounters a script error.",
+    )),
     ("0.3.14", (
         "Combines more source-backed Standard mod changes without rewriting the author's scripts.",
         "Custom panel presentation keeps existing hiring, research and spell handlers working together.",

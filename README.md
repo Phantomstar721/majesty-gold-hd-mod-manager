@@ -9,15 +9,12 @@ subscribed to through Steam Workshop.
 It also combines compatible Merge mods and supplies the game-side support
 needed by custom buildings, panels, and other advanced features.
 
-Current release candidate: **0.3.14 (beta)**. [What changed](release/v0.3.14.md).
+Current release candidate: **0.3.15 (beta)**. [What changed](release/v0.3.15.md).
 
-The **0.3.14 beta** combines more original source-backed scripts and lets
-Custom Building Panels work with existing action handlers. Optional panel and
-ground-action patches remain credited to mikmak300 and are installed through
-Quality of Life when needed. The updated native engine SDK supports additional
-panel records and script functions, with corrected GOG panel text handling.
-Native engine mods retain their Standard packaging and dataset scope.
-[Beta changes](release/v0.3.14.md).
+The **0.3.15 beta** reduces work in the native unit searches used by AI and
+quests, with explicit support for Default Steam, beta2 and GOG. It also improves
+cleanup when a search encounters a script error. This update requires no new
+mod declarations or Prepare operation. [Beta changes](release/v0.3.15.md).
 
 ## Features
 

@@ -3,14 +3,14 @@
 An always-on runtime change with no package declaration. Stock `$ListObjects`
 hands one per-unit filter callback to each candidate collection it walks. The
 runtime replaces only that callback with an exact re-implementation that reaches
-the same decision with less work. Results, their order, script errors and every
-side effect stay those of stock Majesty. An executable without an audited
+the same decision with less work. Stock result ordering and error propagation
+are the compatibility contract; the verification scope and limits are below.
+An executable without an audited
 profile, or with any difference in the guarded stock bytes, keeps the stock
 callback.
 
-Profiles exist for default Steam 1.5.2.24 and Steam beta2 1.5.2.28. GOG 1.5.2.28
-has no profile yet and keeps the stock callback until a row produced by
-`scripts/audit_listobjects_acceleration.py` is added.
+Profiles exist for default Steam 1.5.2.24, Steam beta2 1.5.2.28 and GOG 1.5.2.28.
+All three are mandatory in profile and native fixture verification.
 
 ## Why native code
 
@@ -95,6 +95,10 @@ comparand are set, and the attribute reads last pair first. A missing or deleted
 agent, where the stock getter raises its error, is handed to the stock callback
 for that unit, so the error and its message stay stock's own. A match runs the
 stock value, reference and push_back calls in stock order with the same record.
+The match tail uses a scoped stock reference temporary so a throwing assignment
+destroys the successfully constructed reference before propagating the error,
+just as stock does. Native fault injection exposed and corrected the original
+replacement's missing assignment-error cleanup.
 
 The reordered tests are pure reads. The distance helpers' only side effect is a
 lazy footprint-extent cache fill. A unit whose distance is skipped fills that
@@ -163,10 +167,29 @@ stock. This build is for verification only and does more work than stock.
   and team filters, type and title/subtype settings, zero to two attribute pairs
   and first-match-only. For each unit both callbacks must give the same return
   value, the same records and the same sequence of calls that can raise an error
-  or have a side effect. For missing or deleted agents the fixture checks the
-  hand-over to the stock callback. Each audited build gets 124,416 live-agent
+  or have a side effect. Each audited build gets 124,416 live-agent
   unit comparisons and 55,296 missing/deleted-agent checks. The fixture passes
   in both the release and the verification-build configuration.
+
+### Native error propagation and cleanup
+
+The fixture additionally injects real C++ faults at type/title lookup,
+type/title conversion, unit-attribute lookup, value creation, assignment and
+result insertion. It invokes the actual mapped stock callback and replacement,
+compares escaped fault identity/payload and result effects, and observes the
+actual stock reference constructor/destructor to require no remaining temporary
+on success or unwind. Each injected error is followed by a valid recovery call.
+
+Missing/deleted-agent cases throw at the property-provider boundary while both
+sides run the original callback, instead of replacing it with a return-token
+stub. A fixture-local CRT binding handles stock callback exception frames;
+`/SAFESEH:NO` applies only to this generated test executable to permit its mapped
+stock EH entrypoints. It changes no game, runtime DLL or system security setting.
+
+These are native propagation/lifetime tests with controlled providers. They do
+not instantiate the full game VM/error formatter or certify every rendered
+script-error message. Production still delegates missing/deleted agents to stock
+and uses original property helpers for other errors.
 
 ### Live
 
@@ -176,7 +199,7 @@ recorded 1,319,108,608 unit evaluations and 1,694,359 matches, with 0 mismatches
 and 0 exceptions, and every install guard passed on that executable. No
 missing or deleted agent reached the filter in that session (0 delegated
 units), so that path rests on the offline fixture. Default Steam has not been
-run live, and GOG has no profile.
+run live; GOG has offline profile/native coverage but no live acceptance here.
 
 ## Not changed
 
