@@ -12,7 +12,8 @@ param(
     [switch]$CheckedPlacementTests,
     [switch]$RegistrationDiagnostic,
     [switch]$PanelEngineAlpha,
-    [switch]$EngineModules
+    [switch]$EngineModules,
+    [switch]$ListObjectsDifferential
 )
 
 $ErrorActionPreference = "Stop"
@@ -138,6 +139,11 @@ if ($FreestyleDiagnosticNamedRetention) {
 if ($SiegeCrashDiagnostic) {
     $runtimeDefines += "/DCAM_SIEGE_CRASH_DIAGNOSTIC=1"
 }
+if ($ListObjectsDifferential) {
+    # Verification build: both $ListObjects callbacks run on every unit and
+    # every disagreement is logged (docs/listobjects-acceleration.md).
+    $runtimeDefines += "/DMAJESTY_LISTOBJECTS_DIFFERENTIAL=1"
+}
 
 $runtimeSources = @(
     (Join-Path $sourceRoot "BooleanRuntime.cpp"),
@@ -159,6 +165,7 @@ $runtimeSources = @(
     (Join-Path $sourceRoot "EquipmentRuntime.cpp"),
     (Join-Path $sourceRoot "BoundedMapQuery.cpp"),
     (Join-Path $sourceRoot "MapQueryRuntime.cpp"),
+    (Join-Path $sourceRoot "ListObjectsAcceleration.cpp"),
     (Join-Path $sourceRoot "MajestyModManagerRuntime.cpp"),
     (Join-Path $sourceRoot "ControllerLifecycleRegistry.cpp"),
     (Join-Path $sourceRoot "FreestyleCamRuntime.cpp"),
@@ -201,7 +208,7 @@ if ($PanelEngineAlpha -or $EngineModules) {
 $fixtureNames = @()
 if ($ExplorationTests) { $fixtureNames += "ExplorationNativeTests" }
 if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests"; $fixtureNames += "ObserverReregistrationTests", "PlacementReregistrationTests"; $fixtureNames += "RegistrationDiagnosticTests", "BoundedRuntimeLogTests" }
-if ($FeatureTests) { $fixtureNames += "PaidSourceTargetCommandTests", "PanelLifecycleRuntimeTests", "LargeModListTests" }
+if ($FeatureTests) { $fixtureNames += "PaidSourceTargetCommandTests", "PanelLifecycleRuntimeTests", "LargeModListTests", "ListObjectsAccelerationTests" }
 if ($RegistrationTests) { $fixtureNames += "SharedRegistrationRuntimeTests"; $fixtureNames += "NativeRegistrationLifecycleTests" }
 if ($AttackObservationTests) {
     & $compiler /nologo /W4 /O2 /EHsc @commonIncludes `
@@ -237,7 +244,7 @@ if ($CheckedPlacementTests) {
 foreach ($fixtureName in $fixtureNames) {
     $fixtureLinkOptions = @()
     $fixtureArguments = @()
-    $fixedImageFixture = $fixtureName -in @("SharedRegistrationRuntimeTests", "NativeRegistrationLifecycleTests", "LargeModListTests")
+    $fixedImageFixture = $fixtureName -in @("SharedRegistrationRuntimeTests", "NativeRegistrationLifecycleTests", "LargeModListTests", "ListObjectsAccelerationTests")
     if ($PanelEngineAlpha -and $fixtureName -eq 'LargeModListTests') {
         $fixedImageFixture=$false
         $fixtureLinkOptions=@('/BASE:0x10000000','/DYNAMICBASE')
@@ -261,7 +268,7 @@ foreach ($fixtureName in $fixtureNames) {
     if ($fixtureName -eq "NativeRegistrationLifecycleTests") {
         $fixtureSources = @($fixtureSources | Where-Object { [IO.Path]::GetFileName($_) -ne "AuditedBeta2.cpp" })
     }
-    if (($RegistrationTests -and $fixedImageFixture) -or $fixtureName -eq "LargeModListTests") {
+    if (($RegistrationTests -and $fixedImageFixture) -or $fixtureName -in @("LargeModListTests", "ListObjectsAccelerationTests")) {
         $fixtureSources += (Join-Path $repoRoot "tests\GogFixtureMemory.cpp")
     }
     & $compiler /nologo /W4 /O2 /EHsc @commonIncludes @runtimeDefines `

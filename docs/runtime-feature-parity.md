@@ -94,3 +94,21 @@ Steam and GOG still need in-game acceptance of equipment/panel display,
 hover/refresh, overlapping speed effects and expiry, research purchase and
 cancellation, upgrade/transfer, save/load, and return to menu. Use disposable
 quests and user-prepared packages. This port did not rewrite a package or save.
+
+## `$ListObjects` acceleration
+
+An always-on, behavior-preserving replacement of the stock per-unit filter; see
+[the lifecycle and evidence](listobjects-acceleration.md). Rows and body hashes
+are in `runtime/ListObjectsAccelerationProfiles.h`:
+
+| Stock boundary | Default Steam | Steam beta2 | GOG |
+| --- | --- | --- | --- |
+| `$ListObjects` | `39050` | `39F60` | not audited |
+| Per-unit filter | `38D70` | `39C80` | not audited |
+
+Without a row, GOG keeps the stock callback. That makes this a version-limited
+exception awaiting the maintainer's decision: run the audit script on GOG and
+add its row. `tests/test_listobjects_acceleration_profiles.py` and the
+`ListObjectsAccelerationTests` x86 fixture (`-FeatureTests`) cover every row.
+Live acceptance so far is one Steam beta2 verification session with no
+mismatches; default Steam has not been run live.
