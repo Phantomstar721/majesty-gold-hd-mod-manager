@@ -46,6 +46,7 @@
 #include "PairedOccupantProfiles.h"
 #include "PairedOccupantLookupProfiles.h"
 #include "PanelEngineModules.h"
+#include "ListObjectsAcceleration.h"
 
 namespace {
 
@@ -8472,6 +8473,10 @@ DWORD WINAPI InitializeRuntime(void*) {
     if (!InstallGogWorkshopQuests()) {
         StopUnsafeManagerRuntimeLaunch("GOG quest registration could not be installed: invalid metadata or unaudited stock loader bytes.");
     }
+    // Always-on, behaviour-preserving acceleration of stock $ListObjects
+    // (docs/listobjects-acceleration.md). An unaudited build or any stock-byte
+    // mismatch leaves the stock callback untouched; the outcome is logged.
+    ListObjectsAcceleration::Install(g_imageBase, g_buildProfile->buildId, &WriteLog);
     if (privateRewardFlagRecipes && !PrepareRewardFlagRuntimeRecords()) {
         StopUnsafeManagerRuntimeLaunch(
             "Terminating manager launch before Majesty resumes: private reward flag callbacks could not be prepared from stock Fl00.");

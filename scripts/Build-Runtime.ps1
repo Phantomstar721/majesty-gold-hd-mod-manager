@@ -12,7 +12,8 @@ param(
     [switch]$CheckedPlacementTests,
     [switch]$RegistrationDiagnostic,
     [switch]$PanelEngineAlpha,
-    [switch]$EngineModules
+    [switch]$EngineModules,
+    [switch]$ListObjectsDifferential
 )
 
 $ErrorActionPreference = "Stop"
@@ -138,6 +139,11 @@ if ($FreestyleDiagnosticNamedRetention) {
 if ($SiegeCrashDiagnostic) {
     $runtimeDefines += "/DCAM_SIEGE_CRASH_DIAGNOSTIC=1"
 }
+if ($ListObjectsDifferential) {
+    # Verification build: both $ListObjects callbacks run on every unit and
+    # every disagreement is logged (docs/listobjects-acceleration.md).
+    $runtimeDefines += "/DMAJESTY_LISTOBJECTS_DIFFERENTIAL=1"
+}
 
 $runtimeSources = @(
     (Join-Path $sourceRoot "BooleanRuntime.cpp"),
@@ -159,6 +165,7 @@ $runtimeSources = @(
     (Join-Path $sourceRoot "EquipmentRuntime.cpp"),
     (Join-Path $sourceRoot "BoundedMapQuery.cpp"),
     (Join-Path $sourceRoot "MapQueryRuntime.cpp"),
+    (Join-Path $sourceRoot "ListObjectsAcceleration.cpp"),
     (Join-Path $sourceRoot "MajestyModManagerRuntime.cpp"),
     (Join-Path $sourceRoot "ControllerLifecycleRegistry.cpp"),
     (Join-Path $sourceRoot "FreestyleCamRuntime.cpp"),
@@ -201,7 +208,7 @@ if ($PanelEngineAlpha -or $EngineModules) {
 $fixtureNames = @()
 if ($ExplorationTests) { $fixtureNames += "ExplorationNativeTests" }
 if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests"; $fixtureNames += "ObserverReregistrationTests", "PlacementReregistrationTests"; $fixtureNames += "RegistrationDiagnosticTests", "BoundedRuntimeLogTests" }
-if ($FeatureTests) { $fixtureNames += "PaidSourceTargetCommandTests", "PanelLifecycleRuntimeTests", "LargeModListTests" }
+if ($FeatureTests) { $fixtureNames += "PaidSourceTargetCommandTests", "PanelLifecycleRuntimeTests", "LargeModListTests", "ListObjectsAccelerationTests" }
 if ($RegistrationTests) { $fixtureNames += "SharedRegistrationRuntimeTests"; $fixtureNames += "NativeRegistrationLifecycleTests" }
 if ($AttackObservationTests) {
     & $compiler /nologo /W4 /O2 /EHsc @commonIncludes `
@@ -236,8 +243,13 @@ if ($CheckedPlacementTests) {
 }
 foreach ($fixtureName in $fixtureNames) {
     $fixtureLinkOptions = @()
+    # The ListObjects fixture executes stock callback frames in its private
+    # mapped image. Their native EH entrypoints are not linked fixture symbols.
+    # This affects this test executable only, never the runtime DLL or game.
+    $fixtureExceptionOptions = @()
+    if ($fixtureName -eq 'ListObjectsAccelerationTests') { $fixtureExceptionOptions += '/SAFESEH:NO' }
     $fixtureArguments = @()
-    $fixedImageFixture = $fixtureName -in @("SharedRegistrationRuntimeTests", "NativeRegistrationLifecycleTests", "LargeModListTests")
+    $fixedImageFixture = $fixtureName -in @("SharedRegistrationRuntimeTests", "NativeRegistrationLifecycleTests", "LargeModListTests", "ListObjectsAccelerationTests")
     if ($PanelEngineAlpha -and $fixtureName -eq 'LargeModListTests') {
         $fixedImageFixture=$false
         $fixtureLinkOptions=@('/BASE:0x10000000','/DYNAMICBASE')
@@ -261,12 +273,12 @@ foreach ($fixtureName in $fixtureNames) {
     if ($fixtureName -eq "NativeRegistrationLifecycleTests") {
         $fixtureSources = @($fixtureSources | Where-Object { [IO.Path]::GetFileName($_) -ne "AuditedBeta2.cpp" })
     }
-    if (($RegistrationTests -and $fixedImageFixture) -or $fixtureName -eq "LargeModListTests") {
+    if (($RegistrationTests -and $fixedImageFixture) -or $fixtureName -in @("LargeModListTests", "ListObjectsAccelerationTests")) {
         $fixtureSources += (Join-Path $repoRoot "tests\GogFixtureMemory.cpp")
     }
     & $compiler /nologo /W4 /O2 /EHsc @commonIncludes @runtimeDefines `
         @fixtureSources (Join-Path $repoRoot "tests\$fixtureName.cpp") `
-        "/Fo$output\" "/Fe:$output\$fixtureName.exe" /link @commonLibPaths @runtimeLibraries @fixtureLinkOptions
+        "/Fo$output\" "/Fe:$output\$fixtureName.exe" /link @commonLibPaths @runtimeLibraries @fixtureLinkOptions @fixtureExceptionOptions
     if ($LASTEXITCODE -ne 0) { throw "$fixtureName build failed" }
     if ($fixedImageFixture) {
         # Same fixed-address, data-only fixture layout used by GOG profile tests.
@@ -288,7 +300,7 @@ foreach ($fixtureName in $fixtureNames) {
         $testBase = '0x{0:X}' -f (0x400000 - $fixtureRva)
         $objects = @($fixtureSources | ForEach-Object { Join-Path $output (([IO.Path]::GetFileNameWithoutExtension($_)) + '.obj') })
         $objects += (Join-Path $output "$fixtureName.obj")
-        & $compiler /nologo @objects "/Fe:$testExe" /link "/BASE:$testBase" /ALIGN:65536 /DYNAMICBASE:NO @commonLibPaths @runtimeLibraries
+        & $compiler /nologo @objects "/Fe:$testExe" /link "/BASE:$testBase" /ALIGN:65536 /DYNAMICBASE:NO @commonLibPaths @runtimeLibraries @fixtureExceptionOptions
         if ($LASTEXITCODE -ne 0) { throw "Registration fixture layout did not link" }
     }
     if ($fixtureName -eq "NativeRegistrationLifecycleTests") {
