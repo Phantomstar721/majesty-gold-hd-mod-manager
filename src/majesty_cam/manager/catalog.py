@@ -573,7 +573,7 @@ def _parse_content_node(
             definition=(_selected_definition(definition_path,content_id)
                         if definition_path.is_file() else None)
             native_contract=(not definition_path.is_file() or definition is not None and
-                not (definition.custom_buildings or definition.runtime_features or definition.runtime_capabilities))
+                not (definition.merge or definition.custom_buildings or definition.runtime_features or definition.runtime_capabilities))
             native_engine_component=native_contract and bool(discover(probe).evidence)
         except PanelEngineError as exc:
             # A recognized paired WE protocol that needs newer/valid grammar
@@ -588,7 +588,7 @@ def _parse_content_node(
     kind = (
         CatalogKind.QUEST
         if expected_tag == "Quest"
-        else (CatalogKind.MERGE if (has_cam and not native_engine_component) or _declares_native_source_event(candidate.package_root)
+        else (CatalogKind.MERGE if (has_cam and not native_engine_component) or _declares_merge_intent(candidate.package_root)
               else CatalogKind.STANDARD)
     )
     generated = _is_generated_package(candidate.package_root)
@@ -1472,8 +1472,8 @@ def _normalize_metadata_text(value: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", value.casefold()).split())
 
 
-def _declares_native_source_event(package_root: Path) -> bool:
-    """Route a real native dependency, never arbitrary GPL/metadata, to Merge.
+def _declares_merge_intent(package_root: Path) -> bool:
+    """Route explicit Merge intent or a native source dependency to validation.
 
     This is intent detection only. Normal strict readiness checks still reject
     malformed declarations, wrong identities and unsupported schema versions.
@@ -1485,6 +1485,8 @@ def _declares_native_source_event(package_root: Path) -> bool:
         value = json.loads((package_root / DEFINITION_FILE_NAME).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return False
+    if isinstance(value, dict) and value.get("merge", False) is not False:
+        return True  # Invalid types/schemas must reach strict readiness too.
     features = value.get("runtime_features", ()) if isinstance(value, dict) else ()
     return isinstance(features, list) and any(
         isinstance(feature, dict) and (feature.get("type") in (SPELL_ORIGIN_TYPE, "stock.message-flag-controls.v1") or

@@ -10,7 +10,10 @@ This contract applies only to packages shown in **Merge**. Standard `.mmxml`
 mods remain independent Active Mod selections; `.mqxml` quests are chosen
 through Majesty's stock quest browser rather than the Active Mods list. Source
 quests are catalog-only and are never rewritten or duplicated. The current catalog
-classification routes a Mod manifest containing a `CAM` directive to Merge.
+classification routes a Mod manifest containing a `CAM` directive to Merge,
+except independently loadable Window Engine components without Manager features.
+From Manager 0.3.16, a schema-3 definition can explicitly request Merge using
+`"merge": true`, including a windows-only package with no custom buildings.
 A version-3 source-only package declaring the native `source-terrain-revealed`
 event also uses Merge without a dummy CAM; see the
 [source observation contract](source-exploration-events.md). Other GPL/DAT- or
@@ -90,6 +93,40 @@ ignored:
   "runtime_features": []
 }
 ```
+
+### Explicit Merge selection for native panel packages (0.3.16+)
+
+An independently loadable Window Engine package normally appears as Standard,
+even if an optional definition describes its external engine dependencies.
+To have its CAM windows participate in Merge preferences and typed relocation,
+add the optional top-level boolean `"merge": true` to its schema-3 definition.
+For a package that only replaces existing windows, this is sufficient metadata:
+
+```json
+{
+  "schema_version": 3,
+  "mod_id": "{stable-package-uuid}",
+  "internal_name": "NamespacedPanels",
+  "display_name": "Custom Panels",
+  "merge": true,
+  "custom_buildings": [],
+  "runtime_features": []
+}
+```
+
+This selects the existing Merge path; it grants no exception to the package
+requirements above. In particular, the single matching manifest, `base="Any"`,
+supported loads, CAM/GPL sources and normal resource-conflict checks still apply.
+Window Engine dependencies are discovered from the loaded panel records as usual.
+No dummy building, feature or extra native handler is required. Existing Standard
+packages and implicit CAM Merge packages keep their classification when the field
+is absent; `false` also retains the existing automatic classification. Older
+Managers do not recognize this new field and must be updated before using it.
+
+Standard packages are not moved after the generated profile as a workaround:
+such overlays would bypass Merge preferences and typed resource relocation.
+
+### Custom building declarations
 
 Each `local_name` is unique within the definition. A declared custom building
 supplies matching authored `SMNU` and `STRT` resources and declares the stock

@@ -18,6 +18,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT / "tests")]
 sys.dont_write_bytecode = True
 
 COMMON = (
+    "test_panel_engine_merge_intent",
     "test_manager_history",
     "test_manager_presets", "test_manager_profile", "test_manager_controller", "test_manager_qol_service", "test_quest_dataset", "test_standard_project_recovery",
     "test_attack_observation_proof", "test_native_impact",

@@ -246,6 +246,7 @@ class ModDefinition:
     runtime_features: Tuple[PackageRuntimeFeature, ...] = ()
     external_patches: Tuple[PatchRequirement, ...] = ()
     source_contributions: Tuple[RewardContribution, ...] = ()
+    merge: bool = False
 
 
 @dataclass(frozen=True)
@@ -479,7 +480,12 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         expected.add("external_patches")
     if schema_version >= 2 and "source_contributions" in value:
         expected.add("source_contributions")
+    if schema_version == 3 and "merge" in value:
+        expected.add("merge")
     _require_exact_fields(value, expected, "mod definition")
+    merge = value.get("merge", False)
+    if type(merge) is not bool:
+        raise PackageFormatError("mod definition merge must be a boolean")
     try:
         external_patches = parse_requirements(value.get("external_patches", ()))
         raw_contributions=value.get('source_contributions',())
@@ -865,6 +871,7 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         runtime_features=tuple(features),
         external_patches=external_patches,
         source_contributions=source_contributions,
+        merge=merge,
     )
 
 
@@ -1375,6 +1382,9 @@ def mod_definition_mapping(definition: ModDefinition) -> dict:
         value["external_patches"] = [requirement_mapping(r) for r in definition.external_patches]
     if definition.source_contributions:
         value['source_contributions']=[reward_contribution_mapping(f) for f in definition.source_contributions]
+    # Omission preserves existing definitions and their semantic fingerprints.
+    if definition.merge is not False:
+        value['merge'] = definition.merge
     return value
 
 

@@ -9,12 +9,12 @@ subscribed to through Steam Workshop.
 It also combines compatible Merge mods and supplies the game-side support
 needed by custom buildings, panels, and other advanced features.
 
-Current release candidate: **0.3.15 (beta)**. [What changed](release/v0.3.15.md).
+Current release candidate: **0.3.16 (beta)**. [What changed](release/v0.3.16.md).
 
-The **0.3.15 beta** reduces work in the native unit searches used by AI and
-quests, with explicit support for Default Steam, beta2 and GOG. It also improves
-cleanup when a search encounters a script error. This update requires no new
-mod declarations or Prepare operation. [Beta changes](release/v0.3.15.md).
+The **0.3.16 beta** lets native panel packages explicitly choose Merge using
+`"merge": true` in their schema-3 definition. Existing Standard defaults and
+normal Merge validation remain in place. Supports Default Steam, beta2 and
+GOG. [Beta changes](release/v0.3.16.md).
 
 ## Features
 
@@ -335,6 +335,11 @@ cannot be combined.
 
 For the complete technical rules, see the
 [Merge mod authoring guide](docs/manager-merge-contract.md).
+
+In the 0.3.16 beta, an author can add `"merge": true` to a schema-3 definition
+to merge a windows-only Window Engine package through the usual mod preferences.
+No custom-building declaration is needed for an existing window replacement.
+Independent native packages retain Standard classification without that opt-in.
 
 ## Compatibility and safety
 

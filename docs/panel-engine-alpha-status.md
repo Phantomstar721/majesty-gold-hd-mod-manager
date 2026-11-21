@@ -148,8 +148,8 @@ panels alongside engine panels. Gameplay remains user-operated.
 
 An engine-native component may supply explicit `external_patches` without
 becoming a Manager Merge component. The alpha admits a positive engine
-component as Standard when its matching definition has no Manager custom
-buildings, runtime features or runtime capabilities. A damaged/mismatched
+component as Standard when its matching definition has no explicit `merge: true`,
+Manager custom buildings, runtime features or runtime capabilities. A damaged/mismatched
 definition or real Manager recipe retains the normal Merge admission path.
 The original Dataset, CAM, strings, XML and compiled target remain owned and
 loaded by the native component. Standard can be selected alongside Merge mods

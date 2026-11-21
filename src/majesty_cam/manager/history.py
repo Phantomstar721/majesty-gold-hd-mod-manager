@@ -1,6 +1,9 @@
 """Brief player-facing patch history, newest first."""
 
 PATCH_HISTORY = (
+    ("0.3.16", (
+        "Custom panel packages can opt into Merge and use the usual mod preferences.",
+    )),
     ("0.3.15", (
         "Speeds up the unit searches used by AI and quests on all three supported game versions.",
         "Improves cleanup when a unit search encounters a script error.",

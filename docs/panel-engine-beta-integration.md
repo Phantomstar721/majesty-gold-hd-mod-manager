@@ -26,6 +26,11 @@ calls inside a compiled-only BCD do not yet provide a verified call contract;
 these remain explicitly unresolved rather than guessed. A package can declare
 both external services, or the player can install both optional rows manually.
 No Manager definition is required merely to load a native Standard component.
+From 0.3.16, a matching schema-3 definition can instead opt into the existing
+Merge path using `"merge": true`, without declaring fake buildings or runtime
+features. The ordinary strict Merge manifest/source and preference contracts
+still apply; native panel dependencies and three-build engine dispatch are
+unchanged. Without that opt-in, native components retain Standard admission.
 The untouched native Workshop fixture was admitted as Standard with its
 MajestyExpansion scope; the private evidence receipt is
 `local/panel-engine-beta/original-native-package.json`.

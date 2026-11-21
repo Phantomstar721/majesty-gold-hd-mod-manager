@@ -1,3 +1,12 @@
+Version 0.3.16 (beta) lets authors opt native panel packages into Merge using
+"merge": true in their schema-3 definition. Window-only packages can use the
+normal preferred-mod choices without declaring fake buildings or runtime
+features. Independent native packages remain Standard by default. Supports
+Default Steam, beta2 and GOG. Authors using the new field need Manager 0.3.16
+or newer; existing packages need no changes. Rescan Content after updating a
+definition, then review the Merge selections and Prepare normally. No engine
+patch reinstall or new quest is required for this update.
+
 Version 0.3.15 (beta) speeds up existing native unit searches used by AI and
 quests, particularly in busy games. Supports Default Steam, beta2 and GOG, and
 improves cleanup when a search encounters a script error. Close Majesty and the
