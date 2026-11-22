@@ -1318,8 +1318,15 @@ def merge_text_resources(
         tuple[bytes, int], StrtRowResolution
     ] | None = None,
     stock_named_resources: Mapping[tuple[bytes, bytes], bytes] | None = None,
+    window_review=None,
 ) -> TextMergeResult:
-    """Merge Majesty's known whole STRT tables and all private panel/name tables."""
+    """Merge Majesty's known whole STRT tables and all private panel/name tables.
+
+    With ``window_review`` (a mod-pair review session), window records that
+    still collide become preferred-mod choices; an unanswered choice merges
+    provisionally and must be answered and merged again before use. Without
+    it, such collisions stop the merge as before.
+    """
 
     resources = collapse_native_cam_resources(
         resource for inv in inventories for resource in inv.resources
@@ -1358,6 +1365,23 @@ def merge_text_resources(
         except ValueError as exc:
             raise ComposeError(str(exc)) from exc
         panel_text_transform = text_relocator(resources, dialog_renames)
+    if window_review is not None:
+        from .window_review import reviewed_window_resolutions
+        try:
+            reviewed_windows = reviewed_window_resolutions(
+                inventories,
+                resources,
+                window_review,
+                renames=rename_map,
+                resolutions=named_resolutions,
+                stock_resources=stock_named_resources,
+                text_transform=panel_text_transform,
+                excluded_strt_keys=tuple(_WHOLE_STRT),
+            )
+        except ValueError as exc:
+            raise ComposeError(str(exc)) from exc
+        if reviewed_windows:
+            named_resolutions = {**reviewed_windows, **dict(named_resolutions or {})}
 
     whole: dict[bytes, StrtMergeSelection] = {}
     processed_whole_keys: set[bytes] = set()
@@ -8416,18 +8440,33 @@ def compose_package(
         private_activity_texts = discover_private_activity_texts(
             game_path, inventories
         )
-    text_result = merge_text_resources(
-        game_path,
-        inventories,
-        private_activity_texts=private_activity_texts,
-        dialog_resolutions=dialog_resolutions,
-        controller_panels=controller_result.panels,
-        controller_registry=controller_result.registry,
-        hero_info_tooltips=bool(runtime_feature_registry.hero_info_rows),
-        external_panel_behaviors=external_panel_behaviors,
-        named_resolutions=named_cam_resolutions,
-        strt_resolutions=strt_resolutions,
-        stock_named_resources=stock_named_resources,
+    from .script_review import ScriptReviewSession
+    from .window_review import WindowConflict
+    if script_review is None:
+        script_review = ScriptReviewSession()
+
+    def merge_text():
+        return merge_text_resources(
+            game_path,
+            inventories,
+            private_activity_texts=private_activity_texts,
+            dialog_resolutions=dialog_resolutions,
+            controller_panels=controller_result.panels,
+            controller_registry=controller_result.registry,
+            hero_info_tooltips=bool(runtime_feature_registry.hero_info_rows),
+            external_panel_behaviors=external_panel_behaviors,
+            named_resolutions=named_cam_resolutions,
+            strt_resolutions=strt_resolutions,
+            stock_named_resources=stock_named_resources,
+            window_review=script_review,
+        )
+
+    text_result = merge_text()
+    # A window collision without a saved pair preference merged provisionally.
+    # It joins the consolidated preference review below (with Description and
+    # sound choices), and the windows are merged again once it is answered.
+    window_choices_pending = any(
+        isinstance(conflict, WindowConflict) for conflict in script_review.unresolved
     )
     bdep_result = merge_bdep_resource(
         game_path,
@@ -8508,6 +8547,9 @@ def compose_package(
         forced_keys=(*tuple(description_resolutions or {}),
                      *(c.key for c in script_review.observed if isinstance(c, DescriptionReviewConflict))),
     )
+    if window_choices_pending:
+        # The review above has answered every window choice (or stopped).
+        text_result = merge_text()
     audio_archive, sound_archive, sound_selections = merge_sound_resources(
         inventories,
         named_resolutions=sound_resolutions(inventories, script_review, sound_conflicts, named_cam_resolutions),

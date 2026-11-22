@@ -128,12 +128,19 @@ such overlays would bypass Merge preferences and typed resource relocation.
 
 ### Declared window replacement
 
-Two Merge packages that ship different records for the same window stop
-Prepare with a named CAM conflict. A package built to supersede another
-package's windows on purpose, for example a panel package that already carries
-an art package's changes to those windows, declares exactly which windows it
-replaces and in which package, using the optional schema-3 array
-`resource_replacements`:
+When two Merge packages ship different records for the same window (its `SMNU`
+layout or its `STRT` text), Prepare offers the collision in the
+[mod preference review](script-conflict-review.md). One preferred mod per pair
+covers every window, Description, sound and script conflict between those two
+packages, and saved choices are reused. The preferred mod's whole window record
+is used; Window Engine rows in a chosen `STRT` keep their typed relocation. A
+record identical to stock, or relocated to a private internal ID, never
+conflicts.
+
+A package built to supersede another package's windows on purpose, for example
+a panel package that already carries an art package's changes to those windows,
+can declare exactly which windows it replaces and in which package, so players
+are not asked. It uses the optional schema-3 array `resource_replacements`:
 
 ```json
 {
@@ -164,8 +171,9 @@ and its text is added unopposed.
 The declaration is deliberately narrow:
 
 - It resolves only the listed windows against the named package. Other
-  overlaps between the two packages, a third package shipping the same window,
-  and Description, string, sound or script conflicts follow their usual rules.
+  overlaps between the two packages, including unlisted windows, follow their
+  usual rules. A third package shipping a declared window with different
+  contents still stops Prepare: the declaration covers only its named pair.
 - It is inert when the named package is not selected, and for a listed window
   the named package does not ship.
 - Every listed window must be one the declaring package ships as an `SMNU`
@@ -998,8 +1006,9 @@ compares semantic records with the stock ancestor:
 An overlap proceeds only when the relevant typed merger can prove it is
 independent or an explicit resolution selects or supplies the complete intended
 semantic result. Today, GPL/DAT conflicts may use an explicit selected-owner
-resolution, and a package may declare the windows it replaces in another
-package (see [declared window replacement](#declared-window-replacement)).
+resolution. Window records use the mod preference review, or a package's
+declaration of the windows it replaces in another package (see
+[declared window replacement](#declared-window-replacement)).
 Other divergent Description, named CAM, and whole-table records must
 merge cleanly or stop until an equally explicit typed resolution is added.
 Unused, misspelled, or stale resolution rules also stop the build.

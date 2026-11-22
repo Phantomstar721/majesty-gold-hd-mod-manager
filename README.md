@@ -39,7 +39,7 @@ GOG. [Beta changes](release/v0.3.16.md).
 - Combines independent changes within shared GPL functions and XML Descriptions,
   and asks for one preferred mod per pair when changes cannot be safely combined.
 - Reviews Standard load-order choices together, with expandable conflict details;
-  conflicting sound records use the same preferred-mod choices.
+  conflicting sound and window records use the same preferred-mod choices.
 - Supports reusable list, research, reward, and recruitment panels, including
   single-panel layouts at lower resolutions.
 - Supports custom ability names, icons, and hover descriptions in hero panels.

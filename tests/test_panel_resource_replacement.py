@@ -1,12 +1,16 @@
-"""Declared window replacement between selected Merge packages."""
+"""Window collisions between selected Merge packages: declarations and choices."""
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
 from majesty_cam.cam import CamArchive, CamEntry, CamSection
 from majesty_cam.compose import ComposeError, merge_text_resources
+from majesty_cam.description_composition import prepare_description_views
 from majesty_cam.package import (PackageFormatError, ResourceReplacement,
     _validate_definition_object, mod_definition_mapping, parse_mod_definition)
+from majesty_cam.script_review import (ScriptReviewRequired, ScriptReviewSession,
+    group_conflicts, pair_key)
+from majesty_cam.window_review import WindowConflict
 from test_panel_engine_merge_intent import ONE, TWO, package, prepared, write_definition
 
 
@@ -156,6 +160,92 @@ class PanelResourceReplacementMergeTests(unittest.TestCase):
             self.assertEqual([issue.code for issue in result.issues],
                              ['unshipped_replacement_panel'])
             self.assertIn('AP11', result.issues[0].message)
+
+
+class WindowPreferenceReviewTests(unittest.TestCase):
+    """Undeclared window collisions become one preferred-mod choice per pair."""
+
+    WINDOW_LABELS = {'Window layout: AP10', 'Window text: AP10'}
+    NO_STOCK = {'majesty': {}, 'majestyexpansion': {}}
+
+    def test_an_undeclared_collision_is_a_pair_choice_not_a_stop(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inventories = selected(self, root, ('One', ONE, None), ('Two', TWO, None))
+            review = ScriptReviewSession()
+            merge_text_resources(root, inventories, external_panel_behaviors=True,
+                                 window_review=review)
+            self.assertTrue(all(isinstance(c, WindowConflict) for c in review.unresolved))
+            self.assertEqual({c.gameplay_label for c in review.unresolved}, self.WINDOW_LABELS)
+            self.assertEqual(len(group_conflicts(review.unresolved)), 1)
+            with self.assertRaises(ScriptReviewRequired):
+                review.require_resolved()
+            for winner, index in ((ONE, 0), (TWO, 1)):
+                with self.subTest(winner=winner):
+                    saved = ScriptReviewSession({pair_key(ONE, TWO): winner})
+                    output = merged(merge_text_resources(root, inventories,
+                        external_panel_behaviors=True, window_review=saved))
+                    self.assertEqual(saved.unresolved, ())
+                    for resource in inventories[index].resources:
+                        self.assertEqual(output[resource.section, resource.key],
+                                         resource.entry.data)
+
+    def test_window_choices_join_the_consolidated_review_then_merge_again(self):
+        # The order Prepare uses: provisional text merge, the one preference
+        # dialog (raised from the Description review), then the final merge.
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inventories = selected(self, root, ('One', ONE, None), ('Two', TWO, None))
+            review = ScriptReviewSession()
+            merge_text_resources(root, inventories, external_panel_behaviors=True,
+                                 window_review=review)
+            asked = []
+
+            def choose(conflicts):
+                asked.extend(conflicts)
+                return {pair.identity: TWO for pair in group_conflicts(conflicts)}
+
+            prepare_description_views(root, inventories, (), review, choose,
+                                      stock_views=self.NO_STOCK)
+            self.assertEqual({c.gameplay_label for c in asked}, self.WINDOW_LABELS)
+            self.assertEqual(review.unresolved, ())
+            output = merged(merge_text_resources(root, inventories,
+                external_panel_behaviors=True, window_review=review))
+            for resource in inventories[1].resources:
+                self.assertEqual(output[resource.section, resource.key], resource.entry.data)
+            # Without a resolver, an unanswered window choice still stops.
+            unanswered = ScriptReviewSession()
+            merge_text_resources(root, inventories, external_panel_behaviors=True,
+                                 window_review=unanswered)
+            with self.assertRaises(ScriptReviewRequired):
+                prepare_description_views(root, inventories, (), unanswered, None,
+                                          stock_views=self.NO_STOCK)
+
+    def test_a_declared_replacement_is_never_asked(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inventories = selected(self, root, ('One', ONE, [replaces(TWO, 'AP10')]),
+                                   ('Two', TWO, None))
+            review = ScriptReviewSession()
+            output = merged(merge_text_resources(root, inventories,
+                external_panel_behaviors=True, window_review=review))
+            self.assertEqual(review.observed, ())
+            for resource in inventories[0].resources:
+                self.assertEqual(output[resource.section, resource.key], resource.entry.data)
+
+    def test_identical_windows_ask_nothing(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            one_path, _ = package(root, 'One', ONE)
+            two_path, _ = package(root, 'Two', TWO)
+            (two_path / 'Data/Content.cam').write_bytes(
+                (one_path / 'Data/Content.cam').read_bytes())
+            inventories = tuple(prepared(path, identifier).inventory
+                                for path, identifier in ((one_path, ONE), (two_path, TWO)))
+            review = ScriptReviewSession()
+            merge_text_resources(root, inventories, external_panel_behaviors=True,
+                                 window_review=review)
+            self.assertEqual(review.observed, ())
 
 
 if __name__ == '__main__':
