@@ -551,6 +551,27 @@ def _validate_package(
                     package.root,
                 )
             )
+    # A declared window replacement must name a window this package ships;
+    # whether the other package ships it is decided only when both are selected.
+    replacements = getattr(package.definition, "resource_replacements", ()) or ()
+    shipped_panels = {
+        resource.key
+        for resource in (getattr(inventory, "resources", ()) if replacements else ())
+        if resource.section == b"SMNU"
+    }
+    for index, replacement in enumerate(replacements):
+        for panel in replacement.panels:
+            if panel.encode("ascii") not in shipped_panels:
+                issues.append(
+                    ReadinessIssue(
+                        "unshipped_replacement_panel",
+                        (
+                            f"resource_replacements[{index}] names panel {panel}, "
+                            "but this package ships no SMNU record for it."
+                        ),
+                        package.root / DEFINITION_FILE_NAME,
+                    )
+                )
 
 
 def _slug(display_name: str, content_id: str) -> str:

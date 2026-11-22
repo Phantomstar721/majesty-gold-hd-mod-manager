@@ -243,6 +243,12 @@ automatically supplies shared building-slot, Freestyle, visitor-list, and
 compatible custom-text support. Unknown feature types and malformed or
 conflicting records are rejected rather than guessed.
 
+A package made to replace another Merge mod's windows on purpose can list them
+in the optional `resource_replacements` array, naming that mod's UUID and the
+window IDs it supersedes. Only those windows, and only against that mod, are
+resolved; every other overlap follows the normal rules. See
+[declared window replacement](docs/manager-merge-contract.md#declared-window-replacement).
+
 ### Reusable capabilities
 
 These features are package-declared, not tied to particular mod names or UUIDs:

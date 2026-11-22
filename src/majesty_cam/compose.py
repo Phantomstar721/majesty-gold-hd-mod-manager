@@ -1004,6 +1004,92 @@ def merge_named_resources(
     return entries, selections
 
 
+def declared_panel_resolutions(
+    inventories: Sequence[PackageInventory],
+    resources: Iterable[CamResource],
+    renames: Mapping[tuple[str, bytes], bytes] | None = None,
+) -> dict[tuple[bytes, bytes], ScopedNamedResourceResolution]:
+    """Resolve window collisions that a selected Merge package declares.
+
+    A schema-3 ``resource_replacements`` record names another package and the
+    window FourCCs this package deliberately supersedes there. When both are
+    selected Merge inputs and both ship the same SMNU or STRT window record,
+    the declarer's record is chosen for exactly that pair. An unselected
+    target, a panel the target does not ship and any third undeclared owner
+    are left to the normal collision checks. Records relocated to another
+    internal ID are not stock windows and are never matched.
+    """
+
+    merge_inputs = tuple(
+        inventory for inventory in inventories
+        if not getattr(inventory.selected, "semantic_passthrough", False)
+        and getattr(inventory.selected, "package", None) is not None
+    )
+    declarers = tuple(
+        (inventory.selected.alias, replacements)
+        for inventory in merge_inputs
+        for replacements in (getattr(inventory.selected.package.definition,
+                                     "resource_replacements", ()) or (),)
+        if replacements
+    )
+    if not declarers:
+        return {}
+    rename_map = dict(renames or {})
+    alias_by_id = {
+        _normalized_mod_uuid(inventory.selected.package.mod_id): inventory.selected.alias
+        for inventory in merge_inputs
+    }
+    shipped: dict[tuple[str, bytes, bytes], CamEntry] = {}
+    for resource in resources:
+        if resource.section in (b"SMNU", b"STRT"):
+            shipped[(resource.owner, resource.section, resource.key)] = resource.entry
+
+    claims: dict[tuple[bytes, bytes], tuple[str, set[str]]] = {}
+    for declarer, replacements in declarers:
+        for replacement in replacements:
+            target = alias_by_id.get(_normalized_mod_uuid(replacement.mod_id))
+            if target is None or target == declarer:
+                continue
+            for panel in replacement.panels:
+                key = panel.encode("ascii")
+                if (declarer, b"SMNU", key) not in shipped:
+                    raise ComposeError(
+                        f"{declarer}: resource_replacements names panel {panel}, "
+                        "but the package ships no SMNU record for it"
+                    )
+                for section in (b"SMNU", b"STRT"):
+                    if section == b"STRT" and key in _WHOLE_STRT:
+                        continue
+                    if (target, section, key) not in shipped:
+                        continue
+                    if (declarer, section, key) not in shipped:
+                        continue
+                    if (
+                        rename_map.get((declarer, key), key) != key
+                        or rename_map.get((target, key), key) != key
+                    ):
+                        continue
+                    claim = claims.get((section, key))
+                    if claim is None:
+                        claims[(section, key)] = (declarer, {declarer, target})
+                    elif claim[0] == declarer:
+                        claim[1].add(target)
+                    else:
+                        raise ComposeError(
+                            f"{section.decode('ascii')} resource {_display_key(key)} "
+                            f"is declared as a replacement by both {claim[0]} and "
+                            f"{declarer}; only one package may replace it"
+                        )
+    return {
+        (section, key): ScopedNamedResourceResolution(
+            entry=shipped[(declarer, section, key)],
+            participant_owners=frozenset(owners),
+            selected_owner=declarer,
+        )
+        for (section, key), (declarer, owners) in claims.items()
+    }
+
+
 _MX05_NATIVE_LIST_CONTROL_ID = 0x1388
 _MX05_NATIVE_ACTION_CONTROL_ID = 0x138B
 _MX05_NATIVE_VERBOSE_TOGGLE_CONTROL_ID = 0x138C
@@ -1257,6 +1343,11 @@ def merge_text_resources(
         controller_panels=controller_panels,
     )
     rename_map = {(owner, old): new for owner, old, new in dialog_renames}
+    # Declared window replacements supply a choice only where the caller has
+    # not already resolved that record explicitly.
+    declared_panels = declared_panel_resolutions(inventories, resources, rename_map)
+    if declared_panels:
+        named_resolutions = {**declared_panels, **dict(named_resolutions or {})}
     panel_text_transform = None
     if external_panel_behaviors:
         from .panel_engine_composition import text_relocator, validate_script_panel_references

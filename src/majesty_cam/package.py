@@ -236,6 +236,18 @@ PackageRuntimeFeature = Union[RuntimeFeature, ControllerFeature, GplFeature, Sha
 
 
 @dataclass(frozen=True)
+class ResourceReplacement:
+    """Panels this package deliberately replaces in one other Merge package.
+
+    ``mod_id`` names the other package; ``panels`` are the window FourCCs whose
+    SMNU/STRT records this package supersedes when both packages are selected.
+    """
+
+    mod_id: str
+    panels: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ModDefinition:
     schema_version: int
     mod_id: str
@@ -247,6 +259,7 @@ class ModDefinition:
     external_patches: Tuple[PatchRequirement, ...] = ()
     source_contributions: Tuple[RewardContribution, ...] = ()
     merge: bool = False
+    resource_replacements: Tuple[ResourceReplacement, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -482,6 +495,8 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         expected.add("source_contributions")
     if schema_version == 3 and "merge" in value:
         expected.add("merge")
+    if schema_version == 3 and "resource_replacements" in value:
+        expected.add("resource_replacements")
     _require_exact_fields(value, expected, "mod definition")
     merge = value.get("merge", False)
     if type(merge) is not bool:
@@ -503,6 +518,9 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
     )
     display_name = _required_string(
         value["display_name"], "mod definition display_name"
+    )
+    resource_replacements = _parse_resource_replacements(
+        value.get("resource_replacements", ()), mod_id
     )
 
     raw_buildings = value["custom_buildings"]
@@ -872,7 +890,69 @@ def parse_mod_definition(value: Mapping[str, object]) -> ModDefinition:
         external_patches=external_patches,
         source_contributions=source_contributions,
         merge=merge,
+        resource_replacements=resource_replacements,
     )
+
+
+def _parse_resource_replacements(
+    value: object, own_mod_id: str
+) -> Tuple[ResourceReplacement, ...]:
+    """Parse the exact schema-3 ``resource_replacements`` declaration.
+
+    Each record names one other package by UUID and the window FourCCs this
+    package deliberately supersedes there. The declaration resolves only those
+    collisions; it is not a general load-order or priority claim.
+    """
+
+    if not isinstance(value, (list, tuple)):
+        raise PackageFormatError(
+            "mod definition resource_replacements must be an array"
+        )
+    if not value:
+        return ()
+    # The package's own identity is validated by the manifest checks; only a
+    # target equal to it matters here.
+    try:
+        own = _definition_uuid(own_mod_id, "mod definition mod_id")
+    except PackageFormatError:
+        own = None
+    targets = set()
+    records = []
+    for index, raw in enumerate(value):
+        context = f"mod definition resource_replacements[{index}]"
+        if not isinstance(raw, dict):
+            raise PackageFormatError(f"{context} must be an object")
+        _require_exact_fields(raw, {"mod_id", "panels"}, context)
+        target_id = _required_string(raw["mod_id"], f"{context}.mod_id")
+        target = _definition_uuid(target_id, f"{context}.mod_id")
+        if target == own:
+            raise PackageFormatError(f"{context}.mod_id must name another package")
+        if target in targets:
+            raise PackageFormatError(
+                f"{context}.mod_id repeats an earlier replacement target"
+            )
+        targets.add(target)
+        raw_panels = raw["panels"]
+        if not isinstance(raw_panels, (list, tuple)) or not raw_panels:
+            raise PackageFormatError(f"{context}.panels must be a non-empty array")
+        panels = tuple(
+            _required_fourcc(panel, f"{context}.panels[{panel_index}]")
+            for panel_index, panel in enumerate(raw_panels)
+        )
+        if len(set(panels)) != len(panels):
+            raise PackageFormatError(f"{context}.panels contains a duplicate panel")
+        records.append(ResourceReplacement(mod_id=target_id, panels=panels))
+    return tuple(records)
+
+
+def _definition_uuid(value: object, context: str) -> str:
+    import uuid
+
+    text = _required_string(value, context)
+    try:
+        return str(uuid.UUID(text.strip("{}"))).casefold()
+    except ValueError as exc:
+        raise PackageFormatError(f"{context} must be a mod UUID") from exc
 
 
 def _resolve_package_root(package_root: Union[str, Path]) -> Path:
@@ -1385,6 +1465,11 @@ def mod_definition_mapping(definition: ModDefinition) -> dict:
     # Omission preserves existing definitions and their semantic fingerprints.
     if definition.merge is not False:
         value['merge'] = definition.merge
+    if definition.resource_replacements:
+        value["resource_replacements"] = [
+            {"mod_id": replacement.mod_id, "panels": list(replacement.panels)}
+            for replacement in definition.resource_replacements
+        ]
     return value
 
 
@@ -1574,6 +1659,7 @@ __all__ = [
     "PackageFormatError",
     "PackageRuntimeFeature",
     "PackagePath",
+    "ResourceReplacement",
     "RuntimeFeature",
     "StockGplmxPurchaseEquipmentTail",
     "StockGplmxPurchaseBazaarTail",
