@@ -1,15 +1,18 @@
 """Window collisions between selected Merge packages: declarations and choices."""
 from pathlib import Path
+import struct
 from tempfile import TemporaryDirectory
 import unittest
 
 from majesty_cam.cam import CamArchive, CamEntry, CamSection
 from majesty_cam.compose import ComposeError, merge_text_resources
 from majesty_cam.description_composition import prepare_description_views
+from majesty_cam.hero_info import enable_native_tooltips
 from majesty_cam.package import (PackageFormatError, ResourceReplacement,
     _validate_definition_object, mod_definition_mapping, parse_mod_definition)
 from majesty_cam.script_review import (ScriptReviewRequired, ScriptReviewSession,
     group_conflicts, pair_key)
+from majesty_cam.strt import StrtRecord, StrtTable
 from majesty_cam.window_review import WindowConflict
 from test_panel_engine_merge_intent import ONE, TWO, package, prepared, write_definition
 
@@ -34,6 +37,20 @@ def selected(test, root, *specs):
         test.assertTrue(result.ready, result.issues)
         inventories.append(result.inventory)
     return tuple(inventories)
+
+
+def with_content(test, root, name, identifier, *sections):
+    """A Merge package whose only CAM content is ``sections`` of (ext, key, data)."""
+    path, definition = package(root, name, identifier)
+    definition['merge'] = True
+    write_definition(path, definition)
+    archive = CamArchive(tuple(
+        CamSection(extension, (CamEntry(key.ljust(20, b'\0'), data),))
+        for extension, key, data in sections))
+    (path / 'Data/Content.cam').write_bytes(archive.to_bytes())
+    result = prepared(path, identifier)
+    test.assertTrue(result.ready, result.issues)
+    return result.inventory
 
 
 def merged(result):
@@ -191,14 +208,16 @@ class WindowPreferenceReviewTests(unittest.TestCase):
                                          resource.entry.data)
 
     def test_window_choices_join_the_consolidated_review_then_merge_again(self):
-        # The order Prepare uses: provisional text merge, the one preference
-        # dialog (raised from the Description review), then the final merge.
+        # The order Prepare uses: collect the window choices without merging,
+        # the one preference dialog (raised from the Description review), then
+        # the only text merge.
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             inventories = selected(self, root, ('One', ONE, None), ('Two', TWO, None))
             review = ScriptReviewSession()
-            merge_text_resources(root, inventories, external_panel_behaviors=True,
-                                 window_review=review)
+            self.assertIsNone(merge_text_resources(root, inventories,
+                external_panel_behaviors=True, window_review=review,
+                review_windows_only=True))
             asked = []
 
             def choose(conflicts):
@@ -246,6 +265,69 @@ class WindowPreferenceReviewTests(unittest.TestCase):
             merge_text_resources(root, inventories, external_panel_behaviors=True,
                                  window_review=review)
             self.assertEqual(review.observed, ())
+
+    def test_a_standalone_text_bank_is_never_offered_as_window_text(self):
+        # Two packages ship the same private GPL text bank with different rows.
+        # No selected package ships a LOGX window, so the rows are not window
+        # text: the review stays empty and the normal conflict error stands.
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inventories = tuple(
+                with_content(self, root, name, identifier, (b'STRT', b'LOGX', StrtTable(
+                    b'\x00\x02', (StrtRecord(1, b'First ' + name.encode()),
+                                  StrtRecord(2, b'Second ' + name.encode()))).to_bytes()))
+                for name, identifier in (('One', ONE), ('Two', TWO)))
+            for options in (dict(window_review=ScriptReviewSession(), review_windows_only=True),
+                            dict(window_review=ScriptReviewSession()), {}):
+                with self.subTest(options=sorted(options)):
+                    review = options.get('window_review')
+                    if not options.get('review_windows_only'):
+                        with self.assertRaisesRegex(ComposeError, 'conflicting STRT resource'):
+                            merge_text_resources(root, inventories,
+                                                 external_panel_behaviors=True, **options)
+                    else:
+                        merge_text_resources(root, inventories,
+                                             external_panel_behaviors=True, **options)
+                    if review is not None:
+                        self.assertEqual(review.observed, ())
+
+    def test_window_choices_are_collected_before_the_chosen_layout_is_validated(self):
+        # With hero-info tooltips, AP78 must hold both stock information lists.
+        # The first package's layout lacks list 0x221A; it is only a provisional
+        # stand-in until the player chooses, so it must not stop Prepare first.
+        left = [6, 2, 13, 56, 158, 82, 33, 0, 10, 16, 10, 1048576,
+                12, 1230261833, 13, 1005, 3, 128, 6, 0x221A, 0xFFFFFFFF]
+        right = left.copy()
+        right[3], right[5], right[19] = 161, 52, 0x221B
+        pack = lambda parts: b''.join(struct.pack(f'<{len(p)}I', *p) for p in parts)
+        layouts = {ONE: pack([right, [0xFFFFFFFF]]), TWO: pack([left, right, [0xFFFFFFFF]])}
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inventories = tuple(
+                with_content(self, root, name, identifier, (b'SMNU', b'AP78', layouts[identifier]))
+                for name, identifier in (('One', ONE), ('Two', TWO)))
+            review = ScriptReviewSession()
+            self.assertIsNone(merge_text_resources(root, inventories, hero_info_tooltips=True,
+                window_review=review, review_windows_only=True))
+            self.assertEqual({c.gameplay_label for c in review.unresolved},
+                             {'Window layout: AP78'})
+            asked = []
+
+            def choose(conflicts):
+                asked.extend(conflicts)
+                return {pair.identity: TWO for pair in group_conflicts(conflicts)}
+
+            prepare_description_views(root, inventories, (), review, choose,
+                                      stock_views=self.NO_STOCK)
+            self.assertEqual({c.gameplay_label for c in asked}, {'Window layout: AP78'})
+            output = merged(merge_text_resources(root, inventories, hero_info_tooltips=True,
+                                                 window_review=review))
+            self.assertEqual(output[b'SMNU', b'AP78'], enable_native_tooltips(layouts[TWO]))
+            # Preferring the incomplete layout is refused, but only once it is chosen.
+            chose_one = ScriptReviewSession({pair_key(ONE, TWO): ONE})
+            with self.assertRaisesRegex(ComposeError, '0x221A'):
+                merge_text_resources(root, inventories, hero_info_tooltips=True,
+                                     window_review=chose_one)
 
 
 if __name__ == '__main__':

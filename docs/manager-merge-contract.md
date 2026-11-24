@@ -130,11 +130,16 @@ such overlays would bypass Merge preferences and typed resource relocation.
 
 When two Merge packages ship different records for the same window (its `SMNU`
 layout or its `STRT` text), Prepare offers the collision in the
-[mod preference review](script-conflict-review.md). One preferred mod per pair
-covers every window, Description, sound and script conflict between those two
-packages, and saved choices are reused. The preferred mod's whole window record
-is used; Window Engine rows in a chosen `STRT` keep their typed relocation. A
-record identical to stock, or relocated to a private internal ID, never
+[mod preference review](script-conflict-review.md). An `STRT` record counts as
+window text only when a selected package ships that window's own `SMNU` record
+and the merge emits it; any other private `STRT` bank, such as a GPL text table,
+keeps the normal conflict error. One preferred mod per pair covers every window,
+Description, sound and script conflict between those two packages, and saved
+choices are reused. The preferred mod's whole window record is used; Window
+Engine rows in a chosen `STRT` keep their typed relocation. Window choices are
+collected before the text merge, so checks that depend on the chosen layout,
+such as the hero-information tooltips, run only on the layout the player picked.
+A record identical to stock, or relocated to a private internal ID, never
 conflicts.
 
 A package built to supersede another package's windows on purpose, for example

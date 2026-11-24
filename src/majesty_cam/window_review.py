@@ -85,7 +85,11 @@ def reviewed_window_resolutions(inventories, resources, review, *, renames=None,
 
     Keys that already have a resolution (an explicit choice or a declared
     window replacement) keep it. Records identical to stock and records
-    relocated to a private internal ID never conflict. Each remaining
+    relocated to a private internal ID never conflict. An ``STRT`` record is
+    window text only when a selected package ships that window's ``SMNU``
+    record and the merge will emit it - the pairing the text merge uses to
+    place panel text. Any other private ``STRT`` bank, such as a GPL text
+    table, is left to the normal merge and its conflict error. Each remaining
     collision is observed by ``review``. With a saved pair preference the
     preferred mod's record is chosen; otherwise the first candidate stands in
     provisionally, the conflict stays unresolved in ``review``, and the caller
@@ -97,12 +101,21 @@ def reviewed_window_resolutions(inventories, resources, review, *, renames=None,
     existing = dict(resolutions or {})
     stock = dict(stock_resources or {})
     excluded = set(excluded_strt_keys)
+    window_keys = set()
+    for resource in resources:
+        if resource.section != b'SMNU':
+            continue
+        key = rename_map.get((resource.owner, resource.key), resource.key)
+        # The merge drops an unresolved SMNU identical to stock, so it is not a
+        # shipped window there either.
+        if (b'SMNU', key) in existing or stock.get((b'SMNU', key)) != resource.entry.data:
+            window_keys.add(key)
     grouped = {}
     for resource in resources:
         section, key = resource.section, resource.key
         if section not in (b'SMNU', b'STRT'):
             continue
-        if section == b'STRT' and key in excluded:
+        if section == b'STRT' and (key in excluded or key not in window_keys):
             continue
         if rename_map.get((resource.owner, key), key) != key:
             continue

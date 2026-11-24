@@ -1319,13 +1319,19 @@ def merge_text_resources(
     ] | None = None,
     stock_named_resources: Mapping[tuple[bytes, bytes], bytes] | None = None,
     window_review=None,
-) -> TextMergeResult:
+    review_windows_only: bool = False,
+) -> TextMergeResult | None:
     """Merge Majesty's known whole STRT tables and all private panel/name tables.
 
     With ``window_review`` (a mod-pair review session), window records that
     still collide become preferred-mod choices; an unanswered choice merges
     provisionally and must be answered and merged again before use. Without
     it, such collisions stop the merge as before.
+
+    With ``review_windows_only``, the window collisions are recorded in
+    ``window_review`` and the call returns ``None`` before anything is merged:
+    no validation or transform that depends on the winning window runs until
+    every choice has been answered.
     """
 
     resources = collapse_native_cam_resources(
@@ -1382,6 +1388,8 @@ def merge_text_resources(
             raise ComposeError(str(exc)) from exc
         if reviewed_windows:
             named_resolutions = {**reviewed_windows, **dict(named_resolutions or {})}
+    if review_windows_only:
+        return None
 
     whole: dict[bytes, StrtMergeSelection] = {}
     processed_whole_keys: set[bytes] = set()
@@ -8445,7 +8453,7 @@ def compose_package(
     if script_review is None:
         script_review = ScriptReviewSession()
 
-    def merge_text():
+    def merge_text(review_windows_only=False):
         return merge_text_resources(
             game_path,
             inventories,
@@ -8459,15 +8467,19 @@ def compose_package(
             strt_resolutions=strt_resolutions,
             stock_named_resources=stock_named_resources,
             window_review=script_review,
+            review_windows_only=review_windows_only,
         )
 
-    text_result = merge_text()
-    # A window collision without a saved pair preference merged provisionally.
-    # It joins the consolidated preference review below (with Description and
-    # sound choices), and the windows are merged again once it is answered.
+    # Collect the window collisions first. One without a saved pair preference
+    # joins the consolidated preference review below (with Description and
+    # sound choices), and the text is merged only once it is answered, so
+    # nothing that depends on the winning window - its validation or its
+    # transforms - ever runs on a provisional stand-in.
+    merge_text(review_windows_only=True)
     window_choices_pending = any(
         isinstance(conflict, WindowConflict) for conflict in script_review.unresolved
     )
+    text_result = None if window_choices_pending else merge_text()
     bdep_result = merge_bdep_resource(
         game_path,
         inventories,
