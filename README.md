@@ -39,7 +39,7 @@ GOG. [Beta changes](release/v0.3.16.md).
 - Combines independent changes within shared GPL functions and XML Descriptions,
   and asks for one preferred mod per pair when changes cannot be safely combined.
 - Reviews Standard load-order choices together, with expandable conflict details;
-  conflicting sound records use the same preferred-mod choices.
+  conflicting sound and window records use the same preferred-mod choices.
 - Supports reusable list, research, reward, and recruitment panels, including
   single-panel layouts at lower resolutions.
 - Supports custom ability names, icons, and hover descriptions in hero panels.
@@ -242,6 +242,12 @@ supported primary building panels do not require a package-specific feature. The
 automatically supplies shared building-slot, Freestyle, visitor-list, and
 compatible custom-text support. Unknown feature types and malformed or
 conflicting records are rejected rather than guessed.
+
+A package made to replace another Merge mod's windows on purpose can list them
+in the optional `resource_replacements` array, naming that mod's UUID and the
+window IDs it supersedes. Only those windows, and only against that mod, are
+resolved; every other overlap follows the normal rules. See
+[declared window replacement](docs/manager-merge-contract.md#declared-window-replacement).
 
 ### Reusable capabilities
 

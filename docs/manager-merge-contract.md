@@ -126,6 +126,75 @@ Managers do not recognize this new field and must be updated before using it.
 Standard packages are not moved after the generated profile as a workaround:
 such overlays would bypass Merge preferences and typed resource relocation.
 
+### Declared window replacement
+
+When two Merge packages ship different records for the same window (its `SMNU`
+layout or its `STRT` text), Prepare offers the collision in the
+[mod preference review](script-conflict-review.md). An `STRT` record counts as
+window text only when a selected package ships that window's own `SMNU` record
+and the merge emits it; any other private `STRT` bank, such as a GPL text table,
+keeps the normal conflict error. One preferred mod per pair covers every window,
+Description, sound and script conflict between those two packages, and saved
+choices are reused. The preferred mod's whole window record is used; Window
+Engine rows in a chosen `STRT` keep their typed relocation. Window choices are
+collected before the text merge, so checks that depend on the chosen layout,
+such as the hero-information tooltips, run only on the layout the player picked.
+A record identical to stock, or relocated to a private internal ID, never
+conflicts.
+
+A package built to supersede another package's windows on purpose, for example
+a panel package that already carries an art package's changes to those windows,
+can declare exactly which windows it replaces and in which package, so players
+are not asked. It uses the optional schema-3 array `resource_replacements`:
+
+```json
+{
+  "schema_version": 3,
+  "mod_id": "{panel-package-uuid}",
+  "internal_name": "NamespacedPanels",
+  "display_name": "Custom Panels",
+  "merge": true,
+  "custom_buildings": [],
+  "runtime_features": [],
+  "resource_replacements": [
+    {
+      "mod_id": "{art-package-uuid}",
+      "panels": ["AP01", "AP05"]
+    }
+  ]
+}
+```
+
+Each record names one other package by its Mod UUID and lists window FourCCs.
+When both packages are selected Merge inputs and both ship the same `SMNU` or
+`STRT` record for a listed window, the declaring package's record is used for
+that pair, exactly as an explicit selected-owner resolution would choose it;
+Window Engine rows in the chosen `STRT` keep their normal typed relocation. A
+target that ships only a window's layout is replaced by the declarer's layout,
+and its text is added unopposed.
+
+The declaration is deliberately narrow:
+
+- It resolves only the listed windows against the named package. Other
+  overlaps between the two packages, including unlisted windows, follow their
+  usual rules. A third package shipping a declared window with different
+  contents still stops Prepare: the declaration covers only its named pair.
+- It is inert when the named package is not selected, and for a listed window
+  the named package does not ship.
+- Every listed window must be one the declaring package ships as an `SMNU`
+  record; otherwise the package is red with `unshipped_replacement_panel`.
+- Two packages may not both declare that they replace the same window record;
+  Prepare stops and names both.
+- A window relocated to a private internal ID (a custom building's authored
+  panel) is not a shared stock window and is never matched.
+- Records must be objects with exactly `mod_id` and `panels`. A package cannot
+  name itself or repeat a target, and `panels` must be a non-empty list of
+  unique FourCCs.
+
+The array is optional and omitted definitions keep their existing fingerprints.
+Older Managers reject the unknown field, so a package using it requires a
+Manager that supports declared window replacement.
+
 ### Custom building declarations
 
 Each `local_name` is unique within the definition. A declared custom building
@@ -942,7 +1011,10 @@ compares semantic records with the stock ancestor:
 An overlap proceeds only when the relevant typed merger can prove it is
 independent or an explicit resolution selects or supplies the complete intended
 semantic result. Today, GPL/DAT conflicts may use an explicit selected-owner
-resolution. Divergent Description, named CAM, and whole-table records must
+resolution. Window records use the mod preference review, or a package's
+declaration of the windows it replaces in another package (see
+[declared window replacement](#declared-window-replacement)).
+Other divergent Description, named CAM, and whole-table records must
 merge cleanly or stop until an equally explicit typed resolution is added.
 Unused, misspelled, or stale resolution rules also stop the build.
 

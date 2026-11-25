@@ -893,7 +893,7 @@ def _manager_cache_identity_paths() -> tuple[Path, ...]:
     module_root = Path(__file__).resolve().parent
     return tuple(module_root.parent / name for name in (
         "package.py", "standard_scripts.py", "private_hero_gpl.py", "gpl_features.py",
-        "descriptions.py", "description_review.py", "description_composition.py", "sound_review.py", "event_review.py",
+        "descriptions.py", "description_review.py", "description_composition.py", "sound_review.py", "window_review.py", "event_review.py",
         "stock_gpl.py", "stock_art.py", "strt.py",
         "gpl.py", "gpl_function_merge.py", "script_review.py", "compose.py", "gameplay_events.py",
         "event_boundaries.py", "potion_policy.py", "source_context.py", "dataset_dependencies.py", "native_impact.py", "native_impact_profiles.py", "damage_contributions.py",
