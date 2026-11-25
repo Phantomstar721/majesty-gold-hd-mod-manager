@@ -360,6 +360,7 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.entry = entry
             self.prepared = prepared or blocked_preflight
             self.checkbox: Optional[QCheckBox] = None
+            self.conflicts_button: Optional[QPushButton] = None
             self._selection_allowed = False
             self.setObjectName("modCard")
             self.setProperty("kind", entry.kind.value)
@@ -524,16 +525,18 @@ if _PYSIDE_IMPORT_ERROR is None:
                 metadata.addWidget(details_button)
             if entry.unresolved_overlap_ids and entry.content_id:
                 conflicts_button = QPushButton("CONFLICTS")
+                self.conflicts_button = conflicts_button
                 conflicts_button.setObjectName("conflictsButton")
                 conflicts_button.setCursor(Qt.CursorShape.PointingHandCursor)
                 conflicts_button.setToolTip(
-                    "Show other installed Mods which change the same parts of Majesty"
+                    "Show selected Mods which change the same parts of Majesty"
                 )
                 conflicts_button.clicked.connect(
                     lambda _checked=False, content_id=entry.content_id: (
                         self.conflicts_requested.emit(content_id)
                     )
                 )
+                conflicts_button.hide()
                 metadata.addWidget(conflicts_button)
             source.setToolTip(str(entry.manifest_path))
             metadata.addStretch(1)
@@ -629,13 +632,19 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.author_detail.setVisible(bool(visible))
             self.details_button.setText("Hide details" if visible else "Details")
 
-        def update_selected(self, selected: bool) -> None:
+        def update_selected(self, selections: Mapping[str, bool]) -> None:
+            selected = bool(self.entry.content_id and selections.get(self.entry.content_id))
+            if self.conflicts_button is not None:
+                self.conflicts_button.setVisible(
+                    selected and any(selections.get(other_id) for other_id in self.entry.unresolved_overlap_ids)
+                )
             if self.checkbox is not None:
                 blocked = self.checkbox.blockSignals(True)
                 self.checkbox.setChecked(bool(selected and self.checkbox.isEnabled()))
                 self.checkbox.blockSignals(blocked)
-            if self.entry.selectable:
-                self.setProperty("state", "active" if selected else "ready")
+            state = "active" if selected else "ready"
+            if self.entry.selectable and self.property("state") != state:
+                self.setProperty("state", state)
                 self.style().unpolish(self)
                 self.style().polish(self)
                 self.update()
@@ -793,7 +802,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                     card.entry.content_id
                     and selections.get(card.entry.content_id, False)
                 )
-                card.update_selected(selected)
+                card.update_selected(selections)
                 if selected:
                     selected_names.append(card.entry.variant_label or card.entry.display_name)
             if not selected_names:
@@ -962,6 +971,7 @@ if _PYSIDE_IMPORT_ERROR is None:
                 card.steam_requested.connect(self.steam_requested.emit)
                 card.conflicts_requested.connect(self.conflicts_requested.emit)
                 self.card_layout.addWidget(card)
+                card.update_selected(snapshot.selections)
                 self.cards.append(card)
                 self.standalone_cards.append(card)
 
@@ -1011,12 +1021,7 @@ if _PYSIDE_IMPORT_ERROR is None:
             for group in self.groups:
                 group.update_selections(selections)
             for card in self.standalone_cards:
-                card.update_selected(
-                    bool(
-                        card.entry.content_id
-                        and selections.get(card.entry.content_id, False)
-                    )
-                )
+                card.update_selected(selections)
 
         def _collection_expanded(self, collection_id: str, expanded: bool) -> None:
             if expanded:
@@ -1876,9 +1881,11 @@ if _PYSIDE_IMPORT_ERROR is None:
                 return
             conflicts = tuple(
                 item
-                for item in standard_content_conflicts(self.snapshot.catalog)
+                for item in standard_content_conflicts(self.snapshot.catalog, self.snapshot.selections)
                 if content_id in (item.left_id, item.right_id)
             )
+            if not conflicts:
+                return
             entry = next(
                 (
                     item
@@ -1892,55 +1899,34 @@ if _PYSIDE_IMPORT_ERROR is None:
             dialog = QMessageBox(self)
             dialog.setIcon(QMessageBox.Icon.Warning)
             dialog.setWindowTitle(f"{APP_NAME} — Shared game changes")
-            dialog.setText(f"{entry.display_name} overlaps other installed Mods.")
-            if conflicts:
-                summaries = []
-                details = []
-                for conflict in conflicts:
-                    other_name = (
-                        conflict.right_name
-                        if conflict.left_id == content_id
-                        else conflict.left_name
-                    )
-                    summaries.append(
-                        f"• {other_name}: {len(conflict.change_keys)} shared "
-                        f"{'change' if len(conflict.change_keys) == 1 else 'changes'}"
-                    )
-                    details.append(
-                        f"{entry.display_name}  ↔  {other_name}\n"
-                        + "\n".join(
-                            f"  • {_game_change_label(key)}"
-                            for key in conflict.change_keys
-                        )
-                    )
-                dialog.setInformativeText(
-                    "\n".join(summaries)
-                    + "\n\nSelect both only if you choose which Mod should load last "
-                    "when preparing your setup."
+            dialog.setText(f"{entry.display_name} overlaps other selected Mods.")
+            summaries = []
+            details = []
+            for conflict in conflicts:
+                other_name = (
+                    conflict.right_name
+                    if conflict.left_id == content_id
+                    else conflict.left_name
                 )
-                dialog.setDetailedText("\n\n".join(details))
-            else:
-                dialog.setInformativeText(
-                    "The scan found shared behavior, but no readable definition "
-                    "list was available."
+                summaries.append(
+                    f"• {other_name}: {len(conflict.change_keys)} shared "
+                    f"{'change' if len(conflict.change_keys) == 1 else 'changes'}"
                 )
-            selected_conflicts = tuple(
-                item
-                for item in standard_content_conflicts(
-                    self.snapshot.catalog,
-                    self.snapshot.selections,
+                details.append(
+                    f"{entry.display_name}  ↔  {other_name}\n"
+                    + "\n".join(f"  • {_game_change_label(key)}" for key in conflict.change_keys)
                 )
-                if content_id in (item.left_id, item.right_id)
+            dialog.setInformativeText(
+                "\n".join(summaries) + "\n\nChoose which Mod should load last when preparing your setup."
             )
-            change_button = None
-            if selected_conflicts:
-                change_button = dialog.addButton(
-                    "Change load choices",
-                    QMessageBox.ButtonRole.ActionRole,
-                )
+            dialog.setDetailedText("\n\n".join(details))
+            change_button = dialog.addButton(
+                "Change load choices",
+                QMessageBox.ButtonRole.ActionRole,
+            )
             dialog.addButton(QMessageBox.StandardButton.Close)
             dialog.exec()
-            if change_button is not None and dialog.clickedButton() is change_button:
+            if dialog.clickedButton() is change_button:
                 self._resolve_selected_conflicts(
                     force_review=True,
                     content_id=content_id,

@@ -1009,6 +1009,7 @@ class ManagerAppLayoutTests(unittest.TestCase):
             merge_ready=False,
             unresolved_overlap_ids=(other_id,),
             unresolved_overlap_names=("Another Mod",),
+            content_definitions=(("function:shared", "first"),),
         )
         card = manager_app._ModCard(
             entry,
@@ -1019,11 +1020,30 @@ class ManagerAppLayoutTests(unittest.TestCase):
 
         button = card.findChild(QPushButton, "conflictsButton")
         self.assertIsNotNone(button)
+        card.update_selected({content_id: True, other_id: False})
+        self.assertTrue(button.isHidden())
+        card.update_selected({content_id: True, other_id: True})
+        self.assertFalse(button.isHidden())
         self.assertEqual(button.text(), "CONFLICTS")
         details = " ".join(
             label.text() for label in card.findChildren(QLabel, "cardDetail")
         )
         self.assertNotIn("Another Mod", details)
+        card.update_selected({content_id: False, other_id: True})
+        self.assertTrue(button.isHidden())
+
+        other = replace(entry, content_id=other_id, display_name="Another Mod",
+                        unresolved_overlap_ids=(content_id,),
+                        content_definitions=(("function:shared", "second"),))
+        selections = {content_id: True, other_id: False}
+        window = SimpleNamespace(snapshot=SimpleNamespace(catalog=Catalog((entry, other)), selections=selections))
+        with patch.object(manager_app, "QMessageBox") as dialog:
+            manager_app.ManagerWindow._show_conflicts(window, content_id)
+            dialog.assert_not_called()
+            selections[other_id] = True
+            manager_app.ManagerWindow._show_conflicts(window, content_id)
+            dialog.return_value.setDetailedText.assert_called_once()
+            self.assertIn("Another Mod", dialog.return_value.setDetailedText.call_args.args[0])
 
     def test_multi_mod_options_are_collapsible_and_update_in_place(self) -> None:
         from PySide6.QtWidgets import QLabel, QPushButton

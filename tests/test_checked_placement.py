@@ -9,6 +9,7 @@ from majesty_cam.descriptions import parse_descriptions
 from majesty_cam.gpl import parse_gpl
 from majesty_cam.package import parse_mod_definition, PackageFormatError
 from majesty_cam.compose import _derive_runtime_capabilities, ComposeError
+from majesty_cam.manager.paths import workspace_input
 
 FEATURE=CheckedPlacement("placement","Fixture","Solarus","PrivateCast","PrivateRelease","PrivateMove")
 STOCK="""<Majesty><Description type="Action" subType="Standard" ID="WRd1" Name="teleport" Description="Teleport">
@@ -154,7 +155,10 @@ end
         from majesty_cam.spell_discovery import discover, compose_discovered
         from majesty_cam.gpl import SemanticMergeResult
         game=Path('C:/Program Files (x86)/Steam/steamapps/common/Majesty HD')
-        roots=(Path(os.environ.get('MAJESTY_PLACEMENT_CANDIDATE', 'C:/Users/bterr/Documents/My Games/MajestyHD/Mods/WitchHunterFourSkills')),
+        override = os.environ.get('MAJESTY_PLACEMENT_CANDIDATE') or os.environ.get('MAJESTY_DEVELOPMENT_PACKAGE')
+        candidate = Path(override) if override else workspace_input(Path(__file__).resolve().parents[2],
+            'custom-guilds/majesty-gold-hd-custom-guild-witch-hunter/src/current/WitchHunterFourSkills')
+        roots=(candidate,
                Path('C:/Program Files (x86)/Steam/steamapps/workshop/content/73230/3813128205'))
         if not all(p.is_dir() for p in roots):
             self.skipTest('local development source not installed')

@@ -250,6 +250,18 @@ def launch_majesty(
         raise ManagerLaunchError(str(exc)) from exc
 
     try:
+        # Inspect the same prepared resources protected by the existing launch
+        # lock, including the normal controller path that supplies its handle.
+        from .window_qol import configure as configure_window_options
+        try:
+            manifests = [entry.manifest_path for entry in (*standard_mods, *quests)
+                         if entry.content_id in ordered or entry in quests]
+            ui_root = merged_profile_root or (paths.merged_output_root if acquired_profile_lock is not None else None)
+            if ui_root is not None:
+                manifests.extend(ui_root.glob('*.mmxml'))
+            warnings.extend(configure_window_options(environment, paths, branch, manifests))
+        except (OSError, ValueError) as exc:
+            raise ManagerLaunchError(str(exc)) from exc
         if ensure_qol:
             try:
                 QolService(

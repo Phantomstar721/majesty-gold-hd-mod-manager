@@ -16,6 +16,28 @@ public:
     // Exact stock timer invocation, not a caller assertion or bare agent IDs.
     bool EnterCallback(Word functionValue,Word definition,const Identity&,const Identity&);
     void LeaveCallback();
+    template<class ReadIdentities, class TraceResult, class Invoke>
+    Word InvokeTimer(Word value, void* definition, void* frame, Word movementCallback,
+                     ReadIdentities readIdentities, TraceResult traceResult, Invoke invoke) {
+        const auto definitionAddress = reinterpret_cast<std::uintptr_t>(definition);
+        const bool movement = movementCallback && definitionAddress == movementCallback && frame;
+        Identity actor{}, target{};
+        bool authorized = false;
+        if (movement) {
+            readIdentities(frame, actor, target);
+            authorized = EnterCallback(value, movementCallback, actor, target);
+        } else {
+            // An unrelated timer may use any frame layout. Mask the parent
+            // authorization without reading any of the timer's arguments.
+            EnterCallbackScope();
+        }
+        struct Exit {
+            StockCasts& casts;
+            ~Exit() { casts.LeaveCallback(); }
+        } exit{*this};
+        if (movement) traceResult(actor.address, authorized);
+        return invoke(definition, frame);
+    }
     bool InCallback(const Identity&,const Identity&) const;
     bool Pending(Word actor) const { return records_.count(actor)!=0; }
     void Unlinked(Word actor,Word order);
@@ -26,6 +48,7 @@ public:
     void Reset();
     Casts& Authorizations() { return casts_; }
 private:
+    bool EnterCallbackScope();
     void Trace(Word actor,unsigned reason,const char* event) const;
     struct Record {
         Identity actor,target;

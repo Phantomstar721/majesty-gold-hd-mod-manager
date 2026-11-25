@@ -13,7 +13,7 @@ No package was built or deployed from that prototype.
 
 ## Source findings
 
-Pinned SDK: `.audits/flamey-window-engine-sdk-20261109/sdk/Window Engine/src/we_engine.cpp`
+Pinned SDK source is `local/panel-engine-alpha/sdk/legacy/Window Engine/src/we_engine.cpp`.
 in the workspace root, SHA256
 `d6049b8021575241027677db2df441cdb50bd0038735c3fda6058b70d1a40b9b`.
 

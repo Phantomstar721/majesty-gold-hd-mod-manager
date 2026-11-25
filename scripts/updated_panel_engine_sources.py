@@ -12,7 +12,7 @@ import re
 from generate_panel_engine_bindings import generate
 from panel_engine_profile_sources import ROOT, BRANCHES
 
-SDK_ROOT = ROOT.parent/'.audits/flamey-sdk-update-20261111/sdk/Custom building side-panel and scripted ground-targeting engine SDK'
+SDK_ROOT = ROOT/'local/panel-engine-alpha/sdk/updated'
 SOURCE_PINS = {
     'src/we_engine.cpp':'440f35c579d3af10392b955bf77ec916ba845776732a9617f10f72acd5f1325b',
     'src/sf_functions.cpp':'fdcd3cd2c13b8cc50c43a5219a62f05896dbda7857de6f71becc111d35955b20',

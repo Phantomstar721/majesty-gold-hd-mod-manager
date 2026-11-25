@@ -11,7 +11,7 @@ from .gpl import (DefinitionKind, SemanticItem, SemanticMergeResult,
                   _mask_non_code, parse_gpl)
 from .gpl_function_merge import _Node, _SourceParser, _tokens, _unparen
 from .shared_features import EVENT_SIGNATURES, StockGameplayEventObserver
-from .event_boundaries import EventBoundary
+from .event_boundaries import EventBoundary, _scope_shape
 
 STOCK_EVENT_FILES = {
     "infectious_cloud_hit": "TaskModules/Subtasks/mx_Spells.gpl",
@@ -148,8 +148,7 @@ def _potion_consumption_boundaries(editor):
             if tuple(siblings[index:index+2]) != pair:
                 editor.fail("potion item, recipient or forget-spell pairing changed")
             if path:
-                if (path[-1][0] != "if" or path[-1][2] != "body"
-                        or any(kind != "if" for kind, _, _ in path)
+                if (path[-1][1] != "body" or any(guard.kind != "if" for guard, _ in path)
                         or siblings != (*pair, _Node("statement", ("return", ";")))
                         or editor.offset(node) > editor.offset(normal[0])):
                     editor.fail("additional potion consumption must be a consume-only conditional return")
@@ -203,12 +202,13 @@ def _healing_consumption_boundary(editor, source):
     if len(references) != 1:
         editor.fail('stock healing consumption boundary is missing or ambiguous')
     reference = references[0]
+    reference_scope = _scope_shape(reference[1])
     direct = [entry for entry in editor.actual_entries
-              if entry[0].head == head and entry[1] == reference[1]]
+              if entry[0].head == head and _scope_shape(entry[1]) == reference_scope]
     if direct:
         return editor.anchor(instruction)
     candidates = [node for node, path, siblings, _ in editor.actual_entries
-                  if path == reference[1] and len(siblings) == 1
+                  if _scope_shape(path) == reference_scope and len(siblings) == 1
                   and editor.call_arguments(node) == (('thisagent',),)]
     if len(candidates) != 1:
         editor.fail('healing consumption requires the original debit or one direct helper '
@@ -388,10 +388,12 @@ end
             if name == 'explore_flag_poll' and 'reward-flag-paid' not in requested:
                 continue
             editor = boundary(name)
-            payout = editor.anchor(f'${original}(ThisAgent, $GetAttribute(ThisAgent, #ATTRIB_RewardCost));',
-                                   callee_change=True) if 'reward-flag-paid' in requested else None
-            completion = '$playsound(ThisAgent, "completed_reward", "begin");'
+            completion = name != 'explore_flag_poll' and 'attack-flag-completed' in requested
+            committed = editor.anchor('ThisAgent\'s "gavereward" = TRUE;', nested=True) if completion else None
+            payout_call = f'${original}(ThisAgent, $GetAttribute(ThisAgent, #ATTRIB_RewardCost));'
+            payout = None
             if 'reward-flag-paid' in requested:
+                payout = editor.anchor(payout_call, callee_change=True, scope=committed, nested=True)
                 callee = payout.head[0][1:]
                 # A tiny private entry captures the FLAG, not a later target
                 # passed by the selected mod's distribution helpers.
@@ -404,15 +406,28 @@ end
                 payout_roots[private] = callee
                 editor.edit(payout, lambda text, private=private: re.sub(
                     r'\$[A-Za-z_][A-Za-z0-9_]*', '$' + private, text, count=1))
-            if name != 'explore_flag_poll' and 'attack-flag-completed' in requested:
-                completed = editor.anchor(completion)
-                committed = editor.anchor('ThisAgent\'s "gavereward" = TRUE;')
-                editor.binding('target = $AgentNumber($GetAttribute(ThisAgent, #ATTRIB_TargetID));', completed)
-                editor.ordered(completed, committed)
-                editor.no_exit_between(completed, committed)
-                if name == 'attack_flag_poll':
-                    editor.guard_before('if ($isvalidgamepiece(thisagent) == FALSE)', completed)
-                editor.insert(completed, calls('attack-flag-completed', 'ThisAgent, target') + '\n')
+            if completion:
+                poll = name == 'attack_flag_poll'
+                cleanup_call = '$deletegamepiece(ThisAgent);' if poll else '$check_revert_teams(ThisAgent);'
+                cleanup = editor.anchor(cleanup_call, scope=committed, nested=True)
+                sound = editor.anchor('$playsound(ThisAgent, "completed_reward", "begin");',
+                                      scope=committed, nested=True, optional=True)
+                if not poll and payout is None:
+                    payout = editor.anchor(payout_call, callee_change=True, scope=committed,
+                                           nested=True, optional=sound is not None)
+                milestones = (committed, payout) if poll else (payout, committed)
+                transaction = tuple(node for node in (*milestones, cleanup) if node is not None)
+                editor.ordered(*transaction)
+                # Keep the stock position when the sound precedes the transaction.
+                # Muting or replacing it leaves the first durable action as the anchor.
+                first = transaction[0]
+                at = sound if sound is not None and editor.offset(sound) < editor.offset(first) else first
+                target = editor.binding('target = $AgentNumber($GetAttribute(ThisAgent, #ATTRIB_TargetID));', at)
+                editor.live_recipient_at(target, at)
+                editor.no_exit_between(at, cleanup)
+                if poll:
+                    editor.guard_before('if ($isvalidgamepiece(thisagent) == FALSE)', at)
+                editor.insert(at, calls('attack-flag-completed', 'ThisAgent, target') + '\n')
             save_boundary(editor)
 
     if payout_roots:

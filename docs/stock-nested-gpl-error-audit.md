@@ -18,7 +18,7 @@ No prepared profile, runtime DLL, or mod package was changed for this audit.
 - Full dump: sibling `majesty-gold-hd-freestyle-custom-cam-fix` repository,
   `diagnostics/dumps/MajestyHD.exe.37444.dmp` (536,905,461 bytes).
 - Prepared source: user's existing merged package, `GPL/Merged.gpl`.
-- Owning source: sibling `majesty-gold-hd-restore-abandoned-zoo` repository,
+- Owning source is the `standard/majesty-gold-hd-restore-abandoned-zoo` repository,
   `src/GPL/RestoreAbandonedZoo_Capture.gpl`; HEAD at inspection was
   `c9bf86f9b7fda31ddc875416d70b60e91898a26e`.
 

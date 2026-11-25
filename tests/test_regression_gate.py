@@ -1,6 +1,8 @@
 """The gate itself must fail closed without touching installed game data."""
 import importlib.util
+import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -12,6 +14,21 @@ gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
 
 class GateTests(unittest.TestCase):
+    def test_quick_verification_cannot_be_used_for_release(self):
+        args = ['verify_regression.py', '--mode', 'release', '--quick-development', '--application', 'app']
+        with patch.object(sys, 'argv', args), self.assertRaisesRegex(ValueError, 'packaged development'):
+            gate.main()
+
+    def test_release_rejects_a_smoke_receipt_even_under_the_release_filename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'release-package.json').write_text(json.dumps(
+                {'mode': 'release', 'packaged': True, 'scope': 'local-smoke'}))
+            args = ['verify_regression.py', '--mode', 'release', '--application', 'app',
+                    '--receipt-root', str(root), '--verify-receipt']
+            with patch.object(sys, 'argv', args), self.assertRaisesRegex(ValueError, 'Not a packaged regression receipt'):
+                gate.main()
+
     def test_bounded_runtime_reports_do_not_change_shipped_input_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             app = Path(tmp)

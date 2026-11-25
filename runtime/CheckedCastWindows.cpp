@@ -245,16 +245,19 @@ bool CurrentCosmeticOwner(const CosmeticPose& pose) {
 // a separate scope and cannot borrow the suspended caller's authorization.
 Word __cdecl InvokeThread(Word value,void* definition,void* frame) {
     Operation operation;
-    Identity a,t;bool entered=false;
-    if(Owner()&&bindings.agent) {
-        auto* arguments=static_cast<unsigned char*>(frame)+0x1C;
-        Capture(bindings.agent(arguments,1),a);Capture(bindings.agent(arguments,2),t);
-        const bool accepted=casts.EnterCallback(value,static_cast<Word>(reinterpret_cast<std::uintptr_t>(definition)),a,t);entered=true;
-        if(static_cast<Word>(reinterpret_cast<std::uintptr_t>(definition))==bindings.movementCallback)
-            TracePlacementStage(a.address,accepted?26:27,accepted?"Timer: callback authorized":"Timer: callback record rejected");
-    }
-    struct Exit { bool entered;~Exit(){if(entered)casts.LeaveCallback();} } exit{entered};
-    return reinterpret_cast<Word (__thiscall*)(void*,void*)>(nativeProfile->invoke)(definition,frame);
+    const auto invoke = reinterpret_cast<Word (__thiscall*)(void*,void*)>(nativeProfile->invoke);
+    if (!Owner()) return invoke(definition, frame);
+    return casts.InvokeTimer(value, definition, frame, bindings.movementCallback,
+        [](void* callbackFrame, Identity& actor, Identity& target) {
+            auto* arguments = static_cast<unsigned char*>(callbackFrame) + 0x1C;
+            Capture(bindings.agent(arguments, 1), actor);
+            Capture(bindings.agent(arguments, 2), target);
+        },
+        [](Word actor, bool authorized) {
+            TracePlacementStage(actor, authorized ? 26 : 27,
+                authorized ? "Timer: callback authorized" : "Timer: callback record rejected");
+        },
+        invoke);
 }
 __declspec(naked) void ThreadCall() {
     __asm {

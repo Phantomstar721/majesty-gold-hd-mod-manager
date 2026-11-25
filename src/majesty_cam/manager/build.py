@@ -74,7 +74,7 @@ from ..stock_controller_registry import (
     encode_stock_controller_registry,
     resolve_stock_controller_registry,
 )
-from .catalog import Catalog, CatalogEntry, CatalogKind
+from .catalog import Catalog, CatalogEntry, CatalogKind, datasets_overlap
 from .compatibility import CompatibilityRegistry
 from .paths import ManagerPaths
 from .preflight import PreparedMergeMod, _package_file_inputs, prepare_merge_package
@@ -127,8 +127,8 @@ def standard_content_conflicts(
 
     by_id = {
         entry.content_id: entry
-        for entry in catalog.entries
-        if entry.kind is CatalogKind.STANDARD and entry.content_id is not None
+        for entry in catalog.standard
+        if entry.content_id is not None
     }
     selected_ids = (
         {
@@ -154,7 +154,7 @@ def standard_content_conflicts(
                 continue
             seen.add(pair)
             right = by_id.get(right_id)
-            if right is None:
+            if right is None or not datasets_overlap(left, right):
                 continue
             right_definitions = dict(right.content_definitions)
             changes = tuple(
@@ -805,10 +805,14 @@ def _standard_source_overlap(entries):
             if key.startswith('function:'):
                 groups.setdefault(key, []).append((entry, digest))
     for name, group in groups.items():
-        if len({digest for _, digest in group}) < 2: continue
-        source_owners = 0
+        if len({digest for _, digest in group}) < 2:
+            continue
+        candidates = [(entry, digest) for entry, digest in group
+                      if any(digest != other_digest and datasets_overlap(entry, other)
+                             for other, other_digest in group)]
+        source_owners = []
         key = DefinitionKind.FUNCTION, name.split(':', 1)[1].casefold()
-        for entry, _ in group:
+        for entry, digest in candidates:
             try:
                 if entry.content_id not in snapshots:
                     snapshots[entry.content_id] = standard_scripts.read(entry)
@@ -816,12 +820,15 @@ def _standard_source_overlap(entries):
                 if provider is None: continue
                 for index in reversed(range(len(provider.loads))):
                     if key in provider._block_keys(index):
-                        source_owners += bool(provider.loads[index].sources)
+                        if provider.loads[index].sources:
+                            if any(digest != other_digest and datasets_overlap(entry, other)
+                                   for other, other_digest in source_owners):
+                                return True
+                            source_owners.append((entry, digest))
                         break
             except (OSError, ValueError):
                 snapshots[entry.content_id] = None
                 continue # opaque Standard content keeps its normal load order
-        if source_owners > 1: return True
     return False
 
 

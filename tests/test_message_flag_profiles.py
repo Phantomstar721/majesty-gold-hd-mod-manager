@@ -8,7 +8,7 @@ import unittest
 from test_occupant_runtime_profiles import PeImage
 
 ROOT=Path(__file__).resolve().parents[1]
-FIXTURES=ROOT.parent/'majesty-gold-hd-mod-manager-gog-support/local/fixtures'
+FIXTURES=ROOT/'local/fixtures'
 
 
 class MessageFlagProfileTests(unittest.TestCase):

@@ -12,7 +12,7 @@ from panel_engine_profile_sources import ROOT, BRANCHES, manager_profiles, map_q
 from panel_engine_existing_profiles import existing_boundaries
 
 
-DEFAULT_SDK = ROOT.parent / '.audits/flamey-window-engine-sdk-20261109/sdk'
+DEFAULT_SDK = ROOT / 'local/panel-engine-alpha/sdk/legacy'
 DEFAULT_INVENTORY = ROOT / 'profiles/panel-engine/sdk-inventory.json'
 
 

@@ -94,7 +94,7 @@ class SourceTargetTests(unittest.TestCase):
 
     def test_audited_stock_transport_boundaries(self):
         import pefile
-        root = Path(__file__).resolve().parents[2] / 'majesty-gold-hd-mod-manager-gog-support/local/fixtures'
+        root = Path(__file__).resolve().parents[1] / 'local/fixtures'
         profiles = (
             ('public', 0xDA020, 0x3C544C, 0x1A15F0, 0xDA093, 0xDAD8A, 0x1C5B20),
             ('beta2', 0xDA630, 0x3E3FD4, 0x1B65A0, 0xDA6A3, 0xDB39A, 0x1DAD00),

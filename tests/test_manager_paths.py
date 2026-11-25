@@ -21,6 +21,17 @@ MOD_ID = "42BA4603-2B13-446D-A2A4-6CF3A55DDAC3"
 
 
 class FrozenManagerPathTests(unittest.TestCase):
+    def test_workspace_input_prefers_the_moved_checkout_as_a_unit(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy = root / 'sample-guild'
+            grouped = root / 'custom-guilds/sample-guild'
+            legacy.mkdir()
+            relative = 'custom-guilds/sample-guild/dist/package'
+            self.assertEqual(manager_paths.workspace_input(root, relative), legacy / 'dist/package')
+            grouped.mkdir(parents=True)
+            self.assertEqual(manager_paths.workspace_input(root, relative), grouped / 'dist/package')
+
     def test_default_detection_uses_redirected_windows_documents_folder(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -18,7 +18,9 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT / "tests")]
 sys.dont_write_bytecode = True
 
 COMMON = (
-    "test_panel_engine_merge_intent",
+    "test_event_boundary_contracts", "test_event_evidence_snapshot",
+    "test_window_qol", "test_process_windows.ManagerProcessWiringTests",
+    "test_panel_engine_merge_intent", "test_panel_resource_replacement",
     "test_manager_history",
     "test_manager_presets", "test_manager_profile", "test_manager_controller", "test_manager_qol_service", "test_quest_dataset", "test_standard_project_recovery",
     "test_attack_observation_proof", "test_native_impact",
@@ -71,6 +73,12 @@ DEVELOPMENT = (
 )
 DEVELOPMENT += PANEL_ALPHA
 RELEASE = DEVELOPMENT + ("test_release_scope", "test_release_merge_literals",)
+
+QUICK_DEVELOPMENT = (
+    "test_event_boundary_contracts", "test_event_evidence_snapshot", "test_standard_scripts",
+    "test_window_qol", "test_process_windows.ManagerProcessWiringTests", "test_manager_paths",
+    "test_manager_compatibility", "test_feature_parity_profiles", "test_reward_factoring", "test_regression_gate",
+)
 
 def normalized(code):
     """Ignore relocated filenames, not constants, bytecode, or line information."""
@@ -209,15 +217,21 @@ def main():
     parser.add_argument("--executable-name", default="Majesty Mod Manager.exe")
     parser.add_argument("--receipt-root", type=Path, default=ROOT / "local/regression")
     parser.add_argument("--verify-receipt", action="store_true", help="Check unchanged tested artifact before staging")
+    parser.add_argument("--quick-development", action="store_true", help="Run the local frozen-package smoke checks")
     args = parser.parse_args()
     configured = (ROOT / "regression-mode.txt").read_text().strip()
     if configured not in ("unified", args.mode):
         raise ValueError("Wrong checkout: this tree's regression mode is " + configured)
+    if args.quick_development and (args.mode != "development" or not args.application):
+        raise ValueError("Quick development verification requires a packaged development application")
+    receipt_name = args.mode + ("-quick" if args.quick_development else "")
+    receipt_name += "-package.json" if args.application else "-source.json"
+    scope = "local-smoke" if args.quick_development else "full"
     if args.verify_receipt:
         if not args.application:
             raise ValueError("Receipt verification requires --application")
-        receipt = json.loads((args.receipt_root / (args.mode + "-package.json")).read_text())
-        if receipt.get("mode") != args.mode or not receipt.get("packaged"):
+        receipt = json.loads((args.receipt_root / receipt_name).read_text())
+        if receipt.get("mode") != args.mode or not receipt.get("packaged") or receipt.get("scope", "full") != scope:
             raise ValueError("Not a packaged regression receipt for this mode")
         files = artifact_files(args.application)
         if files != receipt.get("application") or test_inputs() != receipt.get("testInputs"):
@@ -236,6 +250,8 @@ def main():
                   + (PANEL_ALPHA if args.mode=='panel-engine-alpha' else ())
                   + tuple(p.stem for p in sorted((ROOT / "tests").glob("test_*profiles.py"))
                           )))
+    if args.quick_development:
+        names = QUICK_DEVELOPMENT
     # A child owns the audit hook; this process only writes its local receipt.
     if os.environ.get("MMM_REGRESSION_CHILD") == "1":
         sys.addaudithook(write_guard(os.environ["MMM_REGRESSION_TEMP"]))
@@ -244,7 +260,7 @@ def main():
     import subprocess
     reports = args.receipt_root
     reports.mkdir(parents=True, exist_ok=True)
-    receipt = reports / (args.mode + ("-package" if bundle else "-source") + ".json")
+    receipt = reports / receipt_name
     if receipt.exists():
         receipt.unlink()
     with tempfile.TemporaryDirectory(prefix="manager-regression-") as temporary:
@@ -258,7 +274,7 @@ def main():
     if bundle:
         bundle.verify_source()
         bundle.verify_data(args.application,alpha=args.executable_name=='Majesty Mod Manager - Panel Engine Alpha.exe')
-    evidence = {"schema": 1, "mode": args.mode, "fixtures": fixtures,
+    evidence = {"schema": 1, "mode": args.mode, "scope": scope, "fixtures": fixtures,
                 "modules": names, "packaged": bool(bundle), "liveGameplayAcceptance": False,
                 "testInputs": initial_inputs}
     if bundle:

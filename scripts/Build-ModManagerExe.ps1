@@ -8,10 +8,12 @@ param(
     [string]$PhantomsHauntPackage = "",
     [string]$MsvcToolRoot = "",
     [string]$WindowsSdkRoot = "",
-    [switch]$KeepBuildFiles
+    [switch]$KeepBuildFiles,
+    [switch]$FullVerification
 )
 
 $ErrorActionPreference = "Stop"
+$quickDevelopment = $Mode -eq 'development' -and -not $FullVerification
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $repoRoot ".venv\Scripts\python.exe"
 $work = Join-Path $repoRoot "local\pyinstaller"
@@ -59,10 +61,12 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $managerIcon -PathType Leaf)) {
     throw "The Majesty Mod Manager icon was not found: $managerIcon"
 }
-& $python (Join-Path $PSScriptRoot 'build_updated_panel_engine_modules.py') --work (Join-Path $repoRoot 'local/panel-engine-alpha/native-modules')
-if ($LASTEXITCODE -ne 0) { throw 'Updated three-version engine module build failed.' }
-& $python (Join-Path $PSScriptRoot 'verify_regression.py') --mode $Mode
-if ($LASTEXITCODE -ne 0) { throw 'Source regression gate failed; application packaging was not started.' }
+if (-not $quickDevelopment) {
+    & $python (Join-Path $PSScriptRoot 'build_updated_panel_engine_modules.py') --work (Join-Path $repoRoot 'local/panel-engine-alpha/native-modules')
+    if ($LASTEXITCODE -ne 0) { throw 'Updated three-version engine module build failed.' }
+    & $python (Join-Path $PSScriptRoot 'verify_regression.py') --mode $Mode
+    if ($LASTEXITCODE -ne 0) { throw 'Source regression gate failed; application packaging was not started.' }
+}
 $releaseFiles = @(
     (Join-Path $repoRoot "LICENSE"),
     (Join-Path $repoRoot "THIRD-PARTY-NOTICES.md"),
@@ -95,8 +99,10 @@ if (-not (Test-Path -LiteralPath $payloadMarker -PathType Leaf) -or
     ((Get-Content -LiteralPath $payloadMarker -Raw).Trim() -ne "schema=3")) {
     throw "Manager payload staging did not produce the required schema-3 marker."
 }
-& $python (Join-Path $PSScriptRoot 'verify_alpha_cold_start.py') --beta
-if ($LASTEXITCODE -ne 0) { throw 'Beta cold-start source check failed.' }
+if (-not $quickDevelopment) {
+    & $python (Join-Path $PSScriptRoot 'verify_alpha_cold_start.py') --beta
+    if ($LASTEXITCODE -ne 0) { throw 'Beta cold-start source check failed.' }
+}
 foreach ($relative in $requiredPayloadFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $relative) -PathType Leaf)) {
         throw "Manager payload staging omitted required file: $relative"
@@ -149,7 +155,9 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\GPL-3.0.txt") -Destination
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\PYINSTALLER.txt") -Destination $applicationLicenses -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "licenses\FREESTYLE-CAM-SIDECAR.txt") -Destination $applicationLicenses -Force
 Copy-Item -LiteralPath (Join-Path $assetRoot "STEAM-ICON-NOTICE.txt") -Destination $applicationLicenses -Force
-& $python (Join-Path $PSScriptRoot 'verify_regression.py') --mode $Mode --application $applicationOutput
+$verification = @('--mode', $Mode, '--application', $applicationOutput)
+if ($quickDevelopment) { $verification += '--quick-development' }
+& $python (Join-Path $PSScriptRoot 'verify_regression.py') @verification
 if ($LASTEXITCODE -ne 0) { throw 'Packaged Manager regression gate failed. Do not distribute this build.' }
 & $python (Join-Path $PSScriptRoot 'verify_alpha_cold_start.py') --beta --application $applicationOutput
 if ($LASTEXITCODE -ne 0) { throw 'Packaged beta cold-start check failed.' }

@@ -9,7 +9,7 @@ subscribed to through Steam Workshop.
 It also combines compatible Merge mods and supplies the game-side support
 needed by custom buildings, panels, and other advanced features.
 
-Current release candidate: **0.3.16 (beta)**. [What changed](release/v0.3.16.md).
+Current release is **0.3.18 beta**. [What changed](release/v0.3.18.md).
 
 The **0.3.16 beta** lets native panel packages explicitly choose Merge using
 `"merge": true` in their schema-3 definition. Existing Standard defaults and
@@ -113,6 +113,17 @@ See [support-report limits](docs/bounded-support-reporting.md).
 | **Standard** | Ordinary Majesty mods that the game can load independently. |
 | **Quests** | Downloaded adventures and maps available through Majesty's quest browser. |
 | **Quality of Life** | Optional game improvements that can be installed or removed individually. |
+
+**Borderless Window** and **Confine Cursor to Game Window** are independent
+Quality of Life options for the selected game installation. They apply on the
+next Manager launch, including Classic Launch; no Prepare is needed. Start
+Majesty in windowed mode to use them. Borderless keeps your selected resolution.
+While the windowed game is focused, **Ctrl+Shift+F11** releases or confines the
+cursor. Switching apps, minimizing or closing the game releases it automatically.
+Fullscreen retains its usual behavior. A detected shortcut conflict leaves
+confinement off. Both options start off and leave Majesty's saved display
+preferences unchanged. These options support Default Steam, Steam beta2 and GOG.
+When the Manager confinement option is off, GOG retains its own cursor preference.
 
 Items that do not change the game, such as modding tools, are identified but
 are not selectable. If a Merge mod is missing required compatibility
@@ -399,10 +410,10 @@ The complete release payload also uses public helper and compatibility-source
 projects. The [payload staging script](scripts/Stage-ModManagerPayload.ps1)
 lists the required repositories and their default sibling-directory names.
 
-Building the optional native engines also requires mikmak300's pinned Window
-Engine/Script Functions SDK, kept separately from this repository. Current builds
-use `scripts/build_updated_panel_engine_modules.py` and its `--sdk-root` option;
-the default input is the SDK under `../.audits/flamey-sdk-update-20261111/sdk`.
+Building the optional native engines requires the pinned Window Engine/Script
+Functions SDK. `scripts/build_updated_panel_engine_modules.py` reads it from
+`local/panel-engine-alpha/sdk/updated` by default. The SDK is a private local input
+outside Git. Use `--sdk-root` to supply a different location for the same SDK.
 The legacy builder and its November 9 SDK contract remain available for older
 module reproduction. Native API inventories and three-version profiles are under
 `profiles/panel-engine`; the updated builder verifies its additional bindings

@@ -1,5 +1,32 @@
+param(
+    [string]$InputReceipt,
+    [string]$NativeCandidate,
+    [string]$WitchCandidate
+)
+
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent $PSScriptRoot
+$workspace=Split-Path -Parent $repo
+. (Join-Path $PSScriptRoot 'ManagerWorkspace.ps1')
+if (-not $InputReceipt) {
+    throw 'Supply -InputReceipt with the verified Witch Hunters and Standard candidate hashes. The retired alpha pair is no longer an input.'
+}
+$pins=(Resolve-Path -LiteralPath $InputReceipt).Path
+$inputs=Get-Content -LiteralPath $pins -Raw | ConvertFrom-Json
+if (-not $WitchCandidate) {
+    $witchRepo=Resolve-WorkspaceRepo $workspace 'custom-guilds' 'majesty-gold-hd-custom-guild-witch-hunter'
+    $WitchCandidate=Join-Path $witchRepo 'src/current/WitchHunterFourSkills'
+}
+if (-not $NativeCandidate) {
+    $pinnedNative=$inputs.native_candidate
+    if (-not $pinnedNative) { $pinnedNative=$inputs.unchanged_alpha_candidate }
+    $NativeCandidate=$pinnedNative.root
+}
+if (-not $NativeCandidate -or -not (Test-Path -LiteralPath $NativeCandidate -PathType Container)) {
+    throw 'Supply -NativeCandidate with the current directory for the Standard package identified by the receipt.'
+}
+$WitchCandidate=(Resolve-Path -LiteralPath $WitchCandidate).Path
+$NativeCandidate=(Resolve-Path -LiteralPath $NativeCandidate).Path
 $python=Join-Path $repo '.venv/Scripts/python.exe'
 $output=Join-Path $repo 'dist/reward-factor-alpha'
 $work=Join-Path $repo 'local/reward-contributions/unchanged-alpha'
@@ -37,10 +64,8 @@ Assert-Closed
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 $before=Protected-Files
 $before | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $work 'protected-before.json') -Encoding UTF8
-$pins=Join-Path (Split-Path -Parent $repo) 'majesty-gold-hd-custom-guild-witch-hunter/private/manager-side-reward-adapter-20261110/alpha-inputs.json'
-$inputs=Get-Content -LiteralPath $pins -Raw | ConvertFrom-Json
 & $python (Join-Path $PSScriptRoot 'verify_reward_contribution_candidates.py') --infer --input-receipt $pins `
-    --merge-root $inputs.records.witch_candidate.root --native-root $inputs.unchanged_alpha_candidate.root --work $work
+    --merge-root $WitchCandidate --native-root $NativeCandidate --work $work
 if($LASTEXITCODE -ne 0){throw 'Unchanged-input composition/compiler proof failed.'}
 & $python (Join-Path $PSScriptRoot 'verify_regression.py') --mode panel-engine-alpha --receipt-root (Join-Path $work 'regression')
 if($LASTEXITCODE -ne 0){throw 'Reward-factor alpha source regression failed.'}
@@ -76,7 +101,7 @@ if($LASTEXITCODE -ne 0){throw 'Reward-factor alpha packaged cold-start failed.'}
     --executable-name ($name+'.exe') --receipt-root (Join-Path $work 'regression')
 if($LASTEXITCODE -ne 0){throw 'Reward-factor alpha packaged regression failed.'}
 & $python (Join-Path $PSScriptRoot 'verify_packaged_reward_factors.py') --application $app --input-receipt $pins `
-    --merge-root $inputs.records.witch_candidate.root --native-root $inputs.unchanged_alpha_candidate.root `
+    --merge-root $WitchCandidate --native-root $NativeCandidate `
     --work (Join-Path $work 'packaged-language')
 if($LASTEXITCODE -ne 0){throw 'Packaged unchanged-input composition/compiler proof failed.'}
 $after=Protected-Files

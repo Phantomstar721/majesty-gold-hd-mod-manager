@@ -15,6 +15,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $WorkspaceRoot) {
     $WorkspaceRoot = Split-Path -Parent $repoRoot
 }
+. (Join-Path $PSScriptRoot 'ManagerWorkspace.ps1')
 if (-not $OutputRoot) {
     $OutputRoot = Join-Path $repoRoot "payload"
 }
@@ -41,12 +42,12 @@ $rememberRepo = if ($RememberActiveModsRoot) {
 $qolRepo = if ($QolUtilitiesRoot) {
     [IO.Path]::GetFullPath($QolUtilitiesRoot)
 } else {
-    Join-Path $WorkspaceRoot "majesty-gold-hd-qol-utilities"
+    Resolve-WorkspaceRepo $WorkspaceRoot 'tools' 'majesty-gold-hd-qol-utilities'
 }
 $hauntSource = if ($PhantomsHauntPackage) {
     [IO.Path]::GetFullPath($PhantomsHauntPackage)
 } else {
-    Join-Path $WorkspaceRoot "majesty-gold-hd-custom-guild-phantoms-haunt\dist\CustomGuildPhantomsHauntExpanded"
+    Join-Path (Resolve-WorkspaceRepo $WorkspaceRoot 'custom-guilds' 'majesty-gold-hd-custom-guild-phantoms-haunt') 'dist\CustomGuildPhantomsHauntExpanded'
 }
 
 $required = @(

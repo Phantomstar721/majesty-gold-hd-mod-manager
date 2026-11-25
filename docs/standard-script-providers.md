@@ -97,8 +97,12 @@ definitions touched by the generated profile participate in reconciliation:
 For overlapping inputs, the installed compiler must reproduce the declared BCD.
 A filename-only compiler probe identifies diagnostic filename positions. Only
 those proven fields and their exact envelope-size adjustment are normalized;
-instruction bytes, operands, strings and line numbers are not discarded. A
-compiled-only provider is indexed from its native declaration tables during
+instruction bytes, operands, strings and line numbers are not discarded.
+Compiler projects in source subfolders may record shorter relative paths than
+the package manifest. Those same-file suffix spellings are accepted only in
+the filename fields identified by the compiler probe; a whole-path prefix is
+not treated as an executable difference. Unrelated filenames still fail.
+A compiled-only provider is indexed from its native declaration tables during
 composition, using the already captured BCD bytes. Functions, expressions,
 prototypes and DAT records are distinguished from references to other scripts.
 Unrelated compiled-only files remain native without source registration. A real

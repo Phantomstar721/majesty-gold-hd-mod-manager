@@ -1,12 +1,16 @@
 # Offline regression gates
 
-Use the single canonical `majesty-gold-hd-cam-merger` checkout. Run
+Use the canonical `majesty-gold-hd-mod-manager` checkout. Run
 `scripts/Test-Regression.ps1 -Mode development` or `-Mode release`; the unified
 checkout supports both, with independent receipts and coverage. Development is
 the default. `-ApplicationRoot` reads an existing package without launching it.
 
 `Build-ModManagerExe.ps1` defaults to the local test application under
-`dist/Majesty Mod Manager`. `-Mode release` builds under
+`dist/Majesty Mod Manager`. It stages the native runtime and its three-profile
+fixtures once, checks the frozen application against its source and data,
+runs a focused suite from the EXE archive, and checks packaged startup on all
+three profiles. Use `-FullVerification` to run the full development suites
+and startup checks against both source and package. `-Mode release` builds under
 `dist/release-candidate/Majesty Mod Manager` and runs the additional release
 package/native gates. `Stage-Workshop.ps1` stages only that release candidate.
 Separate outputs prevent routine development builds from replacing the staged
@@ -28,7 +32,7 @@ profile and consumed native code, not unrelated executable changes.
   reported Standard-component combination in both preference directions.
   The promoted custom-hero feature fixtures and current local candidate are also
   covered; no diagnostic compile switches are enabled.
-- Development: actual installed guilds plus the local development package,
+- Full development: actual installed guilds plus the local development package,
   every native profile test, placement/art/scoped-output and private lifecycle
   fixtures. MAJESTY_DEVELOPMENT_PACKAGE overrides the local development package
   folder. The release-only combination engine is not claimed as development
@@ -38,8 +42,9 @@ profile and consumed native code, not unrelated executable changes.
   itself. Required skipped tests and empty suites fail.
 - Packaged phase: import Manager Python modules from the EXE archive, refuse
   source fallback for missing modules, compare every bundled Manager module
-  with current source, compare profiles/payload with build inputs, then repeat
-  regression tests on bundled code. Runtime .log files are not code inputs.
+  with current source, compare profiles/payload with build inputs, and run the
+  selected verification scope on bundled code. Runtime .log files are not code
+  inputs.
 
 The latest placement incident has a consumer regression executing the actual
 final-validator placement branch with encoded v2/v3 proofs, distinct required
@@ -54,11 +59,19 @@ rejects writes outside its disposable temporary directory. Actual package
 audits read installed inputs and compile only temporary GPL fixtures. None of
 these commands invokes Manager Prepare or writes a user merged profile.
 
-Build-ModManagerExe runs the source gate before packaging and the packaged gate
-before reporting completion. Existing native compilation/fixture gates remain
-in place. Release staging also requires an unchanged packaged regression
-receipt; changed source, tests, runtime, bundled profiles or application files
-require re-verification. It does not rebuild automatically.
+Local smoke verification writes `development-quick-package.json`. Full
+development and release use their existing separate receipts. Release staging
+requires an unchanged full release receipt and the matching native parity
+receipt. Changed source, tests, runtime, bundled profiles or application
+files require release re-verification.
+
+Guild package inputs use `custom-guilds/`, and the QoL suite uses `tools/`.
+During the workspace move, the root checkout supplies an input when its grouped
+checkout is absent. The full development fixture uses the owning Witch Hunters
+source package by default. The separate `Build-RewardFactorAlpha.ps1` diagnostic
+requires `-InputReceipt` with hashes for the current Witch Hunters and Standard
+candidates. Use `-NativeCandidate` to supply the Standard candidate's current
+location if the receipt's location has moved.
 
 These are offline checks, not live gameplay certification: launch, save/load,
 panels and performance still need bounded user-approved gameplay acceptance.

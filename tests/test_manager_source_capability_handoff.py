@@ -7,19 +7,23 @@ from majesty_cam.compose import _derive_runtime_capabilities
 from majesty_cam.attack_observation import CAPABILITY as OBSERVER
 from majesty_cam.checked_placement import CAPABILITY as PLACEMENT
 from majesty_cam.inventory_spell_display import CAPABILITY as INVENTORY
+from majesty_cam.native_impact import CAPABILITY as NATIVE_IMPACT
 from majesty_cam.runtime_capabilities import PRIVATE_ACTIVITY_TEXT_RUNTIME_CAPABILITY as TEXT
 from majesty_cam.exploration_events import CAPABILITY as EXPLORATION
 from majesty_cam.spell_origin import CAPABILITY as ORIGIN
 from majesty_cam.manager.build import create_build_plan, _validate_finalized_runtime_registries, ManagerBuildError
 from majesty_cam.manager.catalog import Catalog, CatalogEntry, CatalogKind, CatalogSource
 from majesty_cam.manager.compatibility import load_compatibility_registry
+from majesty_cam.manager.paths import workspace_input
 from majesty_cam.package import load_package
 
 
 class SourceCapabilityHandoffTests(unittest.TestCase):
     def test_real_selected_declarations_survive_final_handoff(self):
         game=Path('C:/Program Files (x86)/Steam/steamapps/common/Majesty HD')
-        roots=(Path('C:/Users/bterr/Documents/My Games/MajestyHD/Mods/WitchHunterFourSkills'),
+        candidate = workspace_input(Path(__file__).resolve().parents[2],
+            'custom-guilds/majesty-gold-hd-custom-guild-witch-hunter/src/current/WitchHunterFourSkills')
+        roots=(candidate,
                Path('C:/Program Files (x86)/Steam/steamapps/workshop/content/73230/3813128205'),
                Path('C:/Program Files (x86)/Steam/steamapps/workshop/content/73230/3793509198'))
         if not all(p.is_dir() for p in roots):self.skipTest('installed development sources unavailable')
@@ -43,6 +47,7 @@ class SourceCapabilityHandoffTests(unittest.TestCase):
                     has_private_activity_text=TEXT in plan.runtime_capabilities,
                     has_source_exploration=EXPLORATION in plan.runtime_capabilities,
                     has_spell_origin=ORIGIN in plan.runtime_capabilities,
+                    has_native_impact=NATIVE_IMPACT in plan.runtime_capabilities,
                     has_attack_observation=True,has_checked_placement=True)
                 _validate_finalized_runtime_registries(plan.runtime_feature_registry,
                     plan.runtime_capabilities,finalized,finalized,caps)

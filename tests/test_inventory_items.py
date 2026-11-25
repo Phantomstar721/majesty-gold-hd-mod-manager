@@ -15,6 +15,7 @@ class InventoryItemsTests(unittest.TestCase):
         game = Path('C:/Program Files (x86)/Steam/steamapps/common/Majesty HD')
         paths = [game/'SDK/OriginalQuests/GPL/Hero_Deaths.gpl',
                  game/'SDK/OriginalQuests/GPLMx/mx_Hero_Deaths.gpl',
+                 game.parents[1]/'workshop/content/73230/1448403412/GPL/mx_Monster_Deaths.gpl',
                  Path('C:/Users/bterr/Documents/My Games/MajestyHD/Mods/CustomGuildPhantomsHauntExpanded/GPL/Phantom.gpl')]
         for path in paths:
             if not path.is_file():
@@ -42,6 +43,42 @@ End
         result = add_inventory_death_drop_exclusions(merge_sources([], {'mod':[source]}), ('#PrivateDose',))
         text = result.emit_project_source_set().gpl_text
         self.assertIn('WhatItem /*keep*/ != #MarketItem_Market3_Item && WhatItem != #PrivateDose)', text)
+
+    def test_death_drop_accepts_magic_sword_guard_without_market_exclusions(self):
+        source = '''Function Hero_Drop_Quest_Items(agent ThisAgent)
+Declare integer WhatItem;
+Begin
+    WhatItem = -1;
+    While ($AgentHasInventoryItem(WhatItem, ThisAgent)) do
+    Begin
+        $DeleteInventoryItem(WhatItem, ThisAgent);
+        If (WhatItem != #PrivateDose) $DebugOut("inventory item");
+        If (WhatItem != #QItem_Magic_Sword) /* drop branch */
+            If ($CanDropInventoryItem(WhatItem) == True)
+                $SpawnUnit(ThisAgent, "Special_Item");
+        WhatItem = -1;
+    End
+End
+'''
+        merged = merge_sources([], {'mod': [parse_gpl('Expression #PrivateDose 114\n' + source)]})
+        result = add_inventory_death_drop_exclusions(merged, ('#PrivateDose',))
+        original, changed = merged.items[-1], result.items[-1]
+        self.assertIn('#QItem_Magic_Sword && WhatItem != #PrivateDose)', changed.text)
+        self.assertEqual(changed.text.replace(' && WhatItem != #PrivateDose', ''), original.text)
+        self.assertEqual(add_inventory_death_drop_exclusions(result, ('#PrivateDose',)), result)
+
+    def test_death_drop_rejects_guard_that_does_not_safely_cover_spawn(self):
+        spawn = '$SpawnUnit(ThisAgent, "Special_Item");'
+        guard = 'If (WhatItem != #QItem_Magic_Sword)'
+        for body in (f'{guard} $DebugOut("item"); {spawn}',
+                     f'{guard} {spawn} Else $DebugOut("excluded");',
+                     f'If (WhatItem != #QItem_Magic_Sword || WhatItem == 99) {spawn}'):
+            with self.subTest(body=body):
+                source = parse_gpl('Expression #PrivateDose 114\n'
+                                   'Function Hero_Drop_Quest_Items(agent ThisAgent)\n'
+                                   f'Declare integer WhatItem; Begin {body} End\n')
+                with self.assertRaisesRegex(ValueError, 'guarding every SpawnUnit call'):
+                    add_inventory_death_drop_exclusions(merge_sources([], {'mod': [source]}), ('#PrivateDose',))
 
     def feature(self, expression="#PrivateDose"):
         return parse(dict(type=TYPE, feature_key="dose", item_expression=expression))

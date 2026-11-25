@@ -66,6 +66,8 @@ def export_report(paths, destination):
     """Only known text artifacts; explicitly disclose missing/oversize inputs."""
     destination = Path(destination)
     inputs = []
+    if getattr(paths, 'profile_path', None) is not None:
+        inputs.append(('manager/window-qol.json', paths.profile_path.parent / 'window-qol.json', 64*1024))
     for suffix in ('', '.1', '.2', '.fault', '.fault.1', '.fault.2'):
         inputs.append(('runtime/MajestyBuildingRuntime.log'+suffix,
                        paths.runtime_root / ('MajestyBuildingRuntime.log'+suffix), LIMIT))

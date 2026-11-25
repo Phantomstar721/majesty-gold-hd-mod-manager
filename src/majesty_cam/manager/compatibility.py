@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 from ..gpl import DefinitionKind
-from .paths import application_root, is_frozen_application
+from .paths import application_root, is_frozen_application, workspace_input
 from .profile import normalize_guid
 
 
@@ -320,7 +320,7 @@ def _resolve_replacement(value: str, *, repo_root: Path, workspace_root: Path) -
     cleaned = value.strip()
     if cleaned.startswith("workspace:"):
         relative = cleaned[len("workspace:") :]
-        return _inside(workspace_root, workspace_root / relative, "replacement root")
+        return _inside(workspace_root, workspace_input(workspace_root, relative), "replacement root")
     return _inside(repo_root, repo_root / cleaned, "replacement root")
 
 

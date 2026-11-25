@@ -17,6 +17,7 @@
 #include "CrashDumpDiagnostic.h"
 #endif
 #include "MajestyBuildId.h"
+#include "WindowQoL.h"
 #include "ExplorationProfiles.h"
 #include "SpellOriginProfiles.h"
 #include "FeatureParityProfiles.h"
@@ -8653,6 +8654,13 @@ DWORD WINAPI InitializeRuntime(void*) {
             managerLaunch,
             "Terminating manager launch before Majesty resumes: the private enchantment rows could not be installed.");
     }
+
+    wchar_t borderlessOption[2] = {}, cursorOption[2] = {};
+    const bool borderlessWindow = GetEnvironmentVariableW(L"MAJESTY_MANAGER_BORDERLESS_WINDOW", borderlessOption, 2) == 1 && borderlessOption[0] == L'1';
+    const bool cursorConfinement = GetEnvironmentVariableW(L"MAJESTY_MANAGER_CURSOR_CONFINEMENT", cursorOption, 2) == 1 && cursorOption[0] == L'1';
+    RequireManagerRuntimeInstall(WindowQoL::Install(g_imageBase, g_buildProfile->buildId,
+        borderlessWindow, cursorConfinement, &WriteLog), managerLaunch,
+        "The selected window options do not match their verified native window/cursor profile.");
 
     // The stock main thread must run before Majesty creates its top-level
     // window. Release the launcher only after every static executable patch is

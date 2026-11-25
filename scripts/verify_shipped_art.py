@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from majesty_cam.stock_art import collapse_art_archives, load_stock_art_lineages
 from majesty_cam.compose import _compose_art_domain
+from majesty_cam.manager.paths import workspace_input
 
 
 def main():
@@ -27,7 +28,7 @@ def main():
         development_only = isinstance(item, dict) and item.get('development_only', False)
         if development_only:
             continue  # Development packages must not affect the release gate.
-        root = args.workspace / relative
+        root = workspace_input(args.workspace, relative)
         manifests = sorted(root.glob('*.mmxml'))
         if not manifests:
             results.append({'package': relative, 'developmentOnly': development_only,

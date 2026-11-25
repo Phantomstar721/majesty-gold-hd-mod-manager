@@ -12,6 +12,7 @@ from majesty_cam.cam import read_cam
 from majesty_cam.compose import _compose_art_domain, inventory_package, resolve_building_dialogs
 from majesty_cam.description_composition import prepare_description_views
 from majesty_cam.manager.compatibility import load_compatibility_registry
+from majesty_cam.manager.paths import workspace_input
 from majesty_cam.manager.preflight import prepare_merge_package
 from majesty_cam.script_review import ScriptReviewSession, group_conflicts
 from majesty_cam.scoped_descriptions import inventory_view, inventory_records
@@ -22,8 +23,8 @@ class MergePortPackageTests(unittest.TestCase):
         repo = Path(__file__).resolve().parents[1]
         game = Path(os.environ['MAJESTY_STOCK_ROOT'])
         workshop = game.parents[1] / 'workshop/content/73230'
-        witch = Path(os.environ.get('MAJESTY_DEVELOPMENT_PACKAGE', str(
-            Path(os.environ['USERPROFILE']) / 'Documents/My Games/MajestyHD/Mods/WitchHunterFourSkills')))
+        witch = Path(os.environ['MAJESTY_DEVELOPMENT_PACKAGE']) if 'MAJESTY_DEVELOPMENT_PACKAGE' in os.environ else workspace_input(
+            repo.parent, 'custom-guilds/majesty-gold-hd-custom-guild-witch-hunter/src/current/WitchHunterFourSkills')
         roots = [workshop / name for name in ('3813128205', '3793509198', '3769947406')]
         # The author's published package replaced the temporary test item.
         # Keep the actual art regression payload pinned, not its old download ID.
@@ -44,8 +45,8 @@ class MergePortPackageTests(unittest.TestCase):
         self.assertEqual(bbt[2508:2544].hex(),
                          '010000000500000000000000010000003200000000000000585234374000000000000000')
         roots.append(patch)
-        roots += [repo.parent/'majesty-gold-hd-adventurers-guild/dist/workshop/AdventurerGuild',
-                  repo.parent/'majesty-gold-hd-restore-abandoned-zoo/dist/workshop-upload/content', witch]
+        roots += [workspace_input(repo.parent, 'custom-guilds/majesty-gold-hd-adventurers-guild/dist/workshop/AdventurerGuild'),
+                  repo.parent/'standard/majesty-gold-hd-restore-abandoned-zoo/dist/workshop-upload/content', witch]
         lineages = load_stock_art_lineages(game)
         all_parts = {}
         registry = load_compatibility_registry(repo_root=repo)

@@ -17,6 +17,17 @@ GAME_EXECUTABLE_NAME = "MajestyHD.exe"
 GAME_SELECTION_FILENAME = "game-executable.txt"
 
 
+def workspace_input(workspace: Path, relative: str) -> Path:
+    """Find an input in the grouped layout or in its checkout awaiting a move."""
+    path = Path(relative)
+    parts = path.parts
+    if (len(parts) >= 2 and parts[0] in ('tools', 'custom-guilds')
+            and not (workspace / parts[0] / parts[1]).exists()
+            and (workspace / parts[1]).is_dir()):
+        return workspace.joinpath(*parts[1:])
+    return workspace / path
+
+
 @dataclass(frozen=True)
 class ManagerPaths:
     repo_root: Path

@@ -454,7 +454,7 @@ def catalog_input_signature(
     paths: list[Path] = [*_manager_cache_identity_paths()]
     # Catalog rows embed preflight errors/readiness. They must never outlive
     # the game evidence used by the inner validation cache.
-    context: list[str] = ["installed-catalog-v4", game_signature]
+    context: list[str] = ["installed-catalog-v6", game_signature]
     for label, root, workshop in (
         ("local-mods", local_mods_root, False),
         ("local-quests", local_quests_root, False),

@@ -130,6 +130,7 @@ class ManagerController:
         self.qol_service = QolService(
             repo_root=self.paths.repo_root,
             game_executable=self.paths.game_executable,
+            window_options_path=self.paths.profile_path.parent / 'window-qol.json',
         )
         self._qol_checked = False
         self._qol_input_signature: str | None = None
@@ -179,6 +180,7 @@ class ManagerController:
         self.qol_service = QolService(
             repo_root=self.paths.repo_root,
             game_executable=self.paths.game_executable,
+            window_options_path=self.paths.profile_path.parent / 'window-qol.json',
         )
         self.qol_catalog = None
         self.qol_status = ()

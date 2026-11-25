@@ -721,11 +721,9 @@ def merge_sources(
 
 
 _INVENTORY_EXPRESSION_RE = re.compile(r"^#[A-Za-z_][A-Za-z0-9_]*$")
-_STOCK_DEATH_DROP_LAST_EXCLUSION_RE = re.compile(
-    r"\bWhatItem\s*!=\s*"
-    r"#MarketItem_Market3_Item\b\s*(?=\))",
-    re.IGNORECASE | re.MULTILINE,
-)
+_STOCK_DEATH_DROP_ITEMS = frozenset((
+    "#qitem_magic_sword", "#marketitem_ring_protection", "#marketitem_market3_item",
+))
 
 def _purchase_signature(item: SemanticItem, parameter_types: Sequence[str]):
     """Check the stock ABI, without interpreting a mod's decision body."""
@@ -1472,8 +1470,8 @@ def add_inventory_death_drop_exclusions(
     Numeric inventory keys (``INVx``) are reported droppable by the engine even
     when a private unit description carries ``CanDropItem=0``. Stock handles its
     own exceptions directly in ``Hero_Drop_Quest_Items`` before ``SpawnUnit``.
-    This composes additional private IDs through that same lifecycle and fails
-    closed if the selected function no longer has the stock condition shape.
+    Extend a retained stock exclusion that guards item creation, including when
+    a mod removes or reorders other exclusions.
     """
 
     requested: list[str] = []
@@ -1517,11 +1515,29 @@ def add_inventory_death_drop_exclusions(
         raise ValueError(
             "inventory death-drop exclusions require Hero_Drop_Quest_Items"
         )
-    already_present = {
-        expression.casefold()
-        for expression in requested
-        if re.search(rf"\bWhatItem\s*!=\s*{re.escape(expression)}\b", _mask_non_code(target.text), re.I)
-    }
+    from .event_boundaries import _and_terms, entries
+    from .gpl_function_merge import _SourceParser
+
+    parser = _SourceParser(target.text)
+    _, _, body = parser.function()
+    records = tuple(entries(body))
+    spawn_paths = [path for node, path, _, _ in records if "$spawnunit" in node.head]
+    matches = []
+    for node, _, _, _ in records:
+        if node.kind != "if" or node.otherwise:
+            continue
+        terms = _and_terms(node.head[2:-1])
+        excluded = {term[2] for term in terms if len(term) == 3 and term[:2] == ("whatitem", "!=")}
+        if (excluded & _STOCK_DEATH_DROP_ITEMS and spawn_paths
+                and all(any(guard is node and edge == "body" for guard, edge in path)
+                        for path in spawn_paths)):
+            matches.append((node, excluded))
+    if len(matches) != 1:
+        raise ValueError(
+            "Hero_Drop_Quest_Items does not contain one recognized stock inventory "
+            "exclusion guarding every SpawnUnit call"
+        )
+    guard, already_present = matches[0]
     additions = [
         expression
         for expression in requested
@@ -1530,19 +1546,14 @@ def add_inventory_death_drop_exclusions(
     if not additions:
         return result
 
-    matches = list(_STOCK_DEATH_DROP_LAST_EXCLUSION_RE.finditer(_mask_non_code(target.text)))
-    if len(matches) != 1:
-        raise ValueError(
-            "Hero_Drop_Quest_Items does not contain exactly one recognized "
-            "stock inventory exclusion condition"
-        )
-    match = matches[0]
     # Insert before the closing parenthesis; preserve every selected source
     # byte, including comments and inline versus multiline formatting.
+    body_start, _ = parser.body_spans[id(guard)]
+    insertion = len(_mask_non_code(target.text[:body_start]).rstrip()) - 1
     replacement = " && " + " && ".join(f"WhatItem != {expression}" for expression in additions)
     resolved = replace(
         target,
-        text=target.text[: match.end()] + replacement + target.text[match.end() :],
+        text=target.text[:insertion] + replacement + target.text[insertion:],
         source_name=source_name,
         span=None,
     )

@@ -66,6 +66,13 @@ class StandardScriptTests(TestCase):
             one=refresh_standard_script_inputs(replace(plan,selected_standard_ids=ids[:1]),entries)
             self.assertFalse(one.requires_composition);self.assertEqual(one.standard_script_entries,())
 
+            scoped = tuple(replace(entry, dataset_base=scope)
+                           for entry, scope in zip(entries, ('majesty', 'majestyexpansion')))
+            with patch('majesty_cam.standard_scripts.read', side_effect=AssertionError('disjoint scope read')):
+                split = refresh_standard_script_inputs(plan, scoped)
+            self.assertFalse(split.requires_composition)
+            self.assertEqual(split.standard_script_entries, ())
+
             # Scan uses the complete planner with a game installation, not just
             # refresh_standard_script_inputs. No Merge inventories exist here.
             from majesty_cam.manager.build import create_build_plan
@@ -562,6 +569,90 @@ class StandardScriptTests(TestCase):
         self.assertFalse(_matches_source_locations(runtime.replace(b'code', b'evil'), exact, probe, names))
         self.assertFalse(_matches_source_locations(runtime.replace(b'literal', b'altered'), exact, probe, names))
         self.assertFalse(_matches_source_locations(runtime, exact, exact, names))
+
+    def test_filename_proof_accepts_project_relative_paths_without_masking_other_bytes(self):
+        def envelope(body):
+            data = bytearray(24) + body
+            for offset in (0, 4, 16):
+                struct.pack_into('<I', data, offset, len(data) - 4)
+            return bytes(data)
+        exact = envelope(b'code\0Source0.gpl\0\x34\x12\x02Source1.gpl\0literal\0')
+        probe = envelope(b'code\0ProbeX0.gpl\0\x34\x12\x02ProbeX1.gpl\0literal\0')
+        names = {b'Source0.gpl': 'Scripts/GPL/Original.gpl',
+                 b'Source1.gpl': 'Scripts/GPL/Nested/Other.gpl'}
+        for first, second in ((b'Original.gpl', b'Nested\\Other.gpl'),
+                              (b'.\\Original.gpl', b'Nested/Other.gpl'),
+                              (b'GPL/Original.gpl', b'GPL/Nested/Other.gpl'),
+                              (b'Author/Scripts/GPL/Original.gpl', b'Nested/Other.gpl'),
+                              (b'C:\\Author\\Scripts\\GPL\\Original.gpl', b'Nested/Other.gpl')):
+            with self.subTest(first=first, second=second):
+                runtime = envelope(b'code\0' + first + b'\0\x34\x12\x02' + second + b'\0literal\0')
+                self.assertTrue(_matches_source_locations(runtime, exact, probe, names))
+                for before, after in ((b'code', b'evil'), (b'literal', b'altered'),
+                                      (b'\x34\x12', b'\x35\x12'), (b'\x12\x02', b'\x12\x03')):
+                    self.assertFalse(_matches_source_locations(runtime.replace(before, after), exact, probe, names))
+        for filename in (b'Evil.gpl', b'Elsewhere/Original.gpl'):
+            runtime = envelope(b'code\0' + filename + b'\0\x34\x12\x02Nested/Other.gpl\0literal\0')
+            self.assertFalse(_matches_source_locations(runtime, exact, probe, names))
+
+    def test_filename_proof_does_not_normalize_a_source_name_literal(self):
+        def envelope(body):
+            data = bytearray(24) + body
+            for offset in (0, 4, 16):
+                struct.pack_into('<I', data, offset, len(data) - 4)
+            return bytes(data)
+        exact = envelope(b'code\0Source0.gpl\0Source0.gpl\0')
+        probe = envelope(b'code\0ProbeX0.gpl\0Source0.gpl\0')
+        names = {b'Source0.gpl': 'GPL/Original.gpl'}
+        good = envelope(b'code\0Original.gpl\0Source0.gpl\0')
+        bad = envelope(b'code\0Original.gpl\0Original.gpl\0')
+        self.assertTrue(_matches_source_locations(good, exact, probe, names))
+        self.assertFalse(_matches_source_locations(bad, exact, probe, names))
+
+    def test_project_relative_debug_paths_with_real_compilers_on_three_builds(self):
+        import os
+        import subprocess
+        from majesty_cam._subprocess import no_console_window_options
+        from majesty_cam.standard_scripts import read, verify
+        from majesty_cam.manager.qol_service import detect_majesty_branch
+        for branch in ('public', 'beta2', 'gog'):
+            with self.subTest(branch=branch), TemporaryDirectory() as temp:
+                executable = Path(os.environ['MAJESTY_' + branch.upper() + '_EXE'])
+                self.assertEqual(detect_majesty_branch(executable).key, branch)
+                game = Path(os.environ['MAJESTY_BCD_GOG_GAME' if branch == 'gog' else 'MAJESTY_BCD_GAME'])
+                compiler = game / 'SDK/Gplbcc.exe'
+                self.assertTrue(compiler.is_file())
+                root = Path(temp); directory = root / 'Scripts/GPL'
+                (directory / 'Nested').mkdir(parents=True)
+                original = b'function Example(agent ThisAgent)\ndeclare\nbegin\nThisAgent\'s "Value" = 7;\nend\n'
+                source = directory / 'Main.gpl'; source.write_bytes(original)
+                (directory / 'Nested/Other.gpl').write_bytes(original.replace(b'Example', b'Other'))
+                (directory / 'Author.gplproj').write_text('source="Main.gpl"\nsource="Nested/Other.gpl"\n')
+                def compile_target():
+                    process = subprocess.run((str(compiler), '-in', 'Author.gplproj', '-out', 'Runtime.bcd', '-stdout'),
+                        cwd=directory, capture_output=True, timeout=60, **no_console_window_options())
+                    self.assertEqual(process.returncode, 0, process.stdout.decode('cp1252', errors='replace'))
+                compile_target()
+                ident = '11111111-1111-1111-1111-111111111111'
+                manifest = root / 'mod.mmxml'
+                manifest.write_text(f'<Mod id="{ident}"><DisplayName>Example</DisplayName><DataConfiguration>'
+                    '<Dataset base="Any"><Load><GPL><Target>Scripts/GPL/Runtime.bcd</Target>'
+                    '<Source>Scripts/GPL/Main.gpl</Source><Source>Scripts/GPL/Nested/Other.gpl</Source>'
+                    '</GPL></Load></Dataset></DataConfiguration></Mod>')
+                entry = SimpleNamespace(package_root=root, manifest_path=manifest, content_id=ident, display_name='Example')
+                native = read(entry)
+                self.assertTrue(verify(native, compiler))
+                for scope in ('majesty', 'majestyexpansion'):
+                    context = Providers(for_dataset((native,), scope), lambda names: {}, compiler, scope)
+                    self.assertEqual(set(context.functions(('Example', 'Other'))),
+                        {(DefinitionKind.FUNCTION, 'example'), (DefinitionKind.FUNCTION, 'other')})
+                # An actual executable change remains a mismatch, even though
+                # the same valid project-relative filename records are present.
+                source.write_bytes(original.replace(b'= 7;', b'= 9;'))
+                compile_target()
+                source.write_bytes(original)
+                with self.assertRaisesRegex(ValueError, 'source does not reproduce'):
+                    verify(read(entry), compiler)
 
     def test_installed_standard_potions_keep_native_forms_with_generic_policy(self):
         from majesty_cam.standard_scripts import read

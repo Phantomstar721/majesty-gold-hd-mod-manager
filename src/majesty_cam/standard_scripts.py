@@ -14,6 +14,7 @@ import subprocess
 import json
 import re
 import struct
+import posixpath
 
 from .gpl import (DefinitionKind, ParsedSemanticSource, SemanticMergeResult,
                   require_complete_semantic_coverage)
@@ -302,6 +303,11 @@ def _matches_source_locations(runtime, exact, probe, names):
             fields.append((match.start(), match.end(), names[name]))
     if bytes(patched) != probe or not fields:
         return False
+    # Manifest paths are package-relative; a compiler project below that root
+    # can record a shorter relative suffix. This is only a spelling allowance
+    # inside compiler-proven filename fields, never an executable-byte mask.
+    def path(value):
+        return posixpath.normpath(value.replace('\\', '/')).lower()
     offset = start = 0
     for left, right, relative in fields:
         chunk = exact[start:left]
@@ -311,10 +317,11 @@ def _matches_source_locations(runtime, exact, probe, names):
         end = runtime.find(b'\0', offset)
         if end < 0:
             return False
-        filename = runtime[offset:end].decode('cp1252', errors='replace').replace('\\', '/').lower()
-        filename = re.sub('/+', '/', filename)
-        expected = relative.replace('\\', '/').lower()
-        if filename != expected and not filename.endswith('/' + expected):
+        filename = path(runtime[offset:end].decode('cp1252', errors='replace'))
+        expected = path(relative)
+        absolute = posixpath.isabs(filename) or bool(re.match(r'^[a-z]:/', filename))
+        if not (filename == expected or filename.endswith('/' + expected)
+                or (not absolute and expected.endswith('/' + filename))):
             return False
         offset = end + 1
         start = right

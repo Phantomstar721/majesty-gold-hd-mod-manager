@@ -15,7 +15,7 @@
       "definition": "profiles/poc/phantoms-haunt.mod-definition.json",
       "replacement_roots": [
         "payload/mods/CustomGuildPhantomsHauntExpanded",
-        "workspace:majesty-gold-hd-custom-guild-phantoms-haunt/dist/CustomGuildPhantomsHauntExpanded"
+        "workspace:custom-guilds/majesty-gold-hd-custom-guild-phantoms-haunt/dist/CustomGuildPhantomsHauntExpanded"
       ],
       "merge_priority": 200,
       "badge": "Improved CGPH edition will be used; the stock Elf Guild remains native.",

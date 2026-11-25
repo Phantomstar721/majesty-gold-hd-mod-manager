@@ -1,0 +1,101 @@
+{
+  "schema": 1,
+  "profiles": {
+    "public": {
+      "sha256": "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4",
+      "creationRva": 2400384,
+      "creationSize": 1080,
+      "creationFnv": 395763243,
+      "procedureRva": 2397712,
+      "procedureOperands": [
+        140,
+        265
+      ],
+      "windowedPatchOffset": 467,
+      "windowedPatchOriginal": "0fb6059cac7c00f7d81bc083e01983c007",
+      "borderlessBranchOffset": 419,
+      "nativeFullscreenRva": 3975584,
+      "gameFullscreenRva": 3902992,
+      "mainWindowRva": 3976324,
+      "windowedPreferenceGuardRva": 607087,
+      "windowedPreferenceGuard": "33c9390d108e7b000f94c1516a29e8ae9e0500",
+      "mainWindowGuardRva": 1085037,
+      "mainWindowGuard": "ff15ac5473003b0584ac7c00",
+      "preferenceTableRva": 3893512,
+      "gogClipRva": 0,
+      "gogClipSize": 0,
+      "gogClipFnv": 0,
+      "gogModeRva": 0,
+      "gogActiveRva": 0,
+      "shortcutTokenRecords": {
+        "F11": 3932472,
+        "SHIFT": 3932616,
+        "CONTROL": 3932624
+      }
+    },
+    "beta2": {
+      "sha256": "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82",
+      "creationRva": 2487520,
+      "creationSize": 1080,
+      "creationFnv": 3037490375,
+      "procedureRva": 2484848,
+      "procedureOperands": [
+        140,
+        265
+      ],
+      "windowedPatchOffset": 467,
+      "windowedPatchOriginal": "0fb60524987e00f7d81bc083e01983c007",
+      "borderlessBranchOffset": 419,
+      "nativeFullscreenRva": 4101416,
+      "gameFullscreenRva": 4029000,
+      "mainWindowRva": 4102156,
+      "windowedPreferenceGuardRva": 609055,
+      "windowedPreferenceGuard": "33c9390d487a7d000f94c1516a29e8be9c0500",
+      "mainWindowGuardRva": 1093693,
+      "mainWindowGuard": "ff1528e574003b050c987e00",
+      "preferenceTableRva": 4017000,
+      "gogClipRva": 0,
+      "gogClipSize": 0,
+      "gogClipFnv": 0,
+      "gogModeRva": 0,
+      "gogActiveRva": 0,
+      "shortcutTokenRecords": {
+        "F11": 4058080,
+        "SHIFT": 4058224,
+        "CONTROL": 4058232
+      }
+    },
+    "gog": {
+      "sha256": "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792",
+      "creationRva": 2488672,
+      "creationSize": 1080,
+      "creationFnv": 804150906,
+      "procedureRva": 2486000,
+      "procedureOperands": [
+        140,
+        265
+      ],
+      "windowedPatchOffset": 467,
+      "windowedPatchOriginal": "0fb605bc9a7e00f7d81bc083e01983c007",
+      "borderlessBranchOffset": 419,
+      "nativeFullscreenRva": 4102080,
+      "gameFullscreenRva": 4029284,
+      "mainWindowRva": 4102820,
+      "windowedPreferenceGuardRva": 610512,
+      "windowedPreferenceGuard": "33c9390d647b7d000f94c1516a29e84d9e0500",
+      "mainWindowGuardRva": 1095858,
+      "mainWindowGuard": "ff15e0d474003b05a49a7e00",
+      "preferenceTableRva": 4017000,
+      "gogClipRva": 1095520,
+      "gogClipSize": 109,
+      "gogClipFnv": 851455551,
+      "gogModeRva": 4065480,
+      "gogActiveRva": 4065484,
+      "shortcutTokenRecords": {
+        "F11": 4058760,
+        "SHIFT": 4058904,
+        "CONTROL": 4058912
+      }
+    }
+  }
+}

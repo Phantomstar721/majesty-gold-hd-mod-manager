@@ -1,10 +1,11 @@
 """Catalog and guarded orchestration for standalone Majesty QOL utilities.
 
-The manager owns no executable patch bytes here.  Every mutation is delegated
+The manager owns no executable patch bytes here. Standalone mutations are delegated
 to the canonical, independently reversible PowerShell installer or restorer
 shipped by the corresponding standalone repository.  This module contributes
 only discovery, stock-build identification, status inspection, and idempotent
-apply/remove orchestration.
+apply/remove orchestration. Window options are Manager-owned launch preferences;
+their runtime changes are guarded separately and never written to the game file.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import xml.etree.ElementTree as ET
 
 from .._subprocess import no_console_window_options
 from .elevation import directory_requires_elevation, run_elevated_hidden
-from .paths import default_documents_root
+from .paths import default_documents_root, workspace_input
 
 
 class QolServiceError(RuntimeError):
@@ -116,7 +117,7 @@ SUPPORTED_BRANCHES = (PUBLIC_BRANCH, BETA2_BRANCH, GOG_BRANCH)
 
 # Change this if status interpretation changes independently of the shipped
 # scripts/specs. UI/runtime rebuilds do not change canonical patch evidence.
-QOL_INSPECTION_CACHE_VERSION = 5
+QOL_INSPECTION_CACHE_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -251,6 +252,15 @@ QOL_PATCHES = (
     ),
 )
 
+WINDOW_QOL_PATCHES = tuple(QolPatchSpec(key, name, description,
+    'majesty-gold-hd-cam-merger', '', '', '', '', preference_only=True)
+    for key, name, description in (
+        ('borderless-window', 'Borderless Window',
+         'Removes window borders using Majesty’s native borderless mode. Applies on the next Manager launch when the game is windowed; keeps your chosen resolution.'),
+        ('cursor-confinement', 'Confine Cursor to Game Window',
+         'Keeps the cursor inside the focused game window. Press Ctrl+Shift+F11 in game to release or reconfine it. Releases on focus loss or minimize. Fullscreen keeps its normal behavior. Applies on the next Manager launch.'),
+    ))
+
 PANEL_ENGINE_PATCHES = (
     QolPatchSpec("panel-engine", "Custom Building Panels",
         "Runs Window Engine panels, including custom unit windows, row lists and dynamic text required by selected mods.\n(Credit to mikmak300)",
@@ -274,10 +284,15 @@ class ResolvedQolPatch:
 
     @property
     def apply_available(self) -> bool:
+        if self.source_kind == 'manager-window-qol':
+            from .window_qol import runtime_available
+            return runtime_available(self.source_root)
         return self.install_script is not None and self.install_script.is_file()
 
     @property
     def remove_available(self) -> bool:
+        if self.source_kind == 'manager-window-qol':
+            return True
         return self.remove_script is not None and self.remove_script.is_file()
 
     @property
@@ -358,6 +373,7 @@ class QolService:
         repo_root: Path,
         game_executable: Path,
         prefs_path: Path | None = None,
+        window_options_path: Path | None = None,
         specs: Sequence[QolPatchSpec] | None = None,
         powershell_executable: str = "powershell.exe",
         runner: Runner | None = None,
@@ -367,9 +383,11 @@ class QolService:
         self.repo_root = repo_root.resolve(strict=False)
         self.game_executable = game_executable.resolve(strict=False)
         self.prefs_path = (prefs_path or default_prefs_path()).resolve(strict=False)
+        from .window_qol import settings_path
+        self.window_options_path = window_options_path or settings_path()
         from .edition import panel_alpha
         self.specs = tuple(specs if specs is not None else
-                           QOL_PATCHES + PANEL_ENGINE_PATCHES)
+                           QOL_PATCHES + PANEL_ENGINE_PATCHES + WINDOW_QOL_PATCHES)
         self.powershell_executable = powershell_executable
         self._runner = runner or self._run_command
         self._elevated_runner = elevated_runner or run_elevated_hidden
@@ -382,7 +400,7 @@ class QolService:
         # Finish shared imports before the cold-start worker pool. Frozen
         # importers can otherwise expose a partially initialized module
         # while another worker imports its engine dependency.
-        from . import alpha_ui, engine_patches
+        from . import alpha_ui, engine_patches, window_qol
         # Canonical dry-runs are independent and read-only. Bound the cold
         # inspection to three processes; retain separate PowerShell scopes and
         # each command's timeout rather than sharing script globals/runspaces.
@@ -458,6 +476,16 @@ class QolService:
         current: QolUtilityStatus | None = None,
     ) -> QolUtilityStatus:
         spec = self._spec(key)
+        if key in ('borderless-window', 'cursor-confinement'):
+            from .window_qol import change
+            status = self.inspect_patch(key)
+            if install and not status.can_install and status.installed is not True:
+                raise QolServiceError(status.detail)
+            try:
+                change(self.game_executable, key, install, self.window_options_path)
+            except (OSError, ValueError) as exc:
+                raise QolServiceError(str(exc)) from exc
+            return self.inspect_patch(key)
         from .edition import panel_alpha
         if key in ('panel-engine','scripted-ground-actions'):
             from .engine_patches import change_patch
@@ -538,6 +566,17 @@ class QolService:
         branch: MajestyBranch | None,
     ) -> QolUtilityStatus:
         spec = patch.spec
+        if spec.key in ('borderless-window', 'cursor-confinement'):
+            from .window_qol import options, verify
+            try:
+                verify(self._inspection_executable(), self.repo_root, branch.key if branch else None)
+                installed = options(self.game_executable, self.window_options_path)[spec.key]
+                if not patch.apply_available:
+                    raise ValueError('The matching window QoL runtime is unavailable.')
+                return QolUtilityStatus(patch, QolUtilityState.INSTALLED if installed else QolUtilityState.AVAILABLE,
+                    True, True, installed, 'Enabled for the next Manager launch.' if installed else 'Off. Enable for Manager launches.')
+            except (OSError, ValueError, KeyError) as exc:
+                return QolUtilityStatus(patch, QolUtilityState.UNSUPPORTED, False, False, None, str(exc))
         if spec.key in ("panel-engine", "scripted-ground-actions"):
             from .engine_patches import inspect_patch
             try:
@@ -735,6 +774,8 @@ def resolve_qol_patch(repo_root: Path, spec: QolPatchSpec) -> ResolvedQolPatch:
     """
 
     repo_root = repo_root.resolve(strict=False)
+    if spec.key in ('borderless-window', 'cursor-confinement'):
+        return ResolvedQolPatch(spec, 'manager-window-qol', repo_root, None, None, repo_root / 'LICENSE')
     if spec.key in ('panel-engine','scripted-ground-actions'):
         from .edition import panel_alpha
         script=repo_root/'payload/panel-engine'/('Publish-AlphaExecutable.ps1' if panel_alpha() else 'Publish-EngineExecutable.ps1')
@@ -753,8 +794,7 @@ def resolve_qol_patch(repo_root: Path, spec: QolPatchSpec) -> ResolvedQolPatch:
         (repo_root / "helpers" / spec.payload_slug, "manager-owned-helper"),
         (workspace_root / spec.repository, "standalone-repository"),
         (
-            workspace_root
-            / "majesty-gold-hd-qol-utilities"
+            workspace_input(workspace_root, "tools/majesty-gold-hd-qol-utilities")
             / "utilities"
             / spec.bundle_directory,
             "qol-utilities-bundle",

@@ -10,13 +10,15 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
 from verify_panel_resource_contracts import inventory,check,verify
 from majesty_cam.compose import ComposeError,_split_smnu_records,_smnu_record_index
+from majesty_cam.manager.paths import workspace_input
 
 
 class ActualPanelResourceContracts(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.root=Path(os.environ.get('MAJESTY_DEVELOPMENT_PACKAGE',
-            str(Path(os.environ['USERPROFILE'])/'Documents/My Games/MajestyHD/Mods/WitchHunterFourSkills')))
+        override = os.environ.get('MAJESTY_DEVELOPMENT_PACKAGE')
+        cls.root = Path(override) if override else workspace_input(
+            ROOT.parent, 'custom-guilds/majesty-gold-hd-custom-guild-witch-hunter/src/current/WitchHunterFourSkills')
 
     def test_actual_resources_use_full_text_materialization_all_versions(self):
         result=verify(self.root)

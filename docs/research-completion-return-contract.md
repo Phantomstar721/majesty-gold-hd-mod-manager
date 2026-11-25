@@ -57,5 +57,5 @@ acceptance on any of the three versions.
 Pre-correction runtime object retained privately at
 `local/panel-engine-alpha/research-crash-20261109/MajestyModManagerRuntime.pre-return-fix.obj`,
 SHA256 `8b33aa9208338b1fd8d92f5a2dd436137f3e70c7cbeb0790270ef931997b7224`.
-The guild owner's preserved crash artifacts remain under
-`majesty-gold-hd-flamey-adventurers-guild-alpha/diagnostics/construction-complete-20261109`.
+The preserved crash capture and decoder live beside that object under
+`local/panel-engine-alpha/research-crash-20261109/capture`.

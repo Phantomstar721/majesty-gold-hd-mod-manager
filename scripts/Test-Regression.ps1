@@ -9,7 +9,7 @@ if (-not $Mode) { $Mode = "development" }
 $configured = (Get-Content -LiteralPath (Join-Path $repo 'regression-mode.txt') -Raw).Trim()
 if ($configured -ne "unified" -and $Mode -ne $configured) { throw "Wrong checkout for $Mode; this checkout is $configured." }
 $python = Join-Path $repo '.venv\Scripts\python.exe'
-$fixtures = Join-Path (Split-Path -Parent $repo) 'majesty-gold-hd-mod-manager-gog-support\local\fixtures'
+$fixtures = Join-Path $repo 'local\fixtures'
 # Caller-supplied fixture paths take precedence. No game or Windows settings change.
 if (-not $env:MAJESTY_PUBLIC_EXE) { $env:MAJESTY_PUBLIC_EXE = Join-Path $GameRoot 'MajestyHD.exe' }
 if (-not $env:MAJESTY_BETA2_EXE) { $env:MAJESTY_BETA2_EXE = Join-Path $fixtures 'beta2\MajestyHD.exe' }

@@ -99,7 +99,7 @@ class SavedAttributeTests(unittest.TestCase):
         header=(root/'runtime/SavedAttributeProfiles.h').read_text()
         windows=re.findall(r'\{0x([0-9A-F]+)u,0x([0-9A-F]+)u,0x([0-9A-F]+)u\}',header.split('constexpr Window')[1])
         self.assertEqual(len(windows),42)
-        fixtures=root.parent/'majesty-gold-hd-mod-manager-gog-support/local/fixtures'
+        fixtures=root/'local/fixtures'
         profiles=[(i,name,fixtures/name/'MajestyHD.exe') for i,name in enumerate(('public','beta2','gog-pristine'))]
         if os.environ.get('MAJESTY_BETA2_EXE'):profiles.append((1,'modified-beta2',Path(os.environ['MAJESTY_BETA2_EXE'])))
         for index,name,path in profiles:

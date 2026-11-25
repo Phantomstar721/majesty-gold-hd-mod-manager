@@ -43,11 +43,13 @@ bool StockCasts::Scheduled(Word actor,Word order,Word value,Word definition,bool
     for(const auto& other:records_)if(other.second.functionValue==value)return false;
     r.functionValue=value;r.definition=definition;r.scheduled=true;return true;
 }
-bool StockCasts::EnterCallback(Word value,Word definition,const Identity& a,const Identity& t) {
-    // Push a sentinel even for an unrelated nested callback. It cannot borrow
-    // its parent's permission; LeaveCallback restores the exact parent scope.
+bool StockCasts::EnterCallbackScope() {
     if(callbacks_.size()>=64){++overflowDepth_;Reset();return false;}
     callbacks_.push_back(0);
+    return true;
+}
+bool StockCasts::EnterCallback(Word value,Word definition,const Identity& a,const Identity& t) {
+    if(!EnterCallbackScope())return false;
     auto i=records_.find(a.id);
     if(i==records_.end())return false;
     auto& r=i->second;

@@ -11,7 +11,7 @@ import capstone
 import pefile
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURES = ROOT.parent / 'majesty-gold-hd-mod-manager-gog-support/local/fixtures'
+FIXTURES = ROOT / 'local/fixtures'
 PROFILES = (
     ('public', Path('C:/Program Files (x86)/Steam/steamapps/common/Majesty HD/MajestyHD.exe'),
      '255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4'),

@@ -1,6 +1,19 @@
 """Brief player-facing patch history, newest first."""
 
 PATCH_HISTORY = (
+    ("0.3.18", (
+        "Adds mod preferences for overlapping window layouts and window text.",
+        "Allows Merge packages to declare specific windows they replace in another package.",
+    )),
+    ("0.3.17.1", (
+        "Fixes a shared timer error that could interrupt teleport spells and items.",
+    )),
+    ("0.3.17", (
+        "Fixes false script-source mismatch errors for mods compiled from a source subfolder.",
+        "Keeps mod-added eligibility checks when adding shared reward notifications.",
+        "Adds separate borderless-window and cursor-confinement options for Manager launches.",
+        "Ctrl+Shift+F11 releases or confines the cursor while the windowed game is focused.",
+    )),
     ("0.3.16", (
         "Custom panel packages can opt into Merge and use the usual mod preferences.",
     )),

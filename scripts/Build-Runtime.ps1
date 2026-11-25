@@ -13,7 +13,8 @@ param(
     [switch]$RegistrationDiagnostic,
     [switch]$PanelEngineAlpha,
     [switch]$EngineModules,
-    [switch]$ListObjectsDifferential
+    [switch]$ListObjectsDifferential,
+    [switch]$WindowQoLTests
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +24,14 @@ if ($RegistrationTests) {
         $fixtureType = if ($name -like '*_GAME') { 'Container' } else { 'Leaf' }
         if (-not $fixturePath -or -not (Test-Path -LiteralPath $fixturePath -PathType $fixtureType)) {
             throw "Three-version runtime verification requires $name. No skipped profiles are allowed."
+        }
+    }
+}
+if ($WindowQoLTests -or $FeatureTests) {
+    foreach ($name in @('MAJESTY_PUBLIC_EXE', 'MAJESTY_BETA2_EXE', 'MAJESTY_GOG_EXE')) {
+        $fixturePath = [Environment]::GetEnvironmentVariable($name)
+        if (-not $fixturePath -or -not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) {
+            throw "Window QoL verification requires $name. No skipped profiles are allowed."
         }
     }
 }
@@ -166,6 +175,7 @@ $runtimeSources = @(
     (Join-Path $sourceRoot "BoundedMapQuery.cpp"),
     (Join-Path $sourceRoot "MapQueryRuntime.cpp"),
     (Join-Path $sourceRoot "ListObjectsAcceleration.cpp"),
+    (Join-Path $sourceRoot "WindowQoL.cpp"),
     (Join-Path $sourceRoot "MajestyModManagerRuntime.cpp"),
     (Join-Path $sourceRoot "ControllerLifecycleRegistry.cpp"),
     (Join-Path $sourceRoot "FreestyleCamRuntime.cpp"),
@@ -206,6 +216,7 @@ if ($PanelEngineAlpha -or $EngineModules) {
 }
 
 $fixtureNames = @()
+if ($WindowQoLTests -or $FeatureTests) { $fixtureNames += 'WindowQoLTests' }
 if ($ExplorationTests) { $fixtureNames += "ExplorationNativeTests" }
 if ($FeatureTests) { $fixtureNames += "OccupantActionRuntimeTests"; $fixtureNames += "ObserverReregistrationTests", "PlacementReregistrationTests"; $fixtureNames += "RegistrationDiagnosticTests", "BoundedRuntimeLogTests" }
 if ($FeatureTests) { $fixtureNames += "PaidSourceTargetCommandTests", "PanelLifecycleRuntimeTests", "LargeModListTests", "ListObjectsAccelerationTests" }
@@ -249,7 +260,7 @@ foreach ($fixtureName in $fixtureNames) {
     $fixtureExceptionOptions = @()
     if ($fixtureName -eq 'ListObjectsAccelerationTests') { $fixtureExceptionOptions += '/SAFESEH:NO' }
     $fixtureArguments = @()
-    $fixedImageFixture = $fixtureName -in @("SharedRegistrationRuntimeTests", "NativeRegistrationLifecycleTests", "LargeModListTests", "ListObjectsAccelerationTests")
+    $fixedImageFixture = $fixtureName -in @("SharedRegistrationRuntimeTests", "NativeRegistrationLifecycleTests", "LargeModListTests", "ListObjectsAccelerationTests", "WindowQoLTests")
     if ($PanelEngineAlpha -and $fixtureName -eq 'LargeModListTests') {
         $fixedImageFixture=$false
         $fixtureLinkOptions=@('/BASE:0x10000000','/DYNAMICBASE')
@@ -261,6 +272,11 @@ foreach ($fixtureName in $fixtureNames) {
         $fixtureArguments = @($env:MAJESTY_PUBLIC_EXE, $env:MAJESTY_BETA2_EXE, $env:MAJESTY_GOG_EXE)
     }
     $fixtureSources = @($runtimeSources | Where-Object { [IO.Path]::GetFileName($_) -ne "MajestyModManagerRuntime.cpp" })
+    if ($fixtureName -eq 'WindowQoLTests') {
+        # Include the production implementation in the fixture TU so its OS
+        # boundary can be replaced by fakes; never touch the real desktop.
+        $fixtureSources = @()
+    }
     if ($fixtureName -in @("ObserverReregistrationTests", "NativeRegistrationLifecycleTests")) {
         $fixtureSources = @($fixtureSources | Where-Object { [IO.Path]::GetFileName($_) -notin @("AttackObservationRuntime.cpp", "BooleanRuntime.cpp") })
     }
@@ -273,7 +289,7 @@ foreach ($fixtureName in $fixtureNames) {
     if ($fixtureName -eq "NativeRegistrationLifecycleTests") {
         $fixtureSources = @($fixtureSources | Where-Object { [IO.Path]::GetFileName($_) -ne "AuditedBeta2.cpp" })
     }
-    if (($RegistrationTests -and $fixedImageFixture) -or $fixtureName -in @("LargeModListTests", "ListObjectsAccelerationTests")) {
+    if (($RegistrationTests -and $fixedImageFixture) -or $fixtureName -in @("LargeModListTests", "ListObjectsAccelerationTests", "WindowQoLTests")) {
         $fixtureSources += (Join-Path $repoRoot "tests\GogFixtureMemory.cpp")
     }
     & $compiler /nologo /W4 /O2 /EHsc @commonIncludes @runtimeDefines `

@@ -22,6 +22,16 @@ inserted; they are not reported as a conflict between mods. Source-span edits
 preserve existing instructions and conditional ownership. These checks run
 during preparation, not in the game.
 
+An author may add eligibility conditions with `&&` around a success branch.
+The notification follows that selected branch when every original condition,
+branch edge, payout argument and required target binding remains present.
+Reordered conjunctions are accepted; broader `||` alternatives, inverted or
+removed conditions, changed else/loop paths and ambiguous success sites are
+not inferred. The target binding must execute in the actual enclosing branch
+before the callback, including when sibling conditions have identical text.
+A reassignment on a separate branch that provably returns before the callback
+does not affect the capture. Added unpaid branches remain untouched.
+
 Potion consumption proves the item/spell removal pair, not transformation or
 expiry gameplay. It notifies after the selected remaining application work,
 including consuming early returns. Transformation policy has separate checks
@@ -125,8 +135,12 @@ The flag is borrowed context and may disappear immediately after dispatch.
 The stock birth function starts its existing `activeScript` polling thread,
 sets `gavereward` false, and may change the flag owner's team. Both completion
 paths resolve `target` from the flag's native TargetID and require
-`gavereward != TRUE` plus `IsDead(target)`. Notify **inside that branch,
-immediately before** `playsound(ThisAgent, "completed_reward", "begin")`.
+`gavereward != TRUE` plus `IsDead(target)`. Notify inside the successful branch,
+immediately before the stock sound when it precedes the transaction. If the mod
+removes or replaces the sound, notify before the first durable action. That is
+the `gavereward` assignment in the poll and the payout in the death callback.
+Additional positive guards may wrap the complete transaction, provided the
+completion and cleanup anchors still share one concrete branch.
 
 The poll path sets `gavereward` true before distribution, deletes the flag,
 and returns. The target-death callback distributes first, then sets

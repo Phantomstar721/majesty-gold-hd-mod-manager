@@ -10,7 +10,7 @@ The dependency prompt retains selections and offers Open Quality of Life / Not n
 
 Graph commit f2644580d33ad98703361cd8fc88c825068161ef; evidence.dialog_panel_controls_20261008 and evidence.phantomstar_mods_panel_techniques_20261009, source index entries515/519 with their original qualifications. Shared-map checkpoints19621 and19760, symbol-index (modified beta2 only), Manager panel-lifecycle, stock-data-record-list-and-map-query and stock-gpl-call-return contracts were consulted. Current research scope/actual exclusions were read; no actor factory, interpreter, security or deferred callback implementation is expanded.
 
-SDK source is read-only at ../.audits/flamey-window-engine-sdk-20261109/sdk. Source SHA256 and positive native parser fixtures are recorded privately in local/panel-engine-alpha/sdk-parser-contract.json. Those fixtures execute only parse_line, not any game address. Native source parsing and native game lifecycle acceptance remain separate.
+SDK source is read-only at `local/panel-engine-alpha/sdk/legacy`. Source SHA256 and positive native parser fixtures are recorded privately in `local/panel-engine-alpha/sdk-parser-contract.json`. Those fixtures execute only parse_line, not any game address. Native source parsing and native game lifecycle acceptance remain separate.
 
 scripts/verify_panel_engine_clients.py independently matches complete caller bodies and exact previously guarded provider destinations for reset, append-integer and return-integer clients on all three executable fixtures. profiles/panel-engine/provider-clients.json records each complete caller's VA/size/hash, fixture identity and provider evidence. Calls/virtual requests remain opaque; this does not reopen their implementations or establish every SDK dependency.
 

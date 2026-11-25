@@ -10,7 +10,7 @@ class ResearchSubmissionBoundaryTests(unittest.TestCase):
         literal=re.search(r'body\[\]=\{(.*?)\};',source,re.S).group(1)
         body=bytes(int(v,16) for v in re.findall(r'0x([0-9A-F]{2})',literal))
         self.assertEqual(hashlib.sha256(body).hexdigest(),'8d442931c2a248075474857629ecc84d776e9f07a4c3fa92c9e610900a85b062')
-        fixtures=root.parent/'majesty-gold-hd-mod-manager-gog-support/local/fixtures'
+        fixtures=root/'local/fixtures'
         profiles=[('public',0x740094,0x4dcdf0,0x4dfce0),('beta2',0x758d94,0x4dd400,0x4e02f0),('gog-pristine',0x757f4c,0x4ddb40,0x4e0a30)]
         paths=[(fixtures/name/'MajestyHD.exe',table,scheduler,executor) for name,table,scheduler,executor in profiles]
         if os.environ.get('MAJESTY_BETA2_EXE'):paths.append((Path(os.environ['MAJESTY_BETA2_EXE']),0x758d94,0x4dd400,0x4e02f0))

@@ -8,9 +8,90 @@ from majesty_cam.compose import _load_stock_gameplay_event_items
 from majesty_cam.gameplay_events import add_gameplay_event_observers, EVENT_SIGNATURES
 from majesty_cam.gpl import SemanticMergeResult, parse_gpl
 from majesty_cam.gpl_function_merge import _SourceParser, _tokens, same_function_instructions
+from majesty_cam.event_boundaries import EventBoundary
 
 
 GAME = Path('C:/Program Files (x86)/Steam/steamapps/common/Majesty HD')
+
+
+class EventGuardScopeTests(unittest.TestCase):
+    source = '''function Owner(agent ThisAgent)
+declare agent Target;
+begin
+    if (ThisAgent's "Ready" == TRUE) begin
+        Target = $ChosenTarget(ThisAgent);
+        if ($Eligible(Target)) begin
+            $Apply(Target);
+            $Cleanup(ThisAgent);
+        end
+    end
+end
+'''
+    guard = 'ThisAgent\'s "Ready" == TRUE'
+
+    def editor(self, condition, tail=''):
+        text = self.source.replace('if (' + self.guard + ')', 'if (' + condition + ')')
+        if tail:
+            text = text.rsplit('end', 1)[0] + tail + '\nend\n'
+        return EventBoundary(parse_gpl(text).items[0], parse_gpl(self.source).items[0])
+
+    def test_added_and_guards_keep_the_selected_scope_and_source(self):
+        for condition in (f'({self.guard}) && $Extra(ThisAgent)',
+                          f'$Extra(ThisAgent) && ({self.guard})',
+                          f'(({self.guard}) && ($Extra(ThisAgent) || $Other(ThisAgent)))',
+                          f'(({self.guard}) && $Extra(ThisAgent)) && $Other(ThisAgent)'):
+            with self.subTest(condition=condition):
+                editor = self.editor(condition)
+                at = editor.anchor('$Apply(Target);')
+                editor.binding('Target = $ChosenTarget(ThisAgent);', at)
+                editor.insert(at, '$Observe(ThisAgent, Target);\n')
+                self.assertEqual(editor.text().replace('$Observe(ThisAgent, Target);\n', ''), editor.current.text)
+
+    def test_broader_replaced_negated_and_unsupported_guards_are_rejected(self):
+        for condition in (f'({self.guard}) || $Extra(ThisAgent)',
+                          f'({self.guard}) && $Extra(ThisAgent) || $Other(ThisAgent)',
+                          f'$Extra(ThisAgent) || ({self.guard}) && $Other(ThisAgent)',
+                          f'!({self.guard}) && $Extra(ThisAgent)',
+                          f'(($Extra(ThisAgent) || ({self.guard})) && $Other(ThisAgent))',
+                          f'({self.guard}) && $Extra(ThisAgent) ? TRUE : FALSE',
+                          'TRUE', 'ThisAgent\'s "Ready" != TRUE'):
+            with self.subTest(condition=condition), self.assertRaises(ValueError):
+                self.editor(condition).anchor('$Apply(Target);')
+
+    def test_binding_comes_from_the_actual_success_transaction(self):
+        sibling = '''if ((ThisAgent's "Ready" == TRUE) && $Other(ThisAgent)) begin
+    Target = $ChosenTarget(ThisAgent);
+    $Unrelated(Target);
+end'''
+        editor = self.editor(f'({self.guard}) && $Extra(ThisAgent)', sibling)
+        at = editor.anchor('$Apply(Target);')
+        editor.binding('Target = $ChosenTarget(ThisAgent);', at)
+        bad = editor.current.text.replace('Target = $ChosenTarget(ThisAgent);', 'Target = ThisAgent;', 1)
+        editor = EventBoundary(parse_gpl(bad).items[0], editor.stock)
+        with self.assertRaises(ValueError):
+            editor.binding('Target = $ChosenTarget(ThisAgent);', editor.anchor('$Apply(Target);'))
+
+    def test_same_condition_sibling_does_not_prove_binding(self):
+        editor = self.editor(self.guard)
+        text = editor.current.text.replace('        Target = $ChosenTarget(ThisAgent);\n', '')
+        sibling = f'if ({self.guard}) begin Target = $ChosenTarget(ThisAgent); end\n'
+        variant = text.replace('    if (' + self.guard, sibling + "ThisAgent's \"Ready\" = TRUE;\n"
+                               '    if (' + self.guard, 1)
+        editor = EventBoundary(parse_gpl(variant).items[0], editor.stock)
+        with self.assertRaisesRegex(ValueError, 'missing, moved or ambiguous boundary: Target ='):
+            editor.binding('Target = $ChosenTarget(ThisAgent);', editor.anchor('$Apply(Target);'))
+
+    def test_added_else_eligibility_and_moved_loop_or_ambiguous_sites_are_rejected(self):
+        reference = self.source.replace('$Apply(Target);', '$Other(Target);')
+        reference = reference.replace('$Cleanup(ThisAgent);', 'end else begin $Apply(Target);')
+        stock = parse_gpl(reference).items[0]
+        changed = reference.replace('if ($Eligible(Target))', 'if ($Eligible(Target) && $Extra(Target))')
+        with self.assertRaises(ValueError):
+            EventBoundary(parse_gpl(changed).items[0], stock).anchor('$Apply(Target);')
+        for text in (self.source.replace('if (' + self.guard + ')', 'while (' + self.guard + ')'),
+                     self.source.replace('$Apply(Target);', '$Apply(Target); $Apply(Target);')):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                EventBoundary(parse_gpl(text).items[0], parse_gpl(self.source).items[0]).anchor('$Apply(Target);')
 
 
 @unittest.skipUnless((GAME/'SDK/OriginalQuests/GPLMx').is_dir(), 'requires installed SDK')
@@ -82,6 +163,83 @@ class EventBoundaryContractTests(unittest.TestCase):
         final = self.observe(changed)['attack_flag_poll']
         self.assertIn('$PrivatePayout', final)
         self.assertEqual(final.replace('\t$Observe(ThisAgent, target);\n', ''), changed.text)
+
+    def test_reward_and_completion_keep_extra_eligibility_and_unpaid_sibling(self):
+        requested = {'reward-flag-paid': ('Paid',), 'attack-flag-completed': ('Completed',)}
+        stock = _load_stock_gameplay_event_items(GAME, requested)
+        original = stock['attack_flag_poll']
+        parser = _SourceParser(original.text)
+        body = parser.function()[2]
+        branch = next(n for n in body if n.kind == 'if' and '"gavereward"' in n.head)
+        start, end = parser.node_spans[id(branch)]
+        selected = original.text[start:end]
+        selected, count = re.subn(r'if\s*\(\s*thisagent\x27s\s*"gavereward"\s*!=\s*true\s*\)',
+            'if ((ThisAgent\'s "gavereward" != TRUE) && (ThisAgent\'s "Category" != "Guard"))',
+            selected, count=1, flags=re.I)
+        self.assertEqual(count, 1)
+        sibling = '''if ((ThisAgent's "gavereward" != TRUE) && (ThisAgent's "Category" == "Guard"))
+begin
+    target = $AgentNumber($GetAttribute(ThisAgent, #ATTRIB_TargetID));
+    if ($isdead(target)) begin
+        $DeleteGamepiece(ThisAgent);
+        return;
+    end
+end'''
+        selected = original.text[:start] + selected + '\n' + sibling + original.text[end:]
+        callbacks = parse_gpl('''function Paid(agent Flag, agent Hero, integer Amount) declare begin end
+function Completed(agent Flag, agent Target) declare begin end''').items
+        changed = replace(original, text=selected)
+        final = add_gameplay_event_observers(SemanticMergeResult((*callbacks, changed), ()), requested, stock)
+        emitted = next(i.text for i in final.items if i.normalized_name == 'attack_flag_poll')
+        self.assertEqual(emitted.count('$Completed('), 1)
+        self.assertIn(sibling, emitted)
+        restored = emitted.replace('$MM_Event_AttackGold', '$dropgoldinradius')
+        restored = restored.replace('\t$Completed(ThisAgent, target);\n', '')
+        self.assertEqual(restored, selected)
+        for pattern, replacement in ((r'target\s*=\s*\$agentnumber\s*\([^;]+;', 'target = ThisAgent;'),
+                                     (r'#attrib_rewardcost\b', '#ATTRIB_Gold')):
+            text, count = re.subn(pattern, replacement, selected, count=1, flags=re.I)
+            self.assertEqual(count, 1)
+            with self.assertRaises(ValueError):
+                add_gameplay_event_observers(SemanticMergeResult((*callbacks, replace(changed, text=text)), ()), requested, stock)
+
+    def test_reward_transaction_keeps_nested_eligibility_and_optional_sound(self):
+        requested = {'attack-flag-completed': ('Complete',), 'reward-flag-paid': ('Paid',)}
+        callbacks = parse_gpl('''function Complete(agent Flag, agent Target) declare begin end
+function Paid(agent Flag, agent Recipient, integer Amount) declare begin end''').items
+        notice = '\t$Complete(ThisAgent, target);\n'
+        for dataset in ('majesty', 'majestyexpansion'):
+            stock = _load_stock_gameplay_event_items(GAME, requested, dataset=dataset)
+            for owner, private, first in (
+                ('attack_flag_poll', '$MM_Event_AttackGold', "thisagent's"),
+                ('attack_flag_death_callback', '$MM_Event_DeathGold', '$MM_Event_DeathGold'),
+            ):
+                with self.subTest(dataset=dataset, owner=owner):
+                    item = stock[owner]
+                    parser = _SourceParser(item.text)
+                    paid = next(n for n in parser.function()[2] if '"gavereward"' in n.head)
+                    success = next(n for n in paid.body if '$isdead' in n.head).body
+                    start = parser.node_spans[id(success[0])][0]
+                    after_sound = parser.node_spans[id(success[0])][1]
+                    end = parser.node_spans[id(success[-1])][1]
+                    prefix = ('if (ThisAgent\'s "title" != "Skip") begin\n'
+                              '    if (ThisAgent\'s "Skip" == TRUE) begin target = ThisAgent; return; end\n')
+                    text = item.text[:start] + prefix + item.text[after_sound:end] + '\nend' + item.text[end:]
+
+                    def compose(selected):
+                        output = add_gameplay_event_observers(
+                            SemanticMergeResult((*callbacks, replace(item, text=selected)), ()), requested, stock)
+                        return next(i.text for i in output.items if i.key == item.key)
+
+                    emitted = compose(text)
+                    self.assertEqual(emitted.count(notice), 1)
+                    self.assertTrue(emitted.split(notice, 1)[1].casefold().startswith(first.casefold()))
+                    self.assertEqual(emitted.replace(notice, '').replace(private, '$dropgoldinradius'), text)
+                    with self.assertRaisesRegex(ValueError, 'notification input is reassigned'):
+                        compose(text.replace('target = ThisAgent; return;', 'target = ThisAgent;'))
+                    with self.assertRaisesRegex(ValueError, 'missing, moved or ambiguous boundary'):
+                        compose(text[:start] + prefix + item.text[after_sound:parser.node_spans[id(success[-2])][0]]
+                                + '\nend\n' + item.text[parser.node_spans[id(success[-2])][0]:])
 
     def test_potion_effect_branch_can_change_without_changing_consumption(self):
         self.setup_event('potion-consumed')

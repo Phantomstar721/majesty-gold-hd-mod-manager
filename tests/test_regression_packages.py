@@ -6,6 +6,7 @@ from contextlib import ExitStack
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
 from majesty_cam.manager.compatibility import load_compatibility_registry
+from majesty_cam.manager.paths import workspace_input
 from majesty_cam.manager.preflight import prepare_merge_package, prepared_catalog_merge_preflight
 from majesty_cam.manager import preflight
 from majesty_cam import native_impact
@@ -16,8 +17,8 @@ class InstalledPackageAdmissionTests(unittest.TestCase):
     def test_actual_guilds_on_each_supported_profile(self):
         game = Path(os.environ.get("MAJESTY_STOCK_ROOT", str(Path(os.environ["MAJESTY_PUBLIC_EXE"]).parent)))
         workshop = game.parents[1] / "workshop/content/73230"
-        development = Path(os.environ.get("MAJESTY_DEVELOPMENT_PACKAGE",
-            str(Path(os.environ["USERPROFILE"]) / "Documents/My Games/MajestyHD/Mods/WitchHunterFourSkills")))
+        development = Path(os.environ["MAJESTY_DEVELOPMENT_PACKAGE"]) if "MAJESTY_DEVELOPMENT_PACKAGE" in os.environ else workspace_input(
+            ROOT.parent, "custom-guilds/majesty-gold-hd-custom-guild-witch-hunter/src/current/WitchHunterFourSkills")
         roots = [workshop / item for item in ("3813128205", "3793509198", "3769947406")] + [development]
         registry = load_compatibility_registry(repo_root=ROOT)
         for root in roots:

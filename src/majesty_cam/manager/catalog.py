@@ -660,7 +660,7 @@ def _parse_content_node(
     dataset = _native_dataset(content)
     definitions, values = (
         _content_definition_analysis(dataset, candidate.package_root)
-        if kind is CatalogKind.STANDARD and dataset is not None else ((), ())
+        if kind is CatalogKind.STANDARD and not generated and dataset is not None else ((), ())
     )
     return CatalogEntry(
         content_id=content_id,
@@ -807,7 +807,8 @@ def _annotate_mod_collection(
     conflicts: list[set[int]] = [set() for _entry in entries]
     for left in range(len(entries)):
         for right in range(left + 1, len(entries)):
-            if resource_keys[left].intersection(resource_keys[right]):
+            if (datasets_overlap(entries[left], entries[right])
+                    and resource_keys[left].intersection(resource_keys[right])):
                 conflicts[left].add(right)
                 conflicts[right].add(left)
 
@@ -868,8 +869,11 @@ def _variant_label(display_name: str, collection_name: str) -> str:
 
 
 def _declared_load_resource_keys(content: ET.Element) -> frozenset[str]:
+    dataset = _native_dataset(content)
+    if dataset is None:
+        return frozenset()
     keys: set[str] = set()
-    for load in content.iter():
+    for load in dataset.iter():
         if _local_name(load.tag) != "Load":
             continue
         for resource in list(load):
@@ -906,6 +910,11 @@ def _declared_load_resource_keys(content: ET.Element) -> frozenset[str]:
 
 
 _MAX_ANALYZED_CONTENT_BYTES = 16 * 1024 * 1024
+
+
+def datasets_overlap(left: CatalogEntry, right: CatalogEntry) -> bool:
+    """Only the two explicit, opposite native scopes prove disjoint loading."""
+    return {left.dataset_base, right.dataset_base} != {"majesty", "majestyexpansion"}
 
 
 def _native_dataset(content: ET.Element) -> Optional[ET.Element]:
@@ -1097,6 +1106,10 @@ def _script_fingerprint(text: str) -> tuple[str, Optional[str]]:
 
 
 def _description_definition_key(element: ET.Element) -> Optional[str]:
+    # The native Descriptions loader selects direct Description children.
+    # A Language element is a container, not a replacement keyed by locale.
+    if element.tag != "Description":
+        return None
     attributes = {key.casefold(): value for key, value in element.attrib.items()}
     identifier = attributes.get("id")
     if not identifier:
@@ -1174,7 +1187,7 @@ def _annotate_explicit_relationships(
     standard = tuple(
         entry
         for entry in entries
-        if entry.kind is CatalogKind.STANDARD and entry.content_id is not None
+        if entry.kind is CatalogKind.STANDARD and not entry.generated and entry.content_id is not None
     )
     after: dict[str, set[str]] = {entry.content_id: set() for entry in standard}
     before: dict[str, set[str]] = {entry.content_id: set() for entry in standard}
@@ -1285,7 +1298,7 @@ def _annotate_standard_content_overlaps(
     standard = tuple(
         entry
         for entry in entries
-        if entry.kind is CatalogKind.STANDARD and entry.content_id is not None
+        if entry.kind is CatalogKind.STANDARD and not entry.generated and entry.content_id is not None
     )
     by_id = {entry.content_id: entry for entry in standard}
     definitions = {
@@ -1304,6 +1317,8 @@ def _annotate_standard_content_overlaps(
         if not left_definitions:
             continue
         for right in standard[left_index + 1 :]:
+            if not datasets_overlap(left, right):
+                continue
             right_definitions = definitions[right.content_id]
             shared = set(left_definitions).intersection(right_definitions)
             if not any(

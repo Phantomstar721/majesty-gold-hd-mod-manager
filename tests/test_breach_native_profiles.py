@@ -83,7 +83,7 @@ class BreachTransportParityEvidenceTests(unittest.TestCase):
     )
 
     def test_record_family_dispatch_restore_header_and_level_two_descriptor(self):
-        fixtures = Path(__file__).resolve().parents[2] / 'majesty-gold-hd-mod-manager-gog-support/local/fixtures'
+        fixtures = Path(__file__).resolve().parents[1] / 'local/fixtures'
         for label, digest, serialize, tag, root, factory, dispatch, execute, descriptor, branch, header in self.PROFILES:
             path = fixtures / label / 'MajestyHD.exe'
             if not path.is_file():
@@ -114,7 +114,7 @@ class PaidProductionGuardTests(unittest.TestCase):
     def test_every_production_guard_matches_all_three_independent_images(self):
         import re
         source=(Path(__file__).parents[1]/'runtime/PaidSourceTargetProfiles.h').read_text()
-        root=Path(__file__).parents[2]/'majesty-gold-hd-mod-manager-gog-support/local/fixtures'
+        root=Path(__file__).parents[1]/'local/fixtures'
         for section,count in [('Windows',19),('OwnershipWindows',8)]:
             body=source.split('constexpr NativeWindow '+section)[1].split('};',1)[0]
             records=re.findall(r'\{0x([0-9A-F]+)u,\s*0x([0-9A-F]+)u,\s*0x([0-9A-F]+)u\}',body)

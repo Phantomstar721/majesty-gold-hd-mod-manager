@@ -23,6 +23,97 @@ static Snapshot Example() {
 static void Arm(Casts& c,const Snapshot& s) {
     CHECK(c.Accepted(s.actor,s.target,10,20));CHECK(c.Transfer(s.actor.id,10,11,20));CHECK(c.Release(s.actor.id,11,20));
 }
+static void TimerDispatchCases() {
+    const auto state = Example();
+    StockCasts casts;
+    constexpr Word scheduledValue = 100;
+    constexpr Word dawnfall = 200;
+    constexpr Word stockTeleport = 300;
+    constexpr Word phantomHome = 301;
+    constexpr Word phantomCommerce = 302;
+    constexpr Word unrelated = 303;
+    CHECK(casts.Submitted(state.actor, state.target, 20, 10));
+    CHECK(casts.Animation(1, 10, 11, 20, 2));
+    CHECK(casts.Release(1, 11, 20, 2));
+    CHECK(casts.Scheduled(1, 11, scheduledValue, dawnfall, true));
+
+    Word movementFrame[] = {state.actor.address, state.target.address};
+    unsigned reads = 0, traces = 0;
+    bool expectAuthorization = false;
+    const auto read = [&](void* frame, Identity& actor, Identity& target) {
+        ++reads;
+        CHECK(frame == movementFrame);
+        actor = state.actor;
+        target = state.target;
+    };
+    const auto trace = [&](Word actor, bool authorized) {
+        ++traces;
+        CHECK(actor == state.actor.address);
+        CHECK(authorized == expectAuthorization);
+    };
+    const auto dispatch = [&](Word value, Word id, void* frame, const auto& invoke) {
+        return casts.InvokeTimer(value, reinterpret_cast<void*>(id), frame, dawnfall, read, trace,
+            [&](void* nativeDefinition, void* nativeFrame) {
+                CHECK(nativeDefinition == reinterpret_cast<void*>(id));
+                CHECK(nativeFrame == frame);
+                return invoke();
+            });
+    };
+
+    const auto rejected = [&] {
+        CHECK(!casts.InCallback(state.actor, state.target));
+        return 11u;
+    };
+    CHECK(dispatch(scheduledValue + 1, dawnfall, movementFrame, rejected) == 11);
+    CHECK(casts.Pending(state.actor.id));
+
+    struct NativeException {};
+    expectAuthorization = true;
+    const auto authorized = [&] {
+        CHECK(casts.InCallback(state.actor, state.target));
+        const struct TimerCase { Word callback; std::vector<Word> slots; } cases[] = {
+            {stockTeleport, {state.actor.address, 1400}}, // Wizard
+            {stockTeleport, {state.actor.address, 500}},  // Adept short
+            {stockTeleport, {state.actor.address, 5000}}, // Adept long
+            {stockTeleport, {state.actor.address, 500}},  // Teleport item
+            {phantomHome, {state.actor.address, 800}},
+            {phantomCommerce, {state.actor.address, state.target.address}},
+            {unrelated, {}},
+            {unrelated, {state.actor.address}},
+            {unrelated, {42, state.actor.address, 7}},
+        };
+        for (const auto& fixture : cases) {
+            auto slots = fixture.slots;
+            Word frameHeader = 0;
+            unsigned calls = 0;
+            const auto nativeDispatch = [&] {
+                ++calls;
+                CHECK(!casts.InCallback(state.actor, state.target));
+                return 37u;
+            };
+            void* frame = slots.empty() ? &frameHeader : slots.data();
+            CHECK(dispatch(scheduledValue, fixture.callback, frame, nativeDispatch) == 37);
+            CHECK(calls == 1);
+            CHECK(slots == fixture.slots);
+            CHECK(casts.InCallback(state.actor, state.target));
+        }
+        try {
+            dispatch(scheduledValue, unrelated, nullptr, [&]() -> Word {
+                CHECK(!casts.InCallback(state.actor, state.target));
+                throw NativeException{};
+            });
+            CHECK(false);
+        } catch (const NativeException&) {
+            CHECK(casts.InCallback(state.actor, state.target));
+        }
+        CHECK(casts.Authorizations().Consume(state.actor, state.target));
+        CHECK(!casts.InCallback(state.actor, state.target));
+        return 47u;
+    };
+    CHECK(dispatch(scheduledValue, dawnfall, movementFrame, authorized) == 47);
+    CHECK(reads == 2 && traces == 2);
+    CHECK(!casts.Pending(state.actor.id));
+}
 struct Fixture final: Native {
     Snapshot state=Example();int moves=0,cancels=0,paths=0,fits=0;
     bool complete=true,fit=true,sameSeed=true,allowWrite=true;
@@ -209,6 +300,7 @@ int main(int argc,char** argv) {
     CHECK(!PlacementStateFor(static_cast<MajestyBuildId>(255)));
     CHECK(!PlacementQueriesFor(static_cast<MajestyBuildId>(255)));
     CHECK(!RelocationFor(static_cast<MajestyBuildId>(255)));
+    TimerDispatchCases();
     {
         StockCasts c;const auto s=Example();
         CHECK(c.Submitted(s.actor,s.target,20,10));

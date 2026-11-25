@@ -1,3 +1,29 @@
+Version 0.3.18 (beta) lets you choose which selected Merge mod supplies an
+overlapping window layout or its text. Merge package authors can declare
+specific windows they replace in another package. Supports Default Steam,
+beta2 and GOG.
+
+Version 0.3.17.1 (beta) fixes a shared timer error that could interrupt
+teleport spells, teleport items, and other delayed movement abilities.
+Supports Default Steam, beta2 and GOG.
+
+Version 0.3.17 (beta) fixes false Prepare errors when mods change stock
+inventory drop exclusions or reward eligibility checks. Conflict warnings
+follow the selected mods and their quest datasets. Quality of Life adds
+separate Borderless Window and Confine Cursor to Game Window options, off
+by default. Ctrl+Shift+F11 toggles confinement while the windowed game is
+focused. Supports Default Steam, beta2 and GOG.
+
+Version 0.3.16.2 fixes false reward-notification validation errors when mods
+add eligibility checks to a preserved success branch. Selected mod conditions
+and separate unpaid branches remain intact. No game-time tracing is added.
+Supports Default Steam, beta2 and GOG. Update the Manager and retry Prepare.
+
+Version 0.3.16.1 fixes false script-source mismatch errors for mods compiled
+from a source subfolder. Existing matching packages need no author edits or
+recompilation. Supports Default Steam, beta2 and GOG. Update the Manager and
+retry Prepare; normal mod preferences still apply.
+
 Version 0.3.16 (beta) lets authors opt native panel packages into Merge using
 "merge": true in their schema-3 definition. Window-only packages can use the
 normal preferred-mod choices without declaring fake buildings or runtime

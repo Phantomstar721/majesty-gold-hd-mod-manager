@@ -369,15 +369,15 @@
   "limits": "Static exact-profile instruction evidence and finite adaptation model only. Existing resolver category3 virtual28 ordinary nonzero-ID result is a supplied dependency, not a new actor-service identity/generation proof. No fault/exception cleanup, actors, game execution, consumer implementation or deployment.",
   "existingSourceReferences": [
     {
-      "path": "majesty-gold-hd-cam-merger/runtime/SovereignSourceTargetRuntime.inl",
+      "path": "majesty-gold-hd-mod-manager/runtime/SovereignSourceTargetRuntime.inl",
       "sha256": "8117e60e85c553e5e423b39efebde267012dfe0c0768d58a20a0c6cddad9095f"
     },
     {
-      "path": "majesty-gold-hd-cam-merger/docs/stock-occupant-action-panel.md",
+      "path": "majesty-gold-hd-mod-manager/docs/stock-occupant-action-panel.md",
       "sha256": "663d3c8bb18ae690b0f5959deb8a1776aa2bd11e7c00eab6190e93923528fb61"
     },
     {
-      "path": "majesty-gold-hd-cam-merger/src/majesty_cam/action_callback_bridge.py",
+      "path": "majesty-gold-hd-mod-manager/src/majesty_cam/action_callback_bridge.py",
       "sha256": "8f0a8086eab9e1e41072af7e0b85368d44d5c91d44c7bbf77e14a269dc1d4e40"
     }
   ]

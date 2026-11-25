@@ -1,10 +1,10 @@
 [
-  "majesty-gold-hd-adventurers-guild/dist/workshop/AdventurerGuild",
-  "majesty-gold-hd-custom-guild-alchemist/dist/workshop-upload/content",
-  "majesty-gold-hd-custom-guild-bard/dist/workshop/CustomGuildBards",
-  "majesty-gold-hd-custom-guild-phantoms-haunt/dist/workshop-upload/content",
-  "majesty-gold-hd-custom-guild-phantoms-haunt/dist/CustomGuildPhantomsHauntExpanded",
-  "majesty-gold-hd-restore-abandoned-zoo/dist/workshop-upload/content",
-  "majesty-gold-hd-cam-merger/local/fixtures/art/legacy-troubadour",
-  {"path": "majesty-gold-hd-custom-guild-witch-hunter/dist/WitchHunterFourSkills", "development_only": true}
+  "custom-guilds/majesty-gold-hd-adventurers-guild/dist/workshop/AdventurerGuild",
+  "custom-guilds/majesty-gold-hd-custom-guild-alchemist/dist/workshop-upload/content",
+  "custom-guilds/majesty-gold-hd-custom-guild-bard/dist/workshop/CustomGuildBards",
+  "custom-guilds/majesty-gold-hd-custom-guild-phantoms-haunt/dist/workshop-upload/content",
+  "custom-guilds/majesty-gold-hd-custom-guild-phantoms-haunt/dist/CustomGuildPhantomsHauntExpanded",
+  "standard/majesty-gold-hd-restore-abandoned-zoo/dist/workshop-upload/content",
+  "majesty-gold-hd-mod-manager/local/fixtures/art/legacy-troubadour",
+  {"path": "custom-guilds/majesty-gold-hd-custom-guild-witch-hunter/src/current/WitchHunterFourSkills", "development_only": true}
 ]

@@ -94,6 +94,22 @@ packaging should be resource-neutral, but this is not authorization to invent
 automatic merges for every artwork/description namespace now. A future scoped
 resource must have its own native composition evidence before it is emitted.
 
+Standard conflict discovery now compares definitions only when the two Mods
+can load in a common quest dataset. Only an explicit `Majesty` and
+`MajestyExpansion` pair proves separation. An `Any` or unknown scope still
+participates in overlap checks. Collection variant detection reads the first
+Dataset, and Standard-only planning can skip script snapshots when all
+divergent definitions belong to disjoint scopes. Explicit author constraints
+remain in effect. This follows the three-build loader evidence above and the
+static `evidence.dataset_loading` graph reading at
+`f2644580d33ad98703361cd8fc88c825068161ef`, evidence index entry 210.
+
+The catalog also applies the direct `Description` child filter from the
+[native Descriptions loader](../../majesty-gold-hd-research/docs/dataset-descriptions.md).
+It no longer reports a whole-locale conflict when files registered under
+`Descriptions` both contain a `Language` container. This matches the existing
+Standard description projection. Native Strings loading is a separate route.
+
 ## Manager changes required
 
 - Keep the existing common GUID derivation. Derive scoped identities

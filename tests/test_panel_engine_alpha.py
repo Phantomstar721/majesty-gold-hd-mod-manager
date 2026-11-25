@@ -301,9 +301,9 @@ class AlphaIsolationTests(unittest.TestCase):
             start.assert_not_called()
 
     def test_optional_engine_rows_are_not_global_requirements(self):
-        from majesty_cam.manager.qol_service import QolService, QOL_PATCHES
+        from majesty_cam.manager.qol_service import QolService, QOL_PATCHES, PANEL_ENGINE_PATCHES, WINDOW_QOL_PATCHES
         with patch.dict(os.environ, {"MAJESTY_MANAGER_EDITION":"panel-engine-alpha"}):
             service = QolService(repo_root=Path("."), game_executable=Path("MajestyHD.exe"))
         optional = [spec for spec in service.specs if spec not in QOL_PATCHES]
-        self.assertEqual(len(optional), 2)
+        self.assertEqual({spec.key for spec in optional}, {spec.key for spec in PANEL_ENGINE_PATCHES + WINDOW_QOL_PATCHES})
         self.assertTrue(all(not spec.required_by_manager for spec in optional))

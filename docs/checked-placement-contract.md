@@ -208,6 +208,39 @@ All following addresses are VAs in that image:
   use the native epilogue without another unit call. Registers, flags and FP/SSE
   state are preserved. Other/reentrant writes invalidate the pending attempt.
 
+## Shared timer dispatch regression
+
+The 0.3.17 Workshop runtime read two agent slots before comparing the timer's
+definition. The Public executable's integer argument conversion throws if a
+callback's range is read as an agent. The bridge now compares the exact loaded
+movement definition registered for checked placement before inspecting the
+frame. Other definitions enter a non-authorizing scope and reach the original
+native call once, with the original definition and frame. Returning or
+unwinding that scope restores the caller's authorization. Native scheduling,
+timer expiry, stock movement, effects, and cleanup still execute in Majesty.
+
+The shared hook uses the existing guarded timer call and invoker pairs for
+Public `57D4C8 -> 57AD20`, beta2 `5938C8 -> 590E40`, and GOG
+`592BC8 -> 590140`. The x86 thunk and frame offset are unchanged. The fixture
+covers the private authorized callback, a wrong function value for that same
+definition, and nested unrelated callbacks. Examples include Wizard and both
+Adept teleports, the stock teleport item, Phantom home and commerce return,
+and zero-, one-, and mixed-argument timers. The Phantom commerce case has two
+agents and must still pass through on its distinct definition. These are
+offline dispatch checks and do not establish finished in-game casts.
+
+Research consulted at graph commit `f2644580d33ad98703361cd8fc88c825068161ef`.
+`engine_function.runthread` cites decoded base and expansion call sites in
+`GPL/Building_Births.gpl:15` and `GPLMx/rules_quests_1.gpl:99` with varying
+arity. `script_function.teleport_effect`, `script_function.teleport_short_effect`,
+and `script_function.teleport_long_effect` cite the stock
+`GPLMx/TaskModules/Subtasks/mx_Spells.gpl:4098–4166` cast and move callbacks.
+The Wizard and short-range cases are also in the base SDK `Spells.gpl` at
+lines 1878 and 1898. `spell.teleport_short_amulet` records the static stock
+short-teleport path. Phantom's Haunt `src/gpl/phantom.gpl:2084–2152` supplied
+the two private shapes. These source readings establish argument layouts.
+The three executable fixture windows establish the native handoff separately.
+
 ## Offline evidence
 
 - `tests/CheckedPlacementTests.cpp`: placement, callback lifetime, reentry,

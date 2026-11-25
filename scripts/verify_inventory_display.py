@@ -11,11 +11,11 @@ import struct
 import capstone
 import pefile
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 PROFILES = {
     "public": (Path(r"C:/Program Files (x86)/Steam/steamapps/common/Majesty HD/MajestyHD.exe"), "255957fb09a4f8d5db6dde6d4127943dea965fa71c1da5db57951302b92e40b4"),
-    "beta2": (ROOT / "majesty-gold-hd-mod-manager-gog-support/local/fixtures/beta2/MajestyHD.exe", "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82"),
-    "gog": (ROOT / "majesty-gold-hd-mod-manager-gog-support/local/fixtures/gog-pristine/MajestyHD.exe", "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792"),
+    "beta2": (ROOT / "local/fixtures/beta2/MajestyHD.exe", "05dbd67ae90b2cc14370dabcf3f9e4f9de5dd12c17f85730ac3d237fceec2f82"),
+    "gog": (ROOT / "local/fixtures/gog-pristine/MajestyHD.exe", "65c6dd32c3d873c2e320bdaa2de1b00488af85b44573fd0fd82f79a2ffd37792"),
 }
 SLICES = {"item_text": (0x51e920, 0x95), "items_list": (0x4a2e30, 0x1a1),
           "menu_append": (0x4b4750, 0x1e)}

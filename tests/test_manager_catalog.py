@@ -482,6 +482,100 @@ class ManagerCatalogTests(unittest.TestCase):
             self.assertTrue(catalog.entries[0].generated)
             self.assertIn("invalid_manifest_xml", _issue_codes(catalog.entries[0]))
 
+    def test_generated_script_record_does_not_overlap_installed_sources(self):
+        from majesty_cam.manager.build import standard_content_conflicts
+
+        with TemporaryDirectory() as tmp:
+            mods = Path(tmp)
+            for index, name in enumerate(("First Mod", "Second Mod", "Generated Profile")):
+                package = mods / name
+                (package / "GPL").mkdir(parents=True)
+                _write_standard_source_mod(
+                    package, f"00000000-0000-4000-8000-{index:012d}", name,
+                    f"Expression #SharedValue {index}\n",
+                )
+                if index == 2:
+                    (package / "CAM-MERGE-REPORT.json").write_text("{}", encoding="utf-8")
+
+            catalog = scan_catalog(local_mods_root=mods)
+            first, second = catalog.standard
+            generated = next(entry for entry in catalog.entries if entry.generated)
+            self.assertIs(generated.kind, CatalogKind.STANDARD)
+            self.assertFalse(generated.content_definitions)
+            self.assertEqual(first.unresolved_overlap_ids, (second.content_id,))
+            self.assertEqual(second.unresolved_overlap_ids, (first.content_id,))
+            self.assertEqual([(conflict.left_name, conflict.right_name, conflict.change_keys)
+                              for conflict in standard_content_conflicts(catalog)],
+                             [("First Mod", "Second Mod", ("expression:#sharedvalue",))])
+
+    def test_standard_conflict_requires_a_shared_native_dataset(self):
+        from majesty_cam.manager.build import standard_content_conflicts, standard_selection_issues
+
+        with TemporaryDirectory() as tmp:
+            mods = Path(tmp)
+            for index, scope in enumerate(("Majesty", "MajestyExpansion", "Any")):
+                package = mods / scope
+                (package / "GPL").mkdir(parents=True)
+                _write_standard_source_mod(package, f"00000000-0000-4000-8000-{index:012d}", scope,
+                                           f"Expression #SharedValue {index}\n")
+                path = package / "Mod.mmxml"
+                path.write_text(path.read_text().replace('base="Any"', f'base="{scope}"'))
+
+            catalog = scan_catalog(local_mods_root=mods)
+            by_name = {entry.display_name: entry for entry in catalog.standard}
+            selections = {by_name[scope].content_id: True for scope in ("Majesty", "MajestyExpansion")}
+            self.assertFalse(standard_content_conflicts(catalog, selections))
+            self.assertFalse(standard_selection_issues(catalog, selections))
+            self.assertEqual({frozenset((conflict.left_name, conflict.right_name))
+                              for conflict in standard_content_conflicts(catalog)},
+                             {frozenset(("Any", scope)) for scope in ("Majesty", "MajestyExpansion")})
+
+    def test_collection_variants_only_conflict_for_active_dataset_resources(self):
+        with TemporaryDirectory() as tmp:
+            mods = Path(tmp)
+            package = mods / "Collection"
+            package.mkdir()
+            def dataset(scope, target):
+                return (f'<Dataset base="{scope}"><Load><GPL><Target>{target}</Target>'
+                        '</GPL></Load></Dataset>')
+
+            records = [
+                ("Base", dataset("Majesty", "Data/Attributes_v1.bcd")),
+                ("Expansion", dataset("MajestyExpansion", "Data/Attributes_v2.bcd")),
+                ("Both", dataset("Any", "Data/Extra.bcd") + dataset("Any", "Data/Attributes_v3.bcd")),
+            ]
+            body = ''.join(f'<Mod id="00000000-0000-4000-8000-{index:012d}"><DisplayName>{name}</DisplayName>'
+                           f'<DataConfiguration>{datasets}</DataConfiguration></Mod>'
+                           for index, (name, datasets) in enumerate(records))
+            (package / "Options.mmxml").write_text(f"<Majesty>{body}</Majesty>", encoding="utf-8")
+            entries = scan_catalog(local_mods_root=mods).standard
+            self.assertEqual(len(entries), 3)
+            self.assertTrue(all(not entry.incompatible_ids for entry in entries))
+
+    def test_language_containers_do_not_create_description_conflicts(self):
+        from majesty_cam.manager.build import standard_content_conflicts
+
+        with TemporaryDirectory() as tmp:
+            mods = Path(tmp)
+            for index in range(2):
+                package = mods / str(index)
+                package.mkdir()
+                (package / "Mod.mmxml").write_text(
+                    f'<Majesty><Mod id="00000000-0000-4000-8000-{index:012d}"><DisplayName>Mod {index}'
+                    '</DisplayName><DataConfiguration><Dataset base="Any"><Load>'
+                    '<Descriptions>Records.xml</Descriptions></Load></Dataset></DataConfiguration></Mod></Majesty>',
+                    encoding="utf-8",
+                )
+                (package / "Records.xml").write_text(
+                    f'<Majesty><Language id="en_US"><Text id="notice{index}">Text</Text></Language>'
+                    f'<Description type="Unit" id="shared"><Name>Unit {index}</Name></Description></Majesty>',
+                    encoding="utf-8",
+                )
+            catalog = scan_catalog(local_mods_root=mods)
+            conflicts = standard_content_conflicts(catalog)
+            self.assertEqual(len(conflicts), 1)
+            self.assertEqual(conflicts[0].change_keys, ("description:description:unit::shared",))
+
     def test_known_script_merger_is_informational_and_not_selectable(self):
         with TemporaryDirectory() as tmp:
             mods = Path(tmp) / "Mods"
