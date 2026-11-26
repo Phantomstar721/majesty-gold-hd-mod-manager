@@ -164,6 +164,25 @@ validation still apply; cancelling or a failed build leaves your previous
 completed setup intact. See [choosing preferred mods](docs/script-conflict-review.md)
 for the boundaries and limitations.
 
+### Updating saves after adding mods
+
+A Majesty save remembers exactly which mods it was played with. After you add a
+Merge mod and Prepare, Majesty reports **Mods Missing** for saves made before,
+and a newly selected Standard mod is simply not loaded for them. To keep playing
+such a game with your current mods, choose **Update Saves**, tick the saves you
+want, then select **Update Selected Saves**.
+
+Each update is written as a new `(updated)` copy beside the original save, which
+is never changed. Nothing is ticked for you, so saves that intentionally use
+other mods stay as they are. A save is offered only when updating it adds mods.
+A save whose profile has lost a mod since, or that uses a mod you have not
+selected now, is listed with the reason and left alone: loading a game without
+a mod it was played with can rebuild its world as if the quest had just started.
+A caution marks updates that bring new unit or building types into a game in
+progress, or whose new mods change content its existing mods also change. Prepare
+first: saves are updated to exactly what **Launch** (or **Classic Launch**) runs.
+See [save updates](docs/save-updates.md) for the rules and their evidence.
+
 ## For mod creators: making a mod compatible
 
 A compatible Merge mod does not need to be hardcoded into the Mod Manager. If

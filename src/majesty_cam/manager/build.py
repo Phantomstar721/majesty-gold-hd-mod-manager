@@ -88,6 +88,15 @@ from ..script_review import ScriptReviewSession, ScriptReviewCancelled, validate
 
 
 MANAGER_OUTPUT_SENTINEL = ".majesty-mod-manager-owned.json"
+MERGED_PROFILE_DISPLAY_NAME = "Majesty Mod Manager: Merged Profile"
+
+
+def merged_profile_slug() -> str:
+    """The identity slug of this edition's generated Merge profile."""
+
+    return "panel-engine-alpha" if panel_alpha() else "manager-merged"
+
+
 # Generated reward composition and terminal activity ordering changed. Existing
 # source inputs can be identical while their prepared output needs regeneration.
 PLAN_SCHEMA_VERSION = 29
@@ -1088,8 +1097,8 @@ def build_merged_package(
             paths.game_path,
             staging,
             tuple(item.selected_mod for item in plan.selected_merge),
-            profile_slug="panel-engine-alpha" if panel_alpha() else "manager-merged",
-            display_name="Majesty Mod Manager: Merged Profile",
+            profile_slug=merged_profile_slug(),
+            display_name=MERGED_PROFILE_DISPLAY_NAME,
             internal_name="MajestyModManagerMergedProfile",
             resolution_owners=plan.resolution_owners,
             semantic_resolutions=plan.semantic_resolutions,

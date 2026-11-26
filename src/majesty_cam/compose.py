@@ -9894,14 +9894,26 @@ def _validate_generated_runtime_evidence(
 def _generated_mod_id(
     selected_mods: Sequence[SelectedMod], profile_slug: str
 ) -> str:
+    return profile_mod_id(
+        tuple(selected.package.mod_id for selected in selected_mods), profile_slug
+    )
+
+
+def profile_mod_id(mod_ids: Sequence[str], profile_slug: str) -> str:
+    """The generated profile's Mod id for these ordered Merge package ids.
+
+    Save updates recompute it to tell which Merge mods an older profile held,
+    so this is the single definition of the identity.
+    """
+
     normalized_ids = []
-    for selected in selected_mods:
-        raw = selected.package.mod_id.strip().strip("{}")
+    for mod_id in mod_ids:
+        raw = mod_id.strip().strip("{}")
         try:
             normalized_ids.append(str(uuid.UUID(raw)))
         except ValueError as exc:
             raise ComposeError(
-                f"package Mod id is not a UUID: {selected.package.mod_id!r}"
+                f"package Mod id is not a UUID: {mod_id!r}"
             ) from exc
     # Generated profiles must not reuse a selected Workshop item's identity:
     # Majesty's active-mod registry is UUID-based, so a distinct stable ID is
@@ -11026,6 +11038,7 @@ __all__ = [
     "merge_named_resources",
     "merge_sound_resources",
     "merge_text_resources",
+    "profile_mod_id",
     "resolve_building_dialogs",
     "resolve_controller_registry",
     "resolve_runtime_feature_registry",
