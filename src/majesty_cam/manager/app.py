@@ -1488,6 +1488,14 @@ if _PYSIDE_IMPORT_ERROR is None:
                 self._create_desktop_shortcut
             )
             nav.addWidget(self.desktop_shortcut_button)
+            self.update_saves_button = QPushButton("Update Saves")
+            self.update_saves_button.setToolTip(
+                "Choose saves to keep playing with your current mods. Each update is written as a new "
+                "copy; the original saves are not changed."
+            )
+            self.update_saves_button.clicked.connect(self._update_saves)
+            self.update_saves_button.setEnabled(False)
+            nav.addWidget(self.update_saves_button)
             self.support_report_button = QPushButton("Save Support Report")
             self.support_report_button.setToolTip("Save bounded logs and launch details to a ZIP. May include local paths and mod names; nothing is uploaded.")
             self.support_report_button.clicked.connect(self._save_support_report)
@@ -1625,6 +1633,32 @@ if _PYSIDE_IMPORT_ERROR is None:
                 QMessageBox.warning(self, "Support report", str(exc))
             else:
                 QMessageBox.information(self, "Support report", "Report saved. You can review the ZIP before sharing it. It contains logs, local paths and mod names, but no saves or game binaries.")
+
+        @Slot()
+        def _update_saves(self) -> None:
+            if self._busy or self.snapshot is None or not hasattr(self.controller, "save_update_target"):
+                return
+            from .save_update_dialog import SaveUpdateDialog
+            from .saves import SaveUpdateUnavailable, plan_save_updates
+            classic = self.classic_launch.isChecked()
+            try:
+                target = self.controller.save_update_target(classic=classic)
+            except SaveUpdateUnavailable as exc:
+                QMessageBox.information(self, "Update Saves", str(exc))
+                return
+            standard = len(target.standard)
+            launch = "Classic Launch" if classic else "Launch"
+            if target.profile_id is None:
+                summary = (f"Saves are updated to what {launch} runs now: "
+                           f"{standard} Standard mod{'s' if standard != 1 else ''}, no Merge profile.")
+            else:
+                members = len(target.members)
+                summary = (f"Saves are updated to what {launch} runs now: "
+                           f"{standard} Standard mod{'s' if standard != 1 else ''} and a Merge profile of "
+                           f"{members} mod{'s' if members != 1 else ''}.")
+            folder = self.controller.paths.saves_root
+            dialog = SaveUpdateDialog(lambda: plan_save_updates(folder, target), folder, summary, self)
+            dialog.exec()
 
         @Slot()
         def _choose_game_executable(self) -> None:
@@ -2637,6 +2671,7 @@ if _PYSIDE_IMPORT_ERROR is None:
             self.review_mod_preferences.setEnabled(bool(enabled and self.snapshot.plan.requires_composition))
             self.search.setEnabled(enabled)
             self.expansion_quests.setEnabled(enabled)
+            self.update_saves_button.setEnabled(enabled)
             for catalog_page in self.pages.values():
                 catalog_page.set_interactions_enabled(enabled)
             self.qol_page.set_interactions_enabled(enabled)

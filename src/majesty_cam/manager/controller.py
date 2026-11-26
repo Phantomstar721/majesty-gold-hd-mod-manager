@@ -572,12 +572,182 @@ class ManagerController:
             path=result.output_root,
         )
         save_profile(self.paths.profile_path, self.profile)
+        self._record_prepared_build(result)
         from .presets import Presets
         store = Presets(self.paths)
         if store.state["active"] is not None:
             store.save(self.profile)
             store.retain_build(self.profile, result.fingerprint)
         return result, self.snapshot()
+
+    def _record_prepared_build(self, result: ManagerBuildResult) -> None:
+        """Remember this profile's Merge mods so older saves can be matched."""
+
+        from .saves import ModRef, history_path, record_prepared_build
+        try:
+            record_prepared_build(
+                history_path(self.paths.profile_path.parent),
+                profile_id=result.mod_id,
+                generated_ids=result.active_mod_ids,
+                members=tuple(
+                    ModRef(normalize_guid(item.selected_mod.package.mod_id), item.display_name)
+                    for item in self.plan.selected_merge
+                ),
+            )
+        except (OSError, ValueError):
+            # The history only sharpens save-update decisions; without it,
+            # updates fall back to recomputing profile identities.
+            pass
+
+    def _launch_standard_ids(self, classic: bool) -> tuple[str, ...]:
+        """The Standard mods a launch activates, in launch order."""
+
+        if not classic:
+            return self.plan.selected_standard_ids
+        return tuple(
+            e.content_id
+            for e in sorted(
+                self.catalog.standard,
+                key=lambda entry: self.order.index(entry.content_id)
+                if entry.content_id in self.order else len(self.order),
+            )
+            if e.content_id and e.selectable and self.selections.get(e.content_id)
+        )
+
+    def save_update_target(self, *, classic: bool = False):
+        """Describe what the next launch runs, so saves can be updated to it.
+
+        Raises ``SaveUpdateUnavailable`` when the selection must be prepared
+        first: saves are only ever updated to a profile that exists.
+        """
+
+        from .build import MERGED_PROFILE_DISPLAY_NAME, merged_profile_slug
+        from .saves import (
+            KnownBuild, ModRef, SaveUpdateUnavailable, SHARED_SCOPE, UpdateTarget,
+            history_path, load_prepared_builds, profile_part_ids, report_overlaps,
+        )
+        from ..compose import (
+            ComposeError, _load_effective_stock_descriptions, _parse_description_file, profile_mod_id,
+        )
+        from ..descriptions import DescriptionFormatError
+
+        snapshot = self.snapshot()
+        uses_profile = self.plan.requires_composition and not classic
+        if uses_profile and (snapshot.build_required or snapshot.managed_build is None):
+            raise SaveUpdateUnavailable(
+                "Prepare Selected Mods first, so saves are updated to exactly what Launch will run."
+            )
+        if not classic and not self.plan.valid:
+            raise SaveUpdateUnavailable(
+                "Your current selection cannot launch yet. Resolve it before updating saves."
+            )
+
+        installed: dict[str, str] = {}
+        datasets: dict[str, str] = {}
+        unit_types: dict[str, frozenset[str]] = {}
+        by_name: dict[str, str] = {}
+        for entry in self.catalog.entries:
+            if not entry.content_id or entry.generated:
+                continue
+            try:
+                mod_id = normalize_guid(entry.content_id)
+            except ProfileFormatError:
+                continue
+            installed.setdefault(mod_id, entry.display_name)
+            datasets.setdefault(mod_id, entry.dataset_base)
+            by_name.setdefault(entry.display_name, mod_id)
+            types = {key.split(":")[4] for key, _digest in entry.content_definitions
+                     if key.startswith("description:") and key.count(":") >= 4
+                     and key.split(":")[2] == "unit"}
+            unit_types[mod_id] = frozenset(types) | unit_types.get(mod_id, frozenset())
+
+        def name_of(mod_id: str) -> str:
+            return installed.get(mod_id, mod_id)
+
+        standard = tuple(ModRef(normalize_guid(mod_id), name_of(normalize_guid(mod_id)))
+                         for mod_id in self._launch_standard_ids(classic))
+        members: tuple = ()
+        parts: dict = {}
+        overlaps: tuple = ()
+        slug = merged_profile_slug()
+        if uses_profile:
+            managed = snapshot.managed_build
+            members = tuple(
+                ModRef(normalize_guid(item.selected_mod.package.mod_id), item.display_name)
+                for item in self.plan.selected_merge
+            )
+            # Merge packages are inventoried by preflight, not the catalog:
+            # read their unit types from the same Description files Prepare uses.
+            for member, item in zip(members, self.plan.selected_merge):
+                inventory = getattr(item, "inventory", None)
+                paths = (*getattr(inventory, "descriptions", ()),
+                         *(path for _scope, path in getattr(inventory, "scoped_descriptions", ())))
+                found = set()
+                for path in paths:
+                    try:
+                        records = _parse_description_file(Path(path)).index
+                    except (OSError, ValueError, DescriptionFormatError):
+                        continue
+                    found.update(identifier.casefold() for kind, identifier in records
+                                 if kind.casefold() == "unit")
+                unit_types[member.mod_id] = frozenset(found) | unit_types.get(member.mod_id, frozenset())
+            for scope, mod_id in profile_part_ids(managed.mod_id, managed.active_mod_ids).items():
+                label = (MERGED_PROFILE_DISPLAY_NAME if scope == SHARED_SCOPE
+                         else f"{MERGED_PROFILE_DISPLAY_NAME} ({scope} scripts)")
+                parts[scope] = ModRef(mod_id, label)
+            try:
+                report = json.loads(managed.report.read_text(encoding="utf-8"))
+                overlaps = report_overlaps(report, by_name)
+            except (OSError, UnicodeError, ValueError):
+                overlaps = ()
+
+        known = load_prepared_builds(history_path(self.paths.profile_path.parent))
+        try:
+            from .presets import Presets
+            store = Presets(self.paths)
+            for item in store.state["items"]:
+                build = read_managed_build(store.root / item["id"] / "package")
+                if build is None:
+                    continue
+                main = normalize_guid(build.mod_id)
+                ids = tuple(normalize_guid(mod_id) for mod_id in build.selected_source_ids)
+                if normalize_guid(profile_mod_id(ids, slug)) != main:
+                    # Standard-only compositions record Standard ids here.
+                    if normalize_guid(profile_mod_id((), slug)) != main:
+                        continue
+                    ids = ()
+                known[main] = KnownBuild(
+                    mod_id=main,
+                    members=tuple(ModRef(mod_id, name_of(mod_id)) for mod_id in ids),
+                    parts=profile_part_ids(main, build.active_mod_ids),
+                    label=f'Saved profile "{item["name"]}"',
+                )
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+
+        stock: dict[str, frozenset[str]] | None = {}
+        try:
+            for dataset in ("majesty", "majestyexpansion"):
+                records = _load_effective_stock_descriptions(self.paths.game_path, dataset)
+                stock[dataset] = frozenset(
+                    identifier.casefold() for kind, identifier in records if kind.casefold() == "unit"
+                )
+        except (ComposeError, OSError, ValueError):
+            stock = None
+
+        return UpdateTarget(
+            standard=standard,
+            profile_parts=parts,
+            members=members,
+            profile_slug=slug,
+            installed=installed,
+            datasets=datasets,
+            unit_types=unit_types,
+            known_builds=known,
+            overlaps=overlaps,
+            stock_unit_types=stock,
+            profile_display_name=MERGED_PROFILE_DISPLAY_NAME,
+        )
 
     def _discard_stale_script_preferences(self) -> None:
         if self._script_retry_fingerprint != self.plan.fingerprint:
@@ -624,11 +794,7 @@ class ManagerController:
                 raise ManagerLaunchError(
                     details or "The current profile is not ready to launch."
                 )
-            standard_ids = (tuple(e.content_id for e in sorted(self.catalog.standard,
-                                  key=lambda entry: self.order.index(entry.content_id)
-                                  if entry.content_id in self.order else len(self.order))
-                                  if e.content_id and e.selectable and self.selections.get(e.content_id))
-                            if classic else self.plan.selected_standard_ids)
+            standard_ids = self._launch_standard_ids(classic)
             active_ids = list(standard_ids)
             intent_registry: Path | None = None
             capability_manifest = self.paths.empty_runtime_capability_manifest

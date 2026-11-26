@@ -53,6 +53,11 @@ class ManagerPaths:
         return target_for(self.game_executable) if panel_alpha() else self.game_executable
 
     @property
+    def saves_root(self) -> Path:
+        """Majesty's SaveGame folder, beside the local Mods folder."""
+        return self.local_mods_root.parent / "SaveGame"
+
+    @property
     def runtime_launcher(self) -> Path:
         return self.runtime_root / "MajestyBuildingRuntimeLauncher.exe"
 
